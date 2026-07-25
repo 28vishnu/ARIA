@@ -25,11 +25,11 @@ PERSONALITY RULES:
 - Since your responses will be read out loud via text-to-speech, keep your replies punchy, concise (2-3 sentences max), and conversational.
 - If Master gives an instruction or order, acknowledge it with quiet confidence and report back execution."""
 
-# 3. Configure GenAI Client using google-genai
+# 3. Configure GenAI Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# OFFICIAL STABLE MODEL NAME
-MODEL_NAME = "gemini-2.0-flash"
+# Models to attempt in order of priority (Primary -> Backup)
+MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
 # Initialize Supabase if keys exist
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
@@ -142,29 +142,34 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# ENDPOINT 2: DIRECT CHAT API (WEB APP)
+# ENDPOINT 2: DIRECT CHAT API (WITH AUTOMATIC MODEL FALLBACK)
 # -------------------------------------------------------------
 @app.post("/chat")
 def chat(data: UserQuery):
     if not ai_client:
         return {"assistant": ASSISTANT_NAME, "reply": "GEMINI_API_KEY is missing."}
         
-    try:
-        full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {data.prompt}\n{ASSISTANT_NAME}:"
-        response = ai_client.models.generate_content(
-            model=MODEL_NAME,
-            contents=full_prompt
-        )
-        return {"assistant": ASSISTANT_NAME, "reply": response.text}
-    except Exception as e:
-        print(f"Gemini API Error: {e}")
-        return {
-            "assistant": ASSISTANT_NAME, 
-            "reply": "Apologies, Master. I am experiencing a brief system delay. Please try again in a moment."
-        }
+    full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {data.prompt}\n{ASSISTANT_NAME}:"
+
+    # Try primary model, then backup model
+    for model_id in MODELS:
+        try:
+            response = ai_client.models.generate_content(
+                model=model_id,
+                contents=full_prompt
+            )
+            return {"assistant": ASSISTANT_NAME, "reply": response.text}
+        except Exception as e:
+            print(f"Model {model_id} warning: {e}")
+            continue
+
+    return {
+        "assistant": ASSISTANT_NAME, 
+        "reply": "Apologies, Master. Both neural links are currently at capacity. Please wait 15 seconds and try again."
+    }
 
 # -------------------------------------------------------------
-# ENDPOINT 3: TELEGRAM BOT WEBHOOK
+# ENDPOINT 3: TELEGRAM BOT WEBHOOK (WITH AUTOMATIC FALLBACK)
 # -------------------------------------------------------------
 @app.post("/telegram")
 async def telegram_webhook(req: Request):
@@ -173,21 +178,25 @@ async def telegram_webhook(req: Request):
     if "message" in data and "text" in data["message"]:
         chat_id = data["message"]["chat"]["id"]
         user_text = data["message"]["text"]
+        ai_reply = None
         
-        try:
-            if ai_client:
-                full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
-                response = ai_client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=full_prompt
-                )
-                ai_reply = response.text
-            else:
-                ai_reply = "API key missing."
-        except Exception as e:
-            print(f"Gemini API Error: {e}")
-            ai_reply = "Apologies, Master. System resources are busy. Please wait a moment."
-        
+        if ai_client:
+            full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
+            for model_id in MODELS:
+                try:
+                    response = ai_client.models.generate_content(
+                        model=model_id,
+                        contents=full_prompt
+                    )
+                    ai_reply = response.text
+                    break
+                except Exception as e:
+                    print(f"Model {model_id} warning: {e}")
+                    continue
+
+        if not ai_reply:
+            ai_reply = "Apologies, Master. Systems are currently at capacity. Please wait a moment."
+
         if TELEGRAM_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             async with httpx.AsyncClient() as client:
