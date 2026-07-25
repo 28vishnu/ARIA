@@ -40,13 +40,11 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 ASSISTANT_NAME = "ARIA"
 
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
-CONVERSATIONAL & INTELLIGENCE DIRECTIVES:
+CONVERSATIONAL DIRECTIVES:
 - Speak/type in a composed, warm, articulate, and natural tone. Address the user naturally as 'Sir'.
-- DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- PERSONAL PROFILE & VAULT INTEGRATION:
-  * You have access to the user's permanent memory vault (Name, DOB, preferences, documents).
-  * Use this stored knowledge instantly whenever asked about personal facts or files.
-- Keep responses sharp, direct, and concise (1-2 sentences max)."""
+- DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu in Latin script).
+- MEMORY VAULT ACCESS: You have full access to stored personal profile details, academic background, and project memory (e.g. TaskFlow, WealthFlow AI).
+- Keep responses sharp, direct, and concise (1-2 sentences max). Do not spam repetitive greetings."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -65,7 +63,7 @@ CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
 
 # -------------------------------------------------------------
-# UNIFIED HIGH-SPEED DATABASE ENGINE (PARALLEL EXECUTION)
+# HIGH-SPEED DATABASE ENGINE
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -94,18 +92,16 @@ async def save_memory_fact(category: str, fact: str) -> str:
         if mongo_memory_col is not None:
             try:
                 await mongo_memory_col.insert_one({"category": cat, "fact": fact_str})
-            except Exception as e:
-                print(f"[MongoDB Insert Error]: {e}")
+            except Exception as e: print(f"[MongoDB Error]: {e}")
 
     def _supabase_save():
         if supabase:
             try:
                 supabase.table("personal_memory").insert({"category": cat, "fact": fact_str}).execute()
-            except Exception as e:
-                print(f"[Supabase Insert Error]: {e}")
+            except Exception as e: print(f"[Supabase Error]: {e}")
 
     await asyncio.gather(_mongo_save(), asyncio.to_thread(_supabase_save))
-    return "Understood Sir. Saved permanently in your database vault."
+    return "Understood Sir. Saved permanently in your vault."
 
 async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes, text_preview: str):
     doc_label_clean = doc_label.lower().strip()
@@ -119,29 +115,24 @@ async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes,
                 "b64_payload": b64_payload,
                 "text_preview": text_preview[:1500]
             })
-        except Exception as e:
-            print(f"[MongoDB Doc Save Error]: {e}")
+        except Exception as e: print(f"[Doc Save Error]: {e}")
 
     await save_memory_fact("documents", f"DOCUMENT '{doc_label}' (File: {file_name}): {text_preview[:1500]}")
-    return f"Successfully saved '{file_name}' as '{doc_label}' in your database vault Sir."
+    return f"Successfully saved '{file_name}' to your MongoDB document vault Sir."
 
 async def purge_memory_category(category: str) -> str:
     cat = category.lower().strip()
     if mongo_memory_col is not None:
-        try:
-            await mongo_memory_col.delete_many({"category": cat})
+        try: await mongo_memory_col.delete_many({"category": cat})
         except Exception: pass
     if mongo_docs_col is not None and cat in ["documents", "exams", "stored_files"]:
-        try:
-            await mongo_docs_col.delete_many({})
+        try: await mongo_docs_col.delete_many({})
         except Exception: pass
-
     if supabase:
-        try:
-            supabase.table("personal_memory").delete().eq("category", cat).execute()
+        try: supabase.table("personal_memory").delete().eq("category", cat).execute()
         except Exception: pass
 
-    return f"All {category} records and files have been purged from your vault Sir."
+    return f"All {category} records and files have been purged Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -149,19 +140,6 @@ def fetch_web_search(query: str) -> str:
         res = tavily_client.search(query=query, max_results=2)
         results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
         return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
-    except Exception: pass
-    return ""
-
-async def fetch_weather_by_coords(location_info: str) -> str:
-    if not location_info or "," not in location_info: return ""
-    try:
-        lat, lon = location_info.split(",")
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url, timeout=4.0)
-            if res.status_code == 200:
-                data = res.json().get("current_weather", {})
-                return f"\nLOCAL WEATHER: Currently {data.get('temperature')}°C, wind {data.get('windspeed')} km/h.\n"
     except Exception: pass
     return ""
 
@@ -191,20 +169,43 @@ async def fetch_longterm_memory() -> str:
     mongo_res, supabase_res = await asyncio.gather(_fetch_mongo(), asyncio.to_thread(_fetch_supabase))
     
     for f in mongo_res + supabase_res:
-        if f not in facts:
-            facts.append(f)
+        if f not in facts: facts.append(f)
 
     if facts:
         return "\nSTORED PERSONAL VAULT (USER PROFILE & DOCUMENTS):\n" + "\n".join(facts) + "\n"
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS AI ENGINE
+# ULTRA-FAST PARALLEL LLM INFERENCE ENGINE
 # -------------------------------------------------------------
+async def _call_groq(system_prompt: str, user_text: str) -> str:
+    if not groq_client: return ""
+    try:
+        def _sync_groq():
+            comp = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
+                temperature=0.5, max_tokens=150
+            )
+            return comp.choices[0].message.content
+        return await asyncio.to_thread(_sync_groq)
+    except Exception: return ""
+
+async def _call_gemini(system_prompt: str, user_text: str) -> str:
+    if not gemini_client: return ""
+    try:
+        def _sync_gemini():
+            res = gemini_client.models.generate_content(
+                model="gemini-2.0-flash", contents=f"{system_prompt}\n\nSir: {user_text}\nARIA:"
+            )
+            return res.text
+        return await asyncio.to_thread(_sync_gemini)
+    except Exception: return ""
+
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. SECURITY AUTHORIZATIONS
+    # 1. PENDING SECURITY AUTHORIZATIONS
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
         if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "ok"]):
@@ -213,61 +214,51 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
                 return await purge_memory_category(pending["category"])
         elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
             del PENDING_SECURITY_ACTIONS[session_id]
-            return "Security action aborted Sir. Data remains intact."
+            return "Security action aborted Sir."
         else:
-            return f"Awaiting your authorization Sir. Do you want to proceed with deleting all {pending['category']} data?"
+            return f"Awaiting authorization Sir. Delete all {pending['category']} data?"
 
-    # 2. PURGE DATA COMMANDS
-    if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams", "delete pdfs", "delete documents"]):
+    # 2. PURGE COMMANDS
+    if any(k in cmd for k in ["delete exams", "clear exams", "delete pdfs", "delete documents"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "documents"}
-        return "Purging the document database is an irreversible action Sir. Do I have your authorization to proceed?"
+        return "Purging document database is irreversible. Do I have your authorization Sir?"
 
-    # 3. UNIVERSAL AUTO-SAVER (Profile Details)
-    auto_save_triggers = [
-        "my name is", "my dob is", "i was born", "my birthday is", "my college is",
-        "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this"
-    ]
+    # 3. AUTO-SAVER
+    auto_save_triggers = ["my name is", "my dob is", "i was born", "my birthday is", "my college is", "i live in", "my email is", "remember", "save this"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 4. WEB SEARCH INTENT
-    search_context = ""
-    if any(kw in cmd for kw in ["search", "find", "who is", "latest", "news", "box office", "today"]):
-        search_context = fetch_web_search(user_text)
-
+    # 4. PARALLEL MEMORY & INFERENCE EXECUTION
+    search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news"]) else ""
     memory_context = await fetch_longterm_memory() + search_context
-    if location_info:
-        memory_context += await fetch_weather_by_coords(location_info)
-
     full_system = ARIA_SYSTEM_PROMPT + memory_context
 
-    if groq_client:
-        try:
-            completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "system", "content": full_system}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=150
-            )
-            return completion.choices[0].message.content
-        except Exception: pass
+    # Race Groq and Gemini simultaneously for fastest response time (<800ms)
+    groq_task = asyncio.create_task(_call_groq(full_system, user_text))
+    gemini_task = asyncio.create_task(_call_gemini(full_system, user_text))
 
-    if gemini_client:
-        try:
-            response = gemini_client.models.generate_content(
-                model="gemini-2.0-flash", contents=f"{full_system}\n\nSir: {user_text}\nARIA:"
-            )
-            return response.text
-        except Exception: pass
+    done, pending = await asyncio.wait([groq_task, gemini_task], return_when=asyncio.FIRST_COMPLETED)
+    
+    for completed in done:
+        res = completed.result()
+        if res and len(res.strip()) > 0:
+            for p in pending: p.cancel()
+            return res.strip()
 
-    return "All systems nominal Sir."
+    # Fallback to remaining model if first completed returned empty
+    for p in pending:
+        res = await p
+        if res and len(res.strip()) > 0:
+            return res.strip()
+
+    return "All systems operational Sir."
 
 # -------------------------------------------------------------
-# SECURE TELEGRAM BOT WEBHOOK (ISOLATED COMMAND ROUTING)
+# SECURE TELEGRAM BOT WEBHOOK (ISOLATED EXECUTION)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
-    if not TELEGRAM_TOKEN:
-        return {"status": "no token"}
+    if not TELEGRAM_TOKEN: return {"status": "no token"}
     
     try:
         data = await req.json()
@@ -278,31 +269,22 @@ async def telegram_webhook(req: Request):
         document = message.get("document", None)
         caption = message.get("caption", "").strip()
 
-        if not chat_id:
-            return {"status": "no chat_id"}
+        if not chat_id: return {"status": "no chat_id"}
 
         # 1. AUTHENTICATION LOCK
-        if ALLOWED_TELEGRAM_USER_ID:
-            if str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
-                print(f"[SECURITY ALERT]: Blocked unauthorized Telegram user {from_user_id}")
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                        json={"chat_id": chat_id, "text": "Access Denied: Unauthorized User."}
-                    )
-                return {"status": "unauthorized"}
-
-        # 2. ISOLATED TELEGRAM /start COMMAND (NEVER TOUCHES DOC RETRIEVAL)
-        if text.lower() == "/start":
-            greeting = "Good day, Sir. I am ARIA, your personal neural AI assistant. All systems online and operational. How may I assist you today?"
+        if ALLOWED_TELEGRAM_USER_ID and str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
             async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": greeting}
-                )
+                await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": "Access Denied."})
+            return {"status": "unauthorized"}
+
+        # 2. /start COMMAND
+        if text.lower() == "/start":
+            greeting = "Good day, Sir. I am ARIA, your personal AI assistant. All systems online. How may I assist you?"
+            async with httpx.AsyncClient() as client:
+                await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": greeting})
             return {"status": "ok"}
 
-        # 3. INCOMING FILE ATTACHMENTS
+        # 3. FILE ATTACHMENTS (PDF/DOC UPLOAD)
         if document:
             file_id = document.get("file_id")
             file_name = document.get("file_name", "document.pdf")
@@ -310,90 +292,49 @@ async def telegram_webhook(req: Request):
             async with httpx.AsyncClient() as client:
                 file_info_res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}")
                 file_path = file_info_res.json().get("result", {}).get("file_path")
-                
-                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-                raw_bytes_res = await client.get(download_url)
+                raw_bytes_res = await client.get(f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}")
                 raw_bytes = raw_bytes_res.content
 
-            extracted_text = extract_text_from_pdf(raw_bytes) if file_name.lower().endswith(".pdf") else "Binary File Stored"
+            extracted_text = extract_text_from_pdf(raw_bytes) if file_name.lower().endswith(".pdf") else "Binary Document"
             doc_label = caption if caption else file_name
 
             save_reply = await save_binary_document(file_name, doc_label, raw_bytes, extracted_text)
 
             async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": save_reply}
-                )
+                await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 4. TEXT MESSAGES & FILE RETRIEVAL COMMANDS
+        # 4. EXPLICIT FILE TRANSMISSION TRIGGER
         if text:
             cmd = text.lower()
-
-            # EXPLICIT FILE RETRIEVAL TRIGGERS
-            file_triggers = ["send my resume", "give my resume", "get my resume", "send resume", "give resume", "my resume", "send document", "send pdf"]
-            if any(trigger in cmd for trigger in file_triggers) or cmd in ["yes give", "give it", "send it"]:
+            file_triggers = ["send my resume file", "send resume pdf", "send my document file", "download my resume", "give me the pdf file"]
+            
+            if any(trigger in cmd for trigger in file_triggers):
                 matching_files = []
-
                 if mongo_docs_col is not None:
                     try:
-                        search_keywords = [w for w in cmd.split() if w not in ["send", "give", "get", "my", "the", "pdf", "doc", "document", "yes", "it", "please"]]
-                        
-                        # High-Speed Projection: Omit heavy b64_payload during search
-                        if search_keywords:
-                            query_regex = "|".join(search_keywords)
-                            cursor = mongo_docs_col.find({
-                                "$or": [
-                                    {"file_name": {"$regex": query_regex, "$options": "i"}},
-                                    {"label": {"$regex": query_regex, "$options": "i"}}
-                                ]
-                            }, {"b64_payload": 0})
-                            async for doc in cursor:
-                                matching_files.append(doc["file_name"])
-
-                        # Fallback to latest file if no keyword was passed
-                        if not matching_files:
-                            cursor = mongo_docs_col.find({}, {"b64_payload": 0}).sort("_id", -1).limit(1)
-                            async for doc in cursor:
-                                matching_files.append(doc["file_name"])
-
-                    except Exception as e:
-                        print(f"[MongoDB Fetch Error]: {e}")
+                        cursor = mongo_docs_col.find({}, {"b64_payload": 0}).sort("_id", -1).limit(1)
+                        async for doc in cursor: matching_files.append(doc["file_name"])
+                    except Exception: pass
 
                 async with httpx.AsyncClient() as client:
                     if not matching_files:
-                        await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={"chat_id": chat_id, "text": "I couldn't find any documents stored in your vault Sir. Please upload a document first."}
-                        )
-                    elif len(matching_files) == 1:
+                        await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": "Sir, I have your resume profile details, but no raw .pdf file is saved in the binary vault yet. Please attach and send your resume PDF here to store the physical file."})
+                    else:
                         target_name = matching_files[0]
-                        
-                        # Fetch binary payload ONLY for the selected file
                         full_doc = await mongo_docs_col.find_one({"file_name": target_name})
                         raw_file_bytes = base64.b64decode(full_doc["b64_payload"])
-
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
                             data={"chat_id": chat_id, "caption": f"Here is your document: '{target_name}' Sir."},
                             files={"document": (target_name, raw_file_bytes, "application/octet-stream")}
                         )
-                    else:
-                        file_list = ", ".join(matching_files)
-                        await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={"chat_id": chat_id, "text": f"Sir, I found multiple documents in your vault: [{file_list}]. Which specific document would you like me to send?"}
-                        )
                 return {"status": "ok"}
 
-            # STANDARD CONVERSATIONAL AI
+            # STANDARD CONVERSATIONAL RESPONSE
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": reply_text}
-                )
+                await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
             return {"status": "ok"}
 
     except Exception as e:
@@ -413,9 +354,7 @@ async def set_telegram_webhook(req: Request):
 # SPEECH & PDF ENGINE
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> str:
-    if not selected_voice:
-        selected_voice = get_stored_user_voice()
-
+    if not selected_voice: selected_voice = get_stored_user_voice()
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
     voice_to_use = "te-IN-MohanNeural" if (is_telugu_script and "te-IN" not in selected_voice) else selected_voice
 
@@ -423,8 +362,7 @@ async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> st
         communicate = edge_tts.Communicate(text, voice_to_use)
         audio_data = bytearray()
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.extend(chunk["data"])
+            if chunk["type"] == "audio": audio_data.extend(chunk["data"])
         return base64.b64encode(audio_data).decode('utf-8')
     except Exception:
         communicate = edge_tts.Communicate(text, "en-GB-RyanNeural")
@@ -478,9 +416,6 @@ def serve_webapp():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-        <meta name="mobile-web-app-capable" content="yes">
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-        <meta name="theme-color" content="#020617">
         <title>{ASSISTANT_NAME}</title>
         <style>
             * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }}
