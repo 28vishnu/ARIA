@@ -52,14 +52,13 @@ github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
-# Cache for loaded voices
 CACHE_VOICES = []
 
 # -------------------------------------------------------------
-# DYNAMIC DATABASE & VOICE PREFERENCE VAULT
+# DYNAMIC DATABASE & PERMANENT MEMORY VAULT
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
-    """Retrieves the user's saved voice preference from Supabase."""
+    """Retrieves saved voice preference from Supabase."""
     if supabase:
         try:
             res = supabase.table("personal_memory").select("fact").eq("category", "user_voice_preference").execute()
@@ -67,15 +66,13 @@ def get_stored_user_voice() -> str:
                 return res.data[0]["fact"].strip()
         except Exception as e:
             print(f"[Supabase Voice Read Error]: {e}")
-    return "en-GB-RyanNeural"  # Default studio J.A.R.V.I.S. voice
+    return "en-GB-RyanNeural"  # Default studio voice
 
 def save_stored_user_voice(voice_short_name: str):
-    """Saves or updates user's preferred voice in Supabase."""
+    """Saves preferred voice in Supabase to preserve preference across reloads."""
     if supabase:
         try:
-            # Delete existing preference first
             supabase.table("personal_memory").delete().eq("category", "user_voice_preference").execute()
-            # Store new preference
             supabase.table("personal_memory").insert({
                 "category": "user_voice_preference",
                 "fact": voice_short_name
@@ -84,6 +81,7 @@ def save_stored_user_voice(voice_short_name: str):
             print(f"[Supabase Voice Save Error]: {e}")
 
 def save_memory_fact(category: str, fact: str) -> str:
+    """Stores user facts permanently in Supabase."""
     if supabase:
         try:
             supabase.table("personal_memory").insert({
@@ -96,6 +94,7 @@ def save_memory_fact(category: str, fact: str) -> str:
     return "Memory vault unavailable Sir."
 
 def purge_memory_category(category: str) -> str:
+    """Deletes all facts and documents for a specific category."""
     if supabase:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
@@ -137,20 +136,23 @@ def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# VOICE ASSISTANT & INTENT ENGINE
+# TASK PROCESSING ENGINE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, location_info: str = None) -> str:
     cmd = user_text.lower()
 
-    # 1. Voice Change Intent
-    if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice list"]):
-        return "Opening the neural voice catalog for you Sir. Choose your preferred voice from the interface."
+    # Automatic Fact Auto-Save Intent
+    if any(k in cmd for k in ["remember that", "save this", "store that", "my preference is", "note that"]):
+        save_memory_fact("general_facts", user_text)
 
-    # 2. Category Purge Intent
-    if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished", "exams are over"]):
+    # Voice Change Intent
+    if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice catalog"]):
+        return "Opening the neural voice catalog Sir. Select your preferred voice."
+
+    # Category Purge Intent
+    if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished"]):
         return purge_memory_category("exams")
 
-    # 3. Web Search Intent
     search_context = ""
     if any(kw in cmd for kw in ["search", "find", "who is", "latest", "news", "box office", "today"]):
         search_context = fetch_web_search(user_text)
@@ -182,16 +184,11 @@ async def process_autonomous_task(user_text: str, location_info: str = None) -> 
     return "All systems nominal Sir."
 
 async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> str:
-    """Generates studio-quality neural MP3 audio using the selected voice."""
     if not selected_voice:
         selected_voice = get_stored_user_voice()
 
-    # Auto-detect Telugu script if no voice was specified and script is present
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
-    if is_telugu_script and "te-IN" not in selected_voice:
-        voice_to_use = "te-IN-MohanNeural"
-    else:
-        voice_to_use = selected_voice
+    voice_to_use = "te-IN-MohanNeural" if (is_telugu_script and "te-IN" not in selected_voice) else selected_voice
 
     try:
         communicate = edge_tts.Communicate(text, voice_to_use)
@@ -199,11 +196,8 @@ async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> st
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_data.extend(chunk["data"])
-
         return base64.b64encode(audio_data).decode('utf-8')
-    except Exception as e:
-        print(f"[Edge-TTS Error]: {e}")
-        # Fallback to Ryan British voice if selected voice fails
+    except Exception:
         communicate = edge_tts.Communicate(text, "en-GB-RyanNeural")
         audio_data = bytearray()
         async for chunk in communicate.stream():
@@ -217,7 +211,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# API ROUTE FOR VOICES CATALOG
+# API ROUTES
 # -------------------------------------------------------------
 @app.get("/api/voices")
 async def get_voices_list():
@@ -235,7 +229,6 @@ async def get_voices_list():
                 for v in all_voices
             ]
         except Exception as e:
-            print(f"[Voice List Fetch Error]: {e}")
             return JSONResponse(status_code=500, content={"error": str(e)})
 
     active_voice = get_stored_user_voice()
@@ -249,7 +242,7 @@ async def set_voice_preference(req: Request):
     return {"status": "success", "voice": voice}
 
 # -------------------------------------------------------------
-# ZERO-TEXTBOX CANVAS HUD WITH VOICE SELECTOR MODAL
+# FRONTEND WITH VOICE SELECTOR & PARTICLE HUD
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -308,7 +301,6 @@ def serve_webapp():
             @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
             @keyframes pulse {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
 
-            /* GEAR BUTTON */
             .settings-btn {{
                 position: absolute; top: 25px; right: 25px; z-index: 5;
                 background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3);
@@ -316,7 +308,6 @@ def serve_webapp():
                 cursor: pointer; backdrop-filter: blur(8px);
             }}
 
-            /* VOICE SELECTOR MODAL */
             #voiceModal {{
                 position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
                 background: rgba(2, 6, 23, 0.92); backdrop-filter: blur(16px);
@@ -377,16 +368,15 @@ def serve_webapp():
             </div>
         </div>
 
-        <!-- VOICE SELECTOR MODAL -->
         <div id="voiceModal">
             <div class="modal-content">
                 <div class="modal-header">
                     <h3 style="color: #38bdf8; letter-spacing: 1px;">Neural Voice Catalog</h3>
                     <button style="background: none; border: none; color: #64748b; font-size: 1.5rem; cursor: pointer;" onclick="closeVoiceModal()">✕</button>
                 </div>
-                <input type="text" id="voiceSearch" class="search-box" placeholder="Search language or voice name (e.g. Telugu, Ryan, India)..." oninput="filterVoices()">
+                <input type="text" id="voiceSearch" class="search-box" placeholder="Search language or voice (e.g. Telugu, Ryan, India)..." oninput="filterVoices()">
                 <div class="voice-list" id="voiceList">
-                    <div style="color: #64748b; text-align: center; margin-top: 20px;">Loading voices...</div>
+                    <div style="color: #64748b; text-align: center; margin-top: 20px;">Loading catalog...</div>
                 </div>
             </div>
         </div>
@@ -431,7 +421,7 @@ def serve_webapp():
             }}
             render();
 
-            /* WEBSOCKET REAL-TIME AUDIO STREAMING */
+            /* WEBSOCKET REAL-TIME STREAMING */
             let ws;
             let currentAudio = null;
             let userLocation = null;
