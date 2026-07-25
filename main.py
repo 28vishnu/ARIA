@@ -55,9 +55,9 @@ ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intellig
 HIGH-IQ CONVERSATIONAL DIRECTIVES:
 - Speak/type in a composed, warm, articulate, highly analytical, and clever tone. Address the user naturally as 'Sir'.
 - DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- PROACTIVE INTELLIGENCE: Do not merely answer questions passively. Reason through implications, anticipate next steps, offer strategic suggestions, and ask pertinent follow-up questions when relevant.
+- PROACTIVE INTELLIGENCE: Do not merely answer questions passively. Reason through implications, anticipate next steps, and ask pertinent follow-up questions when relevant.
 - MEMORY VAULT ACCESS: You possess total access to stored personal profile details, academic background, technical projects (TaskFlow, WealthFlow AI), skills, and document context.
-- Keep responses sharp, direct, intelligent, and concise (1-3 sentences max unless providing a structured technical breakdown or briefing)."""
+- Keep responses sharp, direct, intelligent, and concise (1-2 sentences max unless providing a structured technical breakdown or briefing)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -208,7 +208,6 @@ async def fetch_longterm_memory() -> str:
 # GMAIL & GOOGLE CALENDAR ENGINE
 # -------------------------------------------------------------
 async def fetch_recent_emails(max_results: int = 5) -> str:
-    """Fetches recent emails using OAuth Refresh Token or Service Account fallback."""
     try:
         def _get_gmail():
             if GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN:
@@ -316,7 +315,7 @@ async def start_scheduler():
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Scheduler]: Proactive Briefing Daemon Active.")
+    print("[J.A.R.V.I.S. Scheduler]: Active.")
 
 # -------------------------------------------------------------
 # ULTRA-FAST PARALLEL LLM INFERENCE ENGINE (<800MS)
@@ -395,7 +394,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems operational Sir."
 
 # -------------------------------------------------------------
-# SECURE TELEGRAM BOT WEBHOOK
+# SECURE TELEGRAM BOT WEBHOOK (DIRECT FILE DISPATCH)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -445,29 +444,38 @@ async def telegram_webhook(req: Request):
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 4. EXPLICIT FILE TRANSMISSION TRIGGER
+        # 4. EXPLICIT DIRECT TELEGRAM FILE TRANSMISSION (BROAD TRIGGER MATCH)
         if text:
             cmd = text.lower()
-            file_triggers = ["send my resume file", "send resume pdf", "send my document file", "download my resume", "give me the pdf file", "send file"]
+            file_triggers = [
+                "give my resume", "send my resume", "get resume", "give resume", "send resume",
+                "give that document", "save in my phone", "send document", "send pdf",
+                "download my resume", "give me the pdf", "send file"
+            ]
             
             if any(trigger in cmd for trigger in file_triggers):
                 matching_files = []
                 if mongo_docs_col is not None:
                     try:
-                        cursor = mongo_docs_col.find({}, {"b64_payload": 0}).sort("_id", -1).limit(1)
+                        cursor = mongo_docs_col.find({}).sort("_id", -1).limit(1)
                         async for doc in cursor: matching_files.append(doc["file_name"])
                     except Exception: pass
 
                 async with httpx.AsyncClient() as client:
                     if not matching_files:
-                        await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": "Sir, I have your profile details in memory, but no raw .pdf file is saved in the vault yet. Please drop your resume PDF here to store the physical file."})
+                        await client.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                            json={"chat_id": chat_id, "text": "Sir, I have your resume details in text memory, but no raw .pdf file is saved in the vault yet. Please drop your resume PDF here once to store the file."}
+                        )
                     else:
                         target_name = matching_files[0]
                         full_doc = await mongo_docs_col.find_one({"file_name": target_name})
                         raw_file_bytes = base64.b64decode(full_doc["b64_payload"])
+                        
+                        # Direct Telegram Document Binary Push (Sub-2 second execution)
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
-                            data={"chat_id": chat_id, "caption": f"Here is your document: '{target_name}' Sir."},
+                            data={"chat_id": chat_id, "caption": f"Here is your document file: '{target_name}' Sir."},
                             files={"document": (target_name, raw_file_bytes, "application/octet-stream")}
                         )
                 return {"status": "ok"}
