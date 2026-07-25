@@ -8,21 +8,25 @@ from supabase import create_client
 
 app = FastAPI()
 
-# 1. Environment Secrets
+# 1. Fetch Environment Secrets from Render
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
-SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an advanced, highly capable AI assistant.
-You are articulate, proactive, and sharp. Keep spoken/chat replies concise and natural."""
+SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an advanced, highly capable AI personal assistant.
+You are articulate, resourceful, and sharp. Keep spoken/chat replies concise and natural."""
 
-# 2. Setup Services
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.0-flash")
+# 2. Configure Services
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+# Using gemini-1.5-flash for higher free tier quota limits
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+# Initialize Supabase if keys exist
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 class UserQuery(BaseModel):
     prompt: str
@@ -118,11 +122,11 @@ def serve_webapp():
                         document.getElementById('response').innerText = data.reply;
                         document.getElementById('status').innerText = 'Tap microphone to speak again';
 
-                        // Voice synthesis output
+                        // Voice output
                         const utterance = new SpeechSynthesisUtterance(data.reply);
                         window.speechSynthesis.speak(utterance);
                     }} catch (err) {{
-                        document.getElementById('status').innerText = 'Error processing request.';
+                        document.getElementById('status').innerText = 'Error connecting to server.';
                     }}
                 }};
             }}
@@ -132,13 +136,20 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# ENDPOINT 2: DIRECT CHAT API (FOR WEB APP)
+# ENDPOINT 2: DIRECT CHAT API (WEB APP)
 # -------------------------------------------------------------
 @app.post("/chat")
 def chat(data: UserQuery):
-    full_prompt = f"{SYSTEM_PROMPT}\nUser: {data.prompt}\n{ASSISTANT_NAME}:"
-    response = model.generate_content(full_prompt)
-    return {"assistant": ASSISTANT_NAME, "reply": response.text}
+    try:
+        full_prompt = f"{SYSTEM_PROMPT}\nUser: {data.prompt}\n{ASSISTANT_NAME}:"
+        response = model.generate_content(full_prompt)
+        return {"assistant": ASSISTANT_NAME, "reply": response.text}
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        return {
+            "assistant": ASSISTANT_NAME, 
+            "reply": "I am receiving too many requests right now. Please wait about 30 seconds and try again."
+        }
 
 # -------------------------------------------------------------
 # ENDPOINT 3: TELEGRAM BOT WEBHOOK
@@ -147,17 +158,20 @@ def chat(data: UserQuery):
 async def telegram_webhook(req: Request):
     data = await req.json()
     
-    # Process incoming text messages from Telegram
+    # Process text messages from Telegram
     if "message" in data and "text" in data["message"]:
         chat_id = data["message"]["chat"]["id"]
         user_text = data["message"]["text"]
         
-        # Query Gemini
-        full_prompt = f"{SYSTEM_PROMPT}\nUser: {user_text}\n{ASSISTANT_NAME}:"
-        response = model.generate_content(full_prompt)
-        ai_reply = response.text
+        try:
+            full_prompt = f"{SYSTEM_PROMPT}\nUser: {user_text}\n{ASSISTANT_NAME}:"
+            response = model.generate_content(full_prompt)
+            ai_reply = response.text
+        except Exception as e:
+            print(f"Gemini API Error: {e}")
+            ai_reply = "Rate limit reached. Please wait 30 seconds before sending another message."
         
-        # Reply back via Telegram API
+        # Send reply back via Telegram API
         if TELEGRAM_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             async with httpx.AsyncClient() as client:
