@@ -255,7 +255,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# SECURE TELEGRAM BOT WEBHOOK (TEXT & FILE RETRIEVAL)
+# SECURE TELEGRAM BOT WEBHOOK (EXPLICIT ROUTING)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -267,9 +267,12 @@ async def telegram_webhook(req: Request):
         message = data.get("message", {})
         chat_id = message.get("chat", {}).get("id")
         from_user_id = message.get("from", {}).get("id")
-        text = message.get("text", "")
+        text = message.get("text", "").strip()
         document = message.get("document", None)
         caption = message.get("caption", "").strip()
+
+        if not chat_id:
+            return {"status": "no chat_id"}
 
         # 1. AUTHENTICATION LOCK
         if ALLOWED_TELEGRAM_USER_ID:
@@ -282,8 +285,18 @@ async def telegram_webhook(req: Request):
                     )
                 return {"status": "unauthorized"}
 
-        # 2. INCOMING FILE ATTACHMENTS
-        if document and chat_id:
+        # 2. HANDLE TELEGRAM /start COMMAND EXPLICITLY
+        if text.lower() == "/start":
+            greeting = "Good day, Sir. I am ARIA, your personal neural AI assistant. How may I assist you today?"
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": greeting}
+                )
+            return {"status": "ok"}
+
+        # 3. INCOMING FILE ATTACHMENTS
+        if document:
             file_id = document.get("file_id")
             file_name = document.get("file_name", "document.pdf")
 
@@ -307,17 +320,17 @@ async def telegram_webhook(req: Request):
                 )
             return {"status": "ok"}
 
-        # 3. TEXT MESSAGES & FILE RETRIEVAL COMMANDS
-        if chat_id and text:
-            cmd = text.lower().strip()
+        # 4. TEXT MESSAGES & FILE RETRIEVAL COMMANDS
+        if text:
+            cmd = text.lower()
 
-            # FILE RETRIEVAL INTENT MATCHING
-            if any(k in cmd for k in ["send my", "give my", "get my", "send document", "send pdf", "send resume", "give it", "yes give", "my resume"]):
+            # EXPLICIT FILE RETRIEVAL COMMANDS
+            file_triggers = ["send my resume", "give my resume", "get my resume", "send resume", "give resume", "my resume", "send document", "send pdf"]
+            if any(trigger in cmd for trigger in file_triggers) or cmd in ["yes give", "give it", "send it"]:
                 matching_files = []
 
                 if mongo_docs_col is not None:
                     try:
-                        # Extract non-filler keywords for regex search
                         search_keywords = [w for w in cmd.split() if w not in ["send", "give", "get", "my", "the", "pdf", "doc", "document", "yes", "it", "please"]]
                         
                         if search_keywords:
@@ -331,7 +344,7 @@ async def telegram_webhook(req: Request):
                             async for doc in cursor:
                                 matching_files.append((doc["file_name"], doc["b64_payload"]))
 
-                        # Fallback to the most recently saved file if no specific keyword matched or user said "yes give it"
+                        # Fallback to the latest saved file if no keyword matched
                         if not matching_files:
                             cursor = mongo_docs_col.find({}).sort("_id", -1).limit(1)
                             async for doc in cursor:
@@ -340,41 +353,36 @@ async def telegram_webhook(req: Request):
                     except Exception as e:
                         print(f"[MongoDB Fetch Error]: {e}")
 
-                if not matching_files:
-                    reply_text = "I couldn't find any documents stored in your vault Sir. Please upload a document first."
-                    async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient() as client:
+                    if not matching_files:
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={"chat_id": chat_id, "text": reply_text}
+                            json={"chat_id": chat_id, "text": "I couldn't find any documents stored in your vault Sir. Please upload a document first."}
                         )
-                elif len(matching_files) == 1:
-                    target_name, target_b64 = matching_files[0]
-                    raw_file_bytes = base64.b64decode(target_b64)
-
-                    async with httpx.AsyncClient() as client:
+                    elif len(matching_files) == 1:
+                        target_name, target_b64 = matching_files[0]
+                        raw_file_bytes = base64.b64decode(target_b64)
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
                             data={"chat_id": chat_id, "caption": f"Here is your document: '{target_name}' Sir."},
                             files={"document": (target_name, raw_file_bytes, "application/octet-stream")}
                         )
-                    return {"status": "ok"}
-                else:
-                    file_list = ", ".join([f[0] for f in matching_files])
-                    reply_text = f"Sir, I found multiple documents in your vault: [{file_list}]. Which specific document would you like me to send?"
-                    async with httpx.AsyncClient() as client:
+                    else:
+                        file_list = ", ".join([f[0] for f in matching_files])
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={"chat_id": chat_id, "text": reply_text}
+                            json={"chat_id": chat_id, "text": f"Sir, I found multiple documents in your vault: [{file_list}]. Which specific document would you like me to send?"}
                         )
-                    return {"status": "ok"}
+                return {"status": "ok"}
 
-            # STANDARD CONVERSATIONAL AI
+            # STANDARD CONVERSATIONAL RESPONSE
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                     json={"chat_id": chat_id, "text": reply_text}
                 )
+            return {"status": "ok"}
 
     except Exception as e:
         print(f"[Telegram Webhook Error]: {e}")
