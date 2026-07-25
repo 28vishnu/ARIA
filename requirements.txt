@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+google-generativeai
+supabase
+requests
+pydantic
