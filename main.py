@@ -48,9 +48,14 @@ GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
+# PRE-LOADED CORE IDENTITY
+USER_FULL_NAME = "Nanduri Vishnu Saketh"
+
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent neural AI assistant inspired by J.A.R.V.I.S.
+CORE USER IDENTITY:
+- The user's name is {USER_FULL_NAME}. Always address him naturally as 'Sir' or by his name when appropriate.
 DIRECTIVES:
-- Speak/type in a composed, articulate, analytical, and natural tone. Address the user naturally as 'Sir'.
+- Speak/type in a composed, articulate, analytical, and natural tone.
 - DYNAMIC LANGUAGE: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
 - SUB-SECOND SHARPNESS: Keep responses extremely sharp, clever, and concise (1-2 sentences max unless generating a structured report).
 - FULL VAULT ACCESS: Use stored profile details, technical projects (TaskFlow, WealthFlow AI), and documents automatically."""
@@ -72,22 +77,24 @@ scheduler = AsyncIOScheduler()
 # -------------------------------------------------------------
 # 2. IN-MEMORY RAM CACHE (MILLISECOND SPEED TIER)
 # -------------------------------------------------------------
-RAM_MEMORY_CACHE = []
+RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Name is {USER_FULL_NAME}"]
 LAST_CACHE_UPDATE = 0
 
 async def update_ram_cache():
-    """Fetches long-term memory into RAM every 60 seconds to bypass DB read latencies."""
+    """Fetches long-term memory into RAM to bypass DB read latencies."""
     global RAM_MEMORY_CACHE, LAST_CACHE_UPDATE
     now = datetime.now().timestamp()
-    if now - LAST_CACHE_UPDATE < 60 and RAM_MEMORY_CACHE:
+    if now - LAST_CACHE_UPDATE < 60 and len(RAM_MEMORY_CACHE) > 1:
         return RAM_MEMORY_CACHE
 
-    facts = []
+    facts = [f"[PERSONAL_PROFILE]: User Name is {USER_FULL_NAME}"]
     if mongo_memory_col is not None:
         try:
             cursor = mongo_memory_col.find({})
             async for doc in cursor:
-                facts.append(f"[{doc['category'].upper()}]: {doc['fact']}")
+                fact_entry = f"[{doc.get('category', 'MEMORY').upper()}]: {doc.get('fact', '')}"
+                if fact_entry not in facts:
+                    facts.append(fact_entry)
         except Exception: pass
 
     RAM_MEMORY_CACHE = facts
@@ -120,10 +127,8 @@ async def save_memory_fact(category: str, fact: str) -> str:
     cat = category.lower().strip()
     fact_str = fact.strip()
 
-    # Instant RAM Cache Insertion (0ms delay)
     RAM_MEMORY_CACHE.append(f"[{cat.upper()}]: {fact_str}")
 
-    # Non-blocking async background persist
     async def _async_persisters():
         if mongo_memory_col is not None:
             try: await mongo_memory_col.insert_one({"category": cat, "fact": fact_str})
@@ -164,7 +169,7 @@ async def purge_memory_category(category: str) -> str:
         except Exception: pass
 
     global RAM_MEMORY_CACHE
-    RAM_MEMORY_CACHE = []
+    RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Name is {USER_FULL_NAME}"]
     return f"All {category} records and files have been purged Sir."
 
 def fetch_web_search(query: str) -> str:
@@ -276,7 +281,7 @@ async def send_daily_morning_brief():
     weather_info = await fetch_weather_by_coords("17.6868,83.2185")
     cached_facts = await update_ram_cache()
 
-    brief_prompt = f"""Generate a high-IQ, proactive J.A.R.V.I.S. morning briefing for Sir.
+    brief_prompt = f"""Generate a high-IQ, proactive J.A.R.V.I.S. morning briefing for Sir ({USER_FULL_NAME}).
 LOCAL WEATHER: {weather_info}
 TODAY'S CALENDAR AGENDA: {calendar_agenda}
 RECENT GMAIL INBOX PREVIEW: {emails_summary}
@@ -297,10 +302,11 @@ DIRECTIVES:
 
 @app.on_event("startup")
 async def start_scheduler():
+    await update_ram_cache() # Pre-load vault memory on boot
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Scheduler]: Proactive Briefing Daemon Active.")
+    print("[J.A.R.V.I.S. Scheduler & Memory Pre-Loader]: Operational.")
 
 # -------------------------------------------------------------
 # 5. SUB-SECOND INFERENCE ENGINE (<500MS)
@@ -350,7 +356,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         email_data = await fetch_recent_emails(max_results=5)
         user_text = f"Here are my recent inbox emails:\n{email_data}\n\nPlease summarize these emails clearly for me, Sir."
 
-    # 3. AUTO-SAVER (Instant RAM capture)
+    # 3. AUTO-SAVER
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
@@ -365,7 +371,6 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 
     full_system = ARIA_SYSTEM_PROMPT + memory_context + search_context
 
-    # Parallel inference execution
     groq_task = asyncio.create_task(_fast_groq_completion(full_system, user_text))
     gemini_task = asyncio.create_task(_fast_gemini_completion(full_system, user_text))
 
@@ -381,7 +386,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         res = await p
         if res and len(res.strip()) > 0: return res.strip()
 
-    return "All systems operational Sir."
+    return f"All systems operational Sir ({USER_FULL_NAME})."
 
 # -------------------------------------------------------------
 # 6. INSTANT TELEGRAM WEBHOOK (DIRECT FILE DISPATCH)
@@ -409,7 +414,7 @@ async def telegram_webhook(req: Request):
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": "Good day, Sir. I am ARIA. All systems online and operational."}
+                    json={"chat_id": chat_id, "text": f"Good day, Sir ({USER_FULL_NAME}). I am ARIA. All systems online and operational."}
                 )
             return {"status": "ok"}
 
@@ -431,7 +436,7 @@ async def telegram_webhook(req: Request):
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 3. DIRECT FILE RETRIEVAL (Bypasses LLM — Sub-2 Second Execution)
+        # 3. DIRECT FILE RETRIEVAL (Sub-2 Second Execution)
         if text:
             cmd = text.lower()
             file_triggers = [
@@ -455,7 +460,6 @@ async def telegram_webhook(req: Request):
                         target_name = target_doc.get("file_name", "resume.pdf")
                         raw_file_bytes = base64.b64decode(target_doc["b64_payload"])
                         
-                        # Direct Binary Push
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
                             data={"chat_id": chat_id, "caption": f"Here is your file: '{target_name}' Sir."},
