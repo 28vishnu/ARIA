@@ -18,11 +18,11 @@ ASSISTANT_NAME = "ARIA"
 SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an advanced, highly capable AI personal assistant.
 You are articulate, resourceful, and sharp. Keep spoken/chat replies concise and natural."""
 
-# 2. Configure GenAI Client (Using the new google-genai SDK)
+# 2. Configure GenAI Client using google-genai
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Active production model ID
-MODEL_NAME = "gemini-2.0-flash"
+# Updated production model ID
+MODEL_NAME = "gemini-3.5-flash"
 
 # Initialize Supabase if keys exist
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
@@ -153,7 +153,7 @@ def chat(data: UserQuery):
         print(f"Gemini API Error: {e}")
         return {
             "assistant": ASSISTANT_NAME, 
-            "reply": "I am experiencing high traffic right now. Please wait a few seconds and try again."
+            "reply": "API rate limit reached. Please wait 15 seconds and try speaking again."
         }
 
 # -------------------------------------------------------------
@@ -179,7 +179,7 @@ async def telegram_webhook(req: Request):
                 ai_reply = "API key missing."
         except Exception as e:
             print(f"Gemini API Error: {e}")
-            ai_reply = "Service busy. Please wait a few moments before sending another message."
+            ai_reply = "Rate limit reached. Please wait 15 seconds before sending another message."
         
         if TELEGRAM_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
