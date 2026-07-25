@@ -26,24 +26,24 @@ app = FastAPI()
 # -------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
-# BILINGUAL ARIA PROMPT
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous personal AI assistant inspired by J.A.R.V.I.S.
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
-- Address the user naturally as 'Sir' without placing commas before the title.
-- Respond fluently in English or Tenglish (Telugu transliterated in English/Latin script).
-- Keep spoken replies concise, sharp, and natural (1 concise sentence max).
-- Use personal memory context, schedule, weather, search results, and repositories to answer directly."""
+- Speak in a composed, warm, and natural voice. Address the user naturally as 'Sir' without inserting micro-pauses or commas before the title.
+- DYNAMIC LANGUAGE SWITCHING:
+  * Respond fluently in English or Tenglish (Telugu transliterated using English/Latin script).
+  * When speaking in Tenglish, keep it completely natural, expressive, and conversational.
+- AUTONOMOUS TASK EXECUTION:
+  * Execute background actions (web searches, memory categorizations, PDF indexing, or data deletions) quietly and report only the final outcome in 1 concise sentence.
+- Keep spoken responses sharp, articulate, and direct."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -53,48 +53,51 @@ tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 # -------------------------------------------------------------
-# ULTRA-REALISTIC EDGE-TTS VOICE ROUTING (FREE)
+# DYNAMIC DATABASE & AUTONOMOUS ACTION ENGINE
 # -------------------------------------------------------------
-async def generate_speech_audio_b64(text: str) -> tuple[str, str]:
-    """Generates studio-quality neural MP3 audio for English or Telugu/Tenglish."""
-    # Detect Telugu script or common Tenglish words
-    is_telugu = bool(re.search(r'[\u0C00-\u0C7F]', text)) or bool(re.search(r'\b(cheppu|cheyyi|sangu|ela|vunnaru|avunu|kadu|chudu|em|yem|namaskaram|malli|ipudu|nenu|meeru)\b', text, re.I))
-    
-    # Selected Neural Voice Models
-    voice = "te-IN-MohanNeural" if is_telugu else "en-GB-RyanNeural"
-
-    communicate = edge_tts.Communicate(text, voice)
-    audio_data = bytearray()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data.extend(chunk["data"])
-
-    b64_audio = base64.b64encode(audio_data).decode('utf-8')
-    return b64_audio, text
-
-# -------------------------------------------------------------
-# CORE INTEGRATION MODULES
-# -------------------------------------------------------------
-def extract_text_from_pdf(file_bytes: bytes) -> str:
-    try:
-        reader = PdfReader(BytesIO(file_bytes))
-        return "".join([page.extract_text() or "" for page in reader.pages]).strip()
-    except Exception: return ""
-
-def save_fact_to_memory(category: str, fact: str):
+def save_memory_fact(category: str, fact: str) -> str:
+    """Stores data or document facts under a specific category in Supabase."""
     if supabase:
-        try: supabase.table("personal_memory").insert({"category": category, "fact": fact}).execute()
-        except Exception: pass
+        try:
+            supabase.table("personal_memory").insert({
+                "category": category.lower().strip(),
+                "fact": fact.strip()
+            }).execute()
+            return f"Data successfully stored under {category} Sir."
+        except Exception as e:
+            print(f"[Supabase Insert Error]: {e}")
+    return "Memory vault unavailable Sir."
+
+def purge_memory_category(category: str) -> str:
+    """Completely deletes all stored facts and documents belonging to a category."""
+    if supabase:
+        try:
+            supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
+            return f"All {category} records and files have been purged from memory Sir."
+        except Exception as e:
+            print(f"[Supabase Delete Error]: {e}")
+    return "Unable to clear vault category Sir."
+
+def fetch_category_memory(category: str) -> str:
+    """Retrieves all data tagged with a specific category."""
+    if supabase:
+        try:
+            res = supabase.table("personal_memory").select("fact").eq("category", category.lower().strip()).execute()
+            if res.data:
+                facts = [f"- {item['fact']}" for item in res.data]
+                return f"\n{category.upper()} RECORDS:\n" + "\n".join(facts) + "\n"
+        except Exception as e:
+            print(f"[Supabase Fetch Category Error]: {e}")
+    return f"No active records found for {category} Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
-    search_keywords = ["news", "latest", "search", "who is", "today", "box office", "update", "weather", "score", "movie", "cinema"]
-    if any(kw in query.lower() for kw in search_keywords):
-        try:
-            res = tavily_client.search(query=query, max_results=2)
-            results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-            return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
-        except Exception: pass
+    try:
+        res = tavily_client.search(query=query, max_results=2)
+        results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
+        return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
+    except Exception as e:
+        print(f"[Search Error]: {e}")
     return ""
 
 async def fetch_weather_by_coords(location_info: str) -> str:
@@ -110,29 +113,6 @@ async def fetch_weather_by_coords(location_info: str) -> str:
     except Exception: pass
     return ""
 
-def fetch_github_summary() -> str:
-    if not github_client: return ""
-    try:
-        user = github_client.get_user()
-        repos = [repo.name for repo in user.get_repos()[:5]]
-        return f"\nGITHUB REPOSITORIES: {', '.join(repos)}\n"
-    except Exception: return ""
-
-def fetch_google_calendar_events() -> str:
-    if not GOOGLE_SERVICE_ACCOUNT_JSON: return ""
-    try:
-        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=['https://www.googleapis.com/auth/calendar.readonly']
-        )
-        service = build('calendar', 'v3', credentials=creds)
-        events_result = service.events().list(calendarId='primary', maxResults=3, singleEvents=True, orderBy='startTime').execute()
-        events = events_result.get('items', [])
-        if not events: return "\nCALENDAR SCHEDULE: No upcoming events today.\n"
-        event_list = [f"{e.get('summary', 'Event')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events]
-        return "\nCALENDAR SCHEDULE: " + "; ".join(event_list) + "\n"
-    except Exception: return ""
-
 def fetch_longterm_memory() -> str:
     if not supabase: return ""
     try:
@@ -143,10 +123,36 @@ def fetch_longterm_memory() -> str:
     except Exception: pass
     return ""
 
-async def get_aria_response_text(user_text: str, location_info: str = None) -> str:
-    memory_context = fetch_longterm_memory() + fetch_google_calendar_events() + fetch_github_summary() + fetch_web_search(user_text)
+# -------------------------------------------------------------
+# AUTONOMOUS INTENT DISPATCHER & INFERENCE
+# -------------------------------------------------------------
+async def process_autonomous_task(user_text: str, location_info: str = None) -> str:
+    cmd = user_text.lower()
+
+    # 1. Direct Category Purge (e.g. "Delete all exams", "Exams are finished", "Clear exam data")
+    if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished", "exams are over", "delete exam data"]):
+        return purge_memory_category("exams")
+
+    # 2. General Purge Command (e.g. "Delete all data in [category]")
+    purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
+    if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
+        target_cat = purge_match.group(1).replace("data", "").replace("all", "").strip()
+        if target_cat and target_cat not in ["this", "that", "it"]:
+            return purge_memory_category(target_cat)
+
+    # 3. Direct Store Command (e.g. "Exams are near store this", "Save this under exams")
+    if "exam" in cmd and any(k in cmd for k in ["store", "save", "near", "coming", "schedule"]):
+        save_memory_fact("exams", user_text)
+
+    # 4. Web Search Intent Detection
+    search_keywords = ["search", "find", "who is", "latest", "news", "box office", "score", "today", "update"]
+    search_context = ""
+    if any(kw in cmd for kw in search_keywords):
+        search_context = fetch_web_search(user_text)
+
+    memory_context = fetch_longterm_memory() + search_context
     if location_info:
-        memory_context += await fetch_weather_by_coords(location_info) + f"\nUSER GPS LOCATION: {location_info}\n"
+        memory_context += await fetch_weather_by_coords(location_info)
 
     full_system = ARIA_SYSTEM_PROMPT + memory_context
 
@@ -155,10 +161,10 @@ async def get_aria_response_text(user_text: str, location_info: str = None) -> s
             completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": full_system}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=100
+                temperature=0.5, max_tokens=120
             )
             return completion.choices[0].message.content
-        except Exception: pass
+        except Exception as e: print(f"[Groq Warning]: {e}")
 
     if gemini_client:
         try:
@@ -166,12 +172,33 @@ async def get_aria_response_text(user_text: str, location_info: str = None) -> s
                 model="gemini-2.0-flash", contents=f"{full_system}\n\nSir: {user_text}\nARIA:"
             )
             return response.text
-        except Exception: pass
+        except Exception as e: print(f"[Gemini Warning]: {e}")
 
-    return "Standing by Sir."
+    return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# FRONTEND WITH NEURAL AUDIO PLAYER & DIRECT DRAG-AND-DROP
+# EDGE-TTS NEURAL AUDIO SYNTHESIS
+# -------------------------------------------------------------
+async def generate_speech_audio_b64(text: str) -> str:
+    is_telugu = bool(re.search(r'[\u0C00-\u0C7F]', text)) or bool(re.search(r'\b(cheppu|cheyyi|sangu|ela|vunnaru|avunu|kadu|chudu|em|yem|namaskaram|malli|ipudu|nenu|meeru)\b', text, re.I))
+    voice = "te-IN-MohanNeural" if is_telugu else "en-GB-RyanNeural"
+
+    communicate = edge_tts.Communicate(text, voice)
+    audio_data = bytearray()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data.extend(chunk["data"])
+
+    return base64.b64encode(audio_data).decode('utf-8')
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    try:
+        reader = PdfReader(BytesIO(file_bytes))
+        return "".join([page.extract_text() or "" for page in reader.pages]).strip()
+    except Exception: return ""
+
+# -------------------------------------------------------------
+# ZERO-TEXTBOX CANVAS HUD FRONTEND
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -189,55 +216,35 @@ def serve_webapp():
             * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }}
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #020617;
-                color: #f8fafc;
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-                position: relative;
+                background: #020617; color: #f8fafc;
+                min-height: 100vh; display: flex; flex-direction: column;
+                align-items: center; justify-content: center;
+                overflow: hidden; position: relative;
             }}
             canvas#particleCanvas {{
-                position: absolute;
-                top: 0; left: 0; width: 100%; height: 100%;
+                position: absolute; top: 0; left: 0; width: 100%; height: 100%;
                 z-index: 1; pointer-events: none;
             }}
             .ui-layer {{
-                position: relative;
-                z-index: 2;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
+                position: relative; z-index: 2;
+                display: flex; flex-direction: column; align-items: center; justify-content: center;
             }}
             .hud-orb {{
-                position: relative;
-                width: 240px;
-                height: 240px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
+                position: relative; width: 240px; height: 240px;
+                display: flex; align-items: center; justify-content: center; cursor: pointer;
             }}
             .ring-outer {{
-                position: absolute;
-                width: 100%; height: 100%;
-                border-radius: 50%;
+                position: absolute; width: 100%; height: 100%; border-radius: 50%;
                 border: 2px dashed rgba(56, 189, 248, 0.4);
                 animation: spin 20s linear infinite;
             }}
             .ring-inner {{
-                position: absolute;
-                width: 78%; height: 78%;
-                border-radius: 50%;
+                position: absolute; width: 78%; height: 78%; border-radius: 50%;
                 border: 2px solid rgba(129, 140, 248, 0.5);
                 box-shadow: 0 0 30px rgba(56, 189, 248, 0.3);
             }}
             .core-node {{
-                width: 50%; height: 50%;
-                border-radius: 50%;
+                width: 50%; height: 50%; border-radius: 50%;
                 background: radial-gradient(circle, #38bdf8 0%, #0284c7 60%, #0369a1 100%);
                 box-shadow: 0 0 50px rgba(56, 189, 248, 0.8);
                 transition: all 0.3s ease;
@@ -251,28 +258,19 @@ def serve_webapp():
             @keyframes pulse {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
 
             #dropZone {{
-                position: fixed;
-                top: 0; left: 0; width: 100vw; height: 100vh;
-                background: rgba(2, 6, 23, 0.85);
-                backdrop-filter: blur(12px);
-                border: 3px dashed #38bdf8;
-                z-index: 10;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 1.5rem;
-                color: #38bdf8;
-                letter-spacing: 2px;
-                opacity: 0;
-                pointer-events: none;
-                transition: opacity 0.2s ease;
+                position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+                background: rgba(2, 6, 23, 0.85); backdrop-filter: blur(12px);
+                border: 3px dashed #38bdf8; z-index: 10;
+                display: flex; align-items: center; justify-content: center;
+                font-size: 1.5rem; color: #38bdf8; letter-spacing: 2px;
+                opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
             }}
             #dropZone.active {{ opacity: 1; pointer-events: all; }}
         </style>
     </head>
     <body>
         <canvas id="particleCanvas"></canvas>
-        <div id="dropZone">Drop document anywhere to index</div>
+        <div id="dropZone">Drop exam or document files here</div>
 
         <div class="ui-layer">
             <div class="hud-orb" id="hudOrb" onclick="toggleMic()">
@@ -291,10 +289,8 @@ def serve_webapp():
             window.addEventListener('resize', resize); resize();
             class Particle {{
                 constructor() {{
-                    this.x = Math.random() * canvas.width;
-                    this.y = Math.random() * canvas.height;
-                    this.vx = (Math.random() - 0.5) * 0.7;
-                    this.vy = (Math.random() - 0.5) * 0.7;
+                    this.x = Math.random() * canvas.width; this.y = Math.random() * canvas.height;
+                    this.vx = (Math.random() - 0.5) * 0.7; this.vy = (Math.random() - 0.5) * 0.7;
                 }}
                 update() {{
                     this.x += this.vx; this.y += this.vy;
@@ -358,7 +354,7 @@ def serve_webapp():
                     const speech = event.results[event.results.length - 1][0].transcript.trim();
                     if (!speech) return;
 
-                    // INSTANT BARGE-IN: STOP AUDIO IF USER SPEAKS
+                    // INSTANT BARGE-IN INTERRUPTION
                     stopAudio();
 
                     if (ws && ws.readyState === WebSocket.OPEN) {{
@@ -403,7 +399,7 @@ def serve_webapp():
                 currentAudio.play();
             }}
 
-            /* DIRECT SCREEN DRAG AND DROP FILE HANDLER */
+            /* DIRECT DRAG AND DROP FILE HANDLER (AUTO CATEGORIZATION) */
             const dropZone = document.getElementById('dropZone');
             window.addEventListener('dragover', (e) => {{ e.preventDefault(); dropZone.classList.add('active'); }});
             window.addEventListener('dragleave', (e) => {{ if (e.clientX <= 0 || e.clientY <= 0) dropZone.classList.remove('active'); }});
@@ -414,7 +410,13 @@ def serve_webapp():
                     const file = e.dataTransfer.files[0];
                     const formData = new FormData();
                     formData.append('file', file);
-                    await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
+                    formData.append('category', 'exams'); // Auto-tag under exams category
+
+                    const res = await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
+                    const data = await res.json();
+                    if (ws && ws.readyState === WebSocket.OPEN) {{
+                        ws.send(JSON.stringify({{ prompt: "I just uploaded the exam document " + file.name + ". Confirm it is indexed.", location: userLocation }}));
+                    }}
                 }}
             }});
         </script>
@@ -423,7 +425,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# WEBSOCKET REAL-TIME AUDIO STREAMING ENDPOINT
+# WEBSOCKET STREAMING & API ENDPOINTS
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -435,21 +437,20 @@ async def websocket_endpoint(websocket: WebSocket):
             prompt = data.get("prompt", "")
             location = data.get("location", None)
 
-            # Generate reply text
-            reply_text = await get_aria_response_text(prompt, location)
+            # Process task, perform web searches, update DB, or purge records
+            reply_text = await process_autonomous_task(prompt, location)
             
-            # Synthesize realistic Neural MP3 Audio via Edge-TTS
-            audio_b64, text_out = await generate_speech_audio_b64(reply_text)
+            # Generate Edge-TTS neural audio
+            audio_b64 = await generate_speech_audio_b64(reply_text)
             
-            # Send audio payload directly back to frontend
-            await websocket.send_json({"audio": audio_b64, "text": text_out})
+            await websocket.send_json({"audio": audio_b64, "text": reply_text})
     except WebSocketDisconnect:
         pass
 
 @app.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), category: str = "exams"):
     file_bytes = await file.read()
     pdf_text = extract_text_from_pdf(file_bytes)
     if pdf_text:
-        save_fact_to_memory("document", f"PDF '{file.filename}': {pdf_text[:1200]}")
+        save_memory_fact(category, f"PDF '{file.filename}': {pdf_text[:1200]}")
     return {"status": "ok"}
