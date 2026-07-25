@@ -34,12 +34,14 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
-# BILINGUAL ARIA SYSTEM PROMPT (ENGLISH & TENGLISH TRANSLITERATED)
+# DYNAMIC DUAL-LANGUAGE SYSTEM PROMPT (NO FIXED REPETITIVE GREETINGS)
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
 - Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
-- BILINGUAL RULES: You are fluent in English and Telugu. When responding in Telugu or Tenglish, ALWAYS write using English/Latin script (e.g. 'Em sangathulu Sir? Everything is running smoothly' instead of native Telugu script).
-- Writing Telugu words in English script ensures the speech synthesizer pronounces English and Telugu terms together fluently with zero accent shifts or glitches.
+- DYNAMIC LANGUAGE SWITCHING:
+  * If the user speaks in English, respond in clear, articulate English.
+  * If the user speaks in Telugu or Tenglish, respond naturally using English/Latin script for seamless speech synthesis.
+  * DO NOT repeat fixed greetings or phrases like 'Em sangathulu Sir' unless specifically relevant. Keep replies completely unique, context-aware, and fresh every time.
 - Maintain quiet confidence, dry subtle warmth, and complete composure.
 - Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences max).
 - Deliver precise answers immediately using stored personal memory context, schedule, weather, search results, and repositories."""
@@ -167,7 +169,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
     return "Standing by Sir. All core systems operational."
 
 # -------------------------------------------------------------
-# FULLSCREEN HUD FRONTEND WITH INSTANT VOICE BARGE-IN / INTERRUPTION
+# FULLSCREEN HUD FRONTEND WITH ADVANCED NATIVE VOICE SELECTOR
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -376,7 +378,6 @@ def serve_webapp():
                 }};
 
                 recognition.onresult = async (event) => {{
-                    // KILL ANY RUNNING SPEECH SYNTHESIS IMMEDIATELY UPON NEW COMMAND
                     window.speechSynthesis.cancel();
                     isSpeaking = false;
 
@@ -410,7 +411,7 @@ def serve_webapp():
                 isSpeaking = true;
                 window.speechSynthesis.cancel();
                 
-                // STRIP PUNCTUATION GAP BEFORE SIR / MASTER FOR ONE-BREATH DELIVERY
+                // STRIP PUNCTUATION GAP BEFORE SIR FOR ONE-BREATH DELIVERY
                 let fluidText = rawText
                     .replace(/,\\s*Sir/gi, ' Sir')
                     .replace(/,\\s*Master/gi, ' Master')
@@ -418,23 +419,30 @@ def serve_webapp():
                     .replace(/\\s+/g, ' ');
 
                 const utterance = new SpeechSynthesisUtterance(fluidText);
-                utterance.rate = 1.0;
+                utterance.rate = 0.95; // Sightly relaxed rate for clear, natural inflection
                 utterance.pitch = 1.0;
 
                 const voices = window.speechSynthesis.getVoices();
                 
-                // PRIORITY VOICE MATCHING FOR TELUGU & ENGLISH BLEND (en-IN / te-IN)
-                const preferredVoice = voices.find(v => 
-                    v.lang === 'en-IN' || 
+                // HIGH ACCURACY VOICE SELECTION FOR TELUGU & INDIAN ENGLISH
+                const nativeVoice = voices.find(v => 
                     v.lang === 'te-IN' || 
+                    v.lang === 'en-IN' || 
+                    v.name.includes('Telugu') || 
                     v.name.includes('Rishi') || 
                     v.name.includes('India') || 
-                    v.name.includes('Google हिन्दी') || 
-                    (v.lang.includes('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha')))
+                    v.name.includes('Google te-in') ||
+                    v.name.includes('Google en-in')
                 );
                 
-                if (preferredVoice) {{
-                    utterance.voice = preferredVoice;
+                const fallbackVoice = voices.find(v => 
+                    v.lang.includes('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Daniel'))
+                );
+
+                if (nativeVoice) {{
+                    utterance.voice = nativeVoice;
+                }} else if (fallbackVoice) {{
+                    utterance.voice = fallbackVoice;
                 }}
 
                 utterance.onend = () => {{
