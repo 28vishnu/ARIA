@@ -40,11 +40,10 @@ ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ person
 CONVERSATIONAL & INTELLIGENCE DIRECTIVES:
 - Speak/type in a composed, warm, articulate, and natural tone. Address the user naturally as 'Sir'.
 - DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- DOCUMENT RETRIEVAL & PRECISION PROTOCOL:
-  * You have access to stored personal memory, user profile data, and indexed PDF documents.
+- DOCUMENT VAULT & PRECISION RETRIEVAL PROTOCOL:
+  * You have access to stored personal memory, user profile data, and indexed documents/files.
   * When the user requests information from stored documents, inspect the memory vault context.
-  * If the request is broad or ambiguous (e.g. "Get my exam paper" when multiple are saved), ask a PRECISE clarifying question to pinpoint exactly what the user needs.
-  * If the target document/fact is clear, synthesize and state the precise information requested.
+  * If a request for a document is broad or ambiguous (e.g., "Send my resume" when multiple resumes/docs exist), ask a PRECISE clarifying question to pinpoint which file to send.
 - Keep spoken/text responses sharp, concise, and direct (1-2 sentences max)."""
 
 # Initialize SDK Clients
@@ -91,6 +90,25 @@ def save_memory_fact(category: str, fact: str) -> str:
             print(f"[Supabase Insert Error]: {e}")
     return "Memory vault unavailable Sir."
 
+def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes, text_preview: str):
+    """Saves both text context and raw binary base64 file to Supabase."""
+    if not supabase:
+        return "Database unavailable Sir."
+    try:
+        # Save text context for ARIA to read
+        save_memory_fact("documents", f"DOCUMENT '{doc_label}' (File: {file_name}): {text_preview[:1500]}")
+
+        # Save Base64 binary payload for sending back via Telegram
+        b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
+        supabase.table("personal_memory").insert({
+            "category": "stored_files",
+            "fact": f"{file_name}||{doc_label.lower()}||{b64_payload}"
+        }).execute()
+        return f"Successfully saved '{file_name}' as '{doc_label}' in your document vault Sir."
+    except Exception as e:
+        print(f"[Binary Save Error]: {e}")
+        return f"Error storing document: {e}"
+
 def purge_memory_category(category: str) -> str:
     if supabase:
         try:
@@ -127,13 +145,13 @@ def fetch_longterm_memory() -> str:
     try:
         res = supabase.table("personal_memory").select("category, fact").execute()
         if res.data:
-            facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
+            facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data if item['category'] != 'stored_files']
             return "\nSTORED PERSONAL VAULT (MEMORIES, PROFILE & INDEXED DOCS):\n" + "\n".join(facts) + "\n"
     except Exception: pass
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS ENGINE WITH PRECISION DOC RETRIEVAL
+# AUTONOMOUS ENGINE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -152,9 +170,9 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
             return f"Awaiting your authorization Sir. Do you want to proceed with deleting all {pending['category']} data?"
 
     # 2. SECURITY CHECKS (PURGE DATA)
-    if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams", "delete pdfs"]):
-        PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "exams"}
-        return "Purging the exam and document database is an irreversible action Sir. Do I have your authorization to proceed?"
+    if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams", "delete pdfs", "delete documents"]):
+        PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "documents"}
+        return "Purging the document database is an irreversible action Sir. Do I have your authorization to proceed?"
 
     purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
     if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
@@ -166,13 +184,10 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     # 3. UNIVERSAL AUTO-SAVER (Identity, Profile & Personal Details)
     auto_save_triggers = [
         "my name is", "my dob is", "i was born", "my birthday is", "my college is",
-        "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this", "store this document"
+        "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this"
     ]
     if any(trigger in cmd for trigger in auto_save_triggers):
         save_memory_fact("personal_profile", user_text)
-
-    if "exam" in cmd and any(k in cmd for k in ["store", "save", "near", "coming", "schedule"]):
-        save_memory_fact("exams", user_text)
 
     # 4. WEB SEARCH INTENT
     search_context = ""
@@ -206,7 +221,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# SECURE TELEGRAM BOT WEBHOOK ENDPOINT
+# SECURE TELEGRAM BOT WEBHOOK (HANDLES TEXT & ANY DOCUMENT)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -219,8 +234,10 @@ async def telegram_webhook(req: Request):
         chat_id = message.get("chat", {}).get("id")
         from_user_id = message.get("from", {}).get("id")
         text = message.get("text", "")
+        document = message.get("document", None)
+        caption = message.get("caption", "").strip()
 
-        # SECURITY AUTHENTICATION CHECK
+        # 1. SECURITY AUTHENTICATION CHECK
         if ALLOWED_TELEGRAM_USER_ID:
             if str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
                 print(f"[SECURITY ALERT]: Blocked unauthorized Telegram user {from_user_id}")
@@ -231,14 +248,99 @@ async def telegram_webhook(req: Request):
                     )
                 return {"status": "unauthorized"}
 
-        if chat_id and text:
-            reply_text = await process_autonomous_task(text, str(chat_id))
+        # 2. HANDLE INCOMING DOCUMENT ATTACHMENTS (ANY FILE FORMAT)
+        if document and chat_id:
+            file_id = document.get("file_id")
+            file_name = document.get("file_name", "document.pdf")
 
+            async with httpx.AsyncClient() as client:
+                # Get file path from Telegram
+                file_info_res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}")
+                file_path = file_info_res.json().get("result", {}).get("file_path")
+                
+                # Download raw file bytes
+                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+                raw_bytes_res = await client.get(download_url)
+                raw_bytes = raw_bytes_res.content
+
+            # Extract text if PDF, otherwise save preview string
+            extracted_text = extract_text_from_pdf(raw_bytes) if file_name.lower().endswith(".pdf") else "Binary Document Stored"
+            doc_label = caption if caption else file_name
+
+            # Save to Supabase (Text context + raw Base64 file)
+            save_reply = save_binary_document(file_name, doc_label, raw_bytes, extracted_text)
+
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": save_reply}
+                )
+            return {"status": "ok"}
+
+        # 3. HANDLE TEXT COMMANDS & FILE RETRIEVAL REQUESTS
+        if chat_id and text:
+            cmd = text.lower()
+
+            # FILE RETRIEVAL TRIGGER (e.g. "Send my resume", "Give me my document")
+            if any(k in cmd for k in ["send my", "give my", "get my", "send document", "send pdf", "send resume"]):
+                if supabase:
+                    try:
+                        # Query stored binary files in Supabase
+                        res = supabase.table("personal_memory").select("fact").eq("category", "stored_files").execute()
+                        files = res.data if res.data else []
+
+                        if not files:
+                            reply_text = "I couldn't find any stored documents in your vault Sir. Please upload a document first."
+                            async with httpx.AsyncClient() as client:
+                                await client.post(
+                                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                                    json={"chat_id": chat_id, "text": reply_text}
+                                )
+                        else:
+                            # Filter files by query keywords (e.g., "resume", "syllabus", "notes")
+                            matching_files = []
+                            for f in files:
+                                parts = f["fact"].split("||")
+                                file_name, doc_label, b64_data = parts[0], parts[1], parts[2]
+                                if any(word in file_name.lower() or word in doc_label for word in cmd.split()):
+                                    matching_files.append((file_name, b64_data))
+
+                            # If no keyword match, use all files
+                            if not matching_files:
+                                matching_files = [(f["fact"].split("||")[0], f["fact"].split("||")[2]) for f in files]
+
+                            if len(matching_files) == 1:
+                                target_name, target_b64 = matching_files[0]
+                                raw_file_bytes = base64.b64decode(target_b64)
+
+                                async with httpx.AsyncClient() as client:
+                                    await client.post(
+                                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
+                                        data={"chat_id": chat_id, "caption": f"Here is your document: '{target_name}' Sir."},
+                                        files={"document": (target_name, raw_file_bytes, "application/octet-stream")}
+                                    )
+                                return {"status": "ok"}
+                            else:
+                                file_list = ", ".join([f[0] for f in matching_files])
+                                reply_text = f"Sir, I found multiple matching documents in your vault: [{file_list}]. Which specific document would you like me to send?"
+                                async with httpx.AsyncClient() as client:
+                                    await client.post(
+                                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                                        json={"chat_id": chat_id, "text": reply_text}
+                                    )
+                                return {"status": "ok"}
+
+                    except Exception as e:
+                        print(f"[Document Delivery Error]: {e}")
+
+            # STANDARD CONVERSATIONAL AI PIPELINE
+            reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                     json={"chat_id": chat_id, "text": reply_text}
                 )
+
     except Exception as e:
         print(f"[Telegram Webhook Error]: {e}")
 
@@ -425,7 +527,7 @@ def serve_webapp():
     <body>
         <canvas id="particleCanvas"></canvas>
         <button class="settings-btn" onclick="openVoiceModal()">⚙️</button>
-        <div id="dropZone">Drop PDF or document files here to save in vault</div>
+        <div id="dropZone">Drop document files here to save in vault</div>
 
         <div class="ui-layer">
             <div class="hud-orb" id="hudOrb" onclick="toggleMic()">
@@ -639,6 +741,5 @@ async def websocket_endpoint(websocket: WebSocket):
 async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
     file_bytes = await file.read()
     pdf_text = extract_text_from_pdf(file_bytes)
-    if pdf_text:
-        save_memory_fact(category, f"DOCUMENT '{file.filename}': {pdf_text[:1500]}")
+    save_binary_document(file.filename, file.filename, file_bytes, pdf_text)
     return {"status": "ok"}
