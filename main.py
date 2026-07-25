@@ -37,13 +37,14 @@ ASSISTANT_NAME = "ARIA"
 
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
-- Speak in a composed, warm, and natural voice. Address the user naturally as 'Sir' without inserting micro-pauses or commas before the title.
+- Speak in a composed, warm, and natural tone. Address the user naturally as 'Sir' without inserting micro-pauses before the title.
 - DYNAMIC LANGUAGE SWITCHING:
   * Respond fluently in English or Tenglish (Telugu transliterated using English/Latin script).
-  * When speaking in Tenglish, keep it completely natural, expressive, and conversational.
-- AUTONOMOUS TASK EXECUTION:
-  * Execute background actions (voice changes, web searches, memory categorizations, PDF indexing, or data deletions) quietly and report only the final outcome in 1 concise sentence.
-- Keep spoken responses sharp, articulate, and direct."""
+  * Keep replies completely natural, expressive, and conversational.
+- AUTONOMOUS & SECURITY PROTOCOL:
+  * Execute standard decisions (saving notes, indexing files, weather checks, web searches) quietly and report only the final outcome.
+  * For destructive or security-sensitive tasks (purging tables, deleting databases), request explicit voice confirmation first.
+- Keep spoken responses sharp, concise, and direct (1 to 2 sentences max)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -53,12 +54,12 @@ tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 CACHE_VOICES = []
+PENDING_SECURITY_ACTIONS = {}
 
 # -------------------------------------------------------------
 # DYNAMIC DATABASE & PERMANENT MEMORY VAULT
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
-    """Retrieves saved voice preference from Supabase."""
     if supabase:
         try:
             res = supabase.table("personal_memory").select("fact").eq("category", "user_voice_preference").execute()
@@ -69,7 +70,6 @@ def get_stored_user_voice() -> str:
     return "en-GB-RyanNeural"
 
 def save_stored_user_voice(voice_short_name: str):
-    """Saves preferred voice in Supabase to preserve preference across reloads."""
     if supabase:
         try:
             supabase.table("personal_memory").delete().eq("category", "user_voice_preference").execute()
@@ -81,7 +81,6 @@ def save_stored_user_voice(voice_short_name: str):
             print(f"[Supabase Voice Save Error]: {e}")
 
 def save_memory_fact(category: str, fact: str) -> str:
-    """Stores user facts permanently in Supabase."""
     if supabase:
         try:
             supabase.table("personal_memory").insert({
@@ -94,7 +93,6 @@ def save_memory_fact(category: str, fact: str) -> str:
     return "Memory vault unavailable Sir."
 
 def purge_memory_category(category: str) -> str:
-    """Deletes all facts and documents for a specific category."""
     if supabase:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
@@ -136,19 +134,45 @@ def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# TASK PROCESSING ENGINE
+# AUTONOMOUS DECISION & SECURITY AUTHORIZATION ENGINE
 # -------------------------------------------------------------
-async def process_autonomous_task(user_text: str, location_info: str = None) -> str:
-    cmd = user_text.lower()
+async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
+    cmd = user_text.lower().strip()
 
+    # 1. HANDLE PENDING SECURITY AUTHORIZATIONS
+    if session_id in PENDING_SECURITY_ACTIONS:
+        pending = PENDING_SECURITY_ACTIONS[session_id]
+        if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "ok"]):
+            del PENDING_SECURITY_ACTIONS[session_id]
+            if pending["type"] == "purge_category":
+                return purge_memory_category(pending["category"])
+        elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
+            del PENDING_SECURITY_ACTIONS[session_id]
+            return "Security action aborted Sir. Data remains intact."
+        else:
+            return f"Awaiting your authorization Sir. Do you want to proceed with deleting all {pending['category']} data?"
+
+    # 2. DETECT SECURITY SENSITIVE ACTIONS (RED ZONE)
+    if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams"]):
+        PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "exams"}
+        return "Purging the exam database is an irreversible action Sir. Do I have your authorization to proceed?"
+
+    purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
+    if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
+        target_cat = purge_match.group(1).replace("data", "").replace("all", "").strip()
+        if target_cat and target_cat not in ["this", "that", "it"]:
+            PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": target_cat}
+            return f"Deleting all records for {target_cat} requires authorization Sir. Should I proceed?"
+
+    # 3. AUTONOMOUS SELF-DECISIONS (GREEN ZONE)
     if any(k in cmd for k in ["remember that", "save this", "store that", "my preference is", "note that"]):
-        save_memory_fact("general_facts", user_text)
+        return save_memory_fact("general_facts", user_text)
+
+    if "exam" in cmd and any(k in cmd for k in ["store", "save", "near", "coming", "schedule"]):
+        return save_memory_fact("exams", user_text)
 
     if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice catalog"]):
         return "Opening the neural voice catalog Sir. Select your preferred voice."
-
-    if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished"]):
-        return purge_memory_category("exams")
 
     search_context = ""
     if any(kw in cmd for kw in ["search", "find", "who is", "latest", "news", "box office", "today"]):
@@ -425,7 +449,6 @@ def serve_webapp():
             let allVoices = [];
             let activeVoice = "";
             let isPlayingAudio = false;
-            let isUserInterrupted = false;
 
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
@@ -451,9 +474,7 @@ def serve_webapp():
                 if (!recognition || isPlayingAudio) return;
                 try {{
                     recognition.start();
-                }} catch (e) {{
-                    // Recognition already active or starting
-                }}
+                }} catch (e) {{}}
             }}
 
             if (SpeechRecognition) {{
@@ -466,7 +487,6 @@ def serve_webapp():
                     const speech = event.results[event.results.length - 1][0].transcript.trim();
                     if (!speech) return;
 
-                    // Immediately stop any playing audio on user speech
                     stopAudio();
 
                     if (ws && ws.readyState === WebSocket.OPEN) {{
@@ -475,7 +495,6 @@ def serve_webapp():
                 }};
 
                 recognition.onend = () => {{
-                    // Auto-restart listening loop if not playing audio
                     if (!isPlayingAudio) {{
                         setTimeout(startListeningSafely, 200);
                     }}
@@ -510,7 +529,6 @@ def serve_webapp():
             function playNeuralAudio(b64Data) {{
                 stopAudio();
 
-                // Pause mic listening while playing audio to prevent audio feedback loop
                 if (recognition) {{
                     try {{ recognition.stop(); }} catch(e) {{}}
                 }}
@@ -627,6 +645,7 @@ def serve_webapp():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    session_id = id(websocket)
     try:
         while True:
             raw_data = await websocket.receive_text()
@@ -635,12 +654,13 @@ async def websocket_endpoint(websocket: WebSocket):
             location = data.get("location", None)
             selected_voice = data.get("voice", None)
 
-            reply_text = await process_autonomous_task(prompt, location)
+            reply_text = await process_autonomous_task(prompt, str(session_id), location)
             audio_b64 = await generate_speech_audio_b64(reply_text, selected_voice)
             
             await websocket.send_json({"audio": audio_b64, "text": reply_text})
     except WebSocketDisconnect:
-        pass
+        if str(session_id) in PENDING_SECURITY_ACTIONS:
+            del PENDING_SECURITY_ACTIONS[str(session_id)]
 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...), category: str = "exams"):
