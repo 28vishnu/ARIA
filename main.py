@@ -183,9 +183,9 @@ def fetch_web_search(query: str) -> str:
     return ""
 
 async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str:
-    """Fetches instant live weather with 2-second strict timeout."""
+    """Fetches instant live weather with strict 2-second timeout."""
     if not location_info or "," not in location_info:
-        location_info = "17.6868,83.2185" # Default to Visakhapatnam
+        location_info = "17.6868,83.2185"
     try:
         lat, lon = location_info.split(",")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
@@ -285,7 +285,7 @@ async def send_daily_morning_brief():
     cached_facts = await update_ram_cache()
     temporal_str = get_current_temporal_context()
 
-    brief_prompt = f"""Synthesize a high-IQ J.A.R.V.I.S. morning briefing for Sir ({USER_FULL_NAME}).
+    brief_prompt = f"""Synthesize a high-IQ, proactive J.A.R.V.I.S. + Karen hybrid morning briefing for Sir ({USER_FULL_NAME}).
 {temporal_str}
 WEATHER: {weather_info}
 SCHEDULED AGENDA: {calendar_agenda}
@@ -293,9 +293,9 @@ INBOX PREVIEW: {emails_summary}
 VAULT CONTEXT: {cached_facts}
 
 DIRECTIVES:
-- Open with a dignified morning greeting addressing him as 'Sir'.
+- Open with a dignified, witty morning greeting addressing him as 'Sir'.
 - Provide a crisp bulleted summary covering current date/time, weather, calendar obligations, and active engineering project status (TaskFlow, WealthFlow AI).
-- Close with a sharp motivational focus statement."""
+- Conclude with a sharp, tactical focus statement."""
 
     brief_text = await process_autonomous_task(brief_prompt, "system_cron")
 
@@ -311,10 +311,10 @@ async def start_scheduler():
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Core]: Online with high-speed temporal & memory engine.")
+    print("[J.A.R.V.I.S. Core]: Online with high-speed temporal & hybrid persona engine.")
 
 # -------------------------------------------------------------
-# 5. SUB-SECOND FIRST-TOKEN LLM ENGINE (<300MS)
+# 5. HYBRID J.A.R.V.I.S. + KAREN INFERENCE ENGINE (<300MS)
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -352,7 +352,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     cached_facts = await update_ram_cache()
     memory_context = "\nVAULT CONTEXT:\n" + "\n".join(cached_facts) if cached_facts else ""
 
-    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent neural AI assistant inspired by J.A.R.V.I.S.
+    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous AI assistant combining J.A.R.V.I.S. (loyal, articulate, calm, strategic) and Spider-Man's Karen (witty, encouraging, sharp, supportive peer).
 
 {temporal_context}
 {weather_context}
@@ -360,10 +360,11 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {search_context}
 
 CORE DIRECTIVES:
-- TONALITY: Impeccably polite, professional, calm, articulate, and composed.
-- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey there". Use natural, professional J.A.R.V.I.S. greetings ("Good day, Sir", "At your service, Sir").
-- ADDRESS: Address the user as 'Sir' or 'Mr. Saketh'.
-- EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct to the point."""
+- PERSONA: Impeccably polite, clever, loyal, witty, and sharp. Act as a high-IQ digital sidekick for a Computer Science Engineer and cinema enthusiast.
+- ADDRESS: Always address the user naturally as 'Sir' or 'Mr. Saketh'.
+- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey buddy". Use crisp J.A.R.V.I.S. / Karen greetings ("Good day, Sir", "At your service, Sir", "Ready when you are, Sir").
+- PROACTIVE AGENT: Don't just answer; offer clever next steps, code optimizations, or movie/study insights.
+- EFFICIENCY: Keep responses brief (1-2 sentences max), intelligent, and direct."""
 
     # Fast Primary Stream via Groq Llama-3.3-70b (<300ms)
     if groq_client:
@@ -445,7 +446,7 @@ async def telegram_webhook(req: Request):
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 3. DIRECT FILE RETRIEVAL (Bypasses LLM — Sub-2 Second Speed)
+        # 3. DIRECT FILE RETRIEVAL (Sub-2 Second Speed)
         if text:
             cmd = text.lower()
             file_triggers = [
