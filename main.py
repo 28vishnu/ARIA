@@ -12,7 +12,7 @@ from supabase import create_client
 app = FastAPI()
 
 # -------------------------------------------------------------
-# 1. ENVIRONMENT VARIABLES
+# 1. ENVIRONMENT VARIABLES & CLIENTS
 # -------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -25,14 +25,15 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
-# Crisp, Seamless J.A.R.V.I.S. Persona (No awkward punctuation breaks)
-SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an ultra-capable AI assistant inspired by Iron Man's J.A.R.V.I.S.
-RULES FOR SEAMLESS VOICE FLOW:
-- Keep every sentence extremely fluent, natural, and continuous.
-- Do NOT isolate 'Master' or 'Sir' between commas. Integrate it naturally into the sentence (e.g. 'All systems nominal Master ready for your command').
-- Do NOT use filler intros or conversational fluff. Get straight to the answer.
-- Limit replies to 1 or 2 concise, powerful sentences.
-- Avoid listing items, using markdown symbols, or placing excessive commas."""
+# Sophisticated, Adaptive J.A.R.V.I.S. Persona
+SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an ultra-capable, highly articulate personal AI assistant inspired by Iron Man's J.A.R.V.I.S.
+PERFECT CONVERSATION DIRECTIVES:
+- Always address the user as 'Master' or 'Sir'.
+- Speak in flawless, natural, highly intelligent English.
+- Adapt your tone to be calm, confident, poised, and composed—never rushed, never robotic.
+- Give complete, precise answers in 1 to 3 well-structured sentences.
+- Use natural punctuation (commas and periods) so the voice synthesizer speaks with realistic rhythm and breathing pauses.
+- Continuously align your personality to serve as Master's ultimate personal advisor."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -42,12 +43,39 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 
 class UserQuery(BaseModel):
     prompt: str
+    user_wpm: float = 140.0 # Default natural speaking WPM
 
 # -------------------------------------------------------------
-# MULTI-PROVIDER FAST CASCADE
+# MEMORY & KNOWLEDGE PERSISTENCE
+# -------------------------------------------------------------
+def store_conversation_memory(user_text: str, ai_reply: str):
+    """Asynchronously logs conversation memory into Supabase so ARIA remembers long-term."""
+    if supabase:
+        try:
+            supabase.table("conversations").insert({
+                "user_id": "master",
+                "user_message": user_text,
+                "assistant_reply": ai_reply
+            }).execute()
+        except Exception as e:
+            print(f"[Supabase Memory Warning]: {e}")
+
+# -------------------------------------------------------------
+# MULTI-PROVIDER CASCADE INFERENCE
 # -------------------------------------------------------------
 async def generate_assistant_response(user_text: str) -> str:
-    full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
+    # Retrieve past memory summary if available
+    memory_context = ""
+    if supabase:
+        try:
+            res = supabase.table("conversations").select("user_message, assistant_reply").order("created_at", desc=True).limit(3).execute()
+            if res.data:
+                past = "\n".join([f"User: {m['user_message']}\nARIA: {m['assistant_reply']}" for m in reversed(res.data)])
+                memory_context = f"\nRECALL PAST CONVERSATION CONTEXT:\n{past}\n"
+        except Exception as e:
+            pass
+
+    full_system = SYSTEM_PROMPT + memory_context
 
     # PROVIDER 1: GROQ (Ultra-Fast <200ms)
     if groq_client:
@@ -55,13 +83,15 @@ async def generate_assistant_response(user_text: str) -> str:
             completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": full_system},
                     {"role": "user", "content": user_text}
                 ],
-                temperature=0.5,
-                max_tokens=120
+                temperature=0.6,
+                max_tokens=180
             )
-            return completion.choices[0].message.content
+            reply = completion.choices[0].message.content
+            store_conversation_memory(user_text, reply)
+            return reply
         except Exception as e:
             print(f"[Groq Warning]: {e}")
 
@@ -70,46 +100,35 @@ async def generate_assistant_response(user_text: str) -> str:
         try:
             response = gemini_client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=full_prompt
+                contents=f"{full_system}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
             )
-            return response.text
+            reply = response.text
+            store_conversation_memory(user_text, reply)
+            return reply
         except Exception as e:
             print(f"[Gemini Warning]: {e}")
 
-    # PROVIDER 3: MISTRAL HTTP
+    # PROVIDER 3: MISTRAL
     if MISTRAL_API_KEY:
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.post(
                     "https://api.mistral.ai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": "mistral-small-latest", "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}]},
+                    json={"model": "mistral-small-latest", "messages": [{"role": "system", "content": full_system}, {"role": "user", "content": user_text}]},
                     timeout=8.0
                 )
                 if res.status_code == 200:
-                    return res.json()['choices'][0]['message']['content']
+                    reply = res.json()['choices'][0]['message']['content']
+                    store_conversation_memory(user_text, reply)
+                    return reply
         except Exception as e:
             print(f"[Mistral Warning]: {e}")
 
-    # PROVIDER 4: OPENROUTER
-    if OPENROUTER_API_KEY:
-        try:
-            async with httpx.AsyncClient() as client:
-                res = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": "meta-llama/llama-3.3-70b-instruct:free", "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}]},
-                    timeout=8.0
-                )
-                if res.status_code == 200:
-                    return res.json()['choices'][0]['message']['content']
-        except Exception as e:
-            print(f"[OpenRouter Warning]: {e}")
-
-    return "Standing by Master. Systems are currently busy."
+    return "Standing by, Master. Systems are currently calibrating. Please repeat your instruction."
 
 # -------------------------------------------------------------
-# WEB APP FRONTEND (HIGH-SPEED VOICE ENGINE WITH SPEECH CLEANER)
+# ADAPTIVE VOICE FRONTEND (SPEED MEASUREMENT ENGINE)
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -122,7 +141,7 @@ def serve_webapp():
         <title>{ASSISTANT_NAME} HUD</title>
         <style>
             body {{
-                font-family: 'Segoe UI', Roboto, sans-serif;
+                font-family: 'Segoe UI', Roboto, Helvetica, sans-serif;
                 background-color: #030712;
                 color: #f8fafc;
                 display: flex;
@@ -159,13 +178,14 @@ def serve_webapp():
                 100% {{ transform: scale(1); }}
             }}
             #status {{ color: #38bdf8; font-size: 1.1rem; font-weight: 500; min-height: 24px; }}
+            #metrics {{ color: #64748b; font-size: 0.85rem; margin-top: 5px; }}
             #response {{
                 margin-top: 25px;
                 font-size: 1.25rem;
-                line-height: 1.5;
-                max-width: 550px;
+                line-height: 1.6;
+                max-width: 580px;
                 background: #0f172a;
-                padding: 20px;
+                padding: 22px;
                 border-radius: 16px;
                 border: 1px solid #1e293b;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.5);
@@ -173,15 +193,17 @@ def serve_webapp():
         </style>
     </head>
     <body>
-        <h1 style="letter-spacing: 4px; color: #38bdf8;">{ASSISTANT_NAME}</h1>
-        <p style="color: #64748b;">At Your Command Master</p>
+        <h1 style="letter-spacing: 4px; color: #38bdf8; margin-bottom: 5px;">{ASSISTANT_NAME}</h1>
+        <p style="color: #64748b; margin-top: 0;">Adaptive Neural Interface</p>
 
         <div id="orb" class="orb" onclick="toggleListening()">🎤</div>
         <div id="status">Tap orb to initiate voice link</div>
-        <div id="response">Systems nominal Master.</div>
+        <div id="metrics">Pace Calibration: 1.0x</div>
+        <div id="response">Systems nominal, Master. Ready when you are.</div>
 
         <script>
-            let isListening = false;
+            let speechStartTime = 0;
+            let targetSpeechRate = 1.0; // Perfect natural rate baseline
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
@@ -192,6 +214,7 @@ def serve_webapp():
                 recognition.lang = 'en-US';
 
                 recognition.onstart = () => {{
+                    speechStartTime = Date.now();
                     document.getElementById('orb').classList.add('listening');
                     document.getElementById('status').innerText = 'Listening...';
                 }};
@@ -201,21 +224,37 @@ def serve_webapp():
                 }};
 
                 recognition.onresult = async (event) => {{
-                    const speech = event.results[0][0].transcript;
+                    const speechEndTime = Date.now();
+                    const userSpeech = event.results[0][0].transcript;
+                    const durationSeconds = (speechEndTime - speechStartTime) / 1000;
+                    
+                    // CALCULATE USER SPEAKING SPEED (Words Per Minute)
+                    const wordCount = userSpeech.trim().split(/\\s+/).length;
+                    if (durationSeconds > 0.5) {{
+                        const calculatedWPM = (wordCount / durationSeconds) * 60;
+                        
+                        // DYNAMICALLY MAP USER SPEED TO ASSISTANT SPEECH RATE (Bounded between 0.9x and 1.1x for perfect natural flow)
+                        if (calculatedWPM < 110) targetSpeechRate = 0.92;      // User speaks slow -> AI speaks calm and relaxed
+                        else if (calculatedWPM > 170) targetSpeechRate = 1.1; // User speaks fast -> AI speeds up slightly
+                        else targetSpeechRate = 1.0;                          // Perfect standard rate
+                        
+                        document.getElementById('metrics').innerText = 'Detected Pace: ' + Math.round(calculatedWPM) + ' WPM | AI Speed: ' + targetSpeechRate.toFixed(2) + 'x';
+                    }}
+
                     document.getElementById('status').innerText = 'Processing...';
 
                     try {{
                         const res = await fetch('/chat', {{
                             method: 'POST',
                             headers: {{'Content-Type': 'application/json'}},
-                            body: JSON.stringify({{ prompt: speech }})
+                            body: JSON.stringify({{ prompt: userSpeech, user_wpm: targetSpeechRate }})
                         }});
                         const data = await res.json();
 
                         document.getElementById('response').innerText = data.reply;
                         document.getElementById('status').innerText = 'Tap to speak again';
 
-                        speakResponse(data.reply);
+                        speakResponse(data.reply, targetSpeechRate);
                     }} catch (err) {{
                         document.getElementById('status').innerText = 'Connection error.';
                     }}
@@ -226,22 +265,24 @@ def serve_webapp():
                 if (recognition) recognition.start();
             }}
 
-            function speakResponse(rawText) {{
-                window.speechSynthesis.cancel(); // Instantly clear previous queue
+            function speakResponse(text, speedRate) {{
+                window.speechSynthesis.cancel(); // Clear queue
                 
-                // STRIP PAUSE-CAUSING PUNCTUATION FOR SEAMLESS VOICE FLOW
-                let cleanSpeech = rawText
-                    .replace(/,/g, '')       // Removes commas that cause micro-pauses
-                    .replace(/—/g, ' ')      // Removes em-dashes
-                    .replace(/-/g, ' ')      // Removes hyphens
-                    .replace(/\\s+/g, ' ');   // Collapse multiple spaces
+                const utterance = new SpeechSynthesisUtterance(text);
+                
+                // DYNAMIC ADAPTIVE RATE
+                utterance.rate = speedRate; 
+                utterance.pitch = 1.0; // Natural, poised pitch
 
-                const utterance = new SpeechSynthesisUtterance(cleanSpeech);
-                utterance.rate = 1.15; // Smooth J.A.R.V.I.S. cadence
-                utterance.pitch = 1.0;
-
+                // Select high quality natural voice
                 const voices = window.speechSynthesis.getVoices();
-                const preferredVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha')));
+                const preferredVoice = voices.find(v => v.lang.includes('en') && (
+                    v.name.includes('Natural') || 
+                    v.name.includes('Google') || 
+                    v.name.includes('Samantha') || 
+                    v.name.includes('Daniel') || 
+                    v.name.includes('Karen')
+                ));
                 if (preferredVoice) utterance.voice = preferredVoice;
 
                 window.speechSynthesis.speak(utterance);
