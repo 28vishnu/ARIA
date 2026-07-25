@@ -7,7 +7,6 @@ from pydantic import BaseModel
 # Provider SDKs
 from groq import Groq
 from google import genai
-from mistralai import Mistral
 from supabase import create_client
 
 app = FastAPI()
@@ -34,10 +33,9 @@ PERSONALITY RULES:
 - Since your responses will be read out loud via text-to-speech, keep your replies punchy, concise (2-3 sentences max), and conversational.
 - If Master gives an instruction or order, acknowledge it with quiet confidence and report back execution."""
 
-# Initialize AI Provider Clients
+# Initialize SDK Clients safely
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-mistral_client = Mistral(api_key=MISTRAL_API_KEY) if MISTRAL_API_KEY else None
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
@@ -77,21 +75,32 @@ async def generate_assistant_response(user_text: str) -> str:
         except Exception as e:
             print(f"[Gemini Warning]: {e}")
 
-    # --- PROVIDER 3: MISTRAL AI ---
-    if mistral_client:
+    # --- PROVIDER 3: MISTRAL AI (Direct HTTP) ---
+    if MISTRAL_API_KEY:
         try:
-            res = mistral_client.chat.complete(
-                model="mistral-small-latest",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_text}
-                ]
-            )
-            return res.choices[0].message.content
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "mistral-small-latest",
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_text}
+                        ]
+                    },
+                    timeout=10.0
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    return data['choices'][0]['message']['content']
         except Exception as e:
             print(f"[Mistral Warning]: {e}")
 
-    # --- PROVIDER 4: OPENROUTER (FALLBACK AGGREGATOR) ---
+    # --- PROVIDER 4: OPENROUTER (Fallback Aggregator) ---
     if OPENROUTER_API_KEY:
         try:
             async with httpx.AsyncClient() as client:
@@ -117,7 +126,7 @@ async def generate_assistant_response(user_text: str) -> str:
             print(f"[OpenRouter Warning]: {e}")
 
     # --- FINAL EMERGENCY FALLBACK ---
-    return "Apologies, Master. All external neural links are momentarily busy. Please repeat your instruction."
+    return "Apologies, Master. All neural links are currently busy. Please repeat your instruction."
 
 # -------------------------------------------------------------
 # ENDPOINT 1: WEB APP FRONTEND
