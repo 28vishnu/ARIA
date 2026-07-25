@@ -1,9 +1,11 @@
 import os
 import json
 import httpx
-from fastapi import FastAPI, Request
+from io import BytesIO
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from pypdf import PdfReader
 
 # Provider SDKs
 from groq import Groq
@@ -34,7 +36,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
-# DYNAMIC DUAL-LANGUAGE SYSTEM PROMPT
+# SYSTEM PROMPT
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
 - Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
@@ -44,7 +46,7 @@ CONVERSATIONAL DIRECTIVES:
   * DO NOT repeat fixed greetings or phrases unless relevant. Keep replies unique, context-aware, and fresh every time.
 - Maintain quiet confidence, dry subtle warmth, and complete composure.
 - Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences max).
-- Deliver precise answers immediately using stored personal memory context, schedule, weather, search results, and repositories."""
+- Deliver precise answers immediately using stored personal memory context, PDF documents, schedule, weather, search results, and repositories."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -58,8 +60,30 @@ class UserQuery(BaseModel):
     location: str = None
 
 # -------------------------------------------------------------
-# INTEGRATION FUNCTIONS
+# INTEGRATION & PDF PARSING MODULES
 # -------------------------------------------------------------
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Reads complete PDF document and extracts all text content."""
+    try:
+        reader = PdfReader(BytesIO(file_bytes))
+        extracted_text = ""
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text += text + "\n"
+        return extracted_text.strip()
+    except Exception as e:
+        print(f"[PDF Parsing Error]: {e}")
+        return ""
+
+def save_fact_to_memory(category: str, fact: str):
+    """Saves extracted PDF summary or user facts directly into Supabase vault."""
+    if supabase:
+        try:
+            supabase.table("personal_memory").insert({"category": category, "fact": fact}).execute()
+        except Exception as e:
+            print(f"[Memory Save Warning]: {e}")
+
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
     search_keywords = ["news", "latest", "search", "who is", "today", "box office", "update", "weather", "score", "movie", "cinema"]
@@ -125,7 +149,7 @@ def fetch_longterm_memory() -> str:
         res = supabase.table("personal_memory").select("category, fact").execute()
         if res.data:
             facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
-            return "\nSTORED PERSONAL MEMORY:\n" + "\n".join(facts) + "\n"
+            return "\nSTORED PERSONAL MEMORY & DOCUMENTS:\n" + "\n".join(facts) + "\n"
     except Exception: pass
     return ""
 
@@ -169,7 +193,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
     return "Standing by Sir. All core systems operational."
 
 # -------------------------------------------------------------
-# FULLSCREEN HUD FRONTEND WITH ACCURATE SPEECH-ONLY INTERRUPTION
+# FULLSCREEN HUD FRONTEND WITH PDF DOCUMENT UPLOADER
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -222,8 +246,8 @@ def serve_webapp():
             /* ARC REACTOR HUD EFFECT */
             .hud-container {{
                 position: relative;
-                width: 220px;
-                height: 220px;
+                width: 200px;
+                height: 200px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -293,6 +317,18 @@ def serve_webapp():
                 align-items: center;
                 justify-content: center;
             }}
+            .pdf-btn {{
+                margin-top: 15px;
+                background: rgba(56, 189, 248, 0.15);
+                border: 1px solid #38bdf8;
+                color: #38bdf8;
+                padding: 8px 16px;
+                border-radius: 12px;
+                font-size: 0.85rem;
+                cursor: pointer;
+                transition: all 0.2s;
+            }}
+            .pdf-btn:active {{ transform: scale(0.95); background: rgba(56, 189, 248, 0.3); }}
             .telemetry-row {{
                 display: flex;
                 justify-content: space-around;
@@ -321,6 +357,10 @@ def serve_webapp():
         <div class="status-panel">
             <div id="status-text">SYSTEM STANDBY</div>
             <div id="response-box">Online and at your service, Sir.</div>
+            
+            <input type="file" id="pdfInput" accept="application/pdf" style="display: none;" onchange="uploadPDF()">
+            <button class="pdf-btn" onclick="document.getElementById('pdfInput').click()">📄 Upload PDF Document</button>
+
             <div class="telemetry-row">
                 <div class="tel-item"><div class="dot"></div> LINK: ACTIVE</div>
                 <div class="tel-item" id="gps-stat">GPS: CALIBRATING</div>
@@ -371,7 +411,6 @@ def serve_webapp():
                     const speech = event.results[0][0].transcript;
                     if (!speech || speech.trim().length === 0) return;
 
-                    // INTERRUPT ARIA'S SPEECH ONLY WHEN A REAL USER COMMAND IS DETECTED
                     window.speechSynthesis.cancel();
                     isSpeaking = false;
 
@@ -392,6 +431,28 @@ def serve_webapp():
                 }};
             }}
 
+            async function uploadPDF() {{
+                const input = document.getElementById('pdfInput');
+                if (!input.files || input.files.length === 0) return;
+
+                const formData = new FormData();
+                formData.append('file', input.files[0]);
+
+                document.getElementById('status-text').innerText = 'READING DOCUMENT...';
+
+                try {{
+                    const res = await fetch('/upload-pdf', {{
+                        method: 'POST',
+                        body: formData
+                    }});
+                    const data = await res.json();
+                    document.getElementById('response-box').innerText = data.message;
+                    speakResponse(data.message);
+                }} catch (err) {{
+                    document.getElementById('status-text').innerText = 'PDF READ ERROR';
+                }}
+            }}
+
             function toggleListening() {{
                 window.speechSynthesis.cancel();
                 isSpeaking = false;
@@ -404,7 +465,6 @@ def serve_webapp():
                 isSpeaking = true;
                 window.speechSynthesis.cancel();
                 
-                // STRIP PUNCTUATION GAP BEFORE SIR FOR ONE-BREATH DELIVERY
                 let fluidText = rawText
                     .replace(/,\\s*Sir/gi, ' Sir')
                     .replace(/,\\s*Master/gi, ' Master')
@@ -459,6 +519,21 @@ def serve_webapp():
 async def chat(data: UserQuery):
     reply = await generate_aria_response(data.prompt, data.location)
     return {"assistant": ASSISTANT_NAME, "reply": reply}
+
+@app.post("/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    pdf_text = extract_text_from_pdf(file_bytes)
+    
+    if not pdf_text:
+        return {"status": "error", "message": "Could not extract text from document Sir."}
+
+    # Store full document text summary into Supabase Memory
+    truncated_summary = pdf_text[:1200].replace("\n", " ")
+    save_fact_to_memory("document", f"PDF '{file.filename}': {truncated_summary}")
+    
+    reply = f"Document {file.filename} processed and indexed into permanent memory Sir."
+    return {"status": "success", "message": reply}
 
 @app.post("/telegram")
 async def telegram_webhook(req: Request):
