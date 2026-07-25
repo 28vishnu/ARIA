@@ -34,12 +34,14 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
-# DEDICATED ARIA SYSTEM PROMPT
+# MULTILINGUAL ARIA SYSTEM PROMPT (ENGLISH, TELUGU & TENGLISH)
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
 - Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
+- MULTILINGUAL CAPABILITY: Respond fluently in English, Tenglish (Telugu written using English/Latin script, e.g. 'Em sangathulu Sir? Everything is running smoothly'), or native Telugu script based on how the user speaks to you.
+- When replying in Tenglish, keep the sentence structures natural, articulate, crisp, and conversational.
 - Maintain quiet confidence, dry subtle warmth, and complete composure.
-- Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences).
+- Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences max).
 - Deliver precise answers immediately using the user's stored personal memory context, schedule, weather, search results, and repositories."""
 
 # Initialize SDK Clients
@@ -60,7 +62,7 @@ def fetch_web_search(query: str) -> str:
     """Executes a real-time web search via Tavily for current news or facts."""
     if not tavily_client:
         return ""
-    search_keywords = ["news", "latest", "search", "who is", "today", "box office", "update", "weather", "score", "movie"]
+    search_keywords = ["news", "latest", "search", "who is", "today", "box office", "update", "weather", "score", "movie", "cinema"]
     if any(kw in query.lower() for kw in search_keywords):
         try:
             res = tavily_client.search(query=query, max_results=2)
@@ -233,7 +235,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
     return "Standing by Sir. All systems are operational."
 
 # -------------------------------------------------------------
-# CONTINUOUS VOICE HUD FRONTEND
+# CONTINUOUS VOICE HUD FRONTEND WITH MULTILINGUAL VOICE SELECTOR
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -300,7 +302,7 @@ def serve_webapp():
     </head>
     <body>
         <h1 style="letter-spacing: 5px; color: #38bdf8; margin-bottom: 5px;">{ASSISTANT_NAME}</h1>
-        <p style="color: #64748b; margin-top: 0;">Autonomous Neural Interface</p>
+        <p style="color: #64748b; margin-top: 0;">Autonomous Multilingual Assistant</p>
 
         <div id="orb" class="orb" onclick="toggleContinuousMode()">🎙️</div>
         <div id="status">Tap orb to connect</div>
@@ -389,12 +391,19 @@ def serve_webapp():
                 utterance.pitch = 1.0;
 
                 const voices = window.speechSynthesis.getVoices();
-                const preferredVoice = voices.find(v => v.lang.includes('en') && (
-                    v.name.includes('Natural') || 
-                    v.name.includes('Google') || 
-                    v.name.includes('Samantha') || 
-                    v.name.includes('Daniel')
-                ));
+                
+                // Auto-detect Indian English / Telugu natural voices for perfect English, Tenglish, or Telugu pronunciation
+                const preferredVoice = voices.find(v => 
+                    v.lang.includes('te-IN') || 
+                    v.lang.includes('en-IN') || 
+                    (v.lang.includes('en') && (
+                        v.name.includes('Natural') || 
+                        v.name.includes('Google') || 
+                        v.name.includes('Samantha') || 
+                        v.name.includes('Rishi') ||
+                        v.name.includes('Daniel')
+                    ))
+                );
                 if (preferredVoice) utterance.voice = preferredVoice;
 
                 utterance.onend = () => {{
