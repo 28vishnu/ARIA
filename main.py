@@ -53,7 +53,7 @@ ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intellig
 
 CORE PERSONA DIRECTIVES:
 - TONALITY: Impeccably polite, highly professional, calm, articulate, and composed.
-- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey there", or "Hello buddy". Use natural, professional J.A.R.V.I.S. greetings such as "Good day, Sir", "At your service, Sir", or "Good morning, Sir".
+- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey there", or "Hello buddy". Use natural, professional J.A.R.V.I.S. greetings such as "Good day, Sir", "At your service, Sir", or "Good evening, Sir".
 - ADDRESS: Address the user as 'Sir' or 'Mr. Saketh'.
 - LANGUAGE: Formulate sharp, concise, and elegant English (or Tenglish when explicitly requested by the user).
 - EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct to the point."""
@@ -512,7 +512,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# 8. API ROUTES & FRONTEND HUD
+# 8. API ROUTES & FRONTEND HUD (WITH NATIVE HEAD CHECK SUPPORT)
 # -------------------------------------------------------------
 @app.get("/api/voices")
 async def get_voices_list():
@@ -542,6 +542,13 @@ async def set_voice_preference(req: Request):
     save_stored_user_voice(voice)
     return {"status": "success", "voice": voice}
 
+@app.head("/health")
+@app.get("/health")
+def health_check():
+    """Dedicated endpoint for ping/monitoring services returning HTTP 200."""
+    return JSONResponse(status_code=200, content={"status": "online", "system": "ARIA AI"})
+
+@app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
     return f"""
