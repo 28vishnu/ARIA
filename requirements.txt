@@ -11,3 +11,5 @@ tavily-python
 pypdf
 python-multipart
 edge-tts
+motor
+pymongo
