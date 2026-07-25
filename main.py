@@ -25,13 +25,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
-# ABSOLUTE SEAMLESS SPEECH DIRECTIVES
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant.
-CRITICAL SPEECH RULES:
-- Never place commas before or after 'Sir' or 'Master'. Write titles cleanly inline without punctuation breaks (e.g., 'All systems nominal Sir' or 'Right away Sir').
-- Speak in one continuous, highly articulate, and confident sentence (15-25 words max).
-- Your tone should be composed, warm, sharp, and effortless—matching a high-end personal advisor.
-- Deliver direct answers immediately without conversational filler."""
+# DEDICATED J.A.R.V.I.S.-STYLE SYSTEM PROMPT
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly intelligent, articulate, and calm personal AI assistant inspired by J.A.R.V.I.S.
+CONVERSATIONAL DIRECTIVES:
+- Address the user naturally as 'Sir' without putting commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
+- Maintain quiet confidence, dry subtle warmth, and complete composure.
+- Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences).
+- Deliver precise answers immediately using the user's stored personal memory context."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -44,9 +44,10 @@ class UserQuery(BaseModel):
     location: str = None
 
 # -------------------------------------------------------------
-# CONVERSATION & LONG-TERM MEMORY HOOKS
+# SECURE MEMORY & CONVERSATION PIPELINE
 # -------------------------------------------------------------
 def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = None):
+    """Saves user voice transcript and ARIA response safely to Supabase."""
     if supabase:
         try:
             payload = {
@@ -58,36 +59,36 @@ def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = No
                 payload["location"] = location_info
             supabase.table("voice_logs").insert(payload).execute()
         except Exception as e:
-            print(f"[Supabase Log Error]: {e}")
+            print(f"[Supabase Log Warning]: {e}")
 
 def fetch_longterm_memory() -> str:
-    """Retrieves stored facts and preferences from Supabase."""
+    """Retrieves stored personal facts from Supabase."""
     if not supabase:
         return ""
     try:
         res = supabase.table("personal_memory").select("category, fact").execute()
         if res.data:
             facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
-            return "\nPERSONAL MEMORY VAULT:\n" + "\n".join(facts) + "\n"
+            return "\nSTORED PERSONAL CONTEXT:\n" + "\n".join(facts) + "\n"
     except Exception as e:
         print(f"[Memory Retrieval Error]: {e}")
     return ""
 
 # -------------------------------------------------------------
-# MULTI-PROVIDER CASCADE INFERENCE
+# MULTI-PROVIDER INFERENCE CASCADE
 # -------------------------------------------------------------
 async def generate_aria_response(user_text: str, location_info: str = None) -> str:
     memory_context = fetch_longterm_memory()
     
     if location_info:
-        memory_context += f"\nUSER CURRENT LOCATION: {location_info}\n"
+        memory_context += f"\nUSER GPS LOCATION: {location_info}\n"
         
     if supabase:
         try:
             res = supabase.table("voice_logs").select("transcript, ai_reply").order("created_at", desc=True).limit(2).execute()
             if res.data:
-                past = "\n".join([f"User: {m['transcript']}\nARIA: {m['ai_reply']}" for m in reversed(res.data)])
-                memory_context += f"\nRECENT CONVERSATION LOG:\n{past}\n"
+                past = "\n".join([f"Sir: {m['transcript']}\nARIA: {m['ai_reply']}" for m in reversed(res.data)])
+                memory_context += f"\nRECENT DIALOGUE:\n{past}\n"
         except Exception:
             pass
 
@@ -116,7 +117,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
         try:
             response = gemini_client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=f"{full_system}\n\nUser: {user_text}\nARIA:"
+                contents=f"{full_system}\n\nSir: {user_text}\nARIA:"
             )
             reply = response.text
             log_voice_interaction(user_text, reply, location_info)
@@ -124,10 +125,10 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
         except Exception as e:
             print(f"[Gemini Warning]: {e}")
 
-    return "Standing by Sir. Neural links are ready."
+    return "Standing by Sir. All systems are operational."
 
 # -------------------------------------------------------------
-# CONTINUOUS VOICE HUD WITH REAL-TIME GPS LOCATION & SPEECH CLEANER
+# CONTINUOUS VOICE HUD FRONTEND
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -194,7 +195,7 @@ def serve_webapp():
     </head>
     <body>
         <h1 style="letter-spacing: 5px; color: #38bdf8; margin-bottom: 5px;">{ASSISTANT_NAME}</h1>
-        <p style="color: #64748b; margin-top: 0;">Autonomous AI Personal System</p>
+        <p style="color: #64748b; margin-top: 0;">Autonomous Neural Assistant</p>
 
         <div id="orb" class="orb" onclick="toggleContinuousMode()">🎙️</div>
         <div id="status">Tap orb to connect</div>
@@ -215,7 +216,7 @@ def serve_webapp():
                         document.getElementById('loc-status').innerText = 'GPS Status: Active';
                     }},
                     (err) => {{
-                        document.getElementById('loc-status').innerText = 'GPS Status: Permission Denied';
+                        document.getElementById('loc-status').innerText = 'GPS Status: Standby';
                     }}
                 );
             }}
@@ -271,10 +272,12 @@ def serve_webapp():
                 isSpeaking = true;
                 window.speechSynthesis.cancel();
                 
+                // STRIP PAUSE-CAUSING PUNCTUATION FOR A FLUID SPOKEN PHRASE
                 let fluidText = rawText
                     .replace(/,\\s*Sir/gi, ' Sir')
                     .replace(/,\\s*Master/gi, ' Master')
-                    .replace(/,/g, '');
+                    .replace(/,/g, '')
+                    .replace(/\\s+/g, ' ');
 
                 const utterance = new SpeechSynthesisUtterance(fluidText);
                 utterance.rate = 1.05;
