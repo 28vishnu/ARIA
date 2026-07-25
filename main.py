@@ -29,6 +29,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Security lock ID
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -204,7 +205,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# TELEGRAM BOT WEBHOOK ENDPOINT
+# SECURE TELEGRAM BOT WEBHOOK ENDPOINT
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -215,7 +216,19 @@ async def telegram_webhook(req: Request):
         data = await req.json()
         message = data.get("message", {})
         chat_id = message.get("chat", {}).get("id")
+        from_user_id = message.get("from", {}).get("id")
         text = message.get("text", "")
+
+        # SECURITY AUTHENTICATION CHECK
+        if ALLOWED_TELEGRAM_USER_ID:
+            if str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
+                print(f"[SECURITY ALERT]: Blocked unauthorized Telegram user {from_user_id}")
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                        json={"chat_id": chat_id, "text": "Access Denied: Unauthorized User."}
+                    )
+                return {"status": "unauthorized"}
 
         if chat_id and text:
             reply_text = await process_autonomous_task(text, str(chat_id))
