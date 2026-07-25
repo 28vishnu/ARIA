@@ -34,14 +34,14 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
-# DYNAMIC DUAL-LANGUAGE SYSTEM PROMPT (NO FIXED REPETITIVE GREETINGS)
+# DYNAMIC DUAL-LANGUAGE SYSTEM PROMPT
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
 - Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
 - DYNAMIC LANGUAGE SWITCHING:
   * If the user speaks in English, respond in clear, articulate English.
   * If the user speaks in Telugu or Tenglish, respond naturally using English/Latin script for seamless speech synthesis.
-  * DO NOT repeat fixed greetings or phrases like 'Em sangathulu Sir' unless specifically relevant. Keep replies completely unique, context-aware, and fresh every time.
+  * DO NOT repeat fixed greetings or phrases unless relevant. Keep replies unique, context-aware, and fresh every time.
 - Maintain quiet confidence, dry subtle warmth, and complete composure.
 - Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences max).
 - Deliver precise answers immediately using stored personal memory context, schedule, weather, search results, and repositories."""
@@ -169,7 +169,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
     return "Standing by Sir. All core systems operational."
 
 # -------------------------------------------------------------
-# FULLSCREEN HUD FRONTEND WITH ADVANCED NATIVE VOICE SELECTOR
+# FULLSCREEN HUD FRONTEND WITH ACCURATE SPEECH-ONLY INTERRUPTION
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -351,37 +351,30 @@ def serve_webapp():
                 recognition.interimResults = false;
                 recognition.lang = 'en-US';
 
-                // INSTANT BARGE-IN: CANCEL SPEECH IMMEDIATELY WHEN SOUND OR SPEECH BEGINS
-                recognition.onsoundstart = () => {{
-                    if (window.speechSynthesis.speaking) {{
-                        window.speechSynthesis.cancel();
-                        isSpeaking = false;
-                    }}
-                }};
-
                 recognition.onstart = () => {{
-                    if (window.speechSynthesis.speaking) {{
-                        window.speechSynthesis.cancel();
-                        isSpeaking = false;
-                    }}
                     document.getElementById('hud').classList.add('listening');
-                    document.getElementById('status-text').innerText = 'LISTENING...';
+                    if (!isSpeaking) {{
+                        document.getElementById('status-text').innerText = 'LISTENING...';
+                    }}
                 }};
 
                 recognition.onend = () => {{
                     document.getElementById('hud').classList.remove('listening');
                     if (continuousMode && !isSpeaking) {{
-                        setTimeout(() => {{ try {{ recognition.start(); }} catch(e){{}} }}, 300);
+                        setTimeout(() => {{ try {{ recognition.start(); }} catch(e){{}} }}, 400);
                     }} else if (!continuousMode) {{
                         document.getElementById('status-text').innerText = 'STANDBY';
                     }}
                 }};
 
                 recognition.onresult = async (event) => {{
+                    const speech = event.results[0][0].transcript;
+                    if (!speech || speech.trim().length === 0) return;
+
+                    // INTERRUPT ARIA'S SPEECH ONLY WHEN A REAL USER COMMAND IS DETECTED
                     window.speechSynthesis.cancel();
                     isSpeaking = false;
 
-                    const speech = event.results[0][0].transcript;
                     document.getElementById('status-text').innerText = 'PROCESSING...';
 
                     try {{
@@ -419,12 +412,11 @@ def serve_webapp():
                     .replace(/\\s+/g, ' ');
 
                 const utterance = new SpeechSynthesisUtterance(fluidText);
-                utterance.rate = 0.95; // Sightly relaxed rate for clear, natural inflection
+                utterance.rate = 0.95;
                 utterance.pitch = 1.0;
 
                 const voices = window.speechSynthesis.getVoices();
                 
-                // HIGH ACCURACY VOICE SELECTION FOR TELUGU & INDIAN ENGLISH
                 const nativeVoice = voices.find(v => 
                     v.lang === 'te-IN' || 
                     v.lang === 'en-IN' || 
