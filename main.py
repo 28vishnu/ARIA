@@ -41,10 +41,10 @@ CONVERSATIONAL DIRECTIVES:
 - DYNAMIC LANGUAGE SWITCHING:
   * Respond fluently in English or Tenglish (Telugu transliterated using English/Latin script).
   * Keep replies completely natural, expressive, and conversational.
-- AUTONOMOUS & SECURITY PROTOCOL:
-  * Execute standard decisions (saving notes, indexing files, weather checks, web searches) quietly and report only the final outcome.
-  * For destructive or security-sensitive tasks (purging tables, deleting databases), request explicit voice confirmation first.
-- Keep spoken responses sharp, concise, and direct (1 to 2 sentences max)."""
+- AUTONOMOUS & DEVICE CONTROL PROTOCOL:
+  * Execute local app launches, device messaging, web searches, and memory saves quietly and report the final outcome in 1 concise sentence.
+  * For destructive tasks (purging databases), request explicit voice confirmation first.
+- Keep spoken responses sharp, concise, and direct (1 sentence max)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -55,6 +55,21 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
+CONNECTED_BRIDGES = set()  # Active local device agent connections
+
+# -------------------------------------------------------------
+# BROADCAST TO LOCAL DEVICE AGENTS
+# -------------------------------------------------------------
+async def broadcast_device_command(payload: dict):
+    """Sends action signals to connected Laptop or Phone bridge agents."""
+    disconnected = set()
+    for bridge in CONNECTED_BRIDGES:
+        try:
+            await bridge.send_json(payload)
+        except Exception:
+            disconnected.add(bridge)
+    for b in disconnected:
+        CONNECTED_BRIDGES.remove(b)
 
 # -------------------------------------------------------------
 # DYNAMIC DATABASE & PERMANENT MEMORY VAULT
@@ -65,8 +80,7 @@ def get_stored_user_voice() -> str:
             res = supabase.table("personal_memory").select("fact").eq("category", "user_voice_preference").execute()
             if res.data and len(res.data) > 0:
                 return res.data[0]["fact"].strip()
-        except Exception as e:
-            print(f"[Supabase Voice Read Error]: {e}")
+        except Exception: pass
     return "en-GB-RyanNeural"
 
 def save_stored_user_voice(voice_short_name: str):
@@ -77,8 +91,7 @@ def save_stored_user_voice(voice_short_name: str):
                 "category": "user_voice_preference",
                 "fact": voice_short_name
             }).execute()
-        except Exception as e:
-            print(f"[Supabase Voice Save Error]: {e}")
+        except Exception: pass
 
 def save_memory_fact(category: str, fact: str) -> str:
     if supabase:
@@ -88,8 +101,7 @@ def save_memory_fact(category: str, fact: str) -> str:
                 "fact": fact.strip()
             }).execute()
             return f"Data successfully stored under {category} Sir."
-        except Exception as e:
-            print(f"[Supabase Insert Error]: {e}")
+        except Exception: pass
     return "Memory vault unavailable Sir."
 
 def purge_memory_category(category: str) -> str:
@@ -97,8 +109,7 @@ def purge_memory_category(category: str) -> str:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
             return f"All {category} records and files have been purged from memory Sir."
-        except Exception as e:
-            print(f"[Supabase Delete Error]: {e}")
+        except Exception: pass
     return "Unable to clear vault category Sir."
 
 def fetch_web_search(query: str) -> str:
@@ -134,12 +145,12 @@ def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS DECISION & SECURITY AUTHORIZATION ENGINE
+# AUTONOMOUS INTENT & DEVICE CONTROL ENGINE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. HANDLE PENDING SECURITY AUTHORIZATIONS
+    # 1. PENDING SECURITY AUTHORIZATIONS
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
         if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "ok"]):
@@ -149,31 +160,42 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
             del PENDING_SECURITY_ACTIONS[session_id]
             return "Security action aborted Sir. Data remains intact."
-        else:
-            return f"Awaiting your authorization Sir. Do you want to proceed with deleting all {pending['category']} data?"
 
-    # 2. DETECT SECURITY SENSITIVE ACTIONS (RED ZONE)
+    # 2. DEVICE APP CONTROL INTENTS (e.g., "Open YouTube", "Launch Spotify", "Open VS Code")
+    open_match = re.search(r'(?:open|launch|start|run)\s+([a-zA-Z0-9_\-\s]+)', cmd)
+    if open_match:
+        app_name = open_match.group(1).replace("app", "").strip()
+        if app_name and app_name not in ["the", "this", "it"]:
+            await broadcast_device_command({
+                "target": "all",
+                "action": "open_app",
+                "app_name": app_name
+            })
+            return f"Opening {app_name} on your device now Sir."
+
+    # 3. MESSAGING INTENTS (e.g., "Send message to Alex hello", "Send WhatsApp message")
+    msg_match = re.search(r'(?:send|message|text)\s+(?:a\s+)?(?:whatsapp\s+)?(?:message\s+to\s+)?([a-zA-Z0-9_]+)\s+(?:saying\s+)?(.+)', cmd)
+    if msg_match:
+        recipient = msg_match.group(1)
+        message_body = msg_match.group(2)
+        await broadcast_device_command({
+            "target": "phone",
+            "action": "send_message",
+            "recipient": recipient,
+            "message": message_body
+        })
+        return f"Sending message to {recipient} Sir."
+
+    # 4. SECURITY CHECKS (PURGE DATA)
     if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "exams"}
-        return "Purging the exam database is an irreversible action Sir. Do I have your authorization to proceed?"
+        return "Purging the exam database is irreversible Sir. Do I have your authorization to proceed?"
 
-    purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
-    if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
-        target_cat = purge_match.group(1).replace("data", "").replace("all", "").strip()
-        if target_cat and target_cat not in ["this", "that", "it"]:
-            PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": target_cat}
-            return f"Deleting all records for {target_cat} requires authorization Sir. Should I proceed?"
-
-    # 3. AUTONOMOUS SELF-DECISIONS (GREEN ZONE)
+    # 5. GENERAL FACTS AUTO-SAVE
     if any(k in cmd for k in ["remember that", "save this", "store that", "my preference is", "note that"]):
         return save_memory_fact("general_facts", user_text)
 
-    if "exam" in cmd and any(k in cmd for k in ["store", "save", "near", "coming", "schedule"]):
-        return save_memory_fact("exams", user_text)
-
-    if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice catalog"]):
-        return "Opening the neural voice catalog Sir. Select your preferred voice."
-
+    # 6. WEB SEARCH INTENT
     search_context = ""
     if any(kw in cmd for kw in ["search", "find", "who is", "latest", "news", "box office", "today"]):
         search_context = fetch_web_search(user_text)
@@ -232,7 +254,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# API ROUTES
+# API & WEBSOCKET ENDPOINTS
 # -------------------------------------------------------------
 @app.get("/api/voices")
 async def get_voices_list():
@@ -261,6 +283,17 @@ async def set_voice_preference(req: Request):
     voice = data.get("voice", "en-GB-RyanNeural")
     save_stored_user_voice(voice)
     return {"status": "success", "voice": voice}
+
+@app.websocket("/ws-bridge")
+async def websocket_bridge(websocket: WebSocket):
+    """WebSocket endpoint for Local Device Bridge Agents (Laptop / Mobile)."""
+    await websocket.accept()
+    CONNECTED_BRIDGES.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        CONNECTED_BRIDGES.remove(websocket)
 
 # -------------------------------------------------------------
 # FRONTEND WITH STABLE VOICE LOOP & PARTICLE HUD
