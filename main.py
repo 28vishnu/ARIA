@@ -57,6 +57,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 mongo_docs_col = mongo_db["documents"] if mongo_db is not None else None
+mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 
 CACHE_VOICES = []
@@ -103,7 +104,7 @@ async def update_ram_cache():
     return RAM_MEMORY_CACHE
 
 # -------------------------------------------------------------
-# 3. DYNAMIC SMART STORAGE & FAST WEATHER ENGINE
+# 3. DYNAMIC SMART STORAGE & MULTI-MODAL MEDIA ENGINE
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -141,21 +142,23 @@ async def save_memory_fact(category: str, fact: str) -> str:
     asyncio.create_task(_async_persisters())
     return "Understood, Sir. Duly recorded in your personal vault."
 
-async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes, text_preview: str):
+async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = ""):
+    """Stores voice clips, videos, and multi-format documents into MongoDB binary vault."""
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
 
-    if mongo_docs_col is not None:
+    if mongo_media_col is not None:
         try:
-            await mongo_docs_col.insert_one({
+            await mongo_media_col.insert_one({
                 "file_name": file_name,
-                "label": doc_label.lower().strip(),
+                "media_type": media_type,  # 'voice', 'video', 'document'
+                "caption": caption.lower().strip(),
                 "b64_payload": b64_payload,
-                "text_preview": text_preview[:1500]
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
-        except Exception as e: print(f"[Doc Save Error]: {e}")
+        except Exception as e: print(f"[Media Save Error]: {e}")
 
-    await save_memory_fact("documents", f"DOCUMENT '{doc_label}' (File: {file_name}): {text_preview[:1500]}")
-    return f"Document '{file_name}' successfully secured in your vault, Sir."
+    await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Caption: {caption}")
+    return f"{media_type.capitalize()} file '{file_name}' successfully indexed in your neural vault, Sir."
 
 async def purge_memory_category(category: str) -> str:
     cat = category.lower().strip()
@@ -165,6 +168,9 @@ async def purge_memory_category(category: str) -> str:
     if mongo_docs_col is not None and cat in ["documents", "exams", "stored_files"]:
         try: await mongo_docs_col.delete_many({})
         except Exception: pass
+    if mongo_media_col is not None and cat in ["media_vault", "stored_files"]:
+        try: await mongo_media_col.delete_many({})
+        except Exception: pass
     if supabase:
         try: supabase.table("personal_memory").delete().eq("category", cat).execute()
         except Exception: pass
@@ -172,6 +178,18 @@ async def purge_memory_category(category: str) -> str:
     global RAM_MEMORY_CACHE
     RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
     return f"All records associated with '{category}' have been purged, Sir."
+
+def fetch_user_news_and_mentions() -> str:
+    """Monitors live web mentions and news related to you or your digital presence."""
+    if not tavily_client: return ""
+    try:
+        query = f'"{USER_FULL_NAME}" OR "cine.critiq" OR "movie.details"'
+        res = tavily_client.search(query=query, max_results=3)
+        results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
+        if results:
+            return "\nLATEST WEB MENTIONS & NEWS:\n" + "\n".join(results) + "\n"
+    except Exception: pass
+    return ""
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -308,7 +326,7 @@ DIRECTIVES:
 @app.on_event("startup")
 async def start_scheduler():
     await update_ram_cache()
-    trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
+    trigger = CronTrigger(hour=1, minute=30, timezone="UTC")  # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
     print("[J.A.R.V.I.S. Core]: Online with high-speed temporal & hybrid persona engine.")
@@ -342,11 +360,15 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 4. TEMPORAL & WEATHER ENGINE INJECTION
+    # 4. TEMPORAL & WEATHER & NEWS INJECTION
     temporal_context = get_current_temporal_context()
     weather_context = ""
     if any(kw in cmd for kw in ["weather", "temperature", "rain", "forecast", "climate"]):
         weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185")
+
+    news_context = ""
+    if any(kw in cmd for kw in ["news about me", "my news", "web mentions", "my articles", "online presence"]):
+        news_context = fetch_user_news_and_mentions()
 
     search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price"]) else ""
     cached_facts = await update_ram_cache()
@@ -356,6 +378,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 
 {temporal_context}
 {weather_context}
+{news_context}
 {memory_context}
 {search_context}
 
@@ -399,7 +422,7 @@ CORE DIRECTIVES:
     return "All neural systems operational, Sir."
 
 # -------------------------------------------------------------
-# 6. INSTANT TELEGRAM WEBHOOK (DIRECT FILE DISPATCH)
+# 6. INSTANT TELEGRAM WEBHOOK (DIRECT MULTI-MODAL DISPATCH)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -412,6 +435,8 @@ async def telegram_webhook(req: Request):
         from_user_id = message.get("from", {}).get("id")
         text = message.get("text", "").strip()
         document = message.get("document", None)
+        voice = message.get("voice", None)
+        video = message.get("video", None)
 
         if not chat_id: return {"status": "no chat_id"}
 
@@ -428,56 +453,61 @@ async def telegram_webhook(req: Request):
                 )
             return {"status": "ok"}
 
-        # 2. Document Upload Handling
-        if document:
-            file_id = document.get("file_id")
-            file_name = document.get("file_name", "document.pdf")
+        # 2. Multi-Modal Upload Handling (PDF, Voice, Video)
+        file_obj, media_type, default_name = None, "document", "file.dat"
+        if document: file_obj, media_type, default_name = document, "document", document.get("file_name", "document.pdf")
+        elif voice: file_obj, media_type, default_name = voice, "voice", "voice_note.ogg"
+        elif video: file_obj, media_type, default_name = video, "video", "video_clip.mp4"
 
+        if file_obj:
+            file_id = file_obj.get("file_id")
             async with httpx.AsyncClient() as client:
                 file_info_res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}")
                 file_path = file_info_res.json().get("result", {}).get("file_path")
                 raw_bytes_res = await client.get(f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}")
                 raw_bytes = raw_bytes_res.content
 
-            extracted_text = extract_text_from_pdf(raw_bytes) if file_name.lower().endswith(".pdf") else "Binary Document Stored"
-            save_reply = await save_binary_document(file_name, file_name, raw_bytes, extracted_text)
+            save_reply = await save_media_file(default_name, media_type, raw_bytes, caption=text)
 
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 3. DIRECT FILE RETRIEVAL (Sub-2 Second Speed)
+        # 3. Fast Direct File/Media Retrieval Dispatches
         if text:
             cmd = text.lower()
-            file_triggers = [
-                "give my resume", "send my resume", "get resume", "give resume", "send resume",
-                "give that document", "save in my phone", "send document", "send pdf",
-                "download my resume", "give me the pdf", "send file"
+            media_triggers = [
+                "give my voice note", "send voice clip", "get my video", "send my resume", 
+                "give resume", "send resume", "give that document", "save in my phone", 
+                "send document", "send pdf", "download my resume", "give me the pdf", "send file"
             ]
             
-            if any(trigger in cmd for trigger in file_triggers):
+            if any(trigger in cmd for trigger in media_triggers):
                 target_doc = None
-                if mongo_docs_col is not None:
-                    target_doc = await mongo_docs_col.find_one({}, sort=[("_id", -1)])
+                if mongo_media_col is not None:
+                    target_doc = await mongo_media_col.find_one({}, sort=[("_id", -1)])
 
                 async with httpx.AsyncClient() as client:
-                    if not target_doc:
+                    if target_doc:
+                        raw_bytes = base64.b64decode(target_doc["b64_payload"])
+                        fname = target_doc.get("file_name", "file.dat")
+                        mtype = target_doc.get("media_type", "document")
+                        endpoint = "sendVoice" if mtype == "voice" else ("sendVideo" if mtype == "video" else "sendDocument")
+                        param_name = "voice" if mtype == "voice" else ("video" if mtype == "video" else "document")
+
                         await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                            json={"chat_id": chat_id, "text": "I possess your profile details in text memory, Sir, but no binary PDF is saved in the vault yet. Please upload your resume PDF once."}
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{endpoint}",
+                            data={"chat_id": chat_id, "caption": f"Here is your {mtype}: '{fname}' Sir."},
+                            files={param_name: (fname, raw_bytes, "application/octet-stream")}
                         )
                     else:
-                        target_name = target_doc.get("file_name", "resume.pdf")
-                        raw_file_bytes = base64.b64decode(target_doc["b64_payload"])
-                        
                         await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
-                            data={"chat_id": chat_id, "caption": f"Here is your document: '{target_name}' Sir."},
-                            files={"document": (target_name, raw_file_bytes, "application/octet-stream")}
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                            json={"chat_id": chat_id, "text": "I possess your profile details in text memory, Sir, but no stored media file matching your request was found in the vault yet."}
                         )
                 return {"status": "ok"}
 
-            # 4. Fast Conversational AI Response
+            # 4. Standard Fast Conversational AI
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
@@ -669,7 +699,7 @@ def serve_webapp():
     <body>
         <canvas id="particleCanvas"></canvas>
         <button class="settings-btn" onclick="openVoiceModal()">⚙️</button>
-        <div id="dropZone">Drop document files here to save in MongoDB vault</div>
+        <div id="dropZone">Drop media or document files here to save in MongoDB vault</div>
 
         <div class="ui-layer">
             <div class="hud-orb" id="hudOrb" onclick="toggleMic()">
@@ -883,5 +913,5 @@ async def websocket_endpoint(websocket: WebSocket):
 async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
     file_bytes = await file.read()
     pdf_text = extract_text_from_pdf(file_bytes)
-    await save_binary_document(file.filename, file.filename, file_bytes, pdf_text)
+    await save_media_file(file.filename, "document", file_bytes, caption=pdf_text[:500])
     return {"status": "ok"}
