@@ -1,11 +1,14 @@
 import os
 import json
 import httpx
+import base64
+import re
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
+import edge_tts
 
 # Provider SDKs
 from groq import Groq
@@ -23,7 +26,6 @@ app = FastAPI()
 # -------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -35,12 +37,13 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
+# BILINGUAL ARIA PROMPT
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous personal AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
-- Maintain a warm, composed, and natural peer-level tone. Address the user naturally as 'Sir' without inserting commas before the title.
-- Respond fluently in English or Tenglish (Telugu transliterated in English script).
-- Keep spoken replies concise, direct, and immediate (1 natural sentence max).
-- Use personal memory context, schedule, weather, search results, and repositories to answer."""
+- Address the user naturally as 'Sir' without placing commas before the title.
+- Respond fluently in English or Tenglish (Telugu transliterated in English/Latin script).
+- Keep spoken replies concise, sharp, and natural (1 concise sentence max).
+- Use personal memory context, schedule, weather, search results, and repositories to answer directly."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -49,24 +52,38 @@ github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
-class UserQuery(BaseModel):
-    prompt: str
-    location: str = None
+# -------------------------------------------------------------
+# ULTRA-REALISTIC EDGE-TTS VOICE ROUTING (FREE)
+# -------------------------------------------------------------
+async def generate_speech_audio_b64(text: str) -> tuple[str, str]:
+    """Generates studio-quality neural MP3 audio for English or Telugu/Tenglish."""
+    # Detect Telugu script or common Tenglish words
+    is_telugu = bool(re.search(r'[\u0C00-\u0C7F]', text)) or bool(re.search(r'\b(cheppu|cheyyi|sangu|ela|vunnaru|avunu|kadu|chudu|em|yem|namaskaram|malli|ipudu|nenu|meeru)\b', text, re.I))
+    
+    # Selected Neural Voice Models
+    voice = "te-IN-MohanNeural" if is_telugu else "en-GB-RyanNeural"
+
+    communicate = edge_tts.Communicate(text, voice)
+    audio_data = bytearray()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data.extend(chunk["data"])
+
+    b64_audio = base64.b64encode(audio_data).decode('utf-8')
+    return b64_audio, text
 
 # -------------------------------------------------------------
-# CORE MODULES & MEMORY HOOKS
+# CORE INTEGRATION MODULES
 # -------------------------------------------------------------
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     try:
         reader = PdfReader(BytesIO(file_bytes))
         return "".join([page.extract_text() or "" for page in reader.pages]).strip()
-    except Exception:
-        return ""
+    except Exception: return ""
 
 def save_fact_to_memory(category: str, fact: str):
     if supabase:
-        try:
-            supabase.table("personal_memory").insert({"category": category, "fact": fact}).execute()
+        try: supabase.table("personal_memory").insert({"category": category, "fact": fact}).execute()
         except Exception: pass
 
 def fetch_web_search(query: str) -> str:
@@ -126,7 +143,7 @@ def fetch_longterm_memory() -> str:
     except Exception: pass
     return ""
 
-async def stream_aria_response(user_text: str, location_info: str = None):
+async def get_aria_response_text(user_text: str, location_info: str = None) -> str:
     memory_context = fetch_longterm_memory() + fetch_google_calendar_events() + fetch_github_summary() + fetch_web_search(user_text)
     if location_info:
         memory_context += await fetch_weather_by_coords(location_info) + f"\nUSER GPS LOCATION: {location_info}\n"
@@ -135,15 +152,12 @@ async def stream_aria_response(user_text: str, location_info: str = None):
 
     if groq_client:
         try:
-            stream = groq_client.chat.completions.create(
+            completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": full_system}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=100, stream=True
+                temperature=0.5, max_tokens=100
             )
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
-            return
+            return completion.choices[0].message.content
         except Exception: pass
 
     if gemini_client:
@@ -151,14 +165,13 @@ async def stream_aria_response(user_text: str, location_info: str = None):
             response = gemini_client.models.generate_content(
                 model="gemini-2.0-flash", contents=f"{full_system}\n\nSir: {user_text}\nARIA:"
             )
-            yield response.text
-            return
+            return response.text
         except Exception: pass
 
-    yield "Standing by Sir."
+    return "Standing by Sir."
 
 # -------------------------------------------------------------
-# ZERO-TEXTBOX DIRECT DRAG & DROP FRONTEND
+# FRONTEND WITH NEURAL AUDIO PLAYER & DIRECT DRAG-AND-DROP
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -237,7 +250,6 @@ def serve_webapp():
             @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
             @keyframes pulse {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
 
-            /* DRAG AND DROP OVERLAY */
             #dropZone {{
                 position: fixed;
                 top: 0; left: 0; width: 100vw; height: 100vh;
@@ -260,7 +272,6 @@ def serve_webapp():
     </head>
     <body>
         <canvas id="particleCanvas"></canvas>
-
         <div id="dropZone">Drop document anywhere to index</div>
 
         <div class="ui-layer">
@@ -313,9 +324,9 @@ def serve_webapp():
             }}
             render();
 
-            /* WEBSOCKET REAL-TIME STREAMING & SPEECH ENGINE */
+            /* WEBSOCKET REAL-TIME AUDIO STREAMING */
             let ws;
-            let isSpeaking = false;
+            let currentAudio = null;
             let userLocation = null;
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
@@ -331,8 +342,8 @@ def serve_webapp():
                 ws = new WebSocket(`${{protocol}}//${{window.location.host}}/ws`);
 
                 ws.onmessage = (event) => {{
-                    const token = event.data;
-                    speakChunk(token);
+                    const payload = JSON.parse(event.data);
+                    playNeuralAudio(payload.audio);
                 }};
             }}
             initWebSocket();
@@ -347,10 +358,8 @@ def serve_webapp():
                     const speech = event.results[event.results.length - 1][0].transcript.trim();
                     if (!speech) return;
 
-                    // INSTANT MID-SPEECH INTERRUPTION
-                    window.speechSynthesis.cancel();
-                    isSpeaking = false;
-                    document.getElementById('hudOrb').classList.remove('speaking');
+                    // INSTANT BARGE-IN: STOP AUDIO IF USER SPEAKS
+                    stopAudio();
 
                     if (ws && ws.readyState === WebSocket.OPEN) {{
                         ws.send(JSON.stringify({{ prompt: speech, location: userLocation }}));
@@ -366,41 +375,32 @@ def serve_webapp():
                 }});
             }}
 
-            function toggleMic() {{
-                window.speechSynthesis.cancel();
-                isSpeaking = false;
+            function stopAudio() {{
+                if (currentAudio) {{
+                    currentAudio.pause();
+                    currentAudio.currentTime = 0;
+                    currentAudio = null;
+                }}
                 document.getElementById('hudOrb').classList.remove('speaking');
+            }}
+
+            function toggleMic() {{
+                stopAudio();
                 if (recognition) {{ try {{ recognition.start(); }} catch(e){{}} }}
             }}
 
-            let audioBuffer = "";
-            function speakChunk(text) {{
-                audioBuffer += text;
-                // Speak immediately once a sentence clause boundary is reached
-                if (/[,.!?]/.test(text) || audioBuffer.length > 25) {{
-                    const toSpeak = audioBuffer;
-                    audioBuffer = "";
+            function playNeuralAudio(b64Data) {{
+                stopAudio();
 
-                    isSpeaking = true;
-                    document.getElementById('hudOrb').classList.add('speaking');
+                currentAudio = new Audio("data:audio/mp3;base64," + b64Data);
+                document.getElementById('hudOrb').classList.add('speaking');
 
-                    let fluidText = toSpeak.replace(/,\\s*Sir/gi, ' Sir').replace(/,/g, '');
-                    const utterance = new SpeechSynthesisUtterance(fluidText);
-                    utterance.rate = 1.05;
+                currentAudio.onended = () => {{
+                    document.getElementById('hudOrb').classList.remove('speaking');
+                    if (recognition) {{ try {{ recognition.start(); }} catch(e){{}} }}
+                }};
 
-                    const voices = window.speechSynthesis.getVoices();
-                    const preferred = voices.find(v => v.lang === 'en-IN' || v.lang === 'te-IN' || v.name.includes('Rishi') || v.lang.includes('en'));
-                    if (preferred) utterance.voice = preferred;
-
-                    utterance.onend = () => {{
-                        if (audioBuffer.length === 0) {{
-                            isSpeaking = false;
-                            document.getElementById('hudOrb').classList.remove('speaking');
-                        }}
-                    }};
-
-                    window.speechSynthesis.speak(utterance);
-                }}
+                currentAudio.play();
             }}
 
             /* DIRECT SCREEN DRAG AND DROP FILE HANDLER */
@@ -415,7 +415,6 @@ def serve_webapp():
                     const formData = new FormData();
                     formData.append('file', file);
                     await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
-                    speakChunk("I have indexed " + file.name + " into memory Sir.");
                 }}
             }});
         </script>
@@ -424,7 +423,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# WEBSOCKET REAL-TIME STREAMING ENDPOINT
+# WEBSOCKET REAL-TIME AUDIO STREAMING ENDPOINT
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -436,8 +435,14 @@ async def websocket_endpoint(websocket: WebSocket):
             prompt = data.get("prompt", "")
             location = data.get("location", None)
 
-            async for token in stream_aria_response(prompt, location):
-                await websocket.send_text(token)
+            # Generate reply text
+            reply_text = await get_aria_response_text(prompt, location)
+            
+            # Synthesize realistic Neural MP3 Audio via Edge-TTS
+            audio_b64, text_out = await generate_speech_audio_b64(reply_text)
+            
+            # Send audio payload directly back to frontend
+            await websocket.send_json({"audio": audio_b64, "text": text_out})
     except WebSocketDisconnect:
         pass
 
