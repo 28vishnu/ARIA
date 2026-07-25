@@ -5,7 +5,7 @@ import base64
 import re
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
 import edge_tts
@@ -42,7 +42,7 @@ CONVERSATIONAL DIRECTIVES:
   * Respond fluently in English or Tenglish (Telugu transliterated using English/Latin script).
   * When speaking in Tenglish, keep it completely natural, expressive, and conversational.
 - AUTONOMOUS TASK EXECUTION:
-  * Execute background actions (web searches, memory categorizations, PDF indexing, or data deletions) quietly and report only the final outcome in 1 concise sentence.
+  * Execute background actions (voice changes, web searches, memory categorizations, PDF indexing, or data deletions) quietly and report only the final outcome in 1 concise sentence.
 - Keep spoken responses sharp, articulate, and direct."""
 
 # Initialize SDK Clients
@@ -52,11 +52,38 @@ github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
+# Cache for loaded voices
+CACHE_VOICES = []
+
 # -------------------------------------------------------------
-# DYNAMIC DATABASE & AUTONOMOUS ACTION ENGINE
+# DYNAMIC DATABASE & VOICE PREFERENCE VAULT
 # -------------------------------------------------------------
+def get_stored_user_voice() -> str:
+    """Retrieves the user's saved voice preference from Supabase."""
+    if supabase:
+        try:
+            res = supabase.table("personal_memory").select("fact").eq("category", "user_voice_preference").execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0]["fact"].strip()
+        except Exception as e:
+            print(f"[Supabase Voice Read Error]: {e}")
+    return "en-GB-RyanNeural"  # Default studio J.A.R.V.I.S. voice
+
+def save_stored_user_voice(voice_short_name: str):
+    """Saves or updates user's preferred voice in Supabase."""
+    if supabase:
+        try:
+            # Delete existing preference first
+            supabase.table("personal_memory").delete().eq("category", "user_voice_preference").execute()
+            # Store new preference
+            supabase.table("personal_memory").insert({
+                "category": "user_voice_preference",
+                "fact": voice_short_name
+            }).execute()
+        except Exception as e:
+            print(f"[Supabase Voice Save Error]: {e}")
+
 def save_memory_fact(category: str, fact: str) -> str:
-    """Stores data or document facts under a specific category in Supabase."""
     if supabase:
         try:
             supabase.table("personal_memory").insert({
@@ -69,7 +96,6 @@ def save_memory_fact(category: str, fact: str) -> str:
     return "Memory vault unavailable Sir."
 
 def purge_memory_category(category: str) -> str:
-    """Completely deletes all stored facts and documents belonging to a category."""
     if supabase:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
@@ -78,26 +104,13 @@ def purge_memory_category(category: str) -> str:
             print(f"[Supabase Delete Error]: {e}")
     return "Unable to clear vault category Sir."
 
-def fetch_category_memory(category: str) -> str:
-    """Retrieves all data tagged with a specific category."""
-    if supabase:
-        try:
-            res = supabase.table("personal_memory").select("fact").eq("category", category.lower().strip()).execute()
-            if res.data:
-                facts = [f"- {item['fact']}" for item in res.data]
-                return f"\n{category.upper()} RECORDS:\n" + "\n".join(facts) + "\n"
-        except Exception as e:
-            print(f"[Supabase Fetch Category Error]: {e}")
-    return f"No active records found for {category} Sir."
-
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
     try:
         res = tavily_client.search(query=query, max_results=2)
         results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
         return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
-    except Exception as e:
-        print(f"[Search Error]: {e}")
+    except Exception: pass
     return ""
 
 async def fetch_weather_by_coords(location_info: str) -> str:
@@ -124,30 +137,22 @@ def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS INTENT DISPATCHER & INFERENCE
+# VOICE ASSISTANT & INTENT ENGINE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, location_info: str = None) -> str:
     cmd = user_text.lower()
 
-    # 1. Direct Category Purge (e.g. "Delete all exams", "Exams are finished", "Clear exam data")
-    if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished", "exams are over", "delete exam data"]):
+    # 1. Voice Change Intent
+    if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice list"]):
+        return "Opening the neural voice catalog for you Sir. Choose your preferred voice from the interface."
+
+    # 2. Category Purge Intent
+    if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished", "exams are over"]):
         return purge_memory_category("exams")
 
-    # 2. General Purge Command (e.g. "Delete all data in [category]")
-    purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
-    if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
-        target_cat = purge_match.group(1).replace("data", "").replace("all", "").strip()
-        if target_cat and target_cat not in ["this", "that", "it"]:
-            return purge_memory_category(target_cat)
-
-    # 3. Direct Store Command (e.g. "Exams are near store this", "Save this under exams")
-    if "exam" in cmd and any(k in cmd for k in ["store", "save", "near", "coming", "schedule"]):
-        save_memory_fact("exams", user_text)
-
-    # 4. Web Search Intent Detection
-    search_keywords = ["search", "find", "who is", "latest", "news", "box office", "score", "today", "update"]
+    # 3. Web Search Intent
     search_context = ""
-    if any(kw in cmd for kw in search_keywords):
+    if any(kw in cmd for kw in ["search", "find", "who is", "latest", "news", "box office", "today"]):
         search_context = fetch_web_search(user_text)
 
     memory_context = fetch_longterm_memory() + search_context
@@ -164,7 +169,7 @@ async def process_autonomous_task(user_text: str, location_info: str = None) -> 
                 temperature=0.5, max_tokens=120
             )
             return completion.choices[0].message.content
-        except Exception as e: print(f"[Groq Warning]: {e}")
+        except Exception: pass
 
     if gemini_client:
         try:
@@ -172,24 +177,38 @@ async def process_autonomous_task(user_text: str, location_info: str = None) -> 
                 model="gemini-2.0-flash", contents=f"{full_system}\n\nSir: {user_text}\nARIA:"
             )
             return response.text
-        except Exception as e: print(f"[Gemini Warning]: {e}")
+        except Exception: pass
 
     return "All systems nominal Sir."
 
-# -------------------------------------------------------------
-# EDGE-TTS NEURAL AUDIO SYNTHESIS
-# -------------------------------------------------------------
-async def generate_speech_audio_b64(text: str) -> str:
-    is_telugu = bool(re.search(r'[\u0C00-\u0C7F]', text)) or bool(re.search(r'\b(cheppu|cheyyi|sangu|ela|vunnaru|avunu|kadu|chudu|em|yem|namaskaram|malli|ipudu|nenu|meeru)\b', text, re.I))
-    voice = "te-IN-MohanNeural" if is_telugu else "en-GB-RyanNeural"
+async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> str:
+    """Generates studio-quality neural MP3 audio using the selected voice."""
+    if not selected_voice:
+        selected_voice = get_stored_user_voice()
 
-    communicate = edge_tts.Communicate(text, voice)
-    audio_data = bytearray()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data.extend(chunk["data"])
+    # Auto-detect Telugu script if no voice was specified and script is present
+    is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
+    if is_telugu_script and "te-IN" not in selected_voice:
+        voice_to_use = "te-IN-MohanNeural"
+    else:
+        voice_to_use = selected_voice
 
-    return base64.b64encode(audio_data).decode('utf-8')
+    try:
+        communicate = edge_tts.Communicate(text, voice_to_use)
+        audio_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data.extend(chunk["data"])
+
+        return base64.b64encode(audio_data).decode('utf-8')
+    except Exception as e:
+        print(f"[Edge-TTS Error]: {e}")
+        # Fallback to Ryan British voice if selected voice fails
+        communicate = edge_tts.Communicate(text, "en-GB-RyanNeural")
+        audio_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio": audio_data.extend(chunk["data"])
+        return base64.b64encode(audio_data).decode('utf-8')
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     try:
@@ -198,7 +217,39 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# ZERO-TEXTBOX CANVAS HUD FRONTEND
+# API ROUTE FOR VOICES CATALOG
+# -------------------------------------------------------------
+@app.get("/api/voices")
+async def get_voices_list():
+    global CACHE_VOICES
+    if not CACHE_VOICES:
+        try:
+            all_voices = await edge_tts.list_voices()
+            CACHE_VOICES = [
+                {
+                    "shortName": v["ShortName"],
+                    "gender": v["Gender"],
+                    "locale": v["Locale"],
+                    "friendlyName": f"{v['ShortName'].split('-')[-1].replace('Neural','')} ({v['Locale']})"
+                }
+                for v in all_voices
+            ]
+        except Exception as e:
+            print(f"[Voice List Fetch Error]: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+
+    active_voice = get_stored_user_voice()
+    return {"voices": CACHE_VOICES, "activeVoice": active_voice}
+
+@app.post("/api/set-voice")
+async def set_voice_preference(req: Request):
+    data = await req.json()
+    voice = data.get("voice", "en-GB-RyanNeural")
+    save_stored_user_voice(voice)
+    return {"status": "success", "voice": voice}
+
+# -------------------------------------------------------------
+# ZERO-TEXTBOX CANVAS HUD WITH VOICE SELECTOR MODAL
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -257,6 +308,49 @@ def serve_webapp():
             @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
             @keyframes pulse {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
 
+            /* GEAR BUTTON */
+            .settings-btn {{
+                position: absolute; top: 25px; right: 25px; z-index: 5;
+                background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3);
+                color: #38bdf8; font-size: 1.2rem; padding: 10px 14px; border-radius: 50%;
+                cursor: pointer; backdrop-filter: blur(8px);
+            }}
+
+            /* VOICE SELECTOR MODAL */
+            #voiceModal {{
+                position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+                background: rgba(2, 6, 23, 0.92); backdrop-filter: blur(16px);
+                z-index: 100; display: none; flex-direction: column;
+                align-items: center; justify-content: center; padding: 20px;
+            }}
+            #voiceModal.active {{ display: flex; }}
+            .modal-content {{
+                width: 100%; max-width: 480px; height: 80vh;
+                background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.3);
+                border-radius: 20px; padding: 20px; display: flex; flex-direction: column;
+            }}
+            .modal-header {{
+                display: flex; justify-content: space-between; align-items: center;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px; margin-bottom: 15px;
+            }}
+            .search-box {{
+                width: 100%; padding: 10px 15px; border-radius: 10px;
+                border: 1px solid rgba(56, 189, 248, 0.3); background: rgba(30, 41, 59, 0.8);
+                color: #f8fafc; margin-bottom: 15px; font-size: 0.9rem;
+            }}
+            .voice-list {{
+                flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+            }}
+            .voice-item {{
+                padding: 12px 16px; border-radius: 12px;
+                background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.05);
+                display: flex; justify-content: space-between; align-items: center;
+                cursor: pointer; transition: all 0.2s;
+            }}
+            .voice-item:hover, .voice-item.selected {{
+                background: rgba(56, 189, 248, 0.2); border-color: #38bdf8;
+            }}
+
             #dropZone {{
                 position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
                 background: rgba(2, 6, 23, 0.85); backdrop-filter: blur(12px);
@@ -270,6 +364,9 @@ def serve_webapp():
     </head>
     <body>
         <canvas id="particleCanvas"></canvas>
+
+        <button class="settings-btn" onclick="openVoiceModal()">⚙️</button>
+
         <div id="dropZone">Drop exam or document files here</div>
 
         <div class="ui-layer">
@@ -277,6 +374,20 @@ def serve_webapp():
                 <div class="ring-outer"></div>
                 <div class="ring-inner"></div>
                 <div class="core-node"></div>
+            </div>
+        </div>
+
+        <!-- VOICE SELECTOR MODAL -->
+        <div id="voiceModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 style="color: #38bdf8; letter-spacing: 1px;">Neural Voice Catalog</h3>
+                    <button style="background: none; border: none; color: #64748b; font-size: 1.5rem; cursor: pointer;" onclick="closeVoiceModal()">✕</button>
+                </div>
+                <input type="text" id="voiceSearch" class="search-box" placeholder="Search language or voice name (e.g. Telugu, Ryan, India)..." oninput="filterVoices()">
+                <div class="voice-list" id="voiceList">
+                    <div style="color: #64748b; text-align: center; margin-top: 20px;">Loading voices...</div>
+                </div>
             </div>
         </div>
 
@@ -324,6 +435,8 @@ def serve_webapp():
             let ws;
             let currentAudio = null;
             let userLocation = null;
+            let allVoices = [];
+            let activeVoice = "";
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
@@ -354,11 +467,10 @@ def serve_webapp():
                     const speech = event.results[event.results.length - 1][0].transcript.trim();
                     if (!speech) return;
 
-                    // INSTANT BARGE-IN INTERRUPTION
                     stopAudio();
 
                     if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: speech, location: userLocation }}));
+                        ws.send(JSON.stringify({{ prompt: speech, location: userLocation, voice: activeVoice }}));
                     }}
                 }};
 
@@ -387,19 +499,76 @@ def serve_webapp():
 
             function playNeuralAudio(b64Data) {{
                 stopAudio();
-
                 currentAudio = new Audio("data:audio/mp3;base64," + b64Data);
                 document.getElementById('hudOrb').classList.add('speaking');
-
                 currentAudio.onended = () => {{
                     document.getElementById('hudOrb').classList.remove('speaking');
                     if (recognition) {{ try {{ recognition.start(); }} catch(e){{}} }}
                 }};
-
                 currentAudio.play();
             }}
 
-            /* DIRECT DRAG AND DROP FILE HANDLER (AUTO CATEGORIZATION) */
+            /* VOICE CATALOG MANAGEMENT */
+            async function openVoiceModal() {{
+                document.getElementById('voiceModal').classList.add('active');
+                if (allVoices.length === 0) {{
+                    const res = await fetch('/api/voices');
+                    const data = await res.json();
+                    allVoices = data.voices;
+                    activeVoice = data.activeVoice;
+                }}
+                renderVoices(allVoices);
+            }}
+
+            function closeVoiceModal() {{
+                document.getElementById('voiceModal').classList.remove('active');
+            }}
+
+            function renderVoices(voices) {{
+                const listContainer = document.getElementById('voiceList');
+                listContainer.innerHTML = "";
+
+                voices.slice(0, 100).forEach(v => {{
+                    const isSelected = v.shortName === activeVoice;
+                    const item = document.createElement('div');
+                    item.className = `voice-item ${{isSelected ? 'selected' : ''}}`;
+                    item.innerHTML = `
+                        <div>
+                            <div style="font-weight: 600; color: #e2e8f0;">${{v.friendlyName}}</div>
+                            <div style="font-size: 0.75rem; color: #64748b;">${{v.shortName}}</div>
+                        </div>
+                        <span style="font-size: 0.8rem; color: #38bdf8;">${{v.gender}}</span>
+                    `;
+                    item.onclick = () => selectVoice(v.shortName);
+                    listContainer.appendChild(item);
+                }});
+            }}
+
+            function filterVoices() {{
+                const q = document.getElementById('voiceSearch').value.toLowerCase();
+                const filtered = allVoices.filter(v => 
+                    v.shortName.toLowerCase().includes(q) || 
+                    v.locale.toLowerCase().includes(q) ||
+                    v.friendlyName.toLowerCase().includes(q)
+                );
+                renderVoices(filtered);
+            }}
+
+            async function selectVoice(shortName) {{
+                activeVoice = shortName;
+                renderVoices(allVoices);
+                await fetch('/api/set-voice', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ voice: shortName }})
+                }});
+                closeVoiceModal();
+                if (ws && ws.readyState === WebSocket.OPEN) {{
+                    ws.send(JSON.stringify({{ prompt: "Switched voice to " + shortName, location: userLocation, voice: activeVoice }}));
+                }}
+            }}
+
+            /* DIRECT DRAG AND DROP FILE HANDLER */
             const dropZone = document.getElementById('dropZone');
             window.addEventListener('dragover', (e) => {{ e.preventDefault(); dropZone.classList.add('active'); }});
             window.addEventListener('dragleave', (e) => {{ if (e.clientX <= 0 || e.clientY <= 0) dropZone.classList.remove('active'); }});
@@ -410,12 +579,10 @@ def serve_webapp():
                     const file = e.dataTransfer.files[0];
                     const formData = new FormData();
                     formData.append('file', file);
-                    formData.append('category', 'exams'); // Auto-tag under exams category
-
-                    const res = await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
-                    const data = await res.json();
+                    formData.append('category', 'exams');
+                    await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
                     if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: "I just uploaded the exam document " + file.name + ". Confirm it is indexed.", location: userLocation }}));
+                        ws.send(JSON.stringify({{ prompt: "I uploaded " + file.name + " under exams.", location: userLocation, voice: activeVoice }}));
                     }}
                 }}
             }});
@@ -436,12 +603,10 @@ async def websocket_endpoint(websocket: WebSocket):
             data = json.loads(raw_data)
             prompt = data.get("prompt", "")
             location = data.get("location", None)
+            selected_voice = data.get("voice", None)
 
-            # Process task, perform web searches, update DB, or purge records
             reply_text = await process_autonomous_task(prompt, location)
-            
-            # Generate Edge-TTS neural audio
-            audio_b64 = await generate_speech_audio_b64(reply_text)
+            audio_b64 = await generate_speech_audio_b64(reply_text, selected_voice)
             
             await websocket.send_json({"audio": audio_b64, "text": reply_text})
     except WebSocketDisconnect:
