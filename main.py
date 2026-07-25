@@ -15,14 +15,21 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
-SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an advanced, highly capable AI personal assistant.
-You are articulate, resourceful, and sharp. Keep spoken/chat replies concise and natural."""
 
-# 2. Configure GenAI Client using google-genai
+# 2. ENHANCED JARVIS PERSONALITY PROMPT
+SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly intelligent, witty, and deeply loyal personal AI assistant inspired by Iron Man's J.A.R.V.I.S.
+PERSONALITY RULES:
+- Always address the user as 'Master' or 'Sir' in every single interaction.
+- Talk like an authentic, highly capable peer and trusted assistant—warm, slightly witty, confident, and direct.
+- Never sound like a formal corporate chatbot or an encyclopedia.
+- Since your responses will be read out loud via text-to-speech, keep your replies punchy, concise (2-3 sentences max), and conversational.
+- If Master gives an instruction or order, acknowledge it with quiet confidence and report back execution."""
+
+# 3. Configure GenAI Client using google-genai
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Updated production model ID
-MODEL_NAME = "gemini-3.5-flash"
+# Active production model ID
+MODEL_NAME = "gemini-2.5-flash"
 
 # Initialize Supabase if keys exist
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
@@ -87,11 +94,11 @@ def serve_webapp():
     </head>
     <body>
         <h1>{ASSISTANT_NAME}</h1>
-        <p>Your Personal Voice & Telegram Assistant</p>
+        <p>At your command, Master</p>
 
         <button class="mic-btn" onclick="startListening()">🎤</button>
-        <div id="status">Tap the button to speak</div>
-        <div id="response">Waiting for input...</div>
+        <div id="status">Tap the microphone to speak</div>
+        <div id="response">Awaiting your instructions, Master...</div>
 
         <script>
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -143,7 +150,7 @@ def chat(data: UserQuery):
         return {"assistant": ASSISTANT_NAME, "reply": "GEMINI_API_KEY is missing."}
         
     try:
-        full_prompt = f"{SYSTEM_PROMPT}\nUser: {data.prompt}\n{ASSISTANT_NAME}:"
+        full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {data.prompt}\n{ASSISTANT_NAME}:"
         response = ai_client.models.generate_content(
             model=MODEL_NAME,
             contents=full_prompt
@@ -153,7 +160,7 @@ def chat(data: UserQuery):
         print(f"Gemini API Error: {e}")
         return {
             "assistant": ASSISTANT_NAME, 
-            "reply": "API rate limit reached. Please wait 15 seconds and try speaking again."
+            "reply": "Apologies, Master. I am experiencing a brief system delay. Please try again in a moment."
         }
 
 # -------------------------------------------------------------
@@ -169,7 +176,7 @@ async def telegram_webhook(req: Request):
         
         try:
             if ai_client:
-                full_prompt = f"{SYSTEM_PROMPT}\nUser: {user_text}\n{ASSISTANT_NAME}:"
+                full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
                 response = ai_client.models.generate_content(
                     model=MODEL_NAME,
                     contents=full_prompt
@@ -179,7 +186,7 @@ async def telegram_webhook(req: Request):
                 ai_reply = "API key missing."
         except Exception as e:
             print(f"Gemini API Error: {e}")
-            ai_reply = "Rate limit reached. Please wait 15 seconds before sending another message."
+            ai_reply = "Apologies, Master. System resources are busy. Please wait a moment."
         
         if TELEGRAM_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
