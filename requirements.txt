@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 google-genai
+groq
+mistralai
 supabase
 requests
 httpx
