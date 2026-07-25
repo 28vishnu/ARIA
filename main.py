@@ -12,6 +12,7 @@ from supabase import create_client
 from github import Github
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from tavily import TavilyClient
 
 app = FastAPI()
 
@@ -29,21 +30,23 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
 # DEDICATED ARIA SYSTEM PROMPT
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant.
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
 - Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
 - Maintain quiet confidence, dry subtle warmth, and complete composure.
 - Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences).
-- Deliver precise answers immediately using the user's stored personal memory context, schedule, and repositories."""
+- Deliver precise answers immediately using the user's stored personal memory context, schedule, weather, search results, and repositories."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 class UserQuery(BaseModel):
@@ -51,10 +54,47 @@ class UserQuery(BaseModel):
     location: str = None
 
 # -------------------------------------------------------------
+# REAL-TIME TAVILY WEB SEARCH MODULE
+# -------------------------------------------------------------
+def fetch_web_search(query: str) -> str:
+    """Executes a real-time web search via Tavily for current news or facts."""
+    if not tavily_client:
+        return ""
+    search_keywords = ["news", "latest", "search", "who is", "today", "box office", "update", "weather", "score", "movie"]
+    if any(kw in query.lower() for kw in search_keywords):
+        try:
+            res = tavily_client.search(query=query, max_results=2)
+            results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
+            return "\nLIVE TAVILY WEB SEARCH RESULTS:\n" + "\n".join(results) + "\n"
+        except Exception as e:
+            print(f"[Tavily Search Error]: {e}")
+    return ""
+
+# -------------------------------------------------------------
+# REAL-TIME WEATHER MODULE (OPEN-METEO API)
+# -------------------------------------------------------------
+async def fetch_weather_by_coords(location_info: str) -> str:
+    """Fetches real-time localized weather using GPS coordinates."""
+    if not location_info or "," not in location_info:
+        return ""
+    try:
+        lat, lon = location_info.split(",")
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url, timeout=5.0)
+            if res.status_code == 200:
+                data = res.json().get("current_weather", {})
+                temp = data.get("temperature")
+                wind = data.get("windspeed")
+                return f"\nLOCAL WEATHER: Currently {temp}°C with wind speeds of {wind} km/h.\n"
+    except Exception as e:
+        print(f"[Weather Fetch Error]: {e}")
+    return ""
+
+# -------------------------------------------------------------
 # INTEGRATIONS: GITHUB & GOOGLE CALENDAR
 # -------------------------------------------------------------
 def fetch_github_summary() -> str:
-    """Fetches recent repositories from connected GitHub account."""
     if not github_client:
         return ""
     try:
@@ -66,7 +106,6 @@ def fetch_github_summary() -> str:
         return ""
 
 def fetch_google_calendar_events() -> str:
-    """Fetches upcoming schedule from Google Calendar API."""
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         return ""
     try:
@@ -125,8 +164,11 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
     memory_context = fetch_longterm_memory()
     memory_context += fetch_google_calendar_events()
     memory_context += fetch_github_summary()
+    memory_context += fetch_web_search(user_text)
     
     if location_info:
+        weather_info = await fetch_weather_by_coords(location_info)
+        memory_context += weather_info
         memory_context += f"\nUSER GPS LOCATION: {location_info}\n"
         
     if supabase:
