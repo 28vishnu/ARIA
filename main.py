@@ -18,6 +18,8 @@ from google import genai
 from supabase import create_client
 from github import Github
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 from tavily import TavilyClient
 import motor.motor_asyncio
@@ -42,14 +44,20 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
+# Optional Gmail Credentials
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
+GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
+GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
+
 ASSISTANT_NAME = "ARIA"
 
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
-CONVERSATIONAL DIRECTIVES:
-- Speak/type in a composed, warm, articulate, clever, and natural tone. Address the user naturally as 'Sir'.
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent neural AI assistant inspired by J.A.R.V.I.S.
+HIGH-IQ CONVERSATIONAL DIRECTIVES:
+- Speak/type in a composed, warm, articulate, highly analytical, and clever tone. Address the user naturally as 'Sir'.
 - DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- MEMORY VAULT ACCESS: You have full access to stored personal profile details, academic background, and project records (e.g. TaskFlow, WealthFlow AI).
-- Keep responses sharp, direct, intelligent, and concise (1-2 sentences max unless generating a structured report)."""
+- PROACTIVE INTELLIGENCE: Do not merely answer questions passively. Reason through implications, anticipate next steps, offer strategic suggestions, and ask pertinent follow-up questions when relevant.
+- MEMORY VAULT ACCESS: You possess total access to stored personal profile details, academic background, technical projects (TaskFlow, WealthFlow AI), skills, and document context.
+- Keep responses sharp, direct, intelligent, and concise (1-3 sentences max unless providing a structured technical breakdown or briefing)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -145,9 +153,9 @@ async def purge_memory_category(category: str) -> str:
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
     try:
-        res = tavily_client.search(query=query, max_results=2)
-        results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-        return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
+        res = tavily_client.search(query=query, max_results=3)
+        results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
+        return "\nLIVE SEARCH REAL-TIME KNOWLEDGE:\n" + "\n".join(results) + "\n"
     except Exception: pass
     return ""
 
@@ -197,18 +205,63 @@ async def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# GOOGLE CALENDAR & MORNING BRIEFING DAEMON (J.A.R.V.I.S. PROTOCOL)
+# GMAIL & GOOGLE CALENDAR ENGINE
 # -------------------------------------------------------------
-async def fetch_google_calendar_events() -> str:
-    """Fetches today's agenda from Google Calendar using Service Account credentials."""
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        return "No Google Calendar integration configured."
-    
+async def fetch_recent_emails(max_results: int = 5) -> str:
+    """Fetches recent emails using OAuth Refresh Token or Service Account fallback."""
     try:
-        def _get_calendar_data():
+        def _get_gmail():
+            if GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN:
+                creds = Credentials(
+                    token=None,
+                    refresh_token=GMAIL_REFRESH_TOKEN,
+                    client_id=GMAIL_CLIENT_ID,
+                    client_secret=GMAIL_CLIENT_SECRET,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    scopes=['https://www.googleapis.com/auth/gmail.readonly']
+                )
+                if not creds.valid:
+                    creds.refresh(GoogleRequest())
+                service = build('gmail', 'v1', credentials=creds)
+            elif GOOGLE_SERVICE_ACCOUNT_JSON:
+                creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+                creds = service_account.Credentials.from_service_account_info(
+                    creds_info, scopes=['https://www.googleapis.com/auth/gmail.readonly']
+                )
+                service = build('gmail', 'v1', credentials=creds)
+            else:
+                return "Gmail API credentials not configured."
+
+            results = service.users().messages().list(userId='me', maxResults=max_results).execute()
+            messages = results.get('messages', [])
+            if not messages:
+                return "No recent emails found in your inbox, Sir."
+
+            summaries = []
+            for msg in messages:
+                m_data = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
+                snippet = m_data.get('snippet', '')
+                headers = m_data.get('payload', {}).get('headers', [])
+                subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+                sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
+                summaries.append(f"- [From: {sender}] Subject: '{subject}' | Snippet: {snippet[:120]}")
+
+            return "\n".join(summaries)
+
+        return await asyncio.to_thread(_get_gmail)
+    except Exception as e:
+        print(f"[Gmail Error]: {e}")
+        return "Gmail access temporarily unavailable."
+
+async def fetch_google_calendar_events() -> str:
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        return "No Calendar configuration found."
+    try:
+        def _get_calendar():
             creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-            scopes = ['https://www.googleapis.com/auth/calendar.readonly']
-            creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+            creds = service_account.Credentials.from_service_account_info(
+                creds_info, scopes=['https://www.googleapis.com/auth/calendar.readonly']
+            )
             service = build('calendar', 'v3', credentials=creds)
 
             now = datetime.now(timezone.utc)
@@ -224,45 +277,34 @@ async def fetch_google_calendar_events() -> str:
             if not events:
                 return "No scheduled calendar events for today, Sir."
 
-            agenda = [f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events]
-            return "\n".join(agenda)
+            return "\n".join([f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
 
-        return await asyncio.to_thread(_get_calendar_data)
+        return await asyncio.to_thread(_get_calendar)
     except Exception as e:
         print(f"[Calendar Error]: {e}")
         return "Calendar agenda temporarily unavailable."
 
 async def send_daily_morning_brief():
-    """Generates and delivers the J.A.R.V.I.S. morning report to Telegram at 07:00 AM IST."""
-    if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID:
-        return
+    if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
 
-    # 1. Gather Context
     calendar_agenda = await fetch_google_calendar_events()
-    weather_info = await fetch_weather_by_coords("17.6868,83.2185")  # Visakhapatnam coordinates
+    emails_summary = await fetch_recent_emails(max_results=3)
+    weather_info = await fetch_weather_by_coords("17.6868,83.2185")
     user_memory = await fetch_longterm_memory()
 
-    # 2. Build Briefing System Prompt
-    briefing_instruction = f"""Generate a high-IQ, proactive J.A.R.V.I.S.-style morning briefing for Sir.
-LOCAL WEATHER:
-{weather_info}
+    brief_prompt = f"""Generate a high-IQ, proactive J.A.R.V.I.S. morning briefing for Sir.
+LOCAL WEATHER: {weather_info}
+TODAY'S CALENDAR AGENDA: {calendar_agenda}
+RECENT GMAIL INBOX PREVIEW: {emails_summary}
+PROFILE & PROJECT VAULT: {user_memory}
 
-TODAY'S CALENDAR & AGENDA:
-{calendar_agenda}
-
-VAULT & PROJECT CONTEXT:
-{user_memory}
-
-STRUCTURE DIRECTIVES:
+DIRECTIVES:
 - Begin with a smooth, articulate morning greeting addressing him as 'Sir'.
-- Provide a brief update on today's weather and calendar agenda.
-- Mention active technical goals or project priorities (e.g. TaskFlow, WealthFlow AI).
-- Keep the overall brief motivating, concise, and structured in 3-4 distinct bullet points."""
+- Provide a clear, crisp bulleted update covering weather, calendar agenda, inbox alerts, and active project priorities.
+- Conclude with a sharp, motivating focus recommendation for the day."""
 
-    # 3. Generate Briefing Content
-    brief_text = await process_autonomous_task("Generate my proactive daily morning briefing", "system_cron")
+    brief_text = await process_autonomous_task("Generate my proactive morning brief", "system_cron")
 
-    # 4. Dispatch to Telegram
     async with httpx.AsyncClient() as client:
         await client.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -271,11 +313,10 @@ STRUCTURE DIRECTIVES:
 
 @app.on_event("startup")
 async def start_scheduler():
-    """Schedules the morning briefing daemon every day at 07:00 AM IST (01:30 AM UTC)."""
-    trigger = CronTrigger(hour=1, minute=30, timezone="UTC")
+    trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Scheduler]: Morning briefing daemon active.")
+    print("[J.A.R.V.I.S. Scheduler]: Proactive Briefing Daemon Active.")
 
 # -------------------------------------------------------------
 # ULTRA-FAST PARALLEL LLM INFERENCE ENGINE (<800MS)
@@ -287,7 +328,7 @@ async def _call_groq(system_prompt: str, user_text: str) -> str:
             comp = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=250
+                temperature=0.5, max_tokens=300
             )
             return comp.choices[0].message.content
         return await asyncio.to_thread(_sync_groq)
@@ -316,26 +357,25 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
                 return await purge_memory_category(pending["category"])
         elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
             del PENDING_SECURITY_ACTIONS[session_id]
-            return "Security action aborted Sir. Data remains intact."
+            return "Security action aborted Sir."
         else:
             return f"Awaiting authorization Sir. Delete all {pending['category']} data?"
 
-    # 2. PURGE COMMANDS
-    if any(k in cmd for k in ["delete exams", "clear exams", "delete pdfs", "delete documents"]):
-        PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "documents"}
-        return "Purging document database is irreversible. Do I have your authorization Sir?"
+    # 2. GMAIL INTENT DETECTOR
+    if any(k in cmd for k in ["check email", "read emails", "my mails", "summarize emails", "check my inbox", "important mail"]):
+        email_data = await fetch_recent_emails(max_results=5)
+        user_text = f"Here are my recent inbox emails:\n{email_data}\n\nPlease summarize these emails clearly and advise if any require immediate action, Sir."
 
     # 3. AUTO-SAVER (Identity & Personal Details)
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my birthday is", "my college is", "i live in", "my email is", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 4. PARALLEL MEMORY & INFERENCE EXECUTION
-    search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is the price"]) else ""
+    # 4. PARALLEL MEMORY & INFERENCE
+    search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price", "how to"]) else ""
     memory_context = await fetch_longterm_memory() + search_context
     full_system = ARIA_SYSTEM_PROMPT + memory_context
 
-    # Race Groq Llama-3.3 and Gemini Flash simultaneously for lowest latency
     groq_task = asyncio.create_task(_call_groq(full_system, user_text))
     gemini_task = asyncio.create_task(_call_gemini(full_system, user_text))
 
@@ -380,7 +420,7 @@ async def telegram_webhook(req: Request):
 
         # 2. ISOLATED /start COMMAND
         if text.lower() == "/start":
-            greeting = "Good day, Sir. I am ARIA, your personal AI assistant. All systems online and operational. How may I assist you today?"
+            greeting = "Good day, Sir. I am ARIA, your personal neural AI assistant. All systems online and fully operational. How may I assist you today?"
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": greeting})
             return {"status": "ok"}
