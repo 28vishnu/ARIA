@@ -1,4 +1,5 @@
 import os
+import json
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -8,6 +9,9 @@ from pydantic import BaseModel
 from groq import Groq
 from google import genai
 from supabase import create_client
+from github import Github
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 app = FastAPI()
 
@@ -23,20 +27,23 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+
 ASSISTANT_NAME = "ARIA"
 
-# DEDICATED J.A.R.V.I.S.-STYLE SYSTEM PROMPT
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly intelligent, articulate, and calm personal AI assistant inspired by J.A.R.V.I.S.
+# DEDICATED ARIA SYSTEM PROMPT
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant.
 CONVERSATIONAL DIRECTIVES:
-- Address the user naturally as 'Sir' without putting commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
+- Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
 - Maintain quiet confidence, dry subtle warmth, and complete composure.
 - Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences).
-- Deliver precise answers immediately using the user's stored personal memory context."""
+- Deliver precise answers immediately using the user's stored personal memory context, schedule, and repositories."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-
+github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 class UserQuery(BaseModel):
@@ -44,10 +51,48 @@ class UserQuery(BaseModel):
     location: str = None
 
 # -------------------------------------------------------------
-# SECURE MEMORY & CONVERSATION PIPELINE
+# INTEGRATIONS: GITHUB & GOOGLE CALENDAR
+# -------------------------------------------------------------
+def fetch_github_summary() -> str:
+    """Fetches recent repositories from connected GitHub account."""
+    if not github_client:
+        return ""
+    try:
+        user = github_client.get_user()
+        repos = [repo.name for repo in user.get_repos()[:5]]
+        return f"\nGITHUB REPOSITORIES: {', '.join(repos)}\n"
+    except Exception as e:
+        print(f"[GitHub Fetch Error]: {e}")
+        return ""
+
+def fetch_google_calendar_events() -> str:
+    """Fetches upcoming schedule from Google Calendar API."""
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        return ""
+    try:
+        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=['https://www.googleapis.com/auth/calendar.readonly']
+        )
+        service = build('calendar', 'v3', credentials=creds)
+        events_result = service.events().list(
+            calendarId='primary', maxResults=3, singleEvents=True, orderBy='startTime'
+        ).execute()
+        events = events_result.get('items', [])
+        
+        if not events:
+            return "\nCALENDAR SCHEDULE: No upcoming events today.\n"
+        
+        event_list = [f"{e.get('summary', 'Event')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events]
+        return "\nCALENDAR SCHEDULE: " + "; ".join(event_list) + "\n"
+    except Exception as e:
+        print(f"[Calendar Fetch Error]: {e}")
+        return ""
+
+# -------------------------------------------------------------
+# SECURE MEMORY & CONVERSATION LOGGING
 # -------------------------------------------------------------
 def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = None):
-    """Saves user voice transcript and ARIA response safely to Supabase."""
     if supabase:
         try:
             payload = {
@@ -59,17 +104,16 @@ def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = No
                 payload["location"] = location_info
             supabase.table("voice_logs").insert(payload).execute()
         except Exception as e:
-            print(f"[Supabase Log Warning]: {e}")
+            print(f"[Supabase Log Error]: {e}")
 
 def fetch_longterm_memory() -> str:
-    """Retrieves stored personal facts from Supabase."""
     if not supabase:
         return ""
     try:
         res = supabase.table("personal_memory").select("category, fact").execute()
         if res.data:
             facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
-            return "\nSTORED PERSONAL CONTEXT:\n" + "\n".join(facts) + "\n"
+            return "\nSTORED PERSONAL MEMORY:\n" + "\n".join(facts) + "\n"
     except Exception as e:
         print(f"[Memory Retrieval Error]: {e}")
     return ""
@@ -79,6 +123,8 @@ def fetch_longterm_memory() -> str:
 # -------------------------------------------------------------
 async def generate_aria_response(user_text: str, location_info: str = None) -> str:
     memory_context = fetch_longterm_memory()
+    memory_context += fetch_google_calendar_events()
+    memory_context += fetch_github_summary()
     
     if location_info:
         memory_context += f"\nUSER GPS LOCATION: {location_info}\n"
@@ -124,6 +170,23 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
             return reply
         except Exception as e:
             print(f"[Gemini Warning]: {e}")
+
+    # PROVIDER 3: MISTRAL
+    if MISTRAL_API_KEY:
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
+                    json={"model": "mistral-small-latest", "messages": [{"role": "system", "content": full_system}, {"role": "user", "content": user_text}]},
+                    timeout=8.0
+                )
+                if res.status_code == 200:
+                    reply = res.json()['choices'][0]['message']['content']
+                    log_voice_interaction(user_text, reply, location_info)
+                    return reply
+        except Exception as e:
+            print(f"[Mistral Warning]: {e}")
 
     return "Standing by Sir. All systems are operational."
 
@@ -195,7 +258,7 @@ def serve_webapp():
     </head>
     <body>
         <h1 style="letter-spacing: 5px; color: #38bdf8; margin-bottom: 5px;">{ASSISTANT_NAME}</h1>
-        <p style="color: #64748b; margin-top: 0;">Autonomous Neural Assistant</p>
+        <p style="color: #64748b; margin-top: 0;">Autonomous Neural Interface</p>
 
         <div id="orb" class="orb" onclick="toggleContinuousMode()">🎙️</div>
         <div id="status">Tap orb to connect</div>
@@ -272,7 +335,7 @@ def serve_webapp():
                 isSpeaking = true;
                 window.speechSynthesis.cancel();
                 
-                // STRIP PAUSE-CAUSING PUNCTUATION FOR A FLUID SPOKEN PHRASE
+                // STRIP PAUSE-CAUSING COMMAS BEFORE SIR / MASTER FOR SMOOTH FLUID SPEECH
                 let fluidText = rawText
                     .replace(/,\\s*Sir/gi, ' Sir')
                     .replace(/,\\s*Master/gi, ' Master')
