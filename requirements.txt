@@ -3,4 +3,5 @@ uvicorn
 google-generativeai
 supabase
 requests
+httpx
 pydantic
