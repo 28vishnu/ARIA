@@ -66,7 +66,7 @@ def get_stored_user_voice() -> str:
                 return res.data[0]["fact"].strip()
         except Exception as e:
             print(f"[Supabase Voice Read Error]: {e}")
-    return "en-GB-RyanNeural"  # Default studio voice
+    return "en-GB-RyanNeural"
 
 def save_stored_user_voice(voice_short_name: str):
     """Saves preferred voice in Supabase to preserve preference across reloads."""
@@ -141,15 +141,12 @@ def fetch_longterm_memory() -> str:
 async def process_autonomous_task(user_text: str, location_info: str = None) -> str:
     cmd = user_text.lower()
 
-    # Automatic Fact Auto-Save Intent
     if any(k in cmd for k in ["remember that", "save this", "store that", "my preference is", "note that"]):
         save_memory_fact("general_facts", user_text)
 
-    # Voice Change Intent
     if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice catalog"]):
         return "Opening the neural voice catalog Sir. Select your preferred voice."
 
-    # Category Purge Intent
     if any(k in cmd for k in ["delete exams", "delete my exams", "clear exams", "exams finished"]):
         return purge_memory_category("exams")
 
@@ -242,7 +239,7 @@ async def set_voice_preference(req: Request):
     return {"status": "success", "voice": voice}
 
 # -------------------------------------------------------------
-# FRONTEND WITH VOICE SELECTOR & PARTICLE HUD
+# FRONTEND WITH STABLE VOICE LOOP & PARTICLE HUD
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -421,12 +418,15 @@ def serve_webapp():
             }}
             render();
 
-            /* WEBSOCKET REAL-TIME STREAMING */
+            /* STABLE WEBSOCKET & VOICE RECOGNITION LOOP */
             let ws;
             let currentAudio = null;
             let userLocation = null;
             let allVoices = [];
             let activeVoice = "";
+            let isPlayingAudio = false;
+            let isUserInterrupted = false;
+
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
@@ -447,6 +447,15 @@ def serve_webapp():
             }}
             initWebSocket();
 
+            function startListeningSafely() {{
+                if (!recognition || isPlayingAudio) return;
+                try {{
+                    recognition.start();
+                }} catch (e) {{
+                    // Recognition already active or starting
+                }}
+            }}
+
             if (SpeechRecognition) {{
                 recognition = new SpeechRecognition();
                 recognition.continuous = true;
@@ -457,6 +466,7 @@ def serve_webapp():
                     const speech = event.results[event.results.length - 1][0].transcript.trim();
                     if (!speech) return;
 
+                    // Immediately stop any playing audio on user speech
                     stopAudio();
 
                     if (ws && ws.readyState === WebSocket.OPEN) {{
@@ -465,11 +475,20 @@ def serve_webapp():
                 }};
 
                 recognition.onend = () => {{
-                    try {{ recognition.start(); }} catch(e){{}}
+                    // Auto-restart listening loop if not playing audio
+                    if (!isPlayingAudio) {{
+                        setTimeout(startListeningSafely, 200);
+                    }}
+                }};
+
+                recognition.onerror = (event) => {{
+                    if (event.error !== 'aborted' && !isPlayingAudio) {{
+                        setTimeout(startListeningSafely, 300);
+                    }}
                 }};
 
                 window.addEventListener('load', () => {{
-                    try {{ recognition.start(); }} catch(e){{}}
+                    startListeningSafely();
                 }});
             }}
 
@@ -479,23 +498,44 @@ def serve_webapp():
                     currentAudio.currentTime = 0;
                     currentAudio = null;
                 }}
+                isPlayingAudio = false;
                 document.getElementById('hudOrb').classList.remove('speaking');
             }}
 
             function toggleMic() {{
                 stopAudio();
-                if (recognition) {{ try {{ recognition.start(); }} catch(e){{}} }}
+                startListeningSafely();
             }}
 
             function playNeuralAudio(b64Data) {{
                 stopAudio();
+
+                // Pause mic listening while playing audio to prevent audio feedback loop
+                if (recognition) {{
+                    try {{ recognition.stop(); }} catch(e) {{}}
+                }}
+
+                isPlayingAudio = true;
                 currentAudio = new Audio("data:audio/mp3;base64," + b64Data);
                 document.getElementById('hudOrb').classList.add('speaking');
+
                 currentAudio.onended = () => {{
+                    isPlayingAudio = false;
                     document.getElementById('hudOrb').classList.remove('speaking');
-                    if (recognition) {{ try {{ recognition.start(); }} catch(e){{}} }}
+                    startListeningSafely();
                 }};
-                currentAudio.play();
+
+                currentAudio.onerror = () => {{
+                    isPlayingAudio = false;
+                    document.getElementById('hudOrb').classList.remove('speaking');
+                    startListeningSafely();
+                }};
+
+                currentAudio.play().catch(err => {{
+                    isPlayingAudio = false;
+                    document.getElementById('hudOrb').classList.remove('speaking');
+                    startListeningSafely();
+                }});
             }}
 
             /* VOICE CATALOG MANAGEMENT */
