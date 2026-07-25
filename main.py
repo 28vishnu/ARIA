@@ -167,7 +167,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
     return "Standing by Sir. All core systems operational."
 
 # -------------------------------------------------------------
-# PWA FULLSCREEN HUD FRONTEND WITH BILINGUAL VOICE SELECTOR
+# FULLSCREEN HUD FRONTEND WITH INSTANT VOICE BARGE-IN / INTERRUPTION
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -349,7 +349,19 @@ def serve_webapp():
                 recognition.interimResults = false;
                 recognition.lang = 'en-US';
 
+                // INSTANT BARGE-IN: CANCEL SPEECH IMMEDIATELY WHEN SOUND OR SPEECH BEGINS
+                recognition.onsoundstart = () => {{
+                    if (window.speechSynthesis.speaking) {{
+                        window.speechSynthesis.cancel();
+                        isSpeaking = false;
+                    }}
+                }};
+
                 recognition.onstart = () => {{
+                    if (window.speechSynthesis.speaking) {{
+                        window.speechSynthesis.cancel();
+                        isSpeaking = false;
+                    }}
                     document.getElementById('hud').classList.add('listening');
                     document.getElementById('status-text').innerText = 'LISTENING...';
                 }};
@@ -357,13 +369,17 @@ def serve_webapp():
                 recognition.onend = () => {{
                     document.getElementById('hud').classList.remove('listening');
                     if (continuousMode && !isSpeaking) {{
-                        setTimeout(() => {{ try {{ recognition.start(); }} catch(e){{}} }}, 400);
+                        setTimeout(() => {{ try {{ recognition.start(); }} catch(e){{}} }}, 300);
                     }} else if (!continuousMode) {{
                         document.getElementById('status-text').innerText = 'STANDBY';
                     }}
                 }};
 
                 recognition.onresult = async (event) => {{
+                    // KILL ANY RUNNING SPEECH SYNTHESIS IMMEDIATELY UPON NEW COMMAND
+                    window.speechSynthesis.cancel();
+                    isSpeaking = false;
+
                     const speech = event.results[0][0].transcript;
                     document.getElementById('status-text').innerText = 'PROCESSING...';
 
@@ -383,6 +399,8 @@ def serve_webapp():
             }}
 
             function toggleListening() {{
+                window.speechSynthesis.cancel();
+                isSpeaking = false;
                 if (recognition) {{
                     try {{ recognition.start(); }} catch(e) {{ recognition.stop(); }}
                 }}
