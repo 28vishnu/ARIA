@@ -31,7 +31,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Strict Security ID
+ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Security ID
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -54,7 +54,7 @@ github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
-# MongoDB Async Setup
+# MongoDB Async Driver Setup
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 mongo_docs_col = mongo_db["documents"] if mongo_db is not None else None
@@ -64,7 +64,7 @@ CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
 
 # -------------------------------------------------------------
-# UNIFIED DATABASE ENGINE (MongoDB + Supabase Sync)
+# UNIFIED DATABASE ENGINE (MongoDB Atlas + Supabase Sync)
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -89,14 +89,14 @@ async def save_memory_fact(category: str, fact: str) -> str:
     cat = category.lower().strip()
     fact_str = fact.strip()
 
-    # Save to MongoDB
+    # Save to MongoDB Atlas
     if mongo_memory_col is not None:
         try:
             await mongo_memory_col.insert_one({"category": cat, "fact": fact_str})
         except Exception as e:
             print(f"[MongoDB Insert Warning]: {e}")
 
-    # Mirror to Supabase
+    # Mirror save to Supabase
     if supabase:
         try:
             supabase.table("personal_memory").insert({"category": cat, "fact": fact_str}).execute()
@@ -109,7 +109,7 @@ async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes,
     doc_label_clean = doc_label.lower().strip()
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
 
-    # Store in MongoDB Atlas
+    # Store binary payload & metadata in MongoDB Atlas
     if mongo_docs_col is not None:
         try:
             await mongo_docs_col.insert_one({
@@ -175,7 +175,7 @@ async def fetch_longterm_memory() -> str:
         except Exception as e:
             print(f"[MongoDB Read Warning]: {e}")
 
-    # 2. Fallback / Merge from Supabase
+    # 2. Merge from Supabase
     if supabase:
         try:
             res = supabase.table("personal_memory").select("category, fact").execute()
@@ -192,7 +192,7 @@ async def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS ENGINE
+# AUTONOMOUS AI ENGINE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -215,7 +215,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "documents"}
         return "Purging the document database is an irreversible action Sir. Do I have your authorization to proceed?"
 
-    # 3. UNIVERSAL AUTO-SAVER
+    # 3. UNIVERSAL AUTO-SAVER (Identity & Profile Facts)
     auto_save_triggers = [
         "my name is", "my dob is", "i was born", "my birthday is", "my college is",
         "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this"
@@ -255,7 +255,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# SECURE TELEGRAM BOT WEBHOOK
+# SECURE TELEGRAM BOT WEBHOOK (TEXT & FILE RETRIEVAL)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -307,30 +307,41 @@ async def telegram_webhook(req: Request):
                 )
             return {"status": "ok"}
 
-        # 3. TEXT MESSAGES & RETRIEVAL
+        # 3. TEXT MESSAGES & FILE RETRIEVAL COMMANDS
         if chat_id and text:
             cmd = text.lower().strip()
 
-            # FILE RETRIEVAL TRIGGER
-            if any(k in cmd for k in ["send my", "give my", "get my", "send document", "send pdf", "send resume"]):
+            # FILE RETRIEVAL INTENT MATCHING
+            if any(k in cmd for k in ["send my", "give my", "get my", "send document", "send pdf", "send resume", "give it", "yes give", "my resume"]):
                 matching_files = []
 
                 if mongo_docs_col is not None:
                     try:
-                        cursor = mongo_docs_col.find({})
-                        async for doc in cursor:
-                            file_name = doc["file_name"]
-                            label = doc["label"]
-                            b64 = doc["b64_payload"]
-                            if any(word in file_name.lower() or word in label for word in cmd.split() if len(word) > 2):
-                                matching_files.append((file_name, b64))
-                            elif not matching_files:
-                                matching_files.append((file_name, b64))
+                        # Extract non-filler keywords for regex search
+                        search_keywords = [w for w in cmd.split() if w not in ["send", "give", "get", "my", "the", "pdf", "doc", "document", "yes", "it", "please"]]
+                        
+                        if search_keywords:
+                            query_regex = "|".join(search_keywords)
+                            cursor = mongo_docs_col.find({
+                                "$or": [
+                                    {"file_name": {"$regex": query_regex, "$options": "i"}},
+                                    {"label": {"$regex": query_regex, "$options": "i"}}
+                                ]
+                            })
+                            async for doc in cursor:
+                                matching_files.append((doc["file_name"], doc["b64_payload"]))
+
+                        # Fallback to the most recently saved file if no specific keyword matched or user said "yes give it"
+                        if not matching_files:
+                            cursor = mongo_docs_col.find({}).sort("_id", -1).limit(1)
+                            async for doc in cursor:
+                                matching_files.append((doc["file_name"], doc["b64_payload"]))
+
                     except Exception as e:
                         print(f"[MongoDB Fetch Error]: {e}")
 
                 if not matching_files:
-                    reply_text = "I couldn't find any matching documents in your vault Sir. Please upload a document first."
+                    reply_text = "I couldn't find any documents stored in your vault Sir. Please upload a document first."
                     async with httpx.AsyncClient() as client:
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -357,7 +368,7 @@ async def telegram_webhook(req: Request):
                         )
                     return {"status": "ok"}
 
-            # STANDARD CONVERSATION
+            # STANDARD CONVERSATIONAL AI
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(
