@@ -8,7 +8,7 @@ from supabase import create_client
 
 app = FastAPI()
 
-# 1. Fetch Environment Variables from Render
+# 1. Fetch Environment Secrets from Render
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -21,8 +21,8 @@ You are articulate, resourceful, and sharp. Keep spoken/chat replies concise and
 # 2. Configure GenAI Client (Using the new google-genai SDK)
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Active production model
-MODEL_NAME = "gemini-2.5-flash"
+# Active production model ID
+MODEL_NAME = "gemini-2.0-flash"
 
 # Initialize Supabase if keys exist
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
@@ -121,7 +121,7 @@ def serve_webapp():
                         document.getElementById('response').innerText = data.reply;
                         document.getElementById('status').innerText = 'Tap microphone to speak again';
 
-                        // Speech synthesis output
+                        // Voice synthesis output
                         const utterance = new SpeechSynthesisUtterance(data.reply);
                         window.speechSynthesis.speak(utterance);
                     }} catch (err) {{
@@ -140,7 +140,7 @@ def serve_webapp():
 @app.post("/chat")
 def chat(data: UserQuery):
     if not ai_client:
-        return {"assistant": ASSISTANT_NAME, "reply": "API Key not configured."}
+        return {"assistant": ASSISTANT_NAME, "reply": "GEMINI_API_KEY is missing."}
         
     try:
         full_prompt = f"{SYSTEM_PROMPT}\nUser: {data.prompt}\n{ASSISTANT_NAME}:"
