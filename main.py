@@ -36,15 +36,14 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 ASSISTANT_NAME = "ARIA"
 
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
-CONVERSATIONAL DIRECTIVES:
-- Speak/type in a composed, warm, and natural voice. Address the user naturally as 'Sir'.
-- DYNAMIC LANGUAGE SWITCHING:
-  * Respond fluently in English or Tenglish (Telugu transliterated using English/Latin script).
-  * Keep replies completely natural, expressive, and conversational.
-- AUTONOMOUS TASK EXECUTION:
-  * Execute background actions (web searches, memory categorizations, PDF indexing, or data deletions) quietly and report only the final outcome in 1 concise sentence.
-  * For destructive tasks (purging databases), request explicit voice/text confirmation first.
-- Keep responses sharp, articulate, and direct (1-2 sentences max)."""
+CONVERSATIONAL & INTELLIGENCE DIRECTIVES:
+- Speak/type in a composed, warm, articulate, and natural tone. Address the user naturally as 'Sir'.
+- DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
+- PROACTIVE DOUBT RESOLUTION (JARVIS PROTOCOL):
+  * If the user gives a statement with ambiguous or missing details (e.g., "Remind me about my exam" without a date/subject), explicitly ask a brief clarifying question to resolve your doubt.
+- PERMANENT MEMORY ASSIMILATION:
+  * Retain all user information, dates of birth, personal facts, and project notes across sessions.
+- Keep spoken/text responses sharp, concise, and direct (1-2 sentences max)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -85,16 +84,18 @@ def save_memory_fact(category: str, fact: str) -> str:
                 "category": category.lower().strip(),
                 "fact": fact.strip()
             }).execute()
-            return f"Data successfully stored under {category} Sir."
-        except Exception: pass
+            return f"Understood Sir. Saved to permanent memory."
+        except Exception as e:
+            print(f"[Supabase Insert Error]: {e}")
     return "Memory vault unavailable Sir."
 
 def purge_memory_category(category: str) -> str:
     if supabase:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
-            return f"All {category} records and files have been purged from memory Sir."
-        except Exception: pass
+            return f"All {category} records have been permanently purged from memory Sir."
+        except Exception as e:
+            print(f"[Supabase Delete Error]: {e}")
     return "Unable to clear vault category Sir."
 
 def fetch_web_search(query: str) -> str:
@@ -125,12 +126,12 @@ def fetch_longterm_memory() -> str:
         res = supabase.table("personal_memory").select("category, fact").execute()
         if res.data:
             facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
-            return "\nSTORED PERSONAL MEMORY & DOCUMENTS:\n" + "\n".join(facts) + "\n"
+            return "\nSTORED PERSONAL MEMORY & USER PROFILE:\n" + "\n".join(facts) + "\n"
     except Exception: pass
     return ""
 
 # -------------------------------------------------------------
-# UNIFIED AUTONOMOUS ENGINE (Shared by Voice WebApp & Telegram)
+# AUTONOMOUS ENGINE WITH AUTO-SAVE & DOUBT RESOLUTION
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -160,15 +161,16 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
             PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": target_cat}
             return f"Deleting all records for {target_cat} requires authorization Sir. Should I proceed?"
 
-    # 3. GENERAL FACTS AUTO-SAVE
-    if any(k in cmd for k in ["remember that", "save this", "store that", "my preference is", "note that"]):
-        return save_memory_fact("general_facts", user_text)
+    # 3. UNIVERSAL AUTO-SAVER (Identity, Profile & Personal Details)
+    auto_save_triggers = [
+        "my name is", "my dob is", "i was born", "my birthday is", "my college is",
+        "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this"
+    ]
+    if any(trigger in cmd for trigger in auto_save_triggers):
+        save_memory_fact("personal_profile", user_text)
 
     if "exam" in cmd and any(k in cmd for k in ["store", "save", "near", "coming", "schedule"]):
-        return save_memory_fact("exams", user_text)
-
-    if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice catalog"]):
-        return "Opening the neural voice catalog Sir. Select your preferred voice on the web interface."
+        save_memory_fact("exams", user_text)
 
     # 4. WEB SEARCH INTENT
     search_context = ""
@@ -206,7 +208,6 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
-    """Processes text messages from Telegram and stores/reads from the same memory."""
     if not TELEGRAM_TOKEN:
         return {"status": "no token"}
     
@@ -217,10 +218,8 @@ async def telegram_webhook(req: Request):
         text = message.get("text", "")
 
         if chat_id and text:
-            # Generate response using unified memory core
             reply_text = await process_autonomous_task(text, str(chat_id))
 
-            # Send answer back to user on Telegram
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -231,7 +230,6 @@ async def telegram_webhook(req: Request):
 
     return {"status": "ok"}
 
-# Helper to automatically connect Telegram Webhook on startup
 @app.post("/set-telegram-webhook")
 async def set_telegram_webhook(req: Request):
     data = await req.json()
@@ -271,7 +269,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# API ROUTES & FRONTEND
+# API ROUTES & FRONTEND HUD
 # -------------------------------------------------------------
 @app.get("/api/voices")
 async def get_voices_list():
