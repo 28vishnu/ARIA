@@ -25,14 +25,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
-# DEDICATED ARIA PERSONA (Refined, Effortless, High-IQ)
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly advanced, articulate, and deeply capable AI personal assistant.
-IDENTITY & CONVERSATION DIRECTIVES:
-- Your name is ARIA. You are an original AI personal assistant. Do NOT mention Stark Industries, Iron Man, or fictional lore.
-- Address the user naturally as 'Sir' or occasionally 'Master', but do NOT repeat title tags in every sentence. Keep it sparse and authentic.
-- Speak with calm, poised intelligence, subtle dry warmth, and complete composure.
-- Keep spoken replies concise, sharp, and highly fluent (1 to 3 natural sentences).
-- Deliver immediate, clear answers without conversational fluff or lecturing."""
+# ABSOLUTE SEAMLESS SPEECH DIRECTIVES
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant.
+CRITICAL SPEECH RULES:
+- Never place commas before or after 'Sir' or 'Master'. Write titles cleanly inline without punctuation breaks (e.g., 'All systems nominal Sir' or 'Right away Sir').
+- Speak in one continuous, highly articulate, and confident sentence (15-25 words max).
+- Your tone should be composed, warm, sharp, and effortless—matching a high-end personal advisor.
+- Deliver direct answers immediately without conversational filler."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -42,18 +41,19 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 
 class UserQuery(BaseModel):
     prompt: str
+    location: str = None # Accepts browser GPS location
 
 # -------------------------------------------------------------
-# VOICE & CONVERSATION LOGGING (SUPABASE)
+# CONVERSATION & CONTEXT LOGGING (SUPABASE)
 # -------------------------------------------------------------
-def log_voice_interaction(user_text: str, ai_reply: str):
-    """Saves user voice transcript and ARIA response into Supabase."""
+def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = None):
     if supabase:
         try:
             supabase.table("voice_logs").insert({
                 "user_id": "owner",
                 "transcript": user_text,
-                "ai_reply": ai_reply
+                "ai_reply": ai_reply,
+                "location": location_info
             }).execute()
         except Exception as e:
             print(f"[Supabase Log Error]: {e}")
@@ -61,15 +61,17 @@ def log_voice_interaction(user_text: str, ai_reply: str):
 # -------------------------------------------------------------
 # MULTI-PROVIDER CASCADE INFERENCE
 # -------------------------------------------------------------
-async def generate_aria_response(user_text: str) -> str:
-    # Retrieve recent interaction memory
+async def generate_aria_response(user_text: str, location_info: str = None) -> str:
     memory_context = ""
+    if location_info:
+        memory_context += f"\nUSER CURRENT LOCATION: {location_info}\n"
+        
     if supabase:
         try:
-            res = supabase.table("voice_logs").select("transcript, ai_reply").order("created_at", desc=True).limit(3).execute()
+            res = supabase.table("voice_logs").select("transcript, ai_reply").order("created_at", desc=True).limit(2).execute()
             if res.data:
                 past = "\n".join([f"User: {m['transcript']}\nARIA: {m['ai_reply']}" for m in reversed(res.data)])
-                memory_context = f"\nRECENT CONVERSATION LOG:\n{past}\n"
+                memory_context += f"\nRECENT CONVERSATION LOG:\n{past}\n"
         except Exception:
             pass
 
@@ -84,11 +86,11 @@ async def generate_aria_response(user_text: str) -> str:
                     {"role": "system", "content": full_system},
                     {"role": "user", "content": user_text}
                 ],
-                temperature=0.6,
-                max_tokens=160
+                temperature=0.5,
+                max_tokens=150
             )
             reply = completion.choices[0].message.content
-            log_voice_interaction(user_text, reply)
+            log_voice_interaction(user_text, reply, location_info)
             return reply
         except Exception as e:
             print(f"[Groq Warning]: {e}")
@@ -101,32 +103,15 @@ async def generate_aria_response(user_text: str) -> str:
                 contents=f"{full_system}\n\nUser: {user_text}\nARIA:"
             )
             reply = response.text
-            log_voice_interaction(user_text, reply)
+            log_voice_interaction(user_text, reply, location_info)
             return reply
         except Exception as e:
             print(f"[Gemini Warning]: {e}")
 
-    # PROVIDER 3: MISTRAL
-    if MISTRAL_API_KEY:
-        try:
-            async with httpx.AsyncClient() as client:
-                res = await client.post(
-                    "https://api.mistral.ai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": "mistral-small-latest", "messages": [{"role": "system", "content": full_system}, {"role": "user", "content": user_text}]},
-                    timeout=8.0
-                )
-                if res.status_code == 200:
-                    reply = res.json()['choices'][0]['message']['content']
-                    log_voice_interaction(user_text, reply)
-                    return reply
-        except Exception as e:
-            print(f"[Mistral Warning]: {e}")
-
-    return "Standing by, Sir. Neural channels are currently calibrating."
+    return "Standing by Sir. Neural links are ready."
 
 # -------------------------------------------------------------
-# CONTINUOUS VOICE HUD FRONTEND
+# CONTINUOUS VOICE HUD WITH REAL-TIME GPS LOCATION & SPEECH CLEANER
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -177,7 +162,7 @@ def serve_webapp():
                 100% {{ transform: scale(1); }}
             }}
             #status {{ color: #38bdf8; font-size: 1.15rem; font-weight: 500; min-height: 28px; letter-spacing: 1px; }}
-            #toggle-mode {{ color: #64748b; font-size: 0.9rem; margin-top: 10px; cursor: pointer; text-decoration: underline; }}
+            #loc-status {{ color: #64748b; font-size: 0.85rem; margin-top: 5px; }}
             #response {{
                 margin-top: 25px;
                 font-size: 1.25rem;
@@ -193,18 +178,32 @@ def serve_webapp():
     </head>
     <body>
         <h1 style="letter-spacing: 5px; color: #38bdf8; margin-bottom: 5px;">{ASSISTANT_NAME}</h1>
-        <p style="color: #64748b; margin-top: 0;">Autonomous AI Assistant</p>
+        <p style="color: #64748b; margin-top: 0;">Autonomous AI Personal System</p>
 
         <div id="orb" class="orb" onclick="toggleContinuousMode()">🎙️</div>
-        <div id="status">Tap to start voice interface</div>
-        <div id="toggle-mode">Continuous Mode: OFF</div>
-        <div id="response">Online and ready, Sir.</div>
+        <div id="status">Tap orb to connect</div>
+        <div id="loc-status">Location: Acquiring GPS...</div>
+        <div id="response">Online and ready Sir.</div>
 
         <script>
             let continuousListening = false;
             let isSpeaking = false;
+            let userLocation = null;
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
+
+            // ACQUIRE BROWSER GPS LOCATION SECURELY
+            if ("geolocation" in navigator) {{
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {{
+                        userLocation = pos.coords.latitude + "," + pos.coords.longitude;
+                        document.getElementById('loc-status').innerText = 'GPS Status: Active';
+                    }},
+                    (err) => {{
+                        document.getElementById('loc-status').innerText = 'GPS Status: Permission Denied';
+                    }}
+                );
+            }}
 
             if (SpeechRecognition) {{
                 recognition = new SpeechRecognition();
@@ -234,7 +233,7 @@ def serve_webapp():
                         const res = await fetch('/chat', {{
                             method: 'POST',
                             headers: {{'Content-Type': 'application/json'}},
-                            body: JSON.stringify({{ prompt: userSpeech }})
+                            body: JSON.stringify({{ prompt: userSpeech, location: userLocation }})
                         }});
                         const data = await res.json();
 
@@ -248,27 +247,23 @@ def serve_webapp():
 
             function toggleContinuousMode() {{
                 if (!SpeechRecognition) return;
-                
                 continuousListening = !continuousListening;
-                const modeLabel = document.getElementById('toggle-mode');
-                
-                if (continuousListening) {{
-                    modeLabel.innerText = 'Continuous Mode: ONLINE';
-                    modeLabel.style.color = '#38bdf8';
-                    recognition.start();
-                }} else {{
-                    modeLabel.innerText = 'Continuous Mode: OFF';
-                    modeLabel.style.color = '#64748b';
-                    recognition.stop();
-                }}
+                if (continuousListening) recognition.start();
+                else recognition.stop();
             }}
 
-            function speakResponse(text) {{
+            function speakResponse(rawText) {{
                 isSpeaking = true;
                 window.speechSynthesis.cancel();
                 
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = 1.05; // Balanced, articulate pace
+                // STRIP ALL COMMAS BEFORE SIR / MASTER FOR SMOOTH FLUID SPEECH
+                let fluidText = rawText
+                    .replace(/,\\s*Sir/gi, ' Sir')
+                    .replace(/,\\s*Master/gi, ' Master')
+                    .replace(/,/g, ''); // Removes remaining commas to prevent speech gaps
+
+                const utterance = new SpeechSynthesisUtterance(fluidText);
+                utterance.rate = 1.05;
                 utterance.pitch = 1.0;
 
                 const voices = window.speechSynthesis.getVoices();
@@ -299,7 +294,7 @@ def serve_webapp():
 # -------------------------------------------------------------
 @app.post("/chat")
 async def chat(data: UserQuery):
-    reply = await generate_aria_response(data.prompt)
+    reply = await generate_aria_response(data.prompt, data.location)
     return {"assistant": ASSISTANT_NAME, "reply": reply}
 
 @app.post("/telegram")
