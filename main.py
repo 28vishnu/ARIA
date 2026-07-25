@@ -29,7 +29,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Security lock ID
+ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Security ID
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -40,10 +40,11 @@ ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ person
 CONVERSATIONAL & INTELLIGENCE DIRECTIVES:
 - Speak/type in a composed, warm, articulate, and natural tone. Address the user naturally as 'Sir'.
 - DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- PROACTIVE DOUBT RESOLUTION (JARVIS PROTOCOL):
-  * If the user gives a statement with ambiguous or missing details (e.g., "Remind me about my exam" without a date/subject), explicitly ask a brief clarifying question to resolve your doubt.
-- PERMANENT MEMORY ASSIMILATION:
-  * Retain all user information, dates of birth, personal facts, and project notes across sessions.
+- DOCUMENT RETRIEVAL & PRECISION PROTOCOL:
+  * You have access to stored personal memory, user profile data, and indexed PDF documents.
+  * When the user requests information from stored documents, inspect the memory vault context.
+  * If the request is broad or ambiguous (e.g. "Get my exam paper" when multiple are saved), ask a PRECISE clarifying question to pinpoint exactly what the user needs.
+  * If the target document/fact is clear, synthesize and state the precise information requested.
 - Keep spoken/text responses sharp, concise, and direct (1-2 sentences max)."""
 
 # Initialize SDK Clients
@@ -85,7 +86,7 @@ def save_memory_fact(category: str, fact: str) -> str:
                 "category": category.lower().strip(),
                 "fact": fact.strip()
             }).execute()
-            return f"Understood Sir. Saved to permanent memory."
+            return "Understood Sir. Stored permanently in your database vault."
         except Exception as e:
             print(f"[Supabase Insert Error]: {e}")
     return "Memory vault unavailable Sir."
@@ -94,7 +95,7 @@ def purge_memory_category(category: str) -> str:
     if supabase:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
-            return f"All {category} records have been permanently purged from memory Sir."
+            return f"All {category} records and document indexes have been purged from memory Sir."
         except Exception as e:
             print(f"[Supabase Delete Error]: {e}")
     return "Unable to clear vault category Sir."
@@ -127,12 +128,12 @@ def fetch_longterm_memory() -> str:
         res = supabase.table("personal_memory").select("category, fact").execute()
         if res.data:
             facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
-            return "\nSTORED PERSONAL MEMORY & USER PROFILE:\n" + "\n".join(facts) + "\n"
+            return "\nSTORED PERSONAL VAULT (MEMORIES, PROFILE & INDEXED DOCS):\n" + "\n".join(facts) + "\n"
     except Exception: pass
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS ENGINE WITH AUTO-SAVE & DOUBT RESOLUTION
+# AUTONOMOUS ENGINE WITH PRECISION DOC RETRIEVAL
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -151,9 +152,9 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
             return f"Awaiting your authorization Sir. Do you want to proceed with deleting all {pending['category']} data?"
 
     # 2. SECURITY CHECKS (PURGE DATA)
-    if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams"]):
+    if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams", "delete pdfs"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "exams"}
-        return "Purging the exam database is an irreversible action Sir. Do I have your authorization to proceed?"
+        return "Purging the exam and document database is an irreversible action Sir. Do I have your authorization to proceed?"
 
     purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
     if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
@@ -165,7 +166,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     # 3. UNIVERSAL AUTO-SAVER (Identity, Profile & Personal Details)
     auto_save_triggers = [
         "my name is", "my dob is", "i was born", "my birthday is", "my college is",
-        "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this"
+        "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this", "store this document"
     ]
     if any(trigger in cmd for trigger in auto_save_triggers):
         save_memory_fact("personal_profile", user_text)
@@ -189,7 +190,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
             completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": full_system}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=120
+                temperature=0.5, max_tokens=150
             )
             return completion.choices[0].message.content
         except Exception: pass
@@ -424,7 +425,7 @@ def serve_webapp():
     <body>
         <canvas id="particleCanvas"></canvas>
         <button class="settings-btn" onclick="openVoiceModal()">⚙️</button>
-        <div id="dropZone">Drop exam or document files here</div>
+        <div id="dropZone">Drop PDF or document files here to save in vault</div>
 
         <div class="ui-layer">
             <div class="hud-orb" id="hudOrb" onclick="toggleMic()">
@@ -599,10 +600,10 @@ def serve_webapp():
                     const file = e.dataTransfer.files[0];
                     const formData = new FormData();
                     formData.append('file', file);
-                    formData.append('category', 'exams');
+                    formData.append('category', 'documents');
                     await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
                     if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: "I uploaded " + file.name + " under exams.", location: userLocation, voice: activeVoice }}));
+                        ws.send(JSON.stringify({{ prompt: "I uploaded " + file.name + " to my document vault.", location: userLocation, voice: activeVoice }}));
                     }}
                 }}
             }});
@@ -635,9 +636,9 @@ async def websocket_endpoint(websocket: WebSocket):
             del PENDING_SECURITY_ACTIONS[str(session_id)]
 
 @app.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...), category: str = "exams"):
+async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
     file_bytes = await file.read()
     pdf_text = extract_text_from_pdf(file_bytes)
     if pdf_text:
-        save_memory_fact(category, f"PDF '{file.filename}': {pdf_text[:1200]}")
+        save_memory_fact(category, f"DOCUMENT '{file.filename}': {pdf_text[:1500]}")
     return {"status": "ok"}
