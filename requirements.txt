@@ -13,3 +13,4 @@ google-auth-oauthlib
 tavily-python
 pypdf
 python-multipart
+edge-tts
