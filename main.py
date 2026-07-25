@@ -31,7 +31,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Security ID
+ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")  # Strict Security ID
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -42,11 +42,10 @@ ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ person
 CONVERSATIONAL & INTELLIGENCE DIRECTIVES:
 - Speak/type in a composed, warm, articulate, and natural tone. Address the user naturally as 'Sir'.
 - DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- DOCUMENT VAULT & PRECISION RETRIEVAL PROTOCOL:
-  * You have access to stored personal memory, user profile data, and indexed documents/files in MongoDB & Supabase.
-  * When the user requests information from stored documents, inspect the memory vault context.
-  * If a request for a document is broad or ambiguous (e.g., "Send my resume" when multiple resumes/docs exist), ask a PRECISE clarifying question to pinpoint which file to send.
-- Keep spoken/text responses sharp, concise, and direct (1-2 sentences max)."""
+- PERSONAL PROFILE & VAULT INTEGRATION:
+  * You have access to the user's permanent memory vault (Name, DOB, preferences, documents).
+  * Use this stored knowledge instantly whenever asked about personal facts or files.
+- Keep responses sharp, direct, and concise (1-2 sentences max)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -55,7 +54,7 @@ github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
-# MongoDB Async Driver Setup
+# MongoDB Async Setup
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 mongo_docs_col = mongo_db["documents"] if mongo_db is not None else None
@@ -65,7 +64,7 @@ CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
 
 # -------------------------------------------------------------
-# UNIFIED DATABASE ENGINE (MongoDB + Supabase Fallback)
+# UNIFIED DATABASE ENGINE (MongoDB + Supabase Sync)
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -97,7 +96,7 @@ async def save_memory_fact(category: str, fact: str) -> str:
         except Exception as e:
             print(f"[MongoDB Insert Warning]: {e}")
 
-    # Mirror save to Supabase
+    # Mirror to Supabase
     if supabase:
         try:
             supabase.table("personal_memory").insert({"category": cat, "fact": fact_str}).execute()
@@ -107,7 +106,6 @@ async def save_memory_fact(category: str, fact: str) -> str:
     return "Understood Sir. Saved permanently in your database vault."
 
 async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes, text_preview: str):
-    """Saves raw binary document to MongoDB Atlas + extracts text context."""
     doc_label_clean = doc_label.lower().strip()
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
 
@@ -123,9 +121,8 @@ async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes,
         except Exception as e:
             print(f"[MongoDB Doc Save Error]: {e}")
 
-    # Store text context in memory table
     await save_memory_fact("documents", f"DOCUMENT '{doc_label}' (File: {file_name}): {text_preview[:1500]}")
-    return f"Successfully saved '{file_name}' as '{doc_label}' in your MongoDB vault Sir."
+    return f"Successfully saved '{file_name}' as '{doc_label}' in your database vault Sir."
 
 async def purge_memory_category(category: str) -> str:
     cat = category.lower().strip()
@@ -169,24 +166,29 @@ async def fetch_weather_by_coords(location_info: str) -> str:
 
 async def fetch_longterm_memory() -> str:
     facts = []
-    # Fetch from MongoDB
+    # 1. Fetch from MongoDB Atlas
     if mongo_memory_col is not None:
         try:
             cursor = mongo_memory_col.find({})
             async for doc in cursor:
                 facts.append(f"[{doc['category'].upper()}]: {doc['fact']}")
-        except Exception: pass
+        except Exception as e:
+            print(f"[MongoDB Read Warning]: {e}")
 
-    # Fallback to Supabase if Mongo is empty
-    if not facts and supabase:
+    # 2. Fallback / Merge from Supabase
+    if supabase:
         try:
             res = supabase.table("personal_memory").select("category, fact").execute()
             if res.data:
-                facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data if item['category'] != 'stored_files']
-        except Exception: pass
+                for item in res.data:
+                    fact_entry = f"[{item['category'].upper()}]: {item['fact']}"
+                    if fact_entry not in facts:
+                        facts.append(fact_entry)
+        except Exception as e:
+            print(f"[Supabase Read Warning]: {e}")
 
     if facts:
-        return "\nSTORED PERSONAL VAULT (MEMORIES, PROFILE & INDEXED DOCS):\n" + "\n".join(facts) + "\n"
+        return "\nSTORED PERSONAL VAULT (USER PROFILE & DOCUMENTS):\n" + "\n".join(facts) + "\n"
     return ""
 
 # -------------------------------------------------------------
@@ -213,14 +215,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "documents"}
         return "Purging the document database is an irreversible action Sir. Do I have your authorization to proceed?"
 
-    purge_match = re.search(r'(?:delete|clear|remove|purge)\s+(?:all\s+)?(?:data\s+in\s+|records\s+for\s+)?([a-zA-Z0-9_\-\s]+)', cmd)
-    if purge_match and any(w in cmd for w in ["delete", "clear", "purge"]):
-        target_cat = purge_match.group(1).replace("data", "").replace("all", "").strip()
-        if target_cat and target_cat not in ["this", "that", "it"]:
-            PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": target_cat}
-            return f"Deleting all records for {target_cat} requires authorization Sir. Should I proceed?"
-
-    # 3. UNIVERSAL AUTO-SAVER (Identity, Profile & Personal Details)
+    # 3. UNIVERSAL AUTO-SAVER
     auto_save_triggers = [
         "my name is", "my dob is", "i was born", "my birthday is", "my college is",
         "i am", "i live in", "my email is", "my favorite", "my preference", "remember", "save this"
@@ -260,7 +255,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# SECURE TELEGRAM BOT WEBHOOK (HANDLES TEXT & ANY DOCUMENT)
+# SECURE TELEGRAM BOT WEBHOOK
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -276,7 +271,7 @@ async def telegram_webhook(req: Request):
         document = message.get("document", None)
         caption = message.get("caption", "").strip()
 
-        # 1. SECURITY AUTHENTICATION CHECK
+        # 1. AUTHENTICATION LOCK
         if ALLOWED_TELEGRAM_USER_ID:
             if str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
                 print(f"[SECURITY ALERT]: Blocked unauthorized Telegram user {from_user_id}")
@@ -287,26 +282,22 @@ async def telegram_webhook(req: Request):
                     )
                 return {"status": "unauthorized"}
 
-        # 2. HANDLE INCOMING DOCUMENT ATTACHMENTS (ANY FILE FORMAT)
+        # 2. INCOMING FILE ATTACHMENTS
         if document and chat_id:
             file_id = document.get("file_id")
             file_name = document.get("file_name", "document.pdf")
 
             async with httpx.AsyncClient() as client:
-                # Get file path from Telegram
                 file_info_res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}")
                 file_path = file_info_res.json().get("result", {}).get("file_path")
                 
-                # Download raw file bytes
                 download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
                 raw_bytes_res = await client.get(download_url)
                 raw_bytes = raw_bytes_res.content
 
-            # Extract text if PDF, otherwise save preview string
-            extracted_text = extract_text_from_pdf(raw_bytes) if file_name.lower().endswith(".pdf") else "Binary Document Stored"
+            extracted_text = extract_text_from_pdf(raw_bytes) if file_name.lower().endswith(".pdf") else "Binary File Stored"
             doc_label = caption if caption else file_name
 
-            # Save to MongoDB Atlas & Supabase
             save_reply = await save_binary_document(file_name, doc_label, raw_bytes, extracted_text)
 
             async with httpx.AsyncClient() as client:
@@ -316,15 +307,14 @@ async def telegram_webhook(req: Request):
                 )
             return {"status": "ok"}
 
-        # 3. HANDLE TEXT COMMANDS & FILE RETRIEVAL REQUESTS
+        # 3. TEXT MESSAGES & RETRIEVAL
         if chat_id and text:
-            cmd = text.lower()
+            cmd = text.lower().strip()
 
-            # FILE RETRIEVAL TRIGGER (e.g. "Send my resume", "Give my document")
+            # FILE RETRIEVAL TRIGGER
             if any(k in cmd for k in ["send my", "give my", "get my", "send document", "send pdf", "send resume"]):
                 matching_files = []
 
-                # Query MongoDB Atlas
                 if mongo_docs_col is not None:
                     try:
                         cursor = mongo_docs_col.find({})
@@ -332,12 +322,12 @@ async def telegram_webhook(req: Request):
                             file_name = doc["file_name"]
                             label = doc["label"]
                             b64 = doc["b64_payload"]
-                            if any(word in file_name.lower() or word in label for word in cmd.split()):
+                            if any(word in file_name.lower() or word in label for word in cmd.split() if len(word) > 2):
                                 matching_files.append((file_name, b64))
-                            elif len(matching_files) == 0:
+                            elif not matching_files:
                                 matching_files.append((file_name, b64))
                     except Exception as e:
-                        print(f"[MongoDB Read Error]: {e}")
+                        print(f"[MongoDB Fetch Error]: {e}")
 
                 if not matching_files:
                     reply_text = "I couldn't find any matching documents in your vault Sir. Please upload a document first."
@@ -359,7 +349,7 @@ async def telegram_webhook(req: Request):
                     return {"status": "ok"}
                 else:
                     file_list = ", ".join([f[0] for f in matching_files])
-                    reply_text = f"Sir, I found multiple matching documents in your vault: [{file_list}]. Which specific document would you like me to send?"
+                    reply_text = f"Sir, I found multiple documents in your vault: [{file_list}]. Which specific document would you like me to send?"
                     async with httpx.AsyncClient() as client:
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -367,7 +357,7 @@ async def telegram_webhook(req: Request):
                         )
                     return {"status": "ok"}
 
-            # STANDARD CONVERSATIONAL AI PIPELINE
+            # STANDARD CONVERSATION
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(
