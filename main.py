@@ -25,13 +25,14 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
-# Crisp, Professional J.A.R.V.I.S. Persona
-SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly intelligent, crisp, and loyal AI personal assistant inspired by Iron Man's J.A.R.V.I.S.
-CORE DIRECTIVES:
-- Address the user as 'Master' or 'Sir' naturally.
-- Be extremely concise, direct, and witty. Speak in 1-2 sharp sentences.
-- Never list bullet points or use markdown formatting in plain speech.
-- Sound like a trusted, highly efficient peer—calm, confident, and immediate."""
+# Crisp, Seamless J.A.R.V.I.S. Persona (No awkward punctuation breaks)
+SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an ultra-capable AI assistant inspired by Iron Man's J.A.R.V.I.S.
+RULES FOR SEAMLESS VOICE FLOW:
+- Keep every sentence extremely fluent, natural, and continuous.
+- Do NOT isolate 'Master' or 'Sir' between commas. Integrate it naturally into the sentence (e.g. 'All systems nominal Master ready for your command').
+- Do NOT use filler intros or conversational fluff. Get straight to the answer.
+- Limit replies to 1 or 2 concise, powerful sentences.
+- Avoid listing items, using markdown symbols, or placing excessive commas."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -58,7 +59,7 @@ async def generate_assistant_response(user_text: str) -> str:
                     {"role": "user", "content": user_text}
                 ],
                 temperature=0.5,
-                max_tokens=150
+                max_tokens=120
             )
             return completion.choices[0].message.content
         except Exception as e:
@@ -105,10 +106,10 @@ async def generate_assistant_response(user_text: str) -> str:
         except Exception as e:
             print(f"[OpenRouter Warning]: {e}")
 
-    return "Standing by, Master. All neural channels are busy. Please repeat."
+    return "Standing by Master. Systems are currently busy."
 
 # -------------------------------------------------------------
-# WEB APP FRONTEND (HIGH-SPEED VOICE ENGINE)
+# WEB APP FRONTEND (HIGH-SPEED VOICE ENGINE WITH SPEECH CLEANER)
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -173,11 +174,11 @@ def serve_webapp():
     </head>
     <body>
         <h1 style="letter-spacing: 4px; color: #38bdf8;">{ASSISTANT_NAME}</h1>
-        <p style="color: #64748b;">Awaiting Your Command, Master</p>
+        <p style="color: #64748b;">At Your Command Master</p>
 
         <div id="orb" class="orb" onclick="toggleListening()">🎤</div>
         <div id="status">Tap orb to initiate voice link</div>
-        <div id="response">Systems nominal, Master.</div>
+        <div id="response">Systems nominal Master.</div>
 
         <script>
             let isListening = false;
@@ -225,13 +226,20 @@ def serve_webapp():
                 if (recognition) recognition.start();
             }}
 
-            function speakResponse(text) {{
-                window.speechSynthesis.cancel(); // Clear old speech queue immediately
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = 1.15; // Faster, natural cadence
+            function speakResponse(rawText) {{
+                window.speechSynthesis.cancel(); // Instantly clear previous queue
+                
+                // STRIP PAUSE-CAUSING PUNCTUATION FOR SEAMLESS VOICE FLOW
+                let cleanSpeech = rawText
+                    .replace(/,/g, '')       // Removes commas that cause micro-pauses
+                    .replace(/—/g, ' ')      // Removes em-dashes
+                    .replace(/-/g, ' ')      // Removes hyphens
+                    .replace(/\\s+/g, ' ');   // Collapse multiple spaces
+
+                const utterance = new SpeechSynthesisUtterance(cleanSpeech);
+                utterance.rate = 1.15; // Smooth J.A.R.V.I.S. cadence
                 utterance.pitch = 1.0;
 
-                // Pick smooth English voice if available
                 const voices = window.speechSynthesis.getVoices();
                 const preferredVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha')));
                 if (preferredVoice) utterance.voice = preferredVoice;
@@ -244,7 +252,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# API ENDPOINTS (SIMULTANEOUS WEB + TELEGRAM WORKFLOW)
+# API ENDPOINTS
 # -------------------------------------------------------------
 @app.post("/chat")
 async def chat(data: UserQuery):
