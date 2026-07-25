@@ -28,8 +28,8 @@ PERSONALITY RULES:
 # 3. Configure GenAI Client using google-genai
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Active production model ID
-MODEL_NAME = "gemini-2.5-flash"
+# OFFICIAL STABLE MODEL NAME
+MODEL_NAME = "gemini-2.0-flash"
 
 # Initialize Supabase if keys exist
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
