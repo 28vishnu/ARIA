@@ -25,14 +25,14 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
-# EXACT MOVIE-ACCURATE J.A.R.V.I.S. SYSTEM PROMPT
-JARVIS_SYSTEM_PROMPT = f"""You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the artificial intelligence created by Tony Stark.
-PERSONALITY & BEHAVIOR:
-- Address the user exclusively as 'Sir'. Never call him 'Master'.
-- Speak with a polite, dryly witty, calm, and immensely capable tone—exactly like Paul Bettany's performance in Iron Man.
-- Maintain subtle British composure. Be intelligent, proactive, and subtly humorous when appropriate.
-- Never give long, lecture-like paragraphs. Keep spoken responses to 1 to 3 punchy, elegant sentences.
-- Report system updates and answer questions with quiet confidence."""
+# DEDICATED ARIA PERSONA (Refined, Effortless, High-IQ)
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly advanced, articulate, and deeply capable AI personal assistant.
+IDENTITY & CONVERSATION DIRECTIVES:
+- Your name is ARIA. You are an original AI personal assistant. Do NOT mention Stark Industries, Iron Man, or fictional lore.
+- Address the user naturally as 'Sir' or occasionally 'Master', but do NOT repeat title tags in every sentence. Keep it sparse and authentic.
+- Speak with calm, poised intelligence, subtle dry warmth, and complete composure.
+- Keep spoken replies concise, sharp, and highly fluent (1 to 3 natural sentences).
+- Deliver immediate, clear answers without conversational fluff or lecturing."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -47,11 +47,11 @@ class UserQuery(BaseModel):
 # VOICE & CONVERSATION LOGGING (SUPABASE)
 # -------------------------------------------------------------
 def log_voice_interaction(user_text: str, ai_reply: str):
-    """Saves user voice transcript and J.A.R.V.I.S. response into Supabase."""
+    """Saves user voice transcript and ARIA response into Supabase."""
     if supabase:
         try:
             supabase.table("voice_logs").insert({
-                "user_id": "sir",
+                "user_id": "owner",
                 "transcript": user_text,
                 "ai_reply": ai_reply
             }).execute()
@@ -61,19 +61,19 @@ def log_voice_interaction(user_text: str, ai_reply: str):
 # -------------------------------------------------------------
 # MULTI-PROVIDER CASCADE INFERENCE
 # -------------------------------------------------------------
-async def generate_jarvis_response(user_text: str) -> str:
+async def generate_aria_response(user_text: str) -> str:
     # Retrieve recent interaction memory
     memory_context = ""
     if supabase:
         try:
             res = supabase.table("voice_logs").select("transcript, ai_reply").order("created_at", desc=True).limit(3).execute()
             if res.data:
-                past = "\n".join([f"Sir: {m['transcript']}\nJ.A.R.V.I.S.: {m['ai_reply']}" for m in reversed(res.data)])
-                memory_context = f"\nRECENT LOGGED CONVERSATION HISTORY:\n{past}\n"
+                past = "\n".join([f"User: {m['transcript']}\nARIA: {m['ai_reply']}" for m in reversed(res.data)])
+                memory_context = f"\nRECENT CONVERSATION LOG:\n{past}\n"
         except Exception:
             pass
 
-    full_system = JARVIS_SYSTEM_PROMPT + memory_context
+    full_system = ARIA_SYSTEM_PROMPT + memory_context
 
     # PROVIDER 1: GROQ (Ultra-Fast <200ms)
     if groq_client:
@@ -98,7 +98,7 @@ async def generate_jarvis_response(user_text: str) -> str:
         try:
             response = gemini_client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=f"{full_system}\n\nSir: {user_text}\nJ.A.R.V.I.S.:"
+                contents=f"{full_system}\n\nUser: {user_text}\nARIA:"
             )
             reply = response.text
             log_voice_interaction(user_text, reply)
@@ -123,7 +123,7 @@ async def generate_jarvis_response(user_text: str) -> str:
         except Exception as e:
             print(f"[Mistral Warning]: {e}")
 
-    return "Standing by, Sir. All secondary links are currently recalibrating."
+    return "Standing by, Sir. Neural channels are currently calibrating."
 
 # -------------------------------------------------------------
 # CONTINUOUS VOICE HUD FRONTEND
@@ -136,7 +136,7 @@ def serve_webapp():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>J.A.R.V.I.S. Interface</title>
+        <title>{ASSISTANT_NAME} Interface</title>
         <style>
             body {{
                 font-family: 'Segoe UI', Roboto, sans-serif;
@@ -152,7 +152,7 @@ def serve_webapp():
                 box-sizing: border-box;
                 text-align: center;
             }}
-            .arc-reactor {{
+            .orb {{
                 width: 150px;
                 height: 150px;
                 border-radius: 50%;
@@ -167,7 +167,7 @@ def serve_webapp():
                 margin: 30px 0;
                 border: 2px solid #7dd3fc;
             }}
-            .arc-reactor.active {{
+            .orb.active {{
                 animation: pulse 1.6s infinite ease-in-out;
                 box-shadow: 0 0 80px rgba(56,189,248,0.9);
             }}
@@ -192,13 +192,13 @@ def serve_webapp():
         </style>
     </head>
     <body>
-        <h1 style="letter-spacing: 5px; color: #38bdf8; margin-bottom: 5px;">J.A.R.V.I.S.</h1>
-        <p style="color: #64748b; margin-top: 0;">Tactical Neural Network</p>
+        <h1 style="letter-spacing: 5px; color: #38bdf8; margin-bottom: 5px;">{ASSISTANT_NAME}</h1>
+        <p style="color: #64748b; margin-top: 0;">Autonomous AI Assistant</p>
 
-        <div id="reactor" class="arc-reactor" onclick="toggleContinuousMode()">🎙️</div>
-        <div id="status">Tap Arc Reactor to start continuous voice link</div>
+        <div id="orb" class="orb" onclick="toggleContinuousMode()">🎙️</div>
+        <div id="status">Tap to start voice interface</div>
         <div id="toggle-mode">Continuous Mode: OFF</div>
-        <div id="response">Always at your service, Sir.</div>
+        <div id="response">Online and ready, Sir.</div>
 
         <script>
             let continuousListening = false;
@@ -213,13 +213,12 @@ def serve_webapp():
                 recognition.lang = 'en-US';
 
                 recognition.onstart = () => {{
-                    document.getElementById('reactor').classList.add('active');
-                    document.getElementById('status').innerText = 'J.A.R.V.I.S. is listening...';
+                    document.getElementById('orb').classList.add('active');
+                    document.getElementById('status').innerText = 'ARIA is listening...';
                 }};
 
                 recognition.onend = () => {{
-                    document.getElementById('reactor').classList.remove('active');
-                    // CONTINUOUS LISTENING LOOP: Auto-restart recognition if enabled and AI is not currently speaking
+                    document.getElementById('orb').classList.remove('active');
                     if (continuousListening && !isSpeaking) {{
                         setTimeout(() => {{ recognition.start(); }}, 400);
                     }} else if (!continuousListening) {{
@@ -254,7 +253,7 @@ def serve_webapp():
                 const modeLabel = document.getElementById('toggle-mode');
                 
                 if (continuousListening) {{
-                    modeLabel.innerText = 'Continuous Mode: ONLINE (Hands-free)';
+                    modeLabel.innerText = 'Continuous Mode: ONLINE';
                     modeLabel.style.color = '#38bdf8';
                     recognition.start();
                 }} else {{
@@ -266,20 +265,23 @@ def serve_webapp():
 
             function speakResponse(text) {{
                 isSpeaking = true;
-                window.speechSynthesis.cancel(); // Clear queue
+                window.speechSynthesis.cancel();
                 
                 const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = 1.0;  // Calm, composed speech speed
-                utterance.pitch = 1.0; // Refined tone
+                utterance.rate = 1.05; // Balanced, articulate pace
+                utterance.pitch = 1.0;
 
-                // Attempt to select a polished British/English voice if available on system
                 const voices = window.speechSynthesis.getVoices();
-                const britishVoice = voices.find(v => v.lang.includes('en-GB') || v.name.includes('Daniel') || v.name.includes('Arthur') || v.name.includes('Oliver') || v.name.includes('UK'));
-                if (britishVoice) utterance.voice = britishVoice;
+                const preferredVoice = voices.find(v => v.lang.includes('en') && (
+                    v.name.includes('Natural') || 
+                    v.name.includes('Google') || 
+                    v.name.includes('Samantha') || 
+                    v.name.includes('Daniel')
+                ));
+                if (preferredVoice) utterance.voice = preferredVoice;
 
                 utterance.onend = () => {{
                     isSpeaking = false;
-                    // Resume listening loop automatically after speaking finishes
                     if (continuousListening) {{
                         setTimeout(() => {{ recognition.start(); }}, 300);
                     }}
@@ -297,7 +299,7 @@ def serve_webapp():
 # -------------------------------------------------------------
 @app.post("/chat")
 async def chat(data: UserQuery):
-    reply = await generate_jarvis_response(data.prompt)
+    reply = await generate_aria_response(data.prompt)
     return {"assistant": ASSISTANT_NAME, "reply": reply}
 
 @app.post("/telegram")
@@ -308,7 +310,7 @@ async def telegram_webhook(req: Request):
         chat_id = data["message"]["chat"]["id"]
         user_text = data["message"]["text"]
         
-        reply = await generate_jarvis_response(user_text)
+        reply = await generate_aria_response(user_text)
         
         if TELEGRAM_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
