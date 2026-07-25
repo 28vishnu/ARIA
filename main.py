@@ -3,20 +3,29 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+# Provider SDKs
+from groq import Groq
 from google import genai
+from mistralai import Mistral
 from supabase import create_client
 
 app = FastAPI()
 
-# 1. Fetch Environment Secrets from Render
+# -------------------------------------------------------------
+# 1. FETCH SECRETS & INITIALIZE CLIENTS
+# -------------------------------------------------------------
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 
-# 2. ENHANCED JARVIS PERSONALITY PROMPT
 SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a highly intelligent, witty, and deeply loyal personal AI assistant inspired by Iron Man's J.A.R.V.I.S.
 PERSONALITY RULES:
 - Always address the user as 'Master' or 'Sir' in every single interaction.
@@ -25,20 +34,93 @@ PERSONALITY RULES:
 - Since your responses will be read out loud via text-to-speech, keep your replies punchy, concise (2-3 sentences max), and conversational.
 - If Master gives an instruction or order, acknowledge it with quiet confidence and report back execution."""
 
-# 3. Configure GenAI Client
-ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# Initialize AI Provider Clients
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+mistral_client = Mistral(api_key=MISTRAL_API_KEY) if MISTRAL_API_KEY else None
 
-# Models to attempt in order of priority (Primary -> Backup)
-MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
-
-# Initialize Supabase if keys exist
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 class UserQuery(BaseModel):
     prompt: str
 
 # -------------------------------------------------------------
-# ENDPOINT 1: WEB APP VOICE FRONTEND (HTML + JS)
+# MULTI-PROVIDER CASCADE INFERENCE LOGIC
+# -------------------------------------------------------------
+async def generate_assistant_response(user_text: str) -> str:
+    full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
+
+    # --- PROVIDER 1: GROQ (Ultra-Fast) ---
+    if groq_client:
+        try:
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text}
+                ],
+                temperature=0.6,
+                max_tokens=200
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            print(f"[Groq Warning]: {e}")
+
+    # --- PROVIDER 2: GOOGLE GEMINI ---
+    if gemini_client:
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=full_prompt
+            )
+            return response.text
+        except Exception as e:
+            print(f"[Gemini Warning]: {e}")
+
+    # --- PROVIDER 3: MISTRAL AI ---
+    if mistral_client:
+        try:
+            res = mistral_client.chat.complete(
+                model="mistral-small-latest",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text}
+                ]
+            )
+            return res.choices[0].message.content
+        except Exception as e:
+            print(f"[Mistral Warning]: {e}")
+
+    # --- PROVIDER 4: OPENROUTER (FALLBACK AGGREGATOR) ---
+    if OPENROUTER_API_KEY:
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "meta-llama/llama-3.3-70b-instruct:free",
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_text}
+                        ]
+                    },
+                    timeout=10.0
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    return data['choices'][0]['message']['content']
+        except Exception as e:
+            print(f"[OpenRouter Warning]: {e}")
+
+    # --- FINAL EMERGENCY FALLBACK ---
+    return "Apologies, Master. All external neural links are momentarily busy. Please repeat your instruction."
+
+# -------------------------------------------------------------
+# ENDPOINT 1: WEB APP FRONTEND
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -128,7 +210,6 @@ def serve_webapp():
                         document.getElementById('response').innerText = data.reply;
                         document.getElementById('status').innerText = 'Tap microphone to speak again';
 
-                        // Voice synthesis output
                         const utterance = new SpeechSynthesisUtterance(data.reply);
                         window.speechSynthesis.speak(utterance);
                     }} catch (err) {{
@@ -142,34 +223,15 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# ENDPOINT 2: DIRECT CHAT API (WITH AUTOMATIC MODEL FALLBACK)
+# ENDPOINT 2: WEB APP CHAT API
 # -------------------------------------------------------------
 @app.post("/chat")
-def chat(data: UserQuery):
-    if not ai_client:
-        return {"assistant": ASSISTANT_NAME, "reply": "GEMINI_API_KEY is missing."}
-        
-    full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {data.prompt}\n{ASSISTANT_NAME}:"
-
-    # Try primary model, then backup model
-    for model_id in MODELS:
-        try:
-            response = ai_client.models.generate_content(
-                model=model_id,
-                contents=full_prompt
-            )
-            return {"assistant": ASSISTANT_NAME, "reply": response.text}
-        except Exception as e:
-            print(f"Model {model_id} warning: {e}")
-            continue
-
-    return {
-        "assistant": ASSISTANT_NAME, 
-        "reply": "Apologies, Master. Both neural links are currently at capacity. Please wait 15 seconds and try again."
-    }
+async def chat(data: UserQuery):
+    reply = await generate_assistant_response(data.prompt)
+    return {"assistant": ASSISTANT_NAME, "reply": reply}
 
 # -------------------------------------------------------------
-# ENDPOINT 3: TELEGRAM BOT WEBHOOK (WITH AUTOMATIC FALLBACK)
+# ENDPOINT 3: TELEGRAM BOT WEBHOOK
 # -------------------------------------------------------------
 @app.post("/telegram")
 async def telegram_webhook(req: Request):
@@ -178,31 +240,15 @@ async def telegram_webhook(req: Request):
     if "message" in data and "text" in data["message"]:
         chat_id = data["message"]["chat"]["id"]
         user_text = data["message"]["text"]
-        ai_reply = None
         
-        if ai_client:
-            full_prompt = f"{SYSTEM_PROMPT}\n\nMaster: {user_text}\n{ASSISTANT_NAME}:"
-            for model_id in MODELS:
-                try:
-                    response = ai_client.models.generate_content(
-                        model=model_id,
-                        contents=full_prompt
-                    )
-                    ai_reply = response.text
-                    break
-                except Exception as e:
-                    print(f"Model {model_id} warning: {e}")
-                    continue
-
-        if not ai_reply:
-            ai_reply = "Apologies, Master. Systems are currently at capacity. Please wait a moment."
-
+        reply = await generate_assistant_response(user_text)
+        
         if TELEGRAM_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             async with httpx.AsyncClient() as client:
                 await client.post(telegram_url, json={
                     "chat_id": chat_id,
-                    "text": ai_reply
+                    "text": reply
                 })
                 
     return {"status": "ok"}
