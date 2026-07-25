@@ -41,28 +41,44 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 
 class UserQuery(BaseModel):
     prompt: str
-    location: str = None # Accepts browser GPS location
+    location: str = None
 
 # -------------------------------------------------------------
-# CONVERSATION & CONTEXT LOGGING (SUPABASE)
+# CONVERSATION & LONG-TERM MEMORY HOOKS
 # -------------------------------------------------------------
 def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = None):
     if supabase:
         try:
-            supabase.table("voice_logs").insert({
+            payload = {
                 "user_id": "owner",
                 "transcript": user_text,
-                "ai_reply": ai_reply,
-                "location": location_info
-            }).execute()
+                "ai_reply": ai_reply
+            }
+            if location_info:
+                payload["location"] = location_info
+            supabase.table("voice_logs").insert(payload).execute()
         except Exception as e:
             print(f"[Supabase Log Error]: {e}")
+
+def fetch_longterm_memory() -> str:
+    """Retrieves stored facts and preferences from Supabase."""
+    if not supabase:
+        return ""
+    try:
+        res = supabase.table("personal_memory").select("category, fact").execute()
+        if res.data:
+            facts = [f"[{item['category'].upper()}]: {item['fact']}" for item in res.data]
+            return "\nPERSONAL MEMORY VAULT:\n" + "\n".join(facts) + "\n"
+    except Exception as e:
+        print(f"[Memory Retrieval Error]: {e}")
+    return ""
 
 # -------------------------------------------------------------
 # MULTI-PROVIDER CASCADE INFERENCE
 # -------------------------------------------------------------
 async def generate_aria_response(user_text: str, location_info: str = None) -> str:
-    memory_context = ""
+    memory_context = fetch_longterm_memory()
+    
     if location_info:
         memory_context += f"\nUSER CURRENT LOCATION: {location_info}\n"
         
@@ -192,7 +208,6 @@ def serve_webapp():
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
-            // ACQUIRE BROWSER GPS LOCATION SECURELY
             if ("geolocation" in navigator) {{
                 navigator.geolocation.getCurrentPosition(
                     (pos) => {{
@@ -256,11 +271,10 @@ def serve_webapp():
                 isSpeaking = true;
                 window.speechSynthesis.cancel();
                 
-                // STRIP ALL COMMAS BEFORE SIR / MASTER FOR SMOOTH FLUID SPEECH
                 let fluidText = rawText
                     .replace(/,\\s*Sir/gi, ' Sir')
                     .replace(/,\\s*Master/gi, ' Master')
-                    .replace(/,/g, ''); // Removes remaining commas to prevent speech gaps
+                    .replace(/,/g, '');
 
                 const utterance = new SpeechSynthesisUtterance(fluidText);
                 utterance.rate = 1.05;
