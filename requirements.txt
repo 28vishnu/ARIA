@@ -13,3 +13,4 @@ python-multipart
 edge-tts
 motor
 pymongo
+apscheduler
