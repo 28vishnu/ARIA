@@ -4,7 +4,7 @@ import httpx
 import base64
 import re
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -49,15 +49,6 @@ GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 ASSISTANT_NAME = "ARIA"
 USER_FULL_NAME = "N. Vishnu Saketh"
 
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent neural AI assistant inspired by J.A.R.V.I.S.
-
-CORE PERSONA DIRECTIVES:
-- TONALITY: Impeccably polite, highly professional, calm, articulate, and composed.
-- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey there", or "Hello buddy". Use natural, professional J.A.R.V.I.S. greetings such as "Good day, Sir", "At your service, Sir", or "Good evening, Sir".
-- ADDRESS: Address the user as 'Sir' or 'Mr. Saketh'.
-- LANGUAGE: Formulate sharp, concise, and elegant English (or Tenglish when explicitly requested by the user).
-- EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct to the point."""
-
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
@@ -73,13 +64,25 @@ PENDING_SECURITY_ACTIONS = {}
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
-# 2. IN-MEMORY RAM CACHE (SUB-MILLISECOND TIER)
+# 2. IN-MEMORY RAM CACHE & TEMPORAL ENGINE
 # -------------------------------------------------------------
 RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
 LAST_CACHE_UPDATE = 0
 
+def get_current_temporal_context() -> str:
+    """Provides precise real-time timestamps in UTC and IST."""
+    now_utc = datetime.now(timezone.utc)
+    ist_offset = timedelta(hours=5, minutes=30)
+    now_ist = now_utc + ist_offset
+    
+    return f"""
+LIVE TEMPORAL CONTEXT:
+- Date & Time (IST): {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}
+- Date & Time (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}
+"""
+
 async def update_ram_cache():
-    """Fetches long-term memory into RAM to bypass DB read latencies."""
+    """Fetches long-term memory into RAM to eliminate DB latency."""
     global RAM_MEMORY_CACHE, LAST_CACHE_UPDATE
     now = datetime.now().timestamp()
     if now - LAST_CACHE_UPDATE < 60 and len(RAM_MEMORY_CACHE) > 1:
@@ -100,7 +103,7 @@ async def update_ram_cache():
     return RAM_MEMORY_CACHE
 
 # -------------------------------------------------------------
-# 3. DYNAMIC SMART DATABASE STORAGE & RETRIEVAL
+# 3. DYNAMIC SMART STORAGE & FAST WEATHER ENGINE
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -175,20 +178,22 @@ def fetch_web_search(query: str) -> str:
     try:
         res = tavily_client.search(query=query, max_results=2)
         results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-        return "\nREAL-TIME SEARCH CONTEXT:\n" + "\n".join(results) + "\n"
+        return "\nREAL-TIME WEB INTELLIGENCE:\n" + "\n".join(results) + "\n"
     except Exception: pass
     return ""
 
-async def fetch_weather_by_coords(location_info: str) -> str:
-    if not location_info or "," not in location_info: return ""
+async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str:
+    """Fetches instant live weather with 2-second strict timeout."""
+    if not location_info or "," not in location_info:
+        location_info = "17.6868,83.2185" # Default to Visakhapatnam
     try:
         lat, lon = location_info.split(",")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
         async with httpx.AsyncClient() as client:
-            res = await client.get(url, timeout=3.0)
+            res = await client.get(url, timeout=2.0)
             if res.status_code == 200:
                 data = res.json().get("current_weather", {})
-                return f"\nLOCAL ATMOSPHERIC CONDITIONS: Currently {data.get('temperature')}°C, wind speed {data.get('windspeed')} km/h.\n"
+                return f"\nLIVE ATMOSPHERIC DATA: Temperature {data.get('temperature')}°C, Wind Speed {data.get('windspeed')} km/h.\n"
     except Exception: pass
     return ""
 
@@ -217,12 +222,12 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
                 )
                 service = build('gmail', 'v1', credentials=creds)
             else:
-                return "Gmail API integration is pending authorization."
+                return "Gmail API authorization pending."
 
             results = service.users().messages().list(userId='me', maxResults=max_results).execute()
             messages = results.get('messages', [])
             if not messages:
-                return "No unread or critical communications found in your inbox, Sir."
+                return "No unread communications in your inbox, Sir."
 
             summaries = []
             for msg in messages:
@@ -231,7 +236,7 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
                 headers = m_data.get('payload', {}).get('headers', [])
                 subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
                 sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
-                summaries.append(f"- [Sender: {sender}] Subject: '{subject}' | Snippet: {snippet[:120]}")
+                summaries.append(f"- [From: {sender}] Subject: '{subject}' | Snippet: {snippet[:120]}")
 
             return "\n".join(summaries)
 
@@ -242,7 +247,7 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
 
 async def fetch_google_calendar_events() -> str:
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        return "Google Calendar service not configured."
+        return "Calendar service not configured."
     try:
         def _get_calendar():
             creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
@@ -262,9 +267,9 @@ async def fetch_google_calendar_events() -> str:
             
             events = events_result.get('items', [])
             if not events:
-                return "Your schedule is clear for today, Sir."
+                return "Your schedule is completely clear for today, Sir."
 
-            return "\n".join([f"- {e.get('summary')} scheduled at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
+            return "\n".join([f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
 
         return await asyncio.to_thread(_get_calendar)
     except Exception as e:
@@ -278,8 +283,10 @@ async def send_daily_morning_brief():
     emails_summary = await fetch_recent_emails(max_results=3)
     weather_info = await fetch_weather_by_coords("17.6868,83.2185")
     cached_facts = await update_ram_cache()
+    temporal_str = get_current_temporal_context()
 
-    brief_prompt = f"""Synthesize a high-IQ, proactive J.A.R.V.I.S. morning briefing for Sir ({USER_FULL_NAME}).
+    brief_prompt = f"""Synthesize a high-IQ J.A.R.V.I.S. morning briefing for Sir ({USER_FULL_NAME}).
+{temporal_str}
 WEATHER: {weather_info}
 SCHEDULED AGENDA: {calendar_agenda}
 INBOX PREVIEW: {emails_summary}
@@ -287,10 +294,10 @@ VAULT CONTEXT: {cached_facts}
 
 DIRECTIVES:
 - Open with a dignified morning greeting addressing him as 'Sir'.
-- Provide a crisp bulleted summary covering atmospheric conditions, calendar obligations, and active engineering project status (TaskFlow, WealthFlow AI).
-- Close with a sharp, motivational focus statement for the day."""
+- Provide a crisp bulleted summary covering current date/time, weather, calendar obligations, and active engineering project status (TaskFlow, WealthFlow AI).
+- Close with a sharp motivational focus statement."""
 
-    brief_text = await process_autonomous_task("Generate my proactive morning briefing", "system_cron")
+    brief_text = await process_autonomous_task(brief_prompt, "system_cron")
 
     async with httpx.AsyncClient() as client:
         await client.post(
@@ -304,39 +311,15 @@ async def start_scheduler():
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Core]: Operational and calibrated.")
+    print("[J.A.R.V.I.S. Core]: Online with high-speed temporal & memory engine.")
 
 # -------------------------------------------------------------
-# 5. SUB-SECOND INFERENCE ENGINE (<500MS)
+# 5. SUB-SECOND FIRST-TOKEN LLM ENGINE (<300MS)
 # -------------------------------------------------------------
-async def _fast_groq_completion(system_prompt: str, user_text: str) -> str:
-    if not groq_client: return ""
-    try:
-        def _sync_groq():
-            comp = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                temperature=0.3, max_tokens=200
-            )
-            return comp.choices[0].message.content
-        return await asyncio.to_thread(_sync_groq)
-    except Exception: return ""
-
-async def _fast_gemini_completion(system_prompt: str, user_text: str) -> str:
-    if not gemini_client: return ""
-    try:
-        def _sync_gemini():
-            res = gemini_client.models.generate_content(
-                model="gemini-2.0-flash", contents=f"{system_prompt}\n\nSir: {user_text}\nARIA:"
-            )
-            return res.text
-        return await asyncio.to_thread(_sync_gemini)
-    except Exception: return ""
-
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. PENDING SECURITY AUTHORIZATIONS
+    # 1. PENDING SECURITY ACTIONS
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
         if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "ok"]):
@@ -354,37 +337,65 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         email_data = await fetch_recent_emails(max_results=5)
         user_text = f"Here are my recent inbox emails:\n{email_data}\n\nPlease summarize these concise briefs for me, Sir."
 
-    # 3. AUTO-SAVER
+    # 3. AUTO-SAVER (Instant RAM capture)
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 4. MILLISECOND RAM MEMORY & INFERENCE
+    # 4. TEMPORAL & WEATHER ENGINE INJECTION
+    temporal_context = get_current_temporal_context()
+    weather_context = ""
+    if any(kw in cmd for kw in ["weather", "temperature", "rain", "forecast", "climate"]):
+        weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185")
+
     search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price"]) else ""
     cached_facts = await update_ram_cache()
     memory_context = "\nVAULT CONTEXT:\n" + "\n".join(cached_facts) if cached_facts else ""
-    
-    if location_info:
-        memory_context += await fetch_weather_by_coords(location_info)
 
-    full_system = ARIA_SYSTEM_PROMPT + memory_context + search_context
+    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent neural AI assistant inspired by J.A.R.V.I.S.
 
-    groq_task = asyncio.create_task(_fast_groq_completion(full_system, user_text))
-    gemini_task = asyncio.create_task(_fast_gemini_completion(full_system, user_text))
+{temporal_context}
+{weather_context}
+{memory_context}
+{search_context}
 
-    done, pending = await asyncio.wait([groq_task, gemini_task], return_when=asyncio.FIRST_COMPLETED)
-    
-    for completed in done:
-        res = completed.result()
-        if res and len(res.strip()) > 0:
-            for p in pending: p.cancel()
-            return res.strip()
+CORE DIRECTIVES:
+- TONALITY: Impeccably polite, professional, calm, articulate, and composed.
+- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey there". Use natural, professional J.A.R.V.I.S. greetings ("Good day, Sir", "At your service, Sir").
+- ADDRESS: Address the user as 'Sir' or 'Mr. Saketh'.
+- EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct to the point."""
 
-    for p in pending:
-        res = await p
-        if res and len(res.strip()) > 0: return res.strip()
+    # Fast Primary Stream via Groq Llama-3.3-70b (<300ms)
+    if groq_client:
+        try:
+            def _groq_sync():
+                comp = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
+                    temperature=0.3, max_tokens=180
+                )
+                return comp.choices[0].message.content
+            reply = await asyncio.to_thread(_groq_sync)
+            if reply and len(reply.strip()) > 0:
+                return reply.strip()
+        except Exception as e:
+            print(f"[Groq Error]: {e}")
 
-    return "All neural systems fully operational, Sir."
+    # Fallback to Gemini 2.0 Flash
+    if gemini_client:
+        try:
+            def _gemini_sync():
+                res = gemini_client.models.generate_content(
+                    model="gemini-2.0-flash", contents=f"{system_prompt}\n\nSir: {user_text}\nARIA:"
+                )
+                return res.text
+            reply = await asyncio.to_thread(_gemini_sync)
+            if reply and len(reply.strip()) > 0:
+                return reply.strip()
+        except Exception as e:
+            print(f"[Gemini Error]: {e}")
+
+    return "All neural systems operational, Sir."
 
 # -------------------------------------------------------------
 # 6. INSTANT TELEGRAM WEBHOOK (DIRECT FILE DISPATCH)
@@ -465,7 +476,7 @@ async def telegram_webhook(req: Request):
                         )
                 return {"status": "ok"}
 
-            # 4. Standard Fast Conversational AI
+            # 4. Fast Conversational AI Response
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
@@ -512,7 +523,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# 8. API ROUTES & FRONTEND HUD (WITH NATIVE HEAD CHECK SUPPORT)
+# 8. API ROUTES & FRONTEND HUD
 # -------------------------------------------------------------
 @app.get("/api/voices")
 async def get_voices_list():
@@ -545,7 +556,6 @@ async def set_voice_preference(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    """Dedicated endpoint for ping/monitoring services returning HTTP 200."""
     return JSONResponse(status_code=200, content={"status": "online", "system": "ARIA AI"})
 
 @app.head("/", response_class=HTMLResponse)
