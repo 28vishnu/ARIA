@@ -47,18 +47,16 @@ GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
-
-# PRE-LOADED CORE IDENTITY
-USER_FULL_NAME = "Nanduri Vishnu Saketh"
+USER_FULL_NAME = "N. Vishnu Saketh"
 
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent neural AI assistant inspired by J.A.R.V.I.S.
-CORE USER IDENTITY:
-- The user's name is {USER_FULL_NAME}. Always address him naturally as 'Sir' or by his name when appropriate.
-DIRECTIVES:
-- Speak/type in a composed, articulate, analytical, and natural tone.
-- DYNAMIC LANGUAGE: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
-- SUB-SECOND SHARPNESS: Keep responses extremely sharp, clever, and concise (1-2 sentences max unless generating a structured report).
-- FULL VAULT ACCESS: Use stored profile details, technical projects (TaskFlow, WealthFlow AI), and documents automatically."""
+
+CORE PERSONA DIRECTIVES:
+- TONALITY: Impeccably polite, highly professional, calm, articulate, and composed.
+- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey there", or "Hello buddy". Use natural, professional J.A.R.V.I.S. greetings such as "Good day, Sir", "At your service, Sir", or "Good morning, Sir".
+- ADDRESS: Address the user as 'Sir' or 'Mr. Saketh'.
+- LANGUAGE: Formulate sharp, concise, and elegant English (or Tenglish when explicitly requested by the user).
+- EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct to the point."""
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -75,9 +73,9 @@ PENDING_SECURITY_ACTIONS = {}
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
-# 2. IN-MEMORY RAM CACHE (MILLISECOND SPEED TIER)
+# 2. IN-MEMORY RAM CACHE (SUB-MILLISECOND TIER)
 # -------------------------------------------------------------
-RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Name is {USER_FULL_NAME}"]
+RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
 LAST_CACHE_UPDATE = 0
 
 async def update_ram_cache():
@@ -87,7 +85,7 @@ async def update_ram_cache():
     if now - LAST_CACHE_UPDATE < 60 and len(RAM_MEMORY_CACHE) > 1:
         return RAM_MEMORY_CACHE
 
-    facts = [f"[PERSONAL_PROFILE]: User Name is {USER_FULL_NAME}"]
+    facts = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
     if mongo_memory_col is not None:
         try:
             cursor = mongo_memory_col.find({})
@@ -138,7 +136,7 @@ async def save_memory_fact(category: str, fact: str) -> str:
             except Exception: pass
 
     asyncio.create_task(_async_persisters())
-    return "Understood Sir. Saved in vault."
+    return "Understood, Sir. Duly recorded in your personal vault."
 
 async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes, text_preview: str):
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
@@ -154,7 +152,7 @@ async def save_binary_document(file_name: str, doc_label: str, raw_bytes: bytes,
         except Exception as e: print(f"[Doc Save Error]: {e}")
 
     await save_memory_fact("documents", f"DOCUMENT '{doc_label}' (File: {file_name}): {text_preview[:1500]}")
-    return f"Successfully saved '{file_name}' to your binary document vault, Sir."
+    return f"Document '{file_name}' successfully secured in your vault, Sir."
 
 async def purge_memory_category(category: str) -> str:
     cat = category.lower().strip()
@@ -169,15 +167,15 @@ async def purge_memory_category(category: str) -> str:
         except Exception: pass
 
     global RAM_MEMORY_CACHE
-    RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Name is {USER_FULL_NAME}"]
-    return f"All {category} records and files have been purged Sir."
+    RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
+    return f"All records associated with '{category}' have been purged, Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
     try:
         res = tavily_client.search(query=query, max_results=2)
         results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-        return "\nLIVE SEARCH REAL-TIME KNOWLEDGE:\n" + "\n".join(results) + "\n"
+        return "\nREAL-TIME SEARCH CONTEXT:\n" + "\n".join(results) + "\n"
     except Exception: pass
     return ""
 
@@ -187,10 +185,10 @@ async def fetch_weather_by_coords(location_info: str) -> str:
         lat, lon = location_info.split(",")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
         async with httpx.AsyncClient() as client:
-            res = await client.get(url, timeout=4.0)
+            res = await client.get(url, timeout=3.0)
             if res.status_code == 200:
                 data = res.json().get("current_weather", {})
-                return f"\nLOCAL WEATHER: Currently {data.get('temperature')}°C, wind {data.get('windspeed')} km/h.\n"
+                return f"\nLOCAL ATMOSPHERIC CONDITIONS: Currently {data.get('temperature')}°C, wind speed {data.get('windspeed')} km/h.\n"
     except Exception: pass
     return ""
 
@@ -219,12 +217,12 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
                 )
                 service = build('gmail', 'v1', credentials=creds)
             else:
-                return "Gmail API credentials not configured."
+                return "Gmail API integration is pending authorization."
 
             results = service.users().messages().list(userId='me', maxResults=max_results).execute()
             messages = results.get('messages', [])
             if not messages:
-                return "No recent emails found in your inbox, Sir."
+                return "No unread or critical communications found in your inbox, Sir."
 
             summaries = []
             for msg in messages:
@@ -233,18 +231,18 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
                 headers = m_data.get('payload', {}).get('headers', [])
                 subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
                 sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
-                summaries.append(f"- [From: {sender}] Subject: '{subject}' | Snippet: {snippet[:120]}")
+                summaries.append(f"- [Sender: {sender}] Subject: '{subject}' | Snippet: {snippet[:120]}")
 
             return "\n".join(summaries)
 
         return await asyncio.to_thread(_get_gmail)
     except Exception as e:
         print(f"[Gmail Error]: {e}")
-        return "Gmail access temporarily unavailable."
+        return "Gmail service temporarily unavailable."
 
 async def fetch_google_calendar_events() -> str:
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        return "No Calendar configuration found."
+        return "Google Calendar service not configured."
     try:
         def _get_calendar():
             creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
@@ -264,9 +262,9 @@ async def fetch_google_calendar_events() -> str:
             
             events = events_result.get('items', [])
             if not events:
-                return "No scheduled calendar events for today, Sir."
+                return "Your schedule is clear for today, Sir."
 
-            return "\n".join([f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
+            return "\n".join([f"- {e.get('summary')} scheduled at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
 
         return await asyncio.to_thread(_get_calendar)
     except Exception as e:
@@ -281,18 +279,18 @@ async def send_daily_morning_brief():
     weather_info = await fetch_weather_by_coords("17.6868,83.2185")
     cached_facts = await update_ram_cache()
 
-    brief_prompt = f"""Generate a high-IQ, proactive J.A.R.V.I.S. morning briefing for Sir ({USER_FULL_NAME}).
-LOCAL WEATHER: {weather_info}
-TODAY'S CALENDAR AGENDA: {calendar_agenda}
-RECENT GMAIL INBOX PREVIEW: {emails_summary}
+    brief_prompt = f"""Synthesize a high-IQ, proactive J.A.R.V.I.S. morning briefing for Sir ({USER_FULL_NAME}).
+WEATHER: {weather_info}
+SCHEDULED AGENDA: {calendar_agenda}
+INBOX PREVIEW: {emails_summary}
 VAULT CONTEXT: {cached_facts}
 
 DIRECTIVES:
-- Begin with a smooth morning greeting addressing him as 'Sir'.
-- Provide a clear bulleted update covering weather, calendar agenda, inbox alerts, and active project priorities.
-- Conclude with a sharp, motivating focus recommendation."""
+- Open with a dignified morning greeting addressing him as 'Sir'.
+- Provide a crisp bulleted summary covering atmospheric conditions, calendar obligations, and active engineering project status (TaskFlow, WealthFlow AI).
+- Close with a sharp, motivational focus statement for the day."""
 
-    brief_text = await process_autonomous_task("Generate my proactive morning brief", "system_cron")
+    brief_text = await process_autonomous_task("Generate my proactive morning briefing", "system_cron")
 
     async with httpx.AsyncClient() as client:
         await client.post(
@@ -302,11 +300,11 @@ DIRECTIVES:
 
 @app.on_event("startup")
 async def start_scheduler():
-    await update_ram_cache() # Pre-load vault memory on boot
+    await update_ram_cache()
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC") # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Scheduler & Memory Pre-Loader]: Operational.")
+    print("[J.A.R.V.I.S. Core]: Operational and calibrated.")
 
 # -------------------------------------------------------------
 # 5. SUB-SECOND INFERENCE ENGINE (<500MS)
@@ -318,7 +316,7 @@ async def _fast_groq_completion(system_prompt: str, user_text: str) -> str:
             comp = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                temperature=0.4, max_tokens=250
+                temperature=0.3, max_tokens=200
             )
             return comp.choices[0].message.content
         return await asyncio.to_thread(_sync_groq)
@@ -347,14 +345,14 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
                 return await purge_memory_category(pending["category"])
         elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
             del PENDING_SECURITY_ACTIONS[session_id]
-            return "Security action aborted Sir."
+            return "Security action aborted, Sir."
         else:
-            return f"Awaiting authorization Sir. Delete all {pending['category']} data?"
+            return f"Awaiting authorization, Sir. Shall I purge all {pending['category']} records?"
 
     # 2. GMAIL INTENT DETECTOR
     if any(k in cmd for k in ["check email", "read emails", "my mails", "summarize emails", "check my inbox", "important mail"]):
         email_data = await fetch_recent_emails(max_results=5)
-        user_text = f"Here are my recent inbox emails:\n{email_data}\n\nPlease summarize these emails clearly for me, Sir."
+        user_text = f"Here are my recent inbox emails:\n{email_data}\n\nPlease summarize these concise briefs for me, Sir."
 
     # 3. AUTO-SAVER
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
@@ -364,7 +362,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     # 4. MILLISECOND RAM MEMORY & INFERENCE
     search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price"]) else ""
     cached_facts = await update_ram_cache()
-    memory_context = "\nVAULT MEMORY:\n" + "\n".join(cached_facts) if cached_facts else ""
+    memory_context = "\nVAULT CONTEXT:\n" + "\n".join(cached_facts) if cached_facts else ""
     
     if location_info:
         memory_context += await fetch_weather_by_coords(location_info)
@@ -386,7 +384,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         res = await p
         if res and len(res.strip()) > 0: return res.strip()
 
-    return f"All systems operational Sir ({USER_FULL_NAME})."
+    return "All neural systems fully operational, Sir."
 
 # -------------------------------------------------------------
 # 6. INSTANT TELEGRAM WEBHOOK (DIRECT FILE DISPATCH)
@@ -414,7 +412,7 @@ async def telegram_webhook(req: Request):
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": f"Good day, Sir ({USER_FULL_NAME}). I am ARIA. All systems online and operational."}
+                    json={"chat_id": chat_id, "text": "Good day, Sir. I am ARIA, your personal neural assistant. All systems online."}
                 )
             return {"status": "ok"}
 
@@ -436,7 +434,7 @@ async def telegram_webhook(req: Request):
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 3. DIRECT FILE RETRIEVAL (Sub-2 Second Execution)
+        # 3. DIRECT FILE RETRIEVAL (Bypasses LLM — Sub-2 Second Speed)
         if text:
             cmd = text.lower()
             file_triggers = [
@@ -454,7 +452,7 @@ async def telegram_webhook(req: Request):
                     if not target_doc:
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                            json={"chat_id": chat_id, "text": "Sir, I have your resume text in memory, but no raw .pdf binary file is saved in the vault yet. Please attach and send your resume PDF file here once."}
+                            json={"chat_id": chat_id, "text": "I possess your profile details in text memory, Sir, but no binary PDF is saved in the vault yet. Please upload your resume PDF once."}
                         )
                     else:
                         target_name = target_doc.get("file_name", "resume.pdf")
@@ -462,7 +460,7 @@ async def telegram_webhook(req: Request):
                         
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
-                            data={"chat_id": chat_id, "caption": f"Here is your file: '{target_name}' Sir."},
+                            data={"chat_id": chat_id, "caption": f"Here is your document: '{target_name}' Sir."},
                             files={"document": (target_name, raw_file_bytes, "application/octet-stream")}
                         )
                 return {"status": "ok"}
