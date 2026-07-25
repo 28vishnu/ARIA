@@ -4,6 +4,7 @@ import httpx
 import base64
 import re
 import asyncio
+from datetime import datetime, timezone
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -20,6 +21,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from tavily import TavilyClient
 import motor.motor_asyncio
+
+# Scheduler SDKs
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 app = FastAPI()
 
@@ -40,13 +45,11 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 ASSISTANT_NAME = "ARIA"
 
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
-CONVERSATIONAL & INTELLIGENCE DIRECTIVES:
-- Speak/type in a composed, warm, highly articulate, clever, and natural tone. Address the user naturally as 'Sir'.
-- DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu in Latin script).
-- UNIVERSAL MEMORY VAULT ACCESS:
-  * You possess instant access to all stored personal memory, academic background, project records (e.g. TaskFlow, WealthFlow AI), skills, and document context.
-  * Use this vault context seamlessly to answer questions about the user's profile or stored information.
-- Keep responses sharp, direct, intelligent, and concise (1-2 sentences max)."""
+CONVERSATIONAL DIRECTIVES:
+- Speak/type in a composed, warm, articulate, clever, and natural tone. Address the user naturally as 'Sir'.
+- DYNAMIC LANGUAGE SWITCHING: Respond fluently in English or Tenglish (Telugu transliterated in Latin script).
+- MEMORY VAULT ACCESS: You have full access to stored personal profile details, academic background, and project records (e.g. TaskFlow, WealthFlow AI).
+- Keep responses sharp, direct, intelligent, and concise (1-2 sentences max unless generating a structured report)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -55,7 +58,7 @@ github_client = Github(GITHUB_TOKEN) if GITHUB_TOKEN else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
-# MongoDB Async Setup
+# MongoDB Async Driver Setup
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 mongo_docs_col = mongo_db["documents"] if mongo_db is not None else None
@@ -64,8 +67,11 @@ mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
 
+# Scheduler Instance
+scheduler = AsyncIOScheduler()
+
 # -------------------------------------------------------------
-# UNIFIED HIGH-SPEED DATABASE ENGINE (PARALLEL EXECUTION)
+# HIGH-SPEED DATABASE ENGINE (PARALLEL EXECUTION)
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -94,13 +100,13 @@ async def save_memory_fact(category: str, fact: str) -> str:
         if mongo_memory_col is not None:
             try:
                 await mongo_memory_col.insert_one({"category": cat, "fact": fact_str})
-            except Exception as e: print(f"[MongoDB Memory Error]: {e}")
+            except Exception as e: print(f"[MongoDB Error]: {e}")
 
     def _supabase_save():
         if supabase:
             try:
                 supabase.table("personal_memory").insert({"category": cat, "fact": fact_str}).execute()
-            except Exception as e: print(f"[Supabase Memory Error]: {e}")
+            except Exception as e: print(f"[Supabase Error]: {e}")
 
     await asyncio.gather(_mongo_save(), asyncio.to_thread(_supabase_save))
     return "Understood Sir. Saved permanently in your vault."
@@ -141,7 +147,20 @@ def fetch_web_search(query: str) -> str:
     try:
         res = tavily_client.search(query=query, max_results=2)
         results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-        return "\nLIVE WEB SEARCH Context:\n" + "\n".join(results) + "\n"
+        return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
+    except Exception: pass
+    return ""
+
+async def fetch_weather_by_coords(location_info: str) -> str:
+    if not location_info or "," not in location_info: return ""
+    try:
+        lat, lon = location_info.split(",")
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url, timeout=4.0)
+            if res.status_code == 200:
+                data = res.json().get("current_weather", {})
+                return f"\nLOCAL WEATHER: Currently {data.get('temperature')}°C, wind {data.get('windspeed')} km/h.\n"
     except Exception: pass
     return ""
 
@@ -178,6 +197,87 @@ async def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
+# GOOGLE CALENDAR & MORNING BRIEFING DAEMON (J.A.R.V.I.S. PROTOCOL)
+# -------------------------------------------------------------
+async def fetch_google_calendar_events() -> str:
+    """Fetches today's agenda from Google Calendar using Service Account credentials."""
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        return "No Google Calendar integration configured."
+    
+    try:
+        def _get_calendar_data():
+            creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+            scopes = ['https://www.googleapis.com/auth/calendar.readonly']
+            creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+            service = build('calendar', 'v3', credentials=creds)
+
+            now = datetime.now(timezone.utc)
+            start_of_day = now.replace(hour=0, minute=0, second=0).isoformat()
+            end_of_day = now.replace(hour=23, minute=59, second=59).isoformat()
+
+            events_result = service.events().list(
+                calendarId='primary', timeMin=start_of_day, timeMax=end_of_day,
+                singleEvents=True, orderBy='startTime'
+            ).execute()
+            
+            events = events_result.get('items', [])
+            if not events:
+                return "No scheduled calendar events for today, Sir."
+
+            agenda = [f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events]
+            return "\n".join(agenda)
+
+        return await asyncio.to_thread(_get_calendar_data)
+    except Exception as e:
+        print(f"[Calendar Error]: {e}")
+        return "Calendar agenda temporarily unavailable."
+
+async def send_daily_morning_brief():
+    """Generates and delivers the J.A.R.V.I.S. morning report to Telegram at 07:00 AM IST."""
+    if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID:
+        return
+
+    # 1. Gather Context
+    calendar_agenda = await fetch_google_calendar_events()
+    weather_info = await fetch_weather_by_coords("17.6868,83.2185")  # Visakhapatnam coordinates
+    user_memory = await fetch_longterm_memory()
+
+    # 2. Build Briefing System Prompt
+    briefing_instruction = f"""Generate a high-IQ, proactive J.A.R.V.I.S.-style morning briefing for Sir.
+LOCAL WEATHER:
+{weather_info}
+
+TODAY'S CALENDAR & AGENDA:
+{calendar_agenda}
+
+VAULT & PROJECT CONTEXT:
+{user_memory}
+
+STRUCTURE DIRECTIVES:
+- Begin with a smooth, articulate morning greeting addressing him as 'Sir'.
+- Provide a brief update on today's weather and calendar agenda.
+- Mention active technical goals or project priorities (e.g. TaskFlow, WealthFlow AI).
+- Keep the overall brief motivating, concise, and structured in 3-4 distinct bullet points."""
+
+    # 3. Generate Briefing Content
+    brief_text = await process_autonomous_task("Generate my proactive daily morning briefing", "system_cron")
+
+    # 4. Dispatch to Telegram
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": brief_text}
+        )
+
+@app.on_event("startup")
+async def start_scheduler():
+    """Schedules the morning briefing daemon every day at 07:00 AM IST (01:30 AM UTC)."""
+    trigger = CronTrigger(hour=1, minute=30, timezone="UTC")
+    scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
+    scheduler.start()
+    print("[J.A.R.V.I.S. Scheduler]: Morning briefing daemon active.")
+
+# -------------------------------------------------------------
 # ULTRA-FAST PARALLEL LLM INFERENCE ENGINE (<800MS)
 # -------------------------------------------------------------
 async def _call_groq(system_prompt: str, user_text: str) -> str:
@@ -187,7 +287,7 @@ async def _call_groq(system_prompt: str, user_text: str) -> str:
             comp = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=150
+                temperature=0.5, max_tokens=250
             )
             return comp.choices[0].message.content
         return await asyncio.to_thread(_sync_groq)
@@ -225,7 +325,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "documents"}
         return "Purging document database is irreversible. Do I have your authorization Sir?"
 
-    # 3. UNIVERSAL AUTO-SAVER (Identity & Facts)
+    # 3. AUTO-SAVER (Identity & Personal Details)
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my birthday is", "my college is", "i live in", "my email is", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
@@ -235,7 +335,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     memory_context = await fetch_longterm_memory() + search_context
     full_system = ARIA_SYSTEM_PROMPT + memory_context
 
-    # Race Groq Llama-3.3 and Gemini Flash simultaneously
+    # Race Groq Llama-3.3 and Gemini Flash simultaneously for lowest latency
     groq_task = asyncio.create_task(_call_groq(full_system, user_text))
     gemini_task = asyncio.create_task(_call_gemini(full_system, user_text))
 
@@ -280,7 +380,7 @@ async def telegram_webhook(req: Request):
 
         # 2. ISOLATED /start COMMAND
         if text.lower() == "/start":
-            greeting = "Good day, Sir. I am ARIA, your personal neural AI assistant. All systems online. How may I assist you?"
+            greeting = "Good day, Sir. I am ARIA, your personal AI assistant. All systems online and operational. How may I assist you today?"
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": greeting})
             return {"status": "ok"}
@@ -305,7 +405,7 @@ async def telegram_webhook(req: Request):
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 4. EXPLICIT FILE RETRIEVAL COMMANDS
+        # 4. EXPLICIT FILE TRANSMISSION TRIGGER
         if text:
             cmd = text.lower()
             file_triggers = ["send my resume file", "send resume pdf", "send my document file", "download my resume", "give me the pdf file", "send file"]
