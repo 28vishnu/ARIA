@@ -36,17 +36,16 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 ASSISTANT_NAME = "ARIA"
 
-# SYSTEM PROMPT
-ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal AI assistant inspired by J.A.R.V.I.S.
+# FRIENDLY, NATURAL MULTILINGUAL SYSTEM PROMPT
+ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an intelligent, highly responsive, and friendly personal AI assistant.
 CONVERSATIONAL DIRECTIVES:
-- Address the user naturally as 'Sir' without placing commas before or after the title. Integrate 'Sir' seamlessly into sentences (e.g. 'All systems nominal Sir' or 'Right away Sir').
+- Maintain a warm, friendly, natural, and comfortable conversational tone. Address the user naturally as 'Sir' without inserting micro-pauses or awkward commas before the title.
 - DYNAMIC LANGUAGE SWITCHING:
-  * If the user speaks in English, respond in clear, articulate English.
-  * If the user speaks in Telugu or Tenglish, respond naturally using English/Latin script for seamless speech synthesis.
-  * DO NOT repeat fixed greetings or phrases unless relevant. Keep replies unique, context-aware, and fresh every time.
-- Maintain quiet confidence, dry subtle warmth, and complete composure.
-- Keep spoken replies concise, sharp, and highly fluent (1 to 2 natural sentences max).
-- Deliver precise answers immediately using stored personal memory context, PDF documents, schedule, weather, search results, and repositories."""
+  * Respond fluently in English or Tenglish (Telugu transliterated in English script) based on what the user speaks.
+  * When speaking in Tenglish, keep it completely natural, expressive, and conversational.
+  * Never repeat generic filler phrases or default greetings over and over. Keep every response fresh and direct.
+- Keep spoken responses concise, engaging, and clear (1 to 2 articulate sentences max).
+- Use personal memory context, schedule, weather, search results, and repositories to answer directly."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -60,29 +59,23 @@ class UserQuery(BaseModel):
     location: str = None
 
 # -------------------------------------------------------------
-# INTEGRATION & PDF PARSING MODULES
+# MODULE HOOKS & PARSERS
 # -------------------------------------------------------------
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Reads complete PDF document and extracts all text content."""
     try:
         reader = PdfReader(BytesIO(file_bytes))
-        extracted_text = ""
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
+        extracted_text = "".join([page.extract_text() or "" for page in reader.pages])
         return extracted_text.strip()
     except Exception as e:
-        print(f"[PDF Parsing Error]: {e}")
+        print(f"[PDF Error]: {e}")
         return ""
 
 def save_fact_to_memory(category: str, fact: str):
-    """Saves extracted PDF summary or user facts directly into Supabase vault."""
     if supabase:
         try:
             supabase.table("personal_memory").insert({"category": category, "fact": fact}).execute()
         except Exception as e:
-            print(f"[Memory Save Warning]: {e}")
+            print(f"[Memory Warning]: {e}")
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -91,7 +84,7 @@ def fetch_web_search(query: str) -> str:
         try:
             res = tavily_client.search(query=query, max_results=2)
             results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-            return "\nLIVE TAVILY SEARCH RESULTS:\n" + "\n".join(results) + "\n"
+            return "\nLIVE SEARCH RESULTS:\n" + "\n".join(results) + "\n"
         except Exception as e:
             print(f"[Search Error]: {e}")
     return ""
@@ -116,7 +109,7 @@ def fetch_github_summary() -> str:
         user = github_client.get_user()
         repos = [repo.name for repo in user.get_repos()[:5]]
         return f"\nGITHUB REPOSITORIES: {', '.join(repos)}\n"
-    except Exception as e:
+    except Exception:
         return ""
 
 def fetch_google_calendar_events() -> str:
@@ -132,7 +125,7 @@ def fetch_google_calendar_events() -> str:
         if not events: return "\nCALENDAR SCHEDULE: No upcoming events today.\n"
         event_list = [f"{e.get('summary', 'Event')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events]
         return "\nCALENDAR SCHEDULE: " + "; ".join(event_list) + "\n"
-    except Exception as e:
+    except Exception:
         return ""
 
 def log_voice_interaction(user_text: str, ai_reply: str, location_info: str = None):
@@ -173,7 +166,7 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
             completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": full_system}, {"role": "user", "content": user_text}],
-                temperature=0.5, max_tokens=150
+                temperature=0.6, max_tokens=150
             )
             reply = completion.choices[0].message.content
             log_voice_interaction(user_text, reply, location_info)
@@ -190,10 +183,10 @@ async def generate_aria_response(user_text: str, location_info: str = None) -> s
             return reply
         except Exception as e: print(f"[Gemini Warning]: {e}")
 
-    return "Standing by Sir. All core systems operational."
+    return "Online and ready Sir. How can I help you right now?"
 
 # -------------------------------------------------------------
-# FULLSCREEN HUD FRONTEND WITH PDF DOCUMENT UPLOADER
+# ADVANCED CANVAS PARTICLES & FULLSCREEN AUTOMATIC HUD
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
@@ -206,22 +199,41 @@ def serve_webapp():
         <meta name="mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
         <meta name="theme-color" content="#030712">
-        <title>{ASSISTANT_NAME} AI</title>
+        <title>{ASSISTANT_NAME} Neural Core</title>
         <style>
-            * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }}
+            * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }}
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #030712;
+                background: #020617;
                 color: #f8fafc;
-                margin: 0;
-                padding: 0;
                 min-height: 100vh;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 justify-content: space-between;
-                padding: 30px 20px;
+                padding: 25px 20px;
                 overflow: hidden;
+                position: relative;
+            }}
+            canvas#particleCanvas {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 1;
+                pointer-events: none;
+            }}
+            .ui-layer {{
+                position: relative;
+                z-index: 2;
+                width: 100%;
+                max-width: 500px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                height: 100%;
+                justify-content: space-between;
             }}
             .header {{
                 text-align: center;
@@ -229,147 +241,192 @@ def serve_webapp():
             }}
             .title {{
                 font-size: 2.2rem;
-                font-weight: 800;
-                letter-spacing: 6px;
+                font-weight: 900;
+                letter-spacing: 8px;
                 background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
                 -webkit-background-clip: text;
                 -webkit-text-fill-color: transparent;
-                margin: 0;
             }}
-            .subtitle {{
-                color: #64748b;
-                font-size: 0.8rem;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                margin-top: 4px;
-            }}
-            /* ARC REACTOR HUD EFFECT */
-            .hud-container {{
+            .hud-orb-container {{
                 position: relative;
-                width: 200px;
-                height: 200px;
+                width: 220px;
+                height: 220px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                margin: 40px 0;
                 cursor: pointer;
             }}
-            .outer-ring {{
+            .ring-1 {{
                 position: absolute;
                 width: 100%;
                 height: 100%;
                 border-radius: 50%;
                 border: 2px dashed rgba(56, 189, 248, 0.4);
-                animation: rotate 20s linear infinite;
+                animation: spin 22s linear infinite;
             }}
-            .inner-ring {{
+            .ring-2 {{
                 position: absolute;
-                width: 75%;
-                height: 75%;
+                width: 80%;
+                height: 80%;
                 border-radius: 50%;
-                border: 2px solid rgba(56, 189, 248, 0.6);
-                box-shadow: 0 0 25px rgba(56, 189, 248, 0.3);
+                border: 2px solid rgba(129, 140, 248, 0.5);
+                box-shadow: 0 0 30px rgba(56, 189, 248, 0.3);
             }}
-            .core-orb {{
-                width: 50%;
-                height: 50%;
+            .core-node {{
+                width: 55%;
+                height: 55%;
                 border-radius: 50%;
-                background: radial-gradient(circle, #38bdf8 0%, #0284c7 70%, #0369a1 100%);
-                box-shadow: 0 0 40px rgba(56, 189, 248, 0.8);
+                background: radial-gradient(circle, #38bdf8 0%, #0284c7 60%, #0369a1 100%);
+                box-shadow: 0 0 50px rgba(56, 189, 248, 0.8);
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 35px;
-                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                font-size: 38px;
+                transition: transform 0.3s ease, background 0.3s ease;
             }}
-            .hud-container.listening .core-orb {{
-                animation: pulseCore 1.2s ease-in-out infinite alternate;
-                background: radial-gradient(circle, #f43f5e 0%, #e11d48 70%, #9f1239 100%);
-                box-shadow: 0 0 60px rgba(244, 63, 94, 0.9);
+            .hud-orb-container.speaking .core-node {{
+                animation: pulseGlow 1s ease-in-out infinite alternate;
+                background: radial-gradient(circle, #818cf8 0%, #4f46e5 70%, #3730a3 100%);
+                box-shadow: 0 0 70px rgba(129, 140, 248, 0.9);
             }}
-            @keyframes rotate {{ 100% {{ transform: rotate(360deg); }} }}
-            @keyframes pulseCore {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
+            @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
+            @keyframes pulseGlow {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.12); }} }}
 
-            /* TELEMETRY CARDS */
-            .status-panel {{
+            .status-card {{
                 width: 100%;
-                max-width: 500px;
-                background: rgba(15, 23, 42, 0.7);
-                backdrop-filter: blur(12px);
-                border-radius: 20px;
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                padding: 20px;
+                background: rgba(15, 23, 42, 0.75);
+                backdrop-filter: blur(16px);
+                border-radius: 24px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                padding: 22px;
                 text-align: center;
-                box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
             }}
-            #status-text {{
-                color: #38bdf8;
-                font-size: 1rem;
-                font-weight: 600;
-                letter-spacing: 1px;
-                margin-bottom: 8px;
-            }}
-            #response-box {{
-                font-size: 1.1rem;
-                line-height: 1.5;
-                color: #e2e8f0;
-                min-height: 60px;
+            #live-text {{
+                font-size: 1.15rem;
+                line-height: 1.6;
+                color: #f1f5f9;
+                min-height: 55px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
             }}
             .pdf-btn {{
                 margin-top: 15px;
-                background: rgba(56, 189, 248, 0.15);
-                border: 1px solid #38bdf8;
+                background: rgba(56, 189, 248, 0.12);
+                border: 1px solid rgba(56, 189, 248, 0.5);
                 color: #38bdf8;
-                padding: 8px 16px;
-                border-radius: 12px;
+                padding: 10px 20px;
+                border-radius: 14px;
                 font-size: 0.85rem;
+                font-weight: 600;
                 cursor: pointer;
-                transition: all 0.2s;
+                transition: all 0.2s ease;
             }}
-            .pdf-btn:active {{ transform: scale(0.95); background: rgba(56, 189, 248, 0.3); }}
-            .telemetry-row {{
+            .pdf-btn:active {{ transform: scale(0.96); background: rgba(56, 189, 248, 0.25); }}
+            .telemetry {{
                 display: flex;
                 justify-content: space-around;
                 margin-top: 15px;
                 padding-top: 12px;
-                border-top: 1px solid rgba(255,255,255,0.05);
+                border-top: 1px solid rgba(255, 255, 255, 0.08);
                 font-size: 0.75rem;
                 color: #64748b;
+                letter-spacing: 1px;
             }}
-            .tel-item {{ display: flex; align-items: center; gap: 5px; }}
-            .dot {{ width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }}
+            .tel-dot {{ width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; margin-right: 5px; }}
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1 class="title">{ASSISTANT_NAME}</h1>
-            <div class="subtitle">Neural Autonomous Interface</div>
-        </div>
+        <canvas id="particleCanvas"></canvas>
 
-        <div class="hud-container" id="hud" onclick="toggleListening()">
-            <div class="outer-ring"></div>
-            <div class="inner-ring"></div>
-            <div class="core-orb" id="orb">🎙️</div>
-        </div>
+        <div class="ui-layer">
+            <div class="header">
+                <h1 class="title">{ASSISTANT_NAME}</h1>
+            </div>
 
-        <div class="status-panel">
-            <div id="status-text">SYSTEM STANDBY</div>
-            <div id="response-box">Online and at your service, Sir.</div>
-            
-            <input type="file" id="pdfInput" accept="application/pdf" style="display: none;" onchange="uploadPDF()">
-            <button class="pdf-btn" onclick="document.getElementById('pdfInput').click()">📄 Upload PDF Document</button>
+            <div class="hud-orb-container" id="hudContainer" onclick="forceMicRestart()">
+                <div class="ring-1"></div>
+                <div class="ring-2"></div>
+                <div class="core-node" id="coreNode">🎙️</div>
+            </div>
 
-            <div class="telemetry-row">
-                <div class="tel-item"><div class="dot"></div> LINK: ACTIVE</div>
-                <div class="tel-item" id="gps-stat">GPS: CALIBRATING</div>
-                <div class="tel-item">ENGINE: GROQ 3.3</div>
+            <div class="status-card">
+                <div id="live-text">Listening...</div>
+                
+                <input type="file" id="pdfInput" accept="application/pdf" style="display: none;" onchange="uploadPDF()">
+                <button class="pdf-btn" onclick="document.getElementById('pdfInput').click()">📄 Upload Document / PDF</button>
+
+                <div class="telemetry">
+                    <div><span class="tel-dot"></span> ONLINE</div>
+                    <div id="gpsStat">GPS: ACTIVE</div>
+                    <div>NEURAL CORE: 3.3</div>
+                </div>
             </div>
         </div>
 
         <script>
-            let continuousMode = true;
+            /* DYNAMIC BACKGROUND PARTICLES ENGINE */
+            const canvas = document.getElementById('particleCanvas');
+            const ctx = canvas.getContext('2d');
+            let particles = [];
+
+            function resizeCanvas() {{
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }}
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            class Particle {{
+                constructor() {{
+                    this.x = Math.random() * canvas.width;
+                    this.y = Math.random() * canvas.height;
+                    this.vx = (Math.random() - 0.5) * 0.8;
+                    this.vy = (Math.random() - 0.5) * 0.8;
+                    this.radius = Math.random() * 2 + 1;
+                    this.alpha = Math.random() * 0.5 + 0.2;
+                }}
+                update() {{
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+                    if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+                }}
+                draw() {{
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(56, 189, 248, ${{this.alpha}})`;
+                    ctx.fill();
+                }}
+            }}
+
+            for (let i = 0; i < 60; i++) particles.push(new Particle());
+
+            function animateParticles() {{
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                particles.forEach((p, index) => {{
+                    p.update();
+                    p.draw();
+                    for (let j = index + 1; j < particles.length; j++) {{
+                        const p2 = particles[j];
+                        const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
+                        if (dist < 110) {{
+                            ctx.beginPath();
+                            ctx.moveTo(p.x, p.y);
+                            ctx.lineTo(p2.x, p2.y);
+                            ctx.strokeStyle = `rgba(56, 189, 248, ${{0.15 * (1 - dist / 110)}})`;
+                            ctx.lineWidth = 0.8;
+                            ctx.stroke();
+                        }}
+                    }}
+                }});
+                requestAnimationFrame(animateParticles);
+            }}
+            animateParticles();
+
+            /* SPEECH RECOGNITION & AUTOMATIC SYSTEM CONTROLLER */
             let isSpeaking = false;
             let userLocation = null;
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -377,44 +434,29 @@ def serve_webapp():
 
             if ("geolocation" in navigator) {{
                 navigator.geolocation.getCurrentPosition(
-                    (pos) => {{
-                        userLocation = pos.coords.latitude + "," + pos.coords.longitude;
-                        document.getElementById('gps-stat').innerText = 'GPS: LOCKED';
-                    }},
-                    (err) => {{ document.getElementById('gps-stat').innerText = 'GPS: OFF'; }}
+                    (pos) => {{ userLocation = pos.coords.latitude + "," + pos.coords.longitude; }},
+                    () => {{ document.getElementById('gpsStat').innerText = 'GPS: OFF'; }}
                 );
             }}
 
             if (SpeechRecognition) {{
                 recognition = new SpeechRecognition();
-                recognition.continuous = false;
+                recognition.continuous = true;
                 recognition.interimResults = false;
                 recognition.lang = 'en-US';
 
-                recognition.onstart = () => {{
-                    document.getElementById('hud').classList.add('listening');
-                    if (!isSpeaking) {{
-                        document.getElementById('status-text').innerText = 'LISTENING...';
-                    }}
-                }};
-
-                recognition.onend = () => {{
-                    document.getElementById('hud').classList.remove('listening');
-                    if (continuousMode && !isSpeaking) {{
-                        setTimeout(() => {{ try {{ recognition.start(); }} catch(e){{}} }}, 400);
-                    }} else if (!continuousMode) {{
-                        document.getElementById('status-text').innerText = 'STANDBY';
-                    }}
-                }};
-
                 recognition.onresult = async (event) => {{
-                    const speech = event.results[0][0].transcript;
-                    if (!speech || speech.trim().length === 0) return;
+                    const lastResultIndex = event.results.length - 1;
+                    const speech = event.results[lastResultIndex][0].transcript.trim();
 
+                    if (!speech) return;
+
+                    // INSTANT BARGE-IN INTERRUPTION
                     window.speechSynthesis.cancel();
                     isSpeaking = false;
+                    document.getElementById('hudContainer').classList.remove('speaking');
 
-                    document.getElementById('status-text').innerText = 'PROCESSING...';
+                    document.getElementById('live-text').innerText = speech;
 
                     try {{
                         const res = await fetch('/chat', {{
@@ -423,12 +465,72 @@ def serve_webapp():
                             body: JSON.stringify({{ prompt: speech, location: userLocation }})
                         }});
                         const data = await res.json();
-                        document.getElementById('response-box').innerText = data.reply;
+                        document.getElementById('live-text').innerText = data.reply;
                         speakResponse(data.reply);
                     }} catch (err) {{
-                        document.getElementById('status-text').innerText = 'CONNECTION ERROR';
+                        document.getElementById('live-text').innerText = 'Re-establishing link Sir...';
                     }}
                 }};
+
+                recognition.onend = () => {{
+                    if (!isSpeaking) {{
+                        try {{ recognition.start(); }} catch(e){{}}
+                    }}
+                }};
+
+                // AUTOMATIC DIRECT START ON PAGE LOAD
+                window.addEventListener('load', () => {{
+                    try {{ recognition.start(); }} catch(e) {{}}
+                }});
+            }}
+
+            function forceMicRestart() {{
+                window.speechSynthesis.cancel();
+                isSpeaking = false;
+                document.getElementById('hudContainer').classList.remove('speaking');
+                if (recognition) {{
+                    try {{ recognition.start(); }} catch(e) {{}}
+                }}
+            }}
+
+            function speakResponse(rawText) {{
+                isSpeaking = true;
+                window.speechSynthesis.cancel();
+                document.getElementById('hudContainer').classList.add('speaking');
+                
+                let fluidText = rawText
+                    .replace(/,\\s*Sir/gi, ' Sir')
+                    .replace(/,/g, '')
+                    .replace(/\\s+/g, ' ');
+
+                const utterance = new SpeechSynthesisUtterance(fluidText);
+                utterance.rate = 0.98;
+                utterance.pitch = 1.0;
+
+                const voices = window.speechSynthesis.getVoices();
+                const nativeVoice = voices.find(v => 
+                    v.lang === 'te-IN' || 
+                    v.lang === 'en-IN' || 
+                    v.name.includes('Telugu') || 
+                    v.name.includes('Rishi') || 
+                    v.name.includes('India') ||
+                    v.name.includes('Google te-in') ||
+                    v.name.includes('Google en-in')
+                );
+                
+                const fallbackVoice = voices.find(v => v.lang.includes('en'));
+                if (nativeVoice) utterance.voice = nativeVoice;
+                else if (fallbackVoice) utterance.voice = fallbackVoice;
+
+                utterance.onend = () => {{
+                    isSpeaking = false;
+                    document.getElementById('hudContainer').classList.remove('speaking');
+                    if (recognition) {{
+                        try {{ recognition.start(); }} catch(e){{}}
+                    }}
+                }};
+
+                window.speechSynthesis.speak(utterance);
             }}
 
             async function uploadPDF() {{
@@ -438,7 +540,7 @@ def serve_webapp():
                 const formData = new FormData();
                 formData.append('file', input.files[0]);
 
-                document.getElementById('status-text').innerText = 'READING DOCUMENT...';
+                document.getElementById('live-text').innerText = 'Reading document Sir...';
 
                 try {{
                     const res = await fetch('/upload-pdf', {{
@@ -446,66 +548,11 @@ def serve_webapp():
                         body: formData
                     }});
                     const data = await res.json();
-                    document.getElementById('response-box').innerText = data.message;
+                    document.getElementById('live-text').innerText = data.message;
                     speakResponse(data.message);
                 }} catch (err) {{
-                    document.getElementById('status-text').innerText = 'PDF READ ERROR';
+                    document.getElementById('live-text').innerText = 'Failed to index PDF.';
                 }}
-            }}
-
-            function toggleListening() {{
-                window.speechSynthesis.cancel();
-                isSpeaking = false;
-                if (recognition) {{
-                    try {{ recognition.start(); }} catch(e) {{ recognition.stop(); }}
-                }}
-            }}
-
-            function speakResponse(rawText) {{
-                isSpeaking = true;
-                window.speechSynthesis.cancel();
-                
-                let fluidText = rawText
-                    .replace(/,\\s*Sir/gi, ' Sir')
-                    .replace(/,\\s*Master/gi, ' Master')
-                    .replace(/,/g, '')
-                    .replace(/\\s+/g, ' ');
-
-                const utterance = new SpeechSynthesisUtterance(fluidText);
-                utterance.rate = 0.95;
-                utterance.pitch = 1.0;
-
-                const voices = window.speechSynthesis.getVoices();
-                
-                const nativeVoice = voices.find(v => 
-                    v.lang === 'te-IN' || 
-                    v.lang === 'en-IN' || 
-                    v.name.includes('Telugu') || 
-                    v.name.includes('Rishi') || 
-                    v.name.includes('India') || 
-                    v.name.includes('Google te-in') ||
-                    v.name.includes('Google en-in')
-                );
-                
-                const fallbackVoice = voices.find(v => 
-                    v.lang.includes('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Daniel'))
-                );
-
-                if (nativeVoice) {{
-                    utterance.voice = nativeVoice;
-                }} else if (fallbackVoice) {{
-                    utterance.voice = fallbackVoice;
-                }}
-
-                utterance.onend = () => {{
-                    isSpeaking = false;
-                    document.getElementById('status-text').innerText = 'LISTENING...';
-                    if (continuousMode) {{
-                        setTimeout(() => {{ try {{ recognition.start(); }} catch(e){{}} }}, 300);
-                    }}
-                }};
-
-                window.speechSynthesis.speak(utterance);
             }}
         </script>
     </body>
@@ -526,13 +573,12 @@ async def upload_pdf(file: UploadFile = File(...)):
     pdf_text = extract_text_from_pdf(file_bytes)
     
     if not pdf_text:
-        return {"status": "error", "message": "Could not extract text from document Sir."}
+        return {"status": "error", "message": "Could not read document text Sir."}
 
-    # Store full document text summary into Supabase Memory
     truncated_summary = pdf_text[:1200].replace("\n", " ")
     save_fact_to_memory("document", f"PDF '{file.filename}': {truncated_summary}")
     
-    reply = f"Document {file.filename} processed and indexed into permanent memory Sir."
+    reply = f"I have read and saved {file.filename} into memory Sir."
     return {"status": "success", "message": reply}
 
 @app.post("/telegram")
