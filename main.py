@@ -32,20 +32,19 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-MACRODROID_DEVICE_ID = os.getenv("MACRODROID_DEVICE_ID")  # Phone automation ID
 
 ASSISTANT_NAME = "ARIA"
 
 ARIA_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, an autonomous, high-IQ personal neural AI assistant inspired by J.A.R.V.I.S.
 CONVERSATIONAL DIRECTIVES:
-- Speak in a composed, warm, and natural voice. Address the user naturally as 'Sir' without inserting micro-pauses or commas before the title.
+- Speak/type in a composed, warm, and natural voice. Address the user naturally as 'Sir'.
 - DYNAMIC LANGUAGE SWITCHING:
   * Respond fluently in English or Tenglish (Telugu transliterated using English/Latin script).
   * Keep replies completely natural, expressive, and conversational.
-- AUTONOMOUS & DEVICE CONTROL PROTOCOL:
-  * Execute background actions (opening phone/laptop apps, sending messages, weather checks, web searches, memory saves) quietly and report only the final outcome in 1 concise sentence.
-  * For destructive or security-sensitive tasks (purging tables, deleting databases), request explicit voice confirmation first.
-- Keep spoken responses sharp, articulate, and direct (1 sentence max)."""
+- AUTONOMOUS TASK EXECUTION:
+  * Execute background actions (web searches, memory categorizations, PDF indexing, or data deletions) quietly and report only the final outcome in 1 concise sentence.
+  * For destructive tasks (purging databases), request explicit voice/text confirmation first.
+- Keep responses sharp, articulate, and direct (1-2 sentences max)."""
 
 # Initialize SDK Clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -56,36 +55,9 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
-CONNECTED_BRIDGES = set()  # Active laptop/device bridge agent connections
 
 # -------------------------------------------------------------
-# MOBILE & LAPTOP BRIDGE AGENT MESSAGING
-# -------------------------------------------------------------
-async def trigger_phone_webhook(action_type: str, params: dict):
-    """Sends background webhook signal directly to MacroDroid on Android."""
-    if not MACRODROID_DEVICE_ID:
-        return
-    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-    url = f"https://trigger.macrodroid.com/{MACRODROID_DEVICE_ID}/{action_type}?{query_string}"
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.get(url, timeout=3.0)
-    except Exception as e:
-        print(f"[MacroDroid Webhook Warning]: {e}")
-
-async def broadcast_device_command(payload: dict):
-    """Sends action signals to connected Laptop bridge agents."""
-    disconnected = set()
-    for bridge in CONNECTED_BRIDGES:
-        try:
-            await bridge.send_json(payload)
-        except Exception:
-            disconnected.add(bridge)
-    for b in disconnected:
-        CONNECTED_BRIDGES.remove(b)
-
-# -------------------------------------------------------------
-# DYNAMIC DATABASE & PERMANENT MEMORY VAULT
+# UNIFIED DATABASE & PERMANENT MEMORY VAULT
 # -------------------------------------------------------------
 def get_stored_user_voice() -> str:
     if supabase:
@@ -93,8 +65,7 @@ def get_stored_user_voice() -> str:
             res = supabase.table("personal_memory").select("fact").eq("category", "user_voice_preference").execute()
             if res.data and len(res.data) > 0:
                 return res.data[0]["fact"].strip()
-        except Exception as e:
-            print(f"[Supabase Voice Read Error]: {e}")
+        except Exception: pass
     return "en-GB-RyanNeural"
 
 def save_stored_user_voice(voice_short_name: str):
@@ -105,8 +76,7 @@ def save_stored_user_voice(voice_short_name: str):
                 "category": "user_voice_preference",
                 "fact": voice_short_name
             }).execute()
-        except Exception as e:
-            print(f"[Supabase Voice Save Error]: {e}")
+        except Exception: pass
 
 def save_memory_fact(category: str, fact: str) -> str:
     if supabase:
@@ -116,8 +86,7 @@ def save_memory_fact(category: str, fact: str) -> str:
                 "fact": fact.strip()
             }).execute()
             return f"Data successfully stored under {category} Sir."
-        except Exception as e:
-            print(f"[Supabase Insert Error]: {e}")
+        except Exception: pass
     return "Memory vault unavailable Sir."
 
 def purge_memory_category(category: str) -> str:
@@ -125,8 +94,7 @@ def purge_memory_category(category: str) -> str:
         try:
             supabase.table("personal_memory").delete().eq("category", category.lower().strip()).execute()
             return f"All {category} records and files have been purged from memory Sir."
-        except Exception as e:
-            print(f"[Supabase Delete Error]: {e}")
+        except Exception: pass
     return "Unable to clear vault category Sir."
 
 def fetch_web_search(query: str) -> str:
@@ -162,7 +130,7 @@ def fetch_longterm_memory() -> str:
     return ""
 
 # -------------------------------------------------------------
-# AUTONOMOUS INTENT & DEVICE CONTROL ENGINE
+# UNIFIED AUTONOMOUS ENGINE (Shared by Voice WebApp & Telegram)
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -180,26 +148,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         else:
             return f"Awaiting your authorization Sir. Do you want to proceed with deleting all {pending['category']} data?"
 
-    # 2. DEVICE APP LAUNCH INTENTS (Laptop & Android Phone)
-    open_match = re.search(r'(?:open|launch|start|run)\s+([a-zA-Z0-9_\-\s]+)', cmd)
-    if open_match:
-        app_name = open_match.group(1).replace("app", "").strip()
-        if app_name and app_name not in ["the", "this", "it"]:
-            # Trigger Mobile MacroDroid Webhook
-            await trigger_phone_webhook("open_app", {"app_name": app_name})
-            # Trigger Laptop Agent WebSocket
-            await broadcast_device_command({"target": "all", "action": "open_app", "app_name": app_name})
-            return f"Opening {app_name} on your devices Sir."
-
-    # 3. MOBILE MESSAGING INTENTS
-    msg_match = re.search(r'(?:send|message|text)\s+(?:a\s+)?(?:whatsapp\s+)?(?:message\s+to\s+)?([a-zA-Z0-9_]+)\s+(?:saying\s+)?(.+)', cmd)
-    if msg_match:
-        recipient = msg_match.group(1)
-        message_body = msg_match.group(2)
-        await trigger_phone_webhook("send_message", {"recipient": recipient, "message": message_body})
-        return f"Sending message to {recipient} Sir."
-
-    # 4. SECURITY CHECKS (PURGE DATA)
+    # 2. SECURITY CHECKS (PURGE DATA)
     if any(k in cmd for k in ["delete exams", "clear exams", "delete my exams", "purge exams"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": "exams"}
         return "Purging the exam database is an irreversible action Sir. Do I have your authorization to proceed?"
@@ -211,7 +160,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
             PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_category", "category": target_cat}
             return f"Deleting all records for {target_cat} requires authorization Sir. Should I proceed?"
 
-    # 5. GENERAL FACTS AUTO-SAVE
+    # 3. GENERAL FACTS AUTO-SAVE
     if any(k in cmd for k in ["remember that", "save this", "store that", "my preference is", "note that"]):
         return save_memory_fact("general_facts", user_text)
 
@@ -219,9 +168,9 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         return save_memory_fact("exams", user_text)
 
     if any(k in cmd for k in ["change voice", "switch voice", "select voice", "voice catalog"]):
-        return "Opening the neural voice catalog Sir. Select your preferred voice."
+        return "Opening the neural voice catalog Sir. Select your preferred voice on the web interface."
 
-    # 6. WEB SEARCH INTENT
+    # 4. WEB SEARCH INTENT
     search_context = ""
     if any(kw in cmd for kw in ["search", "find", "who is", "latest", "news", "box office", "today"]):
         search_context = fetch_web_search(user_text)
@@ -253,7 +202,46 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     return "All systems nominal Sir."
 
 # -------------------------------------------------------------
-# EDGE-TTS NEURAL AUDIO SYNTHESIS ENGINE
+# TELEGRAM BOT WEBHOOK ENDPOINT
+# -------------------------------------------------------------
+@app.post("/telegram-webhook")
+async def telegram_webhook(req: Request):
+    """Processes text messages from Telegram and stores/reads from the same memory."""
+    if not TELEGRAM_TOKEN:
+        return {"status": "no token"}
+    
+    try:
+        data = await req.json()
+        message = data.get("message", {})
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "")
+
+        if chat_id and text:
+            # Generate response using unified memory core
+            reply_text = await process_autonomous_task(text, str(chat_id))
+
+            # Send answer back to user on Telegram
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": reply_text}
+                )
+    except Exception as e:
+        print(f"[Telegram Webhook Error]: {e}")
+
+    return {"status": "ok"}
+
+# Helper to automatically connect Telegram Webhook on startup
+@app.post("/set-telegram-webhook")
+async def set_telegram_webhook(req: Request):
+    data = await req.json()
+    webhook_url = data.get("url") + "/telegram-webhook"
+    async with httpx.AsyncClient() as client:
+        res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
+        return res.json()
+
+# -------------------------------------------------------------
+# SPEECH & PDF ENGINE
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> str:
     if not selected_voice:
@@ -283,7 +271,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception: return ""
 
 # -------------------------------------------------------------
-# API ROUTE FOR VOICES CATALOG & BRIDGES
+# API ROUTES & FRONTEND
 # -------------------------------------------------------------
 @app.get("/api/voices")
 async def get_voices_list():
@@ -313,20 +301,6 @@ async def set_voice_preference(req: Request):
     save_stored_user_voice(voice)
     return {"status": "success", "voice": voice}
 
-@app.websocket("/ws-bridge")
-async def websocket_bridge(websocket: WebSocket):
-    """WebSocket endpoint for Local Laptop Bridge Agents."""
-    await websocket.accept()
-    CONNECTED_BRIDGES.add(websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        CONNECTED_BRIDGES.remove(websocket)
-
-# -------------------------------------------------------------
-# FRONTEND WITH STABLE VOICE LOOP & PARTICLE HUD
-# -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
     return f"""
@@ -438,9 +412,7 @@ def serve_webapp():
     </head>
     <body>
         <canvas id="particleCanvas"></canvas>
-
         <button class="settings-btn" onclick="openVoiceModal()">⚙️</button>
-
         <div id="dropZone">Drop exam or document files here</div>
 
         <div class="ui-layer">
@@ -465,7 +437,6 @@ def serve_webapp():
         </div>
 
         <script>
-            /* PARTICLES ENGINE */
             const canvas = document.getElementById('particleCanvas');
             const ctx = canvas.getContext('2d');
             let particles = [];
@@ -504,27 +475,17 @@ def serve_webapp():
             }}
             render();
 
-            /* STABLE WEBSOCKET & VOICE RECOGNITION LOOP */
-            let ws;
-            let currentAudio = null;
-            let userLocation = null;
-            let allVoices = [];
-            let activeVoice = "";
-            let isPlayingAudio = false;
-
+            let ws, currentAudio = null, userLocation = null, allVoices = [], activeVoice = "", isPlayingAudio = false;
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
             if ("geolocation" in navigator) {{
-                navigator.geolocation.getCurrentPosition((pos) => {{
-                    userLocation = pos.coords.latitude + "," + pos.coords.longitude;
-                }});
+                navigator.geolocation.getCurrentPosition((pos) => {{ userLocation = pos.coords.latitude + "," + pos.coords.longitude; }});
             }}
 
             function initWebSocket() {{
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${{protocol}}//${{window.location.host}}/ws`);
-
                 ws.onmessage = (event) => {{
                     const payload = JSON.parse(event.data);
                     playNeuralAudio(payload.audio);
@@ -534,9 +495,7 @@ def serve_webapp():
 
             function startListeningSafely() {{
                 if (!recognition || isPlayingAudio) return;
-                try {{
-                    recognition.start();
-                }} catch (e) {{}}
+                try {{ recognition.start(); }} catch (e) {{}}
             }}
 
             if (SpeechRecognition) {{
@@ -548,107 +507,56 @@ def serve_webapp():
                 recognition.onresult = (event) => {{
                     const speech = event.results[event.results.length - 1][0].transcript.trim();
                     if (!speech) return;
-
                     stopAudio();
-
                     if (ws && ws.readyState === WebSocket.OPEN) {{
                         ws.send(JSON.stringify({{ prompt: speech, location: userLocation, voice: activeVoice }}));
                     }}
                 }};
 
-                recognition.onend = () => {{
-                    if (!isPlayingAudio) {{
-                        setTimeout(startListeningSafely, 200);
-                    }}
-                }};
-
-                recognition.onerror = (event) => {{
-                    if (event.error !== 'aborted' && !isPlayingAudio) {{
-                        setTimeout(startListeningSafely, 300);
-                    }}
-                }};
-
-                window.addEventListener('load', () => {{
-                    startListeningSafely();
-                }});
+                recognition.onend = () => {{ if (!isPlayingAudio) setTimeout(startListeningSafely, 200); }};
+                recognition.onerror = (event) => {{ if (event.error !== 'aborted' && !isPlayingAudio) setTimeout(startListeningSafely, 300); }};
+                window.addEventListener('load', () => {{ startListeningSafely(); }});
             }}
 
             function stopAudio() {{
-                if (currentAudio) {{
-                    currentAudio.pause();
-                    currentAudio.currentTime = 0;
-                    currentAudio = null;
-                }}
+                if (currentAudio) {{ currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }}
                 isPlayingAudio = false;
                 document.getElementById('hudOrb').classList.remove('speaking');
             }}
 
-            function toggleMic() {{
-                stopAudio();
-                startListeningSafely();
-            }}
+            function toggleMic() {{ stopAudio(); startListeningSafely(); }}
 
             function playNeuralAudio(b64Data) {{
                 stopAudio();
-
-                if (recognition) {{
-                    try {{ recognition.stop(); }} catch(e) {{}}
-                }}
-
+                if (recognition) {{ try {{ recognition.stop(); }} catch(e) {{}} }}
                 isPlayingAudio = true;
                 currentAudio = new Audio("data:audio/mp3;base64," + b64Data);
                 document.getElementById('hudOrb').classList.add('speaking');
-
-                currentAudio.onended = () => {{
-                    isPlayingAudio = false;
-                    document.getElementById('hudOrb').classList.remove('speaking');
-                    startListeningSafely();
-                }};
-
-                currentAudio.onerror = () => {{
-                    isPlayingAudio = false;
-                    document.getElementById('hudOrb').classList.remove('speaking');
-                    startListeningSafely();
-                }};
-
-                currentAudio.play().catch(err => {{
-                    isPlayingAudio = false;
-                    document.getElementById('hudOrb').classList.remove('speaking');
-                    startListeningSafely();
-                }});
+                currentAudio.onended = () => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }};
+                currentAudio.onerror = () => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }};
+                currentAudio.play().catch(err => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }});
             }}
 
-            /* VOICE CATALOG MANAGEMENT */
             async function openVoiceModal() {{
                 document.getElementById('voiceModal').classList.add('active');
                 if (allVoices.length === 0) {{
                     const res = await fetch('/api/voices');
                     const data = await res.json();
-                    allVoices = data.voices;
-                    activeVoice = data.activeVoice;
+                    allVoices = data.voices; activeVoice = data.activeVoice;
                 }}
                 renderVoices(allVoices);
             }}
 
-            function closeVoiceModal() {{
-                document.getElementById('voiceModal').classList.remove('active');
-            }}
+            function closeVoiceModal() {{ document.getElementById('voiceModal').classList.remove('active'); }}
 
             function renderVoices(voices) {{
                 const listContainer = document.getElementById('voiceList');
                 listContainer.innerHTML = "";
-
                 voices.slice(0, 100).forEach(v => {{
                     const isSelected = v.shortName === activeVoice;
                     const item = document.createElement('div');
                     item.className = `voice-item ${{isSelected ? 'selected' : ''}}`;
-                    item.innerHTML = `
-                        <div>
-                            <div style="font-weight: 600; color: #e2e8f0;">${{v.friendlyName}}</div>
-                            <div style="font-size: 0.75rem; color: #64748b;">${{v.shortName}}</div>
-                        </div>
-                        <span style="font-size: 0.8rem; color: #38bdf8;">${{v.gender}}</span>
-                    `;
+                    item.innerHTML = `<div><div style="font-weight: 600; color: #e2e8f0;">${{v.friendlyName}}</div><div style="font-size: 0.75rem; color: #64748b;">${{v.shortName}}</div></div><span style="font-size: 0.8rem; color: #38bdf8;">${{v.gender}}</span>`;
                     item.onclick = () => selectVoice(v.shortName);
                     listContainer.appendChild(item);
                 }});
@@ -656,29 +564,20 @@ def serve_webapp():
 
             function filterVoices() {{
                 const q = document.getElementById('voiceSearch').value.toLowerCase();
-                const filtered = allVoices.filter(v => 
-                    v.shortName.toLowerCase().includes(q) || 
-                    v.locale.toLowerCase().includes(q) ||
-                    v.friendlyName.toLowerCase().includes(q)
-                );
+                const filtered = allVoices.filter(v => v.shortName.toLowerCase().includes(q) || v.locale.toLowerCase().includes(q) || v.friendlyName.toLowerCase().includes(q));
                 renderVoices(filtered);
             }}
 
             async function selectVoice(shortName) {{
                 activeVoice = shortName;
                 renderVoices(allVoices);
-                await fetch('/api/set-voice', {{
-                    method: 'POST',
-                    headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{ voice: shortName }})
-                }});
+                await fetch('/api/set-voice', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ voice: shortName }}) }});
                 closeVoiceModal();
                 if (ws && ws.readyState === WebSocket.OPEN) {{
                     ws.send(JSON.stringify({{ prompt: "Switched voice to " + shortName, location: userLocation, voice: activeVoice }}));
                 }}
             }}
 
-            /* DIRECT DRAG AND DROP FILE HANDLER */
             const dropZone = document.getElementById('dropZone');
             window.addEventListener('dragover', (e) => {{ e.preventDefault(); dropZone.classList.add('active'); }});
             window.addEventListener('dragleave', (e) => {{ if (e.clientX <= 0 || e.clientY <= 0) dropZone.classList.remove('active'); }});
