@@ -144,7 +144,7 @@ async def sync_ram_cache():
 # 3. DIRECT FILE DISPATCH & AUTONOMOUS TOOLS
 # -------------------------------------------------------------
 async def send_file_from_vault(file_query: str, chat_id: str) -> str:
-    """Finds matching document in MongoDB and sends binary file directly via Telegram."""
+    """Dispatches and uploads binary PDF file directly via Telegram."""
     if mongo_media_col is None:
         return "Vault database is currently offline, Sir."
 
@@ -184,7 +184,7 @@ async def query_document_vault(doc_keyword: str, specific_question: str) -> str:
     try:
         q_regex = re.compile(doc_keyword.strip(), re.IGNORECASE) if doc_keyword else None
         filter_clause = {"$or": [{"file_name": q_regex}, {"caption": q_regex}]} if q_regex else {}
-        docs = await mongo_media_col.find(filter_clause).sort("_id", -1).to_list(length=2)
+        docs = await mongo_media_col.find(filter_clause).sort("_id", -1).to_list(length=3)
 
         if not docs:
             return f"No document matching '{doc_keyword}' was found in your vault, Sir."
@@ -192,7 +192,7 @@ async def query_document_vault(doc_keyword: str, specific_question: str) -> str:
         results = []
         for d in docs:
             content = d.get("caption", "").strip()
-            results.append(f"DOCUMENT NAME: '{d.get('file_name')}'\nEXTRACTED TEXT:\n{content[:4000]}")
+            results.append(f"DOCUMENT NAME: '{d.get('file_name')}'\nEXTRACTED TEXT:\n{content[:5000]}")
 
         return "\n\n====================\n\n".join(results)
     except Exception as e:
@@ -379,11 +379,11 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_file_from_vault",
-            "description": "Dispatches and sends the actual binary PDF or file to Telegram ONLY when the user explicitly asks to receive, download, or get a PDF file.",
+            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram ONLY when the user explicitly requests to send, download, or get a PDF file.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_query": {"type": "string", "description": "Document keyword e.g. 'aadhar', 'resume', 'certificate', 'cs50'"}
+                    "file_query": {"type": "string", "description": "Document name e.g. 'aadhar', 'resume', 'certificate'"}
                 },
                 "required": ["file_query"]
             }
@@ -393,12 +393,12 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_document_vault",
-            "description": "Reads text content inside stored PDFs to answer questions about specific points inside a document (e.g. projects in resume, grades, or details).",
+            "description": "Reads text content inside uploaded PDFs to answer specific questions or extract details from stored documents.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "doc_keyword": {"type": "string", "description": "Keyword identifying which document to read e.g. 'resume', 'aadhar', 'proposal'"},
-                    "specific_question": {"type": "string", "description": "The exact question or point the user is asking about"}
+                    "doc_keyword": {"type": "string", "description": "Keyword identifying which document to search e.g. 'aadhar', 'resume', 'proposal'"},
+                    "specific_question": {"type": "string", "description": "The exact detail or question asked about the document content"}
                 },
                 "required": ["doc_keyword", "specific_question"]
             }
@@ -447,7 +447,7 @@ GROQ_TOOLS = [
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # Simple greeting bypass: Prevents accidental tool re-triggers on 'hello' or 'hi'
+    # Simple conversational bypass
     if cmd in ["hello", "hi", "hey", "hola", "start", "/start"]:
         return "At your service, Sir. How may I assist you today?"
 
@@ -483,15 +483,15 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {history_context}
 {search_context}
 
-DYNAMIC DIRECTIVES & PRIVACY RULES:
-1. GREETINGS & CONVERSATION: If the user says 'hello' or simple greetings, respond directly and naturally without calling tools.
-2. SENSITIVE IDENTIFIER PRIVACY (AADHAAR / RRN / MYNUMBER):
-   * NEVER print out the numeric digits of an Aadhaar card, RRN, or MyNumber in chat text under any circumstances.
-   * If asked for an Aadhaar number, state: "For security and privacy protocols, I cannot print government ID numbers directly in text. However, I can dispatch your official Aadhaar PDF directly to your Telegram chat." Then offer or call 'send_file_from_vault' with file_query='aadhar'.
-3. FILE DISPATCH vs SPECIFIC TEXT EXTRACTION:
-   * If the user wants the PDF document file itself, call 'send_file_from_vault'.
-   * If the user asks a specific question about content INSIDE a PDF (e.g., 'What is my CGPA in my transcript?', 'Extract project details from my resume'), call 'query_document_vault'.
-4. ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Keep responses concise (1-2 sentences max), articulate, and sharp."""
+CRITICAL ROUTING & PRIVACY DIRECTIVES:
+1. SENSITIVE GOVERNMENT ID REDACTION RULE (AADHAAR / RRN / MYNUMBER):
+   * NEVER print numeric digits of an Aadhaar card, RRN, or MyNumber in text output under any circumstances.
+   * If the user explicitly asks for their Aadhaar number or digits in text, call 'query_document_vault' to inspect the document, then answer:
+     "Per safety and privacy protocols, I cannot display raw government ID digits in text chat. However, I have verified your Aadhaar document is in the vault and can dispatch the PDF directly to your Telegram." (and offer or send the file via 'send_file_from_vault').
+2. ROUTING DISTINCTION:
+   * Call 'send_file_from_vault' ONLY when the user explicitly asks to receive, download, or dispatch a PDF/document file.
+   * Call 'query_document_vault' when the user asks a question about information INSIDE a document.
+3. ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Keep responses concise (1-2 sentences max), articulate, and sharp."""
 
     reply_text = ""
 
@@ -526,15 +526,15 @@ DYNAMIC DIRECTIVES & PRIVACY RULES:
                         specific_q = fn_args.get("specific_question", user_text)
                         retrieved_doc_text = await query_document_vault(doc_keyword, specific_q)
 
-                        qa_prompt = f"""The user asked: '{user_text}'
+                        qa_prompt = f"""User Request: '{user_text}'
 
-RETRIEVED DOCUMENT CONTENT:
+DOCUMENT TEXT FROM VAULT:
 {retrieved_doc_text}
 
-INSTRUCTIONS:
-Extract and answer the specific point requested from the document content above concisely.
-Rule: Do not output numeric digits of sensitive government IDs like Aadhaar.
-Address the user as Sir."""
+MANDATORY INSTRUCTIONS:
+- Answer the user's specific request using the document text above.
+- STRICT PRIVACY RULE: Do NOT output numeric digits of sensitive government IDs (Aadhaar, RRN, MyNumber). If asked for Aadhaar digits, explain privacy redaction and offer to send the PDF file.
+- Address the user as Sir or Master."""
 
                         qa_comp = groq_client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
@@ -640,7 +640,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. High-Precision Engine]: Online and Synced.")
+    print("[J.A.R.V.I.S. Precision Routing Core]: Online and Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -676,7 +676,7 @@ def health_check():
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"<h1>ARIA High-Precision Engine Online</h1>"
+    return f"<h1>ARIA Precision Routing Core Online</h1>"
 
 # -------------------------------------------------------------
 # 8. WEBSOCKET STREAMING & UPLOAD ROUTE
