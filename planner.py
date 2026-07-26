@@ -2,8 +2,7 @@ import json
 import re
 
 async def action_planner(user_message: str, session_context: str, tool_descriptions: dict, executed_tools: list, llm_router) -> dict:
-    # Loop-breaking safeguard: if tools have already run and match previous iterations, halt execution to prevent token waste
-    if len(executed_tools) >= 2:
+    if len(executed_tools) >= 3:
         print("[Planner Safeguard]: Maximum tool iterations reached. Stopping loop.")
         return {"goal": "complete", "action": "retrieve", "tools": []}
 
@@ -11,9 +10,9 @@ async def action_planner(user_message: str, session_context: str, tool_descripti
     already_run = json.dumps(executed_tools)
 
     prompt = f"""
-You are an autonomous action planner for ARIA, a J.A.R.V.I.S.-style assistant.
+You are an advanced reflective action planner for ARIA, an autonomous AI operating system.
 
-Available Registered Tools & Capabilities:
+Available Registered Tools & Specialist Agents:
 {tools_json}
 
 Tools already executed in previous steps:
@@ -24,11 +23,12 @@ Recent Session Context:
 
 User Request: "{user_message}"
 
-Analyze the user request and determine the primary action and required tools. 
+Reflect on the user request, evaluate if previous tools yielded enough information, and determine the next optimal action and required tools/agents.
 Action types allowed: retrieve, save, delete, dispatch, analyze, schedule, search.
 
 Return ONLY a valid JSON object:
 {{
+  "reflection": "brief analysis of current state and missing data",
   "goal": "short description of objective",
   "action": "retrieve|save|delete|dispatch|analyze|schedule|search",
   "tools": ["memory", "documents", "web", "media", "schedule"]
@@ -36,17 +36,18 @@ Return ONLY a valid JSON object:
 
 If no further tools are needed, return an empty list for tools:
 {{
+  "reflection": "All required data acquired.",
   "goal": "complete",
   "action": "retrieve",
   "tools": []
 }}
 """
     messages = [
-        {"role": "system", "content": "You are a precise JSON task planner. Output valid JSON only."},
+        {"role": "system", "content": "You are a precise reflective JSON task planner. Output valid JSON only."},
         {"role": "user", "content": prompt}
     ]
     try:
-        raw = await llm_router.chat(messages, temperature=0.1, max_tokens=200)
+        raw = await llm_router.chat(messages, temperature=0.1, max_tokens=250)
         cleaned_raw = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
         
         if not cleaned_raw.startswith("{"):
