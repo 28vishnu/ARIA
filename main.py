@@ -246,8 +246,13 @@ class ProfileHandler(BaseHandler):
 
 class BatchUploadHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
-        phrases = ["send all my documents", "upload my documents", "here are my files", "i'll send my documents", "batch upload"]
-        return any(p in text.lower() for p in phrases)
+        phrases = [
+            "send all my documents", "upload my documents", "here are my files", 
+            "i'll send my documents", "batch upload", "read these", "save these", 
+            "store this", "remember these", "archive these", "index these files", "these are my"
+        ]
+        lower = text.lower()
+        return any(p in lower for p in phrases)
     async def handle(self, text: str, session_id: str, app_state) -> str:
         return (
             "Certainly, Sir.\n\n"
@@ -272,7 +277,7 @@ class GreetingHandler(BaseHandler):
 class TimeHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         lower = text.lower()
-        return any(k in lower for k in ["what time is it", "current time", "time now", "what's the time", "date today", "what day is it", "today's date"])
+        return any(k in lower for k in ["what time is it", "current time", "time now", "what's the time", "date today", "what day is it", "today's date", "today date"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         lower = text.lower()
@@ -318,7 +323,8 @@ class WeatherHandler(BaseHandler):
 
 class ScheduleHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
-        return any(kw in text.lower() for kw in ["schedule", "task", "reminder", "today"])
+        # Excludes generic word 'today' to prevent conflict with TimeHandler
+        return any(kw in text.lower() for kw in ["schedule", "task", "reminder", "agenda", "meeting"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
         res = await app_state.tool_manager.execute_tool("schedule", text, chat_id=session_id)
         if res.get("success"):
@@ -333,6 +339,7 @@ class MediaHandler(BaseHandler):
         res = await app_state.tool_manager.execute_tool("media", text, chat_id=session_id)
         return f"{res.get('content')}"
 
+# Corrected handler precedence (TimeHandler ordered strictly before ScheduleHandler)
 DETERMINISTIC_ROUTER = [
     CommandHandler(),
     IdentityHandler(),
@@ -340,14 +347,14 @@ DETERMINISTIC_ROUTER = [
     BatchUploadHandler(),
     GreetingHandler(),
     TimeHandler(),
+    ScheduleHandler(),
     LocationHandler(),
     CalculatorHandler(),
     WeatherHandler(),
-    ScheduleHandler(),
     MediaHandler()
 ]
 
-# EXACTLY ONE FastAPI application instance
+# Single application instance
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
@@ -429,7 +436,6 @@ async def startup_event():
     # Idempotent Knowledge Graph Seeding
     if app.state.brain is not None:
         try:
-            # Check if concepts are already present or use idempotent link logic if available
             app.state.brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
             app.state.brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
             app.state.brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
