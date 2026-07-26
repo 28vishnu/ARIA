@@ -4,9 +4,8 @@ from datetime import datetime, timezone
 import random
 
 class BackgroundWorkers:
-    def __init__(self, mongo_db, profile_engine, llm_router, tavily_client):
+    def __init__(self, mongo_db, llm_router, tavily_client):
         self.db = mongo_db
-        self.profile_engine = profile_engine
         self.llm_router = llm_router
         self.tavily = tavily_client
         self.chats_col = mongo_db["chat_history"] if mongo_db is not None else None
@@ -42,12 +41,23 @@ class BackgroundWorkers:
             print("[Morning Worker]: User already active today. Skipping briefing.")
             return
 
-        # 1. Fetch dynamic profile, location, routine, and goals
-        profile = await self.profile_engine.get_profile()
-        user_name = profile.get("name", "Sir")
-        location = profile.get("location", "Visakhapatnam")
-        routine = profile.get("routine", {})
-        active_project = profile.get("active_project", {"name": "ARIA AI", "progress": "In Progress"})
+        # 1. Fetch dynamic profile, location, routine, and goals from DB if available
+        user_name = "Saketh"
+        location = "Sujathanagar, Visakhapatnam"
+        routine = {"wake": "07:00 AM", "college_start": "09:00 AM"}
+        active_project = {"name": "ARIA AI", "progress": "85%", "next_task": "Document Intelligence & Knowledge Graph"}
+        
+        try:
+            profile_col = self.db["user_profile"] if self.db is not None else None
+            if profile_col:
+                profile = await profile_col.find_one({"_id": "master_profile"})
+                if profile:
+                    user_name = profile.get("name", user_name)
+                    location = profile.get("location", location)
+                    routine = profile.get("routine", routine)
+                    active_project = profile.get("active_project", active_project)
+        except Exception as e:
+            print(f"[Morning Worker Profile Fetch Error]: {e}")
 
         # 2. Fetch live weather for the saved location
         weather_info = "Weather data unavailable."
@@ -99,14 +109,21 @@ class BackgroundWorkers:
             topics = [c.get("user_msg", "")[:30] for c in today_chats[:3]]
             interaction_summary += f" Key topics: {', '.join(topics)}."
 
-        profile = await self.profile_engine.get_profile()
-        routine = profile.get("routine", {})
+        sleep_time = "11:30 PM"
+        try:
+            profile_col = self.db["user_profile"] if self.db is not None else None
+            if profile_col:
+                profile = await profile_col.find_one({"_id": "master_profile"})
+                if profile:
+                    sleep_time = profile.get("routine", {}).get("sleep", sleep_time)
+        except Exception:
+            pass
 
         summary_msg = (
             f"Good evening, Sir. Daily operational wrap-up:\n\n"
             f"🌙 **Night Summary**:\n"
             f"• Activity Log: {interaction_summary}\n"
-            f"• Sleep Schedule: Recommended rest by {routine.get('sleep', '11:30 PM')}.\n"
+            f"• Sleep Schedule: Recommended rest by {sleep_time}.\n"
             f"• System Status: All background workers and vector indices synchronized.\n\n"
             f"Rest well, Sir. Systems remain active in background monitoring."
         )
