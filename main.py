@@ -7,13 +7,8 @@ import asyncio
 import certifi
 import traceback
 from datetime import datetime, timezone, timedelta
-from io import BytesIO
-from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pypdf import PdfReader
-from docx import Document
-import openpyxl
-import edge_tts
 
 # Modular Imports
 from planner import action_planner
@@ -26,17 +21,18 @@ from brain import AriaBrain
 # Provider SDKs
 from groq import Groq
 from google import genai
-from google.genai import types
 from tavily import TavilyClient
 import motor.motor_asyncio
 import chromadb
 
 # Scheduler SDKs
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
 
 app = FastAPI()
 
+# -------------------------------------------------------------
+# MULTI-PROVIDER TIERED AI ROUTER
+# -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         raise NotImplementedError
@@ -56,6 +52,42 @@ class GroqProvider(LLMProvider):
             )
             return res.choices[0].message.content.strip()
         return await asyncio.to_thread(_exec)
+
+class OpenRouterProvider(LLMProvider):
+    def __init__(self, api_key: str):
+        self.client_key = api_key
+
+    async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
+        if not self.client_key: raise Exception("OpenRouter unconfigured")
+        async def _exec():
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
+                    json={"model": "meta-llama/llama-3-70b-instruct", "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
+                    timeout=15.0
+                )
+                data = res.json()
+                return data["choices"][0]["message"]["content"].strip()
+        return await _exec()
+
+class MistralProvider(LLMProvider):
+    def __init__(self, api_key: str):
+        self.client_key = api_key
+
+    async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
+        if not self.client_key: raise Exception("Mistral unconfigured")
+        async def _exec():
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
+                    json={"model": "mistral-small-latest", "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
+                    timeout=15.0
+                )
+                data = res.json()
+                return data["choices"][0]["message"]["content"].strip()
+        return await _exec()
 
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str):
@@ -77,6 +109,8 @@ class FallbackRouter(LLMProvider):
     def __init__(self):
         self.providers = [
             GroqProvider(os.getenv("GROQ_API_KEY")),
+            OpenRouterProvider(os.getenv("OPENROUTER_API_KEY")),
+            MistralProvider(os.getenv("MISTRAL_API_KEY")),
             GeminiProvider(os.getenv("GEMINI_API_KEY"))
         ]
 
@@ -87,10 +121,13 @@ class FallbackRouter(LLMProvider):
             except Exception as e:
                 print(f"[Provider Fallback Triggered]: {e}")
                 continue
-        return "All neural pathways are temporarily offline, Sir. Please check API allowances."
+        return "All neural pathways across Groq, OpenRouter, Mistral, and Gemini are currently exhausted, Sir."
 
 llm_router = FallbackRouter()
 
+# -------------------------------------------------------------
+# CLIENT INITIALIZATION & GETTERS
+# -------------------------------------------------------------
 _tavily_client = None
 _mongo_client = None
 _chroma_client = None
@@ -148,6 +185,9 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
+# -------------------------------------------------------------
+# TASK PROCESSING PIPELINE
+# -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower().strip()
@@ -157,7 +197,7 @@ async def process_task(user_text: str, session_id: str) -> str:
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
     tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
 
-    # 1. REFLECTION ENGINE RUNS FIRST (Catches feedback/corrections before bypasses)
+    # 1. REFLECTION ENGINE RUNS FIRST
     reflection_eng = ReflectionEngine(chats_col, media_col)
     correction = await reflection_eng.evaluate_feedback(user_text, session_id)
     if correction and correction.get("needs_retry"):
@@ -165,7 +205,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
         return f"{correction['explanation']}\n\n{res.get('content', '')}"
 
-    # 2. ZERO-TOKEN INTENT BYPASS (Pleasantries)
+    # 2. ZERO-TOKEN INTENT BYPASS
     zero_token_responses = {
         "hello": "Greetings, Sir. How may I assist you today?",
         "hi": "Hello, Sir. ARIA systems online.",
@@ -182,7 +222,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         print("[INTENT BYPASS] Zero-Token response triggered.")
         return zero_token_responses[lower_txt]
 
-    # 3. STRICT INTENT DETECTION FOR MEDIA (Avoids over-broad keyword matching)
+    # 3. STRICT INTENT DETECTION FOR MEDIA
     media_intent_patterns = ["resume", "cv", "portfolio", "my file", "send document", "download pdf"]
     if any(pattern in lower_txt for pattern in media_intent_patterns):
         print("[INTENT BYPASS] Strict Media Tool trigger.")
@@ -238,7 +278,7 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # 5. ANTI-HALLUCINATION GUARD: Only store in Brain if verified or derived from document/tool sources
+    # 5. ANTI-HALLUCINATION GUARD: Only store if verified by tools
     has_valid_source = any(res.get("success") for res in structured_results.values())
     if has_valid_source:
         is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
@@ -257,7 +297,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         )
         print("[LEARNING ENGINE]: Verified response successfully stored in Brain.")
     else:
-        print("[LEARNING ENGINE]: Skipping brain storage — response lacked verified tool backing to prevent hallucination caching.")
+        print("[LEARNING ENGINE]: Skipping brain storage — response lacked verified tool backing.")
 
     if chats_col is not None:
         async def save_chat():
