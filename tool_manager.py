@@ -60,15 +60,10 @@ class SearchTool(BaseTool):
                 raw_results = res.get("results", [])
                 results_count = len(raw_results)
                 
-                # Dynamic Confidence Scoring based on result density and depth
-                if results_count >= 3:
-                    confidence = 0.92
-                elif results_count == 2:
-                    confidence = 0.85
-                elif results_count == 1:
-                    confidence = 0.70
-                else:
-                    confidence = 0.40
+                if results_count >= 3: confidence = 0.92
+                elif results_count == 2: confidence = 0.85
+                elif results_count == 1: confidence = 0.70
+                else: confidence = 0.40
 
                 results = [f"- {item['title']}: {item['content'][:200]}" for item in raw_results]
                 content = "\n".join(results) if results else "No relevant web intelligence found."
@@ -90,37 +85,39 @@ class MediaVaultTool(BaseTool):
         try:
             clean_q = query.lower().strip()
             target = None
+            term_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
 
             # -------------------------------------------------------------
-            # STEP 1: PRIORITIZED SEARCH ORDER
+            # STEP 1: FORGIVING UNIFIED SEARCH QUERY (Aliases + Filename + Caption)
             # -------------------------------------------------------------
             
-            # 1. Alias Matching (Array or Direct String Match)
-            if any(k in clean_q for k in ["resume", "cv", "portfolio"]):
-                target = await media_col.find_one({"aliases": {"$in": ["resume", "cv", "portfolio"]}})
-            elif any(k in clean_q for k in ["aadhar", "aadhaar"]):
-                target = await media_col.find_one({"aliases": {"$in": ["aadhar", "aadhaar"]}})
-            elif "pan" in clean_q:
-                target = await media_col.find_one({"aliases": "pan"})
-            elif any(k in clean_q for k in ["certificate", "memo"]):
-                target = await media_col.find_one({"aliases": {"$in": ["certificate", "marks memo", "memo"]}})
+            # Extract specific search tokens if present
+            search_terms = []
+            if any(k in clean_q for k in ["resume", "cv", "portfolio"]): search_terms.extend(["resume", "cv", "portfolio"])
+            elif any(k in clean_q for k in ["aadhar", "aadhaar"]): search_terms.extend(["aadhar", "aadhaar"])
+            elif "pan" in clean_q: search_terms.append("pan")
+            elif any(k in clean_q for k in ["certificate", "memo"]): search_terms.extend(["certificate", "memo"])
+            else: search_terms.append(clean_q)
 
-            # 2. Exact Filename Match
-            if not target:
-                target = await media_col.find_one({"file_name": {"$regex": f"^{re.escape(clean_q)}$", "$options": "i"}})
+            # Unified $or query checking aliases, file names, captions, and tags simultaneously
+            unified_filter = {
+                "$or": [
+                    {"aliases": {"$in": search_terms}},
+                    {"file_name": term_regex},
+                    {"caption": term_regex},
+                    {"tags": term_regex}
+                ]
+            }
 
-            # 3. Caption Match
-            if not target:
-                target = await media_col.find_one({"caption": {"$regex": re.escape(clean_q), "$options": "i"}})
+            target = await media_col.find_one(unified_filter)
 
-            # 4. Regex / Keyword Partial Match
+            # Fallback: Broad substring match on filename if exact unified match fails
             if not target:
-                q_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
-                target = await media_col.find_one({"$or": [{"file_name": q_regex}, {"caption": q_regex}, {"tags": q_regex}]})
+                target = await media_col.find_one({"file_name": {"$regex": re.escape(clean_q), "$options": "i"}})
 
-            # 5. Clarification Fallback (Never guess randomly)
+            # Clarification Fallback if still not found
             if not target:
-                print("[TOOL - MEDIA] No matching document found via prioritized search order.")
+                print("[TOOL - MEDIA] No matching document found via unified search order.")
                 cursor = media_col.find({}, {"file_name": 1}).limit(5)
                 available_files = await cursor.to_list(length=5)
                 
@@ -161,7 +158,7 @@ class MediaVaultTool(BaseTool):
                 if not telegram_resp.get("ok"):
                     raise Exception(f"Telegram rejected document transmission: {telegram_resp}")
 
-            # Update Extended Metadata Statistics (send_count, last_sent)
+            # Update Extended Metadata Statistics
             try:
                 await media_col.update_one(
                     {"_id": target["_id"]},
