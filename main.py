@@ -1,163 +1,79 @@
 import os
-import json
-import httpx
-import base64
-import re
 import asyncio
-import certifi
-import traceback
-from datetime import datetime, timezone, timedelta
-from io import BytesIO
-from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pypdf import PdfReader
-from docx import Document
-import openpyxl
-import edge_tts
-
-# Modular Imports
-from planner import action_planner
-from tool_manager import ToolManager
-from reasoner import reason
-from conversation_manager import ConversationManager
-
-# Provider SDKs
-from groq import Groq
-from google import genai
-from google.genai import types
-from tavily import TavilyClient
-import motor.motor_asyncio
-import chromadb
-
-# Scheduler SDKs
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
+import httpx
 
 app = FastAPI()
 
-# Lazy-loaded Globals
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MONGODB_URI = os.getenv("MONGODB_URI")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+# -------------------------------------------------------------
+# LLM PROVIDER ABSTRACTION LAYER (AUTOMATIC FALLBACK)
+# -------------------------------------------------------------
+class LLMProvider:
+    async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
+        raise NotImplementedError
 
-USER_FULL_NAME = "N. Vishnu Saketh"
-PENDING_SECURITY_ACTIONS = {}
+class GroqProvider(LLMProvider):
+    def __init__(self, api_key: str):
+        from groq import Groq
+        self.client = Groq(api_key=api_key) if api_key else None
 
-_groq_client = None
-_gemini_client = None
-_tavily_client = None
-_mongo_client = None
-_chroma_client = None
-
-def get_groq():
-    global _groq_client
-    if _groq_client is None and GROQ_API_KEY is not None:
-        _groq_client = Groq(api_key=GROQ_API_KEY)
-    return _groq_client
-
-def get_gemini():
-    global _gemini_client
-    if _gemini_client is None and GEMINI_API_KEY is not None:
-        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    return _gemini_client
-
-def get_tavily():
-    global _tavily_client
-    if _tavily_client is None and TAVILY_API_KEY is not None:
-        _tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
-    return _tavily_client
-
-def get_mongo():
-    global _mongo_client
-    if _mongo_client is None and MONGODB_URI is not None:
-        try:
-            _mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
-                MONGODB_URI, tlsCAFile=certifi.where(), tlsInsecure=True, serverSelectionTimeoutMS=5000
+    async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
+        if not self.client: raise Exception("Groq unconfigured")
+        def _exec():
+            res = self.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens
             )
-        except Exception:
-            _mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
-    return _mongo_client
+            return res.choices[0].message.content.strip()
+        return await asyncio.to_thread(_exec)
 
-def get_chroma():
-    global _chroma_client
-    if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(path="./aria_vectors")
-    return _chroma_client
+class GeminiProvider(LLMProvider):
+    def __init__(self, api_key: str):
+        from google import genai
+        self.client = genai.Client(api_key=api_key) if api_key else None
 
-def get_collections():
-    client = get_chroma()
-    docs_col = client.get_or_create_collection(name="documents")
-    mem_col = client.get_or_create_collection(name="memory")
-    return docs_col, mem_col
+    async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
+        if not self.client: raise Exception("Gemini unconfigured")
+        # Format messages into a single prompt string for Gemini Flash
+        prompt_lines = [f"{m['role'].upper()}: {m['content']}" for m in messages]
+        prompt_str = "\n".join(prompt_lines) + "\nARIA:"
+        def _exec():
+            res = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt_str
+            )
+            return res.text.strip()
+        return await asyncio.to_thread(_exec)
 
-def get_mongo_collections():
-    db = get_mongo()
-    if db is not None:
-        db_inst = db["aria_db"]
-        return db_inst["personal_memory"], db_inst["media_vault"], db_inst["chat_history"]
-    return None, None, None
+class FallbackRouter(LLMProvider):
+    def __init__(self):
+        self.providers = [
+            GroqProvider(os.getenv("GROQ_API_KEY")),
+            GeminiProvider(os.getenv("GEMINI_API_KEY"))
+        ]
 
-scheduler = AsyncIOScheduler()
+    async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
+        for provider in self.providers:
+            try:
+                return await provider.chat(messages, temperature, max_tokens)
+            except Exception as e:
+                print(f"[Provider Fallback Triggered]: {e}")
+                continue
+        return "All neural pathways are temporarily offline, Sir. Please check API allowances."
 
-def clean_text(raw: str) -> str:
-    if raw is None: return ""
-    return re.sub(r'\*+', '', raw).strip()
+llm_router = FallbackRouter()
 
-def get_temporal() -> str:
-    now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-    return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
-
-async def process_task(user_text: str, session_id: str) -> str:
-    groq = get_groq()
-    tavily = get_tavily()
-    docs_col, mem_col = get_collections()
-    _, _, chats_col = get_mongo_collections()
-
-    conv_mgr = ConversationManager(chats_col)
-    session_context = await conv_mgr.build_session_context(session_id)
-
-    tool_mgr = ToolManager(mem_col, docs_col, tavily)
-    available_tools_desc = tool_mgr.describe_tools()
-
-    # --- ITERATIVE ACTION PLANNER LOOP ---
-    executed_tools = []
-    structured_results = {"memory": {}, "documents": {}, "web": {}}
-
-    for _ in range(3):  # Max 3 planning iterations
-        plan = await action_planner(user_text, session_context, available_tools_desc, executed_tools, groq)
-        tools_to_run = plan.get("tools", [])
-        action = plan.get("action", "retrieve")
-
-        if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
-            if mem_col is not None:
-                await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
-            return "Information stored permanently in your vector vault, Sir."
-
-        if tools_to_run is None or len(tools_to_run) == 0:
-            break
-
-        for t_name in tools_to_run:
-            if t_name not in executed_tools:
-                result = await tool_mgr.execute_tool(t_name, user_text)
-                structured_results[t_name] = result
-                executed_tools.append(t_name)
-
-    # --- STATEFUL REASONER ---
-    raw_answer = await reason(user_text, structured_results, groq, get_temporal(), available_tools_desc, session_context)
-    cleaned = clean_text(raw_answer)
-
-    # Log interaction
-    if chats_col is not None:
-        asyncio.create_task(chats_col.insert_one({"session_id": session_id, "user_msg": user_text, "aria_reply": cleaned, "timestamp": datetime.now(timezone.utc).isoformat()}))
-
-    return cleaned
-
+# -------------------------------------------------------------
+# CORE ASSISTANT LOGIC WITH INTENT BYPASS
+# -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
-    if TELEGRAM_TOKEN is None: return {"status": "no token"}
+    token = os.getenv("TELEGRAM_TOKEN")
+    if not token: return {"status": "no token"}
+    
     try:
         data = await req.json()
         msg = data.get("message", {})
@@ -165,25 +81,34 @@ async def telegram_webhook(req: Request):
         text = msg.get("text", "").strip()
         if chat_id is None or not text: return {"status": "ok"}
 
-        if text.lower() == "/start":
-            async with httpx.AsyncClient() as client:
-                await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": "ARIA online, Sir."})
-            return {"status": "ok"}
+        # Fast Intent Bypass for Simple Messages (Zero Token Usage)
+        lower_txt = text.lower()
+        if lower_txt in ["/start", "hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening"]:
+            reply_text = "Online and fully operational, Sir. How may I assist you today?"
+        else:
+            # Complex Request: Pass through multi-provider fallback reasoner
+            messages = [
+                {"role": "system", "content": "You are ARIA, an advanced J.A.R.V.I.S.-style assistant. Address the user as Sir. Be precise and concise."},
+                {"role": "user", "content": text}
+            ]
+            reply_text = await llm_router.chat(messages)
 
-        ans = await process_task(text, str(chat_id))
         async with httpx.AsyncClient() as client:
-            await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": ans})
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": reply_text}
+            )
         return {"status": "ok"}
-    except Exception:
-        traceback.print_exc()
+    except Exception as e:
+        print(f"[Webhook Error]: {e}")
     return {"status": "ok"}
 
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Multi-Provider Fault-Tolerant Router"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Stateful Agentic Core Active</h1>"
+    return "<h1>ARIA Multi-Provider Fallback Core Active</h1>"
