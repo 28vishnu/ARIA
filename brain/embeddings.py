@@ -2,7 +2,7 @@ import os
 from google import genai
 
 def get_embedding(text: str) -> list[float]:
-    """Generates 768-dimensional semantic embeddings using Google Gemini."""
+    """Generates 768-dimensional semantic embeddings using Google Gemini with fallback zero array."""
     key = os.getenv("GEMINI_API_KEY")
     if not key: 
         return [0.0] * 768
@@ -11,5 +11,5 @@ def get_embedding(text: str) -> list[float]:
         res = client.models.embed_content(model="text-embedding-004", contents=text[:2000])
         return res.embedding.values
     except Exception as e:
-        print(f"[Embedding Error]: {e}")
+        print(f"[Embedding Error - Falling back to zero-vector]: {e}")
         return [0.0] * 768
