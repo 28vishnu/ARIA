@@ -3,6 +3,7 @@ import json
 import base64
 import asyncio
 from datetime import datetime, timezone
+from brain.models.request import BrainRequest
 
 class ToolManager:
     def __init__(self, chroma_memory, chroma_docs, mongo_media, mongo_schedule, tavily_client, aria_brain = None):
@@ -17,30 +18,36 @@ class ToolManager:
         """Returns descriptive capabilities of all available system tools for the action planner."""
         return {
             "memory": "Searches permanent user memory and personal facts.",
-            "documents": "Searches the Chroma vector database for indexed text content, notes, and manuals.",
+            "documents": "Searches indexed text content, notes, and manuals via AriaBrain.",
             "web": "Performs real-time web searches using Tavily for news, facts, and live data.",
-            "media": "Manages the Media Vault, retrieving stored files, documents, resumes, PDFs, and metadata.",
+            "media": "Manages the Media Vault, retrieving stored files, documents, resumes, and PDFs.",
             "schedule": "Manages tasks, reminders, calendars, and daily agendas."
         }
 
     async def execute_tool(self, tool_name: str, query: str, chat_id: str = "default") -> dict:
-        """Dispatches tool execution requests with unified brain fallback integration."""
+        """Dispatches tool execution requests exclusively through AriaBrain kernel when available."""
         tool_lower = tool_name.lower().strip()
         
         if tool_lower == "memory":
-            return await self._handle_memory(query)
+            return await self._handle_memory(query, chat_id)
         elif tool_lower == "documents":
-            return await self._handle_documents(query)
+            return await self._handle_documents(query, chat_id)
         elif tool_lower == "web":
             return await self._handle_web(query)
         elif tool_lower == "media":
-            return await self._handle_media(query)
+            return await self._handle_media(query, chat_id)
         elif tool_lower == "schedule":
             return await self._handle_schedule(query)
         else:
             return {"success": False, "content": f"Unknown tool requested: {tool_name}"}
 
-    async def _handle_memory(self, query: str) -> dict:
+    async def _handle_memory(self, query: str, session_id: str) -> dict:
+        if self.brain is not None:
+            req = BrainRequest(query=query, session_id=session_id, intent="recall")
+            brain_res = await self.brain.search(req)
+            if brain_res and brain_res.get("memories"):
+                return {"success": True, "content": brain_res["memories"]}
+        
         if self.mem_col is None:
             return {"success": False, "content": "Memory vector store offline, Sir."}
         try:
@@ -52,27 +59,21 @@ class ToolManager:
         except Exception as e:
             return {"success": False, "content": f"Memory search failed: {e}"}
 
-    async def _handle_documents(self, query: str) -> dict:
-        # First consult AriaBrain for unified metadata and alias hits
+    async def _handle_documents(self, query: str, session_id: str) -> dict:
+        """Single-pass retrieval delegated entirely to AriaBrain (no duplicate Chroma queries)."""
         if self.brain is not None:
-            brain_res = await self.brain.search(query) if hasattr(self.brain.search, '__code__') and asyncio.iscoroutinefunction(self.brain.search) else self.brain.search(query)
+            req = BrainRequest(query=query, session_id=session_id, intent="document_search")
+            brain_res = await self.brain.search(req)
             if brain_res and brain_res.get("documents"):
-                doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in brain_res["documents"]])
+                docs = brain_res["documents"]
+                doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in docs])
                 return {
                     "success": True,
                     "content": f"Yes, Sir. I found documents matching your request:\n\n{doc_list}"
                 }
+            return {"success": True, "content": "No matching documents found in the repository, Sir."}
 
-        if self.docs_col is None:
-            return {"success": False, "content": "Document vector store offline, Sir."}
-        try:
-            hits = self.docs_col.query(query_texts=[query], n_results=3)
-            docs = hits.get("documents", [[]])[0]
-            if not docs:
-                return {"success": True, "content": "No matching document segments found in the vector vault, Sir."}
-            return {"success": True, "content": "\n\n--- Document Match ---\n".join(docs)}
-        except Exception as e:
-            return {"success": False, "content": f"Document search failed: {e}"}
+        return {"success": False, "content": "AriaBrain kernel offline, Sir."}
 
     async def _handle_web(self, query: str) -> dict:
         if self.tavily is None:
@@ -89,10 +90,11 @@ class ToolManager:
         except Exception as e:
             return {"success": False, "content": f"Web search failed: {e}"}
 
-    async def _handle_media(self, query: str) -> dict:
-        """Unified media vault lookup with AriaBrain alias and summary matching."""
+    async def _handle_media(self, query: str, session_id: str) -> dict:
+        """Optimized media vault lookup using MongoDB regex filtering instead of loading all files."""
         if self.brain is not None:
-            brain_res = await self.brain.search(query) if hasattr(self.brain.search, '__code__') and asyncio.iscoroutinefunction(self.brain.search) else self.brain.search(query)
+            req = BrainRequest(query=query, session_id=session_id, intent="media_search")
+            brain_res = await self.brain.search(req)
             if brain_res and brain_res.get("documents"):
                 doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in brain_res["documents"]])
                 return {
@@ -103,26 +105,32 @@ class ToolManager:
         if self.media_col is None:
             return {"success": False, "content": "Media Vault storage offline, Sir."}
         try:
-            cursor = self.media_col.find({})
-            files = await cursor.to_list(length=50)
+            # Let MongoDB perform regex search efficiently
+            q_clean = query.replace("list", "").replace("files", "").replace("vault", "").strip()
+            filter_query = {}
+            if q_clean and len(q_clean) > 2:
+                filter_query = {
+                    "$or": [
+                        {"file_name": {"$regex": q_clean, "$options": "i"}},
+                        {"category": {"$regex": q_clean, "$options": "i"}}
+                    ]
+                }
+
+            cursor = self.media_col.find(filter_query).limit(10)
+            files = await cursor.to_list(length=10)
+            
+            if not files and filter_query:
+                # Fallback to recent files if specific regex yielded nothing
+                cursor = self.media_col.find({}).sort("_id", -1).limit(10)
+                files = await cursor.to_list(length=10)
+
             if not files:
                 return {"success": True, "content": "Your Media Vault is currently empty, Sir."}
-            
-            q_lower = query.lower()
-            matched = []
-            for f in files:
-                fname = f.get("file_name", "").lower()
-                cat = f.get("category", "").lower()
-                if any(w in fname or w in cat for w in q_lower.split() if len(w) > 2) or "list" in q_lower or "all" in q_lower or "what" in q_lower:
-                    matched.append(f)
 
-            if not matched and not ("list" in q_lower or "all" in q_lower):
-                matched = files[:10]
-
-            file_strs = [f"• **{f.get('file_name')}** (Category: {f.get('category', 'General')})" for f in matched]
+            file_strs = [f"• **{f.get('file_name')}** (Category: {f.get('category', 'General')})" for f in files]
             return {
                 "success": True,
-                "content": f"Found {len(matched)} matching document(s) in your Media Vault:\n\n" + "\n".join(file_strs)
+                "content": f"Found matching document(s) in your Media Vault:\n\n" + "\n".join(file_strs)
             }
         except Exception as e:
             return {"success": False, "content": f"Media vault lookup failed: {e}"}
@@ -131,17 +139,24 @@ class ToolManager:
         if self.schedule_col is None:
             return {"success": False, "content": "Schedule subsystem offline, Sir."}
         try:
-            cursor = self.schedule_col.find({})
+            # Filter specifically for today if requested
+            query_filter = {}
+            lower_q = query.lower()
+            if "today" in lower_q:
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                query_filter = {"time": {"$regex": today_str, "$options": "i"}}
+
+            cursor = self.schedule_col.find(query_filter).limit(20)
             tasks = await cursor.to_list(length=20)
             if not tasks:
-                return {"success": True, "content": "Your schedule is completely clear, Sir."}
+                return {"success": True, "content": "No scheduled tasks found for that timeframe, Sir."}
             task_strs = [f"• [{t.get('time', 'Today')}] {t.get('task')}" for t in tasks]
-            return {"success": True, "content": "Current Schedule & Reminders:\n\n" + "\n".join(task_strs)}
+            return {"success": True, "content": "Schedule & Reminders:\n\n" + "\n".join(task_strs)}
         except Exception as e:
             return {"success": False, "content": f"Schedule retrieval failed: {e}"}
 
     async def ingest_uploaded_file(self, file_id: str, filename: str, file_bytes: bytes, category: str = "document"):
-        """Ingests uploaded files into Mongo Media Vault and registers rich metadata in AriaBrain."""
+        """Ingests uploaded files into Mongo Media Vault and registers metadata in AriaBrain."""
         if self.media_col is not None:
             await self.media_col.update_one(
                 {"file_name": filename},
@@ -159,7 +174,6 @@ class ToolManager:
 
         if self.brain is not None:
             extracted_text = f"Document filename: {filename}. Category: {category}."
-            from brain.models.request import BrainRequest
             req = BrainRequest(query=filename, metadata={"doc_id": file_id})
             if hasattr(self.brain, "learn"):
                 await self.brain.learn(req, filename, extracted_text)
