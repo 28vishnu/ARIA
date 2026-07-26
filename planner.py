@@ -1,13 +1,7 @@
 import json
 import re
-from groq import Groq
 
-async def action_planner(user_message: str, session_context: str, tool_descriptions: dict, executed_tools: list, groq_client: Groq) -> dict:
-    print(f"[STAGE 2.1 - PLANNER] Analyzing user message: '{user_message}'")
-    if not groq_client:
-        print("[STAGE 2.2 - PLANNER] Error: Groq client unconfigured in planner.")
-        return {"goal": "default", "action": "retrieve", "tools": []}
-
+async def action_planner(user_message: str, session_context: str, tool_descriptions: dict, executed_tools: list, llm_router) -> dict:
     tools_json = json.dumps(tool_descriptions, indent=2)
     already_run = json.dumps(executed_tools)
 
@@ -42,18 +36,14 @@ If no further tools are needed, return an empty list for tools:
   "tools": []
 }}
 """
+    messages = [
+        {"role": "system", "content": "You are a precise JSON task planner. Output valid JSON only."},
+        {"role": "user", "content": prompt}
+    ]
     try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=200
-        )
-        raw = response.choices[0].message.content.strip()
+        raw = await llm_router.chat(messages, temperature=0.1, max_tokens=200)
         raw = re.sub(r'```json\s*|\s*```', '', raw)
-        plan_dict = json.loads(raw)
-        print(f"[STAGE 2.3 - PLANNER] Successfully generated plan: {plan_dict}")
-        return plan_dict
+        return json.loads(raw)
     except Exception as e:
-        print(f"[STAGE 2.4 - PLANNER EXCEPTION]: {e}")
+        print(f"[Action Planner Error]: {e}")
         return {"goal": "error", "action": "retrieve", "tools": []}
