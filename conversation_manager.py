@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 class ConversationManager:
     def __init__(self, chats_collection):
         self.chats_col = chats_collection
-        # In-memory session tracking for active context, including last referenced documents
+        # In-memory session tracking for active context and last referenced documents
         self.active_sessions = {}
 
     async def build_session_context(self, session_id: str) -> dict:
