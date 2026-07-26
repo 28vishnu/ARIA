@@ -12,17 +12,17 @@ from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-# Modular Imports
-from planner import action_planner
+# Modular Imports & Kernel Facade
+from brain import AriaBrain, BrainRequest
 from tool_manager import ToolManager
 from reasoner import reason
 from conversation_manager import ConversationManager
 from reflection_engine import ReflectionEngine
-from brain import AriaBrain
 from profile_engine import ProfileEngine
 from workers import BackgroundWorkers
 from memory_engine import MemoryEngine
 from personality_engine import PersonalityEngine
+from planner import action_planner
 
 # Provider SDKs
 from groq import Groq
@@ -348,6 +348,7 @@ DETERMINISTIC_ROUTER = [
     MediaHandler()
 ]
 
+# Single application instance
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
@@ -358,8 +359,6 @@ def clean_text(raw: str) -> str:
 def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
-
-PENDING_STATES = {}
 
 # -------------------------------------------------------------
 # STARTUP EVENT & RESILIENT INITIALIZATION
@@ -407,7 +406,17 @@ async def startup_event():
         app.state.docs_col = None
         app.state.mem_col = None
 
-    app.state.brain = AriaBrain(app.state.chroma_client) if app.state.chroma_client else None
+    # Initialize the modular AriaBrain Kernel with both Chroma client and Mongo db
+    if app.state.chroma_client:
+        app.state.brain = AriaBrain(
+            chroma_client=app.state.chroma_client,
+            mongo_db=db_inst
+        )
+        print("[ARIA OS]: AriaBrain Kernel initialized successfully.")
+    else:
+        app.state.brain = None
+        print("[ARIA OS Warning]: AriaBrain initialized without Chroma client.")
+
     app.state.profile_engine = ProfileEngine(db_inst) if db_inst is not None else None
     app.state.memory_engine = MemoryEngine(db_inst) if db_inst is not None else None
     app.state.personality_engine = PersonalityEngine(app.state.memory_engine)
@@ -418,7 +427,8 @@ async def startup_event():
         app.state.docs_col, 
         app.state.media_col, 
         app.state.schedule_col, 
-        app.state.tavily
+        app.state.tavily,
+        aria_brain=app.state.brain
     )
 
     if app.state.profile_engine is not None:
@@ -428,12 +438,13 @@ async def startup_event():
         except Exception as e:
             print(f"[Profile Load Warning]: {e}")
 
+    # Seed Knowledge Graph via Brain Kernel Facade
     if app.state.brain is not None:
         try:
-            app.state.brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
-            app.state.brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
-            app.state.brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
-            print("[ARIA OS]: Knowledge Graph successfully seeded with core entities.")
+            await app.state.brain.graph.link("Saketh", "studies_at", "Gayatri Vidya Parishad College")
+            await app.state.brain.graph.link("Saketh", "pursuing", "B.Tech Computer Science Engineering")
+            await app.state.brain.graph.link("Saketh", "builds", "ARIA AI")
+            print("[ARIA OS]: Knowledge Graph successfully seeded via Brain Kernel.")
         except Exception as e:
             print(f"[Graph Seeding Warning]: {e}")
 
@@ -452,7 +463,7 @@ async def startup_event():
             print(f"[Worker Scheduler Warning]: {e}")
 
 # -------------------------------------------------------------
-# SHUTDOWN EVENT
+# SHUTDOWN EVENT: SAFE RESOURCE CLEANUP
 # -------------------------------------------------------------
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -464,15 +475,16 @@ async def shutdown_event():
     print("[ARIA OS]: Graceful shutdown complete.")
 
 # -------------------------------------------------------------
-# TASK PROCESSING PIPELINE WITH CONTINUOUS MEMORY & PERSONA
+# TASK PROCESSING PIPELINE WITH KERNEL INTEGRATION
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE -1] Processing task for session {session_id}: '{user_text}'")
 
     memory_eng = app.state.memory_engine
     persona_eng = app.state.personality_engine
+    brain = app.state.brain
 
-    # 1. Continuous Memory Extraction (Background task for every interaction)
+    # 1. Continuous Memory Extraction (Background task)
     if memory_eng is not None:
         asyncio.create_task(memory_eng.extract_and_store_facts(user_text))
 
@@ -485,12 +497,10 @@ async def process_task(user_text: str, session_id: str) -> str:
             return await persona_eng.apply_persona(raw_reply, is_major_event=is_greeting)
 
     # =========================================================
-    # STAGE 0 & ABOVE: REFLECTION, BRAIN, PLANNER, & REASONER
+    # STAGE 0 & ABOVE: BRAIN KERNEL, PLANNER, & REASONER
     # =========================================================
     tool_mgr = app.state.tool_manager
     chats_col = app.state.chats_col
-    mem_col = app.state.mem_col
-    aria_brain = app.state.brain
     conv_mgr = app.state.conversation_manager
     reflection_eng = app.state.reflection_engine
 
@@ -500,10 +510,17 @@ async def process_task(user_text: str, session_id: str) -> str:
         raw_retry = f"{correction['explanation']}\n\n{res.get('content', '')}"
         return await persona_eng.apply_persona(raw_retry)
 
-    if aria_brain is not None:
-        cached_brain_hit = aria_brain.search_brain(user_text)
-        if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
-            return await persona_eng.apply_persona(cached_brain_hit["answer"])
+    # Consult AriaBrain Kernel first via BrainRequest
+    if brain is not None:
+        req = BrainRequest(query=user_text, session_id=session_id, intent="search")
+        brain_hit = await brain.search(req)
+        if brain_hit and brain_hit.get("source") == "cache":
+            return await persona_eng.apply_persona(brain_hit["content"])
+        elif brain_hit and brain_hit.get("documents") and len(brain_hit["documents"]) > 0:
+            docs = brain_hit["documents"]
+            doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in docs])
+            reply = f"Yes, Sir. I found relevant documents in your repository:\n\n{doc_list}"
+            return await persona_eng.apply_persona(reply)
 
     print("[PLANNING STAGE]: Running single-pass action planner...")
     session_context = await conv_mgr.build_session_context(session_id)
@@ -517,8 +534,6 @@ async def process_task(user_text: str, session_id: str) -> str:
     action = plan.get("action", "retrieve")
 
     if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
-        if mem_col is not None:
-            mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
         return await persona_eng.apply_persona("Information stored permanently in your vector vault")
 
     if tools_to_run:
@@ -534,18 +549,8 @@ async def process_task(user_text: str, session_id: str) -> str:
     cleaned = clean_text(raw_answer)
 
     has_valid_source = any(res.get("success") for res in structured_results.values())
-    if has_valid_source and aria_brain is not None:
-        aria_brain.store_knowledge(
-            question=user_text,
-            answer=cleaned,
-            topic="general",
-            category="general",
-            summary=cleaned[:150],
-            source="Verified Tool/AI",
-            confidence=0.96,
-            verified=True,
-            knowledge_type="DYNAMIC"
-        )
+    if has_valid_source and brain is not None:
+        brain.store_knowledge(question=user_text, answer=cleaned)
 
     if chats_col is not None:
         async def save_chat():
@@ -593,9 +598,9 @@ async def telegram_webhook(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Autonomous Continuous Learning Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Kernel-Powered Autonomous Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Autonomous Core Active</h1>"
+    return "<h1>ARIA Kernel-Powered Autonomous Core Active</h1>"
