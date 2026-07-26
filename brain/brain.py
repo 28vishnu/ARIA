@@ -6,6 +6,7 @@ from brain.document_index import DocumentIndex
 from brain.graph import GraphManager
 from brain.cache import CacheManager
 from brain.retrieval import RetrievalEngine
+from brain.learning import LearningEngine
 
 class AriaBrain:
     def __init__(self, chroma_client, mongo_db):
@@ -17,31 +18,50 @@ class AriaBrain:
         self.graph = GraphManager(self.mongo)
         self.documents = DocumentIndex(self.chroma, self.mongo, self.events)
         self.retrieval = RetrievalEngine(self.chroma, self.mongo, self.cache)
+        self.learning = LearningEngine(mongo_db)
 
     async def search(self, request: BrainRequest) -> dict:
-        """Kernel Orchestrator: Intent inspection and parallel context building."""
-        lower_q = request.query.lower()
+        """Deterministic Kernel Orchestrator with Confidence Scoring and Correction Matching."""
+        query = request.query
+        lower_q = query.lower()
 
-        # Intent Routing: Bypass heavy retrieval for targeted profile queries
-        if any(k in lower_q for k in ["my name", "who am i", "my profile"]):
+        # 1. Check Learning Engine for Past Corrections (100% Confidence)
+        correction = await self.learning.check_correction(query)
+        if correction:
+            return {
+                "source": "learning_engine",
+                "content": correction,
+                "confidence": 1.0
+            }
+
+        # 2. Check Profile Data (100% Confidence)
+        if any(k in lower_q for k in ["my name", "who am i", "my profile", "college", "course"]):
             profile = {}
             if self.mongo.profile is not None:
                 profile = await self.mongo.profile.find_one({"_id": "master_profile"}) or {}
-            return {"source": "profile", "profile": profile}
+            if profile:
+                return {
+                    "source": "profile",
+                    "profile": profile,
+                    "confidence": 1.0,
+                    "has_results": True
+                }
 
-        # Intent Routing: Standard parallel retrieval across stores
-        return await self.retrieval.parallel_search(request)
+        # 3. Parallel Retrieval across Memory, Documents, & Graph
+        retrieval_res = await self.retrieval.parallel_search(request)
+        
+        # Determine confidence score based on hit quality
+        if retrieval_res.get("documents"):
+            retrieval_res["confidence"] = 0.95
+        elif retrieval_res.get("graph"):
+            retrieval_res["confidence"] = 0.90
+        else:
+            retrieval_res["confidence"] = 0.0
 
-    async def recall(self, request: BrainRequest) -> dict:
-        return await self.search(request)
+        return retrieval_res
 
     async def learn(self, request: BrainRequest, filename: str, text: str):
-        """Cognitive Mode: Ingest and learn new artifacts."""
         return await self.documents.index_document(request, filename, text)
 
-    async def reason(self, request: BrainRequest) -> str:
-        res = await self.search(request)
-        return str(res)
-
-    def store_knowledge(self, question: str, answer: str):
-        self.cache.set(question, answer)
+    async def record_feedback(self, query: str, wrong_ans: str, correction: str):
+        await self.learning.record_correction(query, wrong_ans, correction)
