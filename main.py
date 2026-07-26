@@ -16,10 +16,6 @@ import edge_tts
 # Provider SDKs
 from groq import Groq
 from google import genai
-from google.oauth2 import service_account
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request as GoogleRequest
-from googleapiclient.discovery import build
 from tavily import TavilyClient
 import motor.motor_asyncio
 
@@ -37,12 +33,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-
-GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
-GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
-GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 
 ASSISTANT_NAME = "ARIA"
 USER_FULL_NAME = "N. Vishnu Saketh"
@@ -82,7 +73,6 @@ mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
 mongo_reminders_col = mongo_db["reminders"] if mongo_db is not None else None
 mongo_security_col = mongo_db["security_logs"] if mongo_db is not None else None
 
-CACHE_VOICES = []
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
@@ -165,7 +155,7 @@ async def sync_ram_cache():
 def build_fuzzy_regex(keyword: str):
     kw = keyword.strip().lower()
     if "adhar" in kw or "aadhar" in kw or "aadhaar" in kw:
-        return re.compile(r"(aadhar|aadhaar|e-aadhar|e_aadhar|e%20aadhar)", re.IGNORECASE)
+        return re.compile(r"(aadhar|aadhaar|e-aadhar|e_aadhar)", re.IGNORECASE)
     return re.compile(re.escape(kw), re.IGNORECASE)
 
 async def send_file_from_vault(file_query: str, chat_id: str) -> str:
@@ -431,7 +421,7 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_file_from_vault",
-            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram when the user asks to send, download, get, or dispatch a PDF file or document.",
+            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram when the user asks to send, download, get, or dispatch a PDF file.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -562,11 +552,16 @@ MANDATORY DIRECTIVES:
             del PENDING_SECURITY_ACTIONS[session_id]
             return "Security authorization withheld. Action canceled, Sir."
 
-    # Direct confirmation trigger for Aadhaar dispatch ("Yes" after privacy prompt)
+    # Direct confirmation trigger for file/PDF dispatch ("Yes" after privacy prompt)
     if cmd in ["yes", "yeah", "sure", "do it", "send it"] and session_id not in PENDING_SECURITY_ACTIONS:
         return await send_file_from_vault("aadhar", session_id)
 
-    # 2. STANDARD HYBRID LLM TOOL EXECUTION
+    # 2. STRICT REDACTION OVERRIDE (Denylist for Aadhaar/RRN/MyNumber digits)
+    if any(k in cmd for k in ["aadhar", "aadhaar", "rrn", "mynumber"]):
+        if any(k in cmd for k in ["number", "digits", "code", "id"]):
+            return "Per safety and privacy protocols, I cannot display raw government ID numbers in chat text, Sir. Would you like me to dispatch your official PDF file directly to your Telegram?"
+
+    # 3. STANDARD HYBRID LLM TOOL EXECUTION
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
     temporal_context = get_current_temporal_context()
     weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185") if any(k in cmd for k in ["weather", "temp", "rain"]) else ""
@@ -587,15 +582,15 @@ MANDATORY DIRECTIVES:
 
 CRITICAL OPERATIONAL DIRECTIVES:
 1. SENSITIVE IDENTIFIER REDACTION (AADHAAR / RRN / MYNUMBER):
-   - Never print raw numeric sequences of Aadhaar or government identification numbers directly in chat text.
-   - If asked for an Aadhaar number, politely state: "Per privacy protocols, I cannot display raw government ID numbers in chat text, but I can dispatch your official PDF file directly to your Telegram." (and offer/execute 'send_file_from_vault').
-2. FILE DISPATCH VS READING:
+   - Never print raw numeric sequences of Aadhaar, RRN, or MyNumber directly in chat text.
+2. FULFILLMENT & FILE DISPATCH:
    - Call 'send_file_from_vault' when the user asks to get, download, or dispatch a document PDF file (e.g. 'Give my aadhar pdf').
    - Call 'query_document_vault' when the user asks a question about text INSIDE a PDF document.
-3. HUMAN-LIKE INTERACTION & LEARNING:
+   - Fulfill all other requests (such as user name query, system diagnostics, coding tasks) directly and completely without refusing.
+3. HUMAN-LIKE INTERACTION & PRECISION:
    - Learn preferences from user interactions and save them to memory when stated.
    - Address the user naturally as 'Sir' or 'Master'.
-   - NEVER output unnecessary boilerplate greetings. Give direct, sharp, and highly useful answers."""
+   - NEVER output unnecessary boilerplate greetings or canned loops. Give direct, sharp, and highly useful answers."""
 
     reply_text = ""
 
@@ -648,9 +643,8 @@ CRITICAL OPERATIONAL DIRECTIVES:
 DOCUMENT TEXT FROM VAULT:
 {doc_res.get('text')}
 
-MANDATORY PRIVACY DIRECTIVE:
+MANDATORY DIRECTIVE:
 - Answer the user's specific request using the document content above concisely.
-- Do NOT output numeric digits of sensitive government IDs (Aadhaar/RRN/MyNumber). Summarize non-sensitive details or offer to dispatch the PDF.
 - Address the user as Sir or Master."""
 
                             qa_comp = groq_client.chat.completions.create(
@@ -680,12 +674,6 @@ MANDATORY PRIVACY DIRECTIVE:
         try:
             if any(k in cmd for k in ["name", "who am i", "profile"]):
                 gem_prompt = f"{system_prompt}\n\nUser Profile Full Name: {USER_FULL_NAME}\n\nUser: {user_text}\nARIA:"
-            elif any(k in cmd for k in ["aadhar", "aadhaar", "document", "pdf", "file"]):
-                doc_res = await query_document_vault(cmd, user_text)
-                if doc_res.get("status") == "success":
-                    gem_prompt = f"{system_prompt}\n\nDOCUMENT TEXT FROM VAULT:\n{doc_res.get('text')}\n\nUser: {user_text}\nARIA:"
-                else:
-                    gem_prompt = f"{system_prompt}\n\nUser: {user_text}\nARIA:"
             else:
                 gem_prompt = f"{system_prompt}\n\nUser: {user_text}\nARIA:"
 
@@ -699,10 +687,8 @@ MANDATORY PRIVACY DIRECTIVE:
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     if not reply_text:
-        if "name" in cmd or "who am i" in cmd:
+        if any(k in cmd for k in ["name", "who am i"]):
             reply_text = f"Your full name is {USER_FULL_NAME}, Sir."
-        elif "aadhar" in cmd or "aadhaar" in cmd:
-            reply_text = "Per privacy protocols, I cannot display raw government ID numbers in chat text, Sir. Would you like me to dispatch your official Aadhaar PDF directly to your Telegram?"
         elif "diagnostic" in cmd:
             reply_text = await get_system_diagnostics()
         else:
