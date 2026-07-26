@@ -68,8 +68,19 @@ class SearchTool(BaseTool):
                 elif results_count == 1: confidence = 0.70
                 else: confidence = 0.40
 
-                results = [f"- {item['title']}: {item['content'][:200]}" for item in raw_results]
-                content = "\n".join(results) if results else "No relevant web intelligence found."
+                # Formatted human-readable output (No raw API JSON)
+                if "weather" in query.lower():
+                    snippet = raw_results[0]['content'] if raw_results else "Data unavailable"
+                    content = (
+                        f"🌤 Weather Report — {query.title()}\n\n"
+                        f"• Conditions: {snippet[:200]}\n\n"
+                        f"☔ Recommendation:\n"
+                        f"Check local parameters before heading out, Sir."
+                    )
+                else:
+                    items = [f"• **{item['title']}**\n  {item['content'][:180]}..." for item in raw_results]
+                    content = "📰 **Live Intelligence Radar**:\n\n" + "\n\n".join(items)
+
                 return {"success": True, "source": "web", "content": content, "confidence": confidence, "metadata": {"results_count": results_count}}
         except Exception as e:
             print(f"[SearchTool Error]: {e}")
@@ -78,16 +89,66 @@ class SearchTool(BaseTool):
 class MediaVaultTool(BaseTool):
     NAME = "media"
     DESCRIPTION = "Manage, list, index, categorise, and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
-    CAPABILITIES = ["dispatch file", "list documents", "categorise documents", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
+    CAPABILITIES = ["dispatch file", "list documents", "categorise documents", "resume", "send document", "download pdf", "pan", "certificate"]
 
     def _auto_categorize(self, filename: str) -> str:
-        """Automatically categorises documents based on filename heuristics."""
         fn = filename.lower()
         if any(w in fn for w in ["resume", "cv", "portfolio"]): return "Resume"
-        if any(w in fn for w in ["aadhar", "aadhaar", "pan", "passport", "id"]): return "Identity"
+        if any(w in fn for w in ["pan", "passport", "id"]): return "Identity"
         if any(w in fn for w in ["cert", "certificate", "course", "completion"]): return "Certificates"
         if any(w in fn for w in ["note", "memo", "study", "syllabus"]): return "College Notes"
         return "General"
+
+    async def ingest_or_check_duplicate(self, file_name: str, raw_bytes: bytes, media_col, documents_collection=None) -> str:
+        """SHA-256 duplicate detection engine. If identical content exists, skips storage and updates telemetry."""
+        content_hash = hashlib.sha256(raw_bytes).hexdigest()
+        existing = await media_col.find_one({"content_hash": content_hash})
+
+        if existing:
+            await media_col.update_one(
+                {"_id": existing["_id"]},
+                {
+                    "$inc": {"send_count": 1},
+                    "$set": {"last_accessed": datetime.now(timezone.utc).isoformat()}
+                }
+            )
+            existing_name = existing.get("file_name", "document")
+            return f"I already have this document stored under '{existing_name}' (Identical content hash detected). Access count updated, Sir."
+
+        b64_payload = base64.b64encode(raw_bytes).decode("utf-8")
+        category = self._auto_categorize(file_name)
+        
+        extracted_text = ""
+        if file_name.lower().endswith(".pdf") and documents_collection is not None:
+            try:
+                reader = PdfReader(BytesIO(raw_bytes))
+                for page in reader.pages:
+                    txt = page.extract_text()
+                    if txt: extracted_text += txt + "\n"
+                
+                chunks = [extracted_text[i:i+1000] for i in range(0, len(extracted_text), 1000)]
+                for idx, chunk in enumerate(chunks):
+                    chunk_id = f"doc_{content_hash[:8]}_{idx}"
+                    documents_collection.upsert(
+                        ids=[chunk_id],
+                        documents=[chunk],
+                        metadatas=[{"file_name": file_name, "source": "MediaVault", "hash": content_hash}]
+                    )
+            except Exception as e:
+                print(f"[Document Parsing Error]: {e}")
+
+        doc_record = {
+            "file_name": file_name,
+            "b64_payload": b64_payload,
+            "content_hash": content_hash,
+            "category": category,
+            "indexed": True,
+            "send_count": 1,
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "last_accessed": datetime.now(timezone.utc).isoformat()
+        }
+        await media_col.insert_one(doc_record)
+        return f"Document '{file_name}' successfully ingested, indexed, and categorized as '{category}', Sir."
 
     async def execute(self, query: str, media_col, chat_id: str = None, documents_collection = None) -> dict:
         print(f"[TOOL - MEDIA] Executing document intelligence operation for query: '{query}'")
@@ -97,7 +158,6 @@ class MediaVaultTool(BaseTool):
         try:
             clean_q = query.lower().strip()
 
-            # 1. DOCUMENT INVENTORY & AUTOMATED CATEGORISATION
             if any(k in clean_q for k in ["what documents", "list files", "stored files", "document list", "vault inventory", "categories"]):
                 cursor = media_col.find({}, {"file_name": 1, "category": 1, "uploaded_at": 1})
                 all_files = await cursor.to_list(length=100)
@@ -117,62 +177,9 @@ class MediaVaultTool(BaseTool):
                 inventory_msg = f"I currently manage {len(all_files)} documents in your Media Vault, Sir:\n\n{cat_summary}"
                 return {"success": True, "source": "media", "content": inventory_msg, "confidence": 1.0, "metadata": {"count": len(all_files)}}
 
-            # 2. BULK PDF INGESTION & INTELLIGENT INDEXING
-            if any(k in clean_q for k in ["read every pdf", "ingest all", "index pdfs", "scan all documents"]):
-                cursor = media_col.find({})
-                vault_files = await cursor.to_list(length=100)
-                indexed_count, skipped_count, chunk_count = 0, 0, 0
-
-                for file_doc in vault_files:
-                    fname = file_doc.get("file_name", "doc.pdf")
-                    if fname.lower().endswith(".pdf") and documents_collection is not None:
-                        try:
-                            raw_bytes = base64.b64decode(file_doc["b64_payload"])
-                            content_hash = hashlib.sha256(raw_bytes).hexdigest()
-                            
-                            if file_doc.get("content_hash") == content_hash and file_doc.get("indexed", False):
-                                skipped_count += 1
-                                continue
-
-                            reader = PdfReader(BytesIO(raw_bytes))
-                            file_text = ""
-                            for page in reader.pages:
-                                text = page.extract_text()
-                                if text: file_text += text + "\n"
-                            
-                            if file_text.strip():
-                                chunks = [file_text[i:i+1000] for i in range(0, len(file_text), 1000)]
-                                for idx, chunk in enumerate(chunks):
-                                    chunk_id = f"doc_{content_hash[:8]}_{idx}"
-                                    documents_collection.upsert(
-                                        ids=[chunk_id],
-                                        documents=[chunk],
-                                        metadatas=[{"file_name": fname, "source": "MediaVault", "hash": content_hash}]
-                                    )
-                                    chunk_count += 1
-                                
-                                assigned_category = self._auto_categorize(fname)
-                                await media_col.update_one(
-                                    {"_id": file_doc["_id"]},
-                                    {"$set": {"indexed": True, "content_hash": content_hash, "category": assigned_category}}
-                                )
-                                indexed_count += 1
-                        except Exception as ex:
-                            print(f"[Ingestion Error for {fname}]: {ex}")
-
-                ingest_summary = (
-                    f"Scanning vault documents...\n\n"
-                    f"✓ Newly indexed PDFs: {indexed_count}\n"
-                    f"✓ Skipped (already indexed): {skipped_count}\n"
-                    f"✓ Search index updated with {chunk_count} searchable chunks, Sir."
-                )
-                return {"success": True, "source": "media", "content": ingest_summary, "confidence": 1.0, "metadata": {"indexed": indexed_count}}
-
-            # 3. DOCUMENT DISPATCH & RETRIEVAL
             target = None
             search_terms = []
             if any(k in clean_q for k in ["resume", "cv", "portfolio"]): search_terms.extend(["resume", "cv", "portfolio"])
-            elif any(k in clean_q for k in ["aadhar", "aadhaar"]): search_terms.extend(["aadhar", "aadhaar"])
             elif "pan" in clean_q: search_terms.append("pan")
             elif any(k in clean_q for k in ["certificate", "memo"]): search_terms.extend(["certificate", "memo"])
             else: search_terms.append(clean_q)
