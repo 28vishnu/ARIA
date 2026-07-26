@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger("aria")
+SCHEMA_VERSION = 1
 
 class MemoryEngine:
     def __init__(self, mongo_db):
@@ -11,18 +12,19 @@ class MemoryEngine:
         self.memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 
     async def initialize_indexes(self):
-        """Creates indexes on startup to ensure high-performance retrieval as memories scale."""
+        """Creates unique indexes once on application startup for high-performance scaling."""
         if self.memory_col is not None:
             try:
                 await self.memory_col.create_index("key", unique=True)
                 await self.memory_col.create_index("category")
+                await self.memory_col.create_index("memory_type")
                 await self.memory_col.create_index("updated_at")
                 logger.info("[MemoryEngine] Successfully initialized MongoDB indexes.")
             except Exception as e:
                 logger.warning("[MemoryEngine] Index creation note: %s", e)
 
     def _should_extract(self, text: str) -> bool:
-        """Filters non-fact statements and strict privacy identifiers (Aadhaar, RRN, MyNumber, PAN)."""
+        """Filters out non-fact statements and strict privacy identifiers (Aadhaar, RRN, MyNumber, PAN)."""
         aadhaar_pattern = r'\b\d{4}\s?\d{4}\s?\d{4}\b'
         pan_pattern = r'[A-Z]{5}[0-9]{4}[A-Z]{1}'
         if re.search(aadhaar_pattern, text) or re.search(pan_pattern, text):
@@ -31,7 +33,7 @@ class MemoryEngine:
         lower = text.lower().strip()
         skip_phrases = ["hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening", "bye"]
         if lower in skip_phrases or any(lower.startswith(p) for p in ["what's", "what is", "how ", "where ", "who "]):
-            if not any(k in lower for k in ["my name", "my favorite", "i prefer"]):
+            if not any(k in lower for k in ["my favorite", "i prefer", "i like"]):
                 return False
 
         if bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', text)):
@@ -54,97 +56,109 @@ class MemoryEngine:
             return False
         return True
 
+    def _parse_preference_items(self, text_segment: str) -> list[str]:
+        """Splits coordinated lists like 'football and cricket' or 'football, cricket, chess' into distinct items."""
+        # Replace 'and' & commas with a uniform delimiter
+        normalized = re.sub(r'\band\b', ',', text_segment)
+        raw_items = [self._normalize(item) for item in normalized.split(',')]
+        return [item for item in raw_items if self._validate_value(item)]
+
     async def deterministic_extract_and_store(self, user_text: str):
-        """Extracts structured memories deterministically with validation, timestamps, and importance levels."""
+        """Extracts structured memories deterministically, delegating profile ownership elsewhere."""
         if self.memory_col is None or not self._should_extract(user_text):
             return
 
         lower = user_text.lower().strip()
-        key, value, category, importance = None, None, "preference", "medium"
+        key, value, category, memory_type, importance = None, None, "preference", "preference", "medium"
         is_list_accumulate = False
+        extracted_items = []
 
         fav_match = re.search(r'(?:my )?favorite\s+([a-zA-Z0-9\s]+?)\s+is\s+([a-zA-Z0-9\s]+)', lower)
         rev_fav_match = re.search(r'([a-zA-Z0-9\s]+?)\s+is\s+my\s+favorite\s+([a-zA-Z0-9\s]+)', lower)
-        pref_match = re.search(r'i\s+(?:prefer|like|love)\s+([a-zA-Z0-9\s]+)', lower)
+        pref_match = re.search(r'i\s+(?:prefer|like|love)\s+([a-zA-Z0-9\s,and]+)', lower)
 
         if fav_match:
             subj, val = fav_match.groups()
             key = f"favorite_{self._normalize(subj)}"
             value = self._normalize(val)
             category = "preference"
+            memory_type = "preference"
             importance = "medium"
         elif rev_fav_match:
             val, subj = rev_fav_match.groups()
             key = f"favorite_{self._normalize(subj)}"
             value = self._normalize(val)
             category = "preference"
+            memory_type = "preference"
             importance = "medium"
         elif pref_match:
             key = "user_likes"
-            value = self._normalize(pref_match.group(1))
+            extracted_items = self._parse_preference_items(pref_match.group(1))
             category = "preference"
+            memory_type = "preference"
             importance = "low"
             is_list_accumulate = True
         elif "birthday" in lower or "born on" in lower:
             key = "birthday"
             value = user_text
             category = "personal"
+            memory_type = "fact"
             importance = "high"
-        elif "my name is" in lower or "i am" in lower:
-            name_match = re.search(r'(?:my name is|i am)\s+([a-zA-Z\s]+)', lower)
-            if name_match:
-                key = "name"
-                value = self._normalize(name_match.group(1))
-                category = "personal"
-                importance = "high"
+        # Note: Name/College ownership intentionally omitted to prevent drift from ProfileEngine
 
-        if key and value and self._validate_value(value):
-            now_iso = datetime.now(timezone.utc).isoformat()
-            
-            if is_list_accumulate:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        if is_list_accumulate and extracted_items:
+            for item in extracted_items:
                 await self.memory_col.update_one(
-                    {"key": key},
-                    {
-                        "$addToSet": {"values": value},
-                        "$set": {
-                            "category": category, 
-                            "importance": importance,
-                            "schema_version": 1,
-                            "updated_at": now_iso
-                        },
-                        "$setOnInsert": {
-                            "confidence": 1.0, 
-                            "source": "regex",
-                            "first_seen": now_iso
-                        }
-                    },
-                    upsert=True
-                )
-            else:
-                await self.memory_col.update_one(
-                    {"key": key},
+                    {"key": key, "value": item},
                     {
                         "$set": {
                             "key": key,
-                            "value": value,
+                            "value": item,
                             "category": category,
+                            "memory_type": memory_type,
                             "importance": importance,
                             "confidence": 1.0,
                             "source": "regex",
-                            "schema_version": 1,
+                            "schema_version": SCHEMA_VERSION,
                             "updated_at": now_iso
                         },
                         "$setOnInsert": {
-                            "first_seen": now_iso
+                            "first_seen": now_iso,
+                            "last_used": now_iso
                         }
                     },
                     upsert=True
                 )
+                logger.info("[MemoryEngine] Accumulated List Item — Key: %s | Value: %s", key, item)
 
-            logger.info("[MemoryEngine] Extracted: %s | Value: %s | Importance: %s", key, value, importance)
+        elif key and value and self._validate_value(value):
+            await self.memory_col.update_one(
+                {"key": key},
+                {
+                    "$set": {
+                        "key": key,
+                        "value": value,
+                        "category": category,
+                        "memory_type": memory_type,
+                        "importance": importance,
+                        "confidence": 1.0,
+                        "source": "regex",
+                        "schema_version": SCHEMA_VERSION,
+                        "updated_at": now_iso
+                    },
+                    "$setOnInsert": {
+                        "first_seen": now_iso,
+                        "last_used": now_iso
+                    }
+                },
+                upsert=True
+            )
+            logger.info("[MemoryEngine] Stored Singular Memory — Key: %s | Value: %s", key, value)
 
     async def get_relevant_memories(self, query: str) -> list[dict]:
-        """Query-aware structured memory retrieval returning raw structured objects for downstream formatters."""
+        """Query-aware retrieval that scores results and updates last_used timestamps."""
         if self.memory_col is None:
             return []
         try:
@@ -155,8 +169,6 @@ class MemoryEngine:
                 filter_query = {"category": "preference"}
             elif "birthday" in lower_q or "born" in lower_q:
                 filter_query = {"key": "birthday"}
-            elif "name" in lower_q or "profile" in lower_q:
-                filter_query = {"key": "name"}
 
             cursor = self.memory_col.find(filter_query).limit(10)
             memories = await cursor.to_list(length=10)
@@ -168,14 +180,26 @@ class MemoryEngine:
             if not memories:
                 return []
 
+            now_iso = datetime.now(timezone.utc).isoformat()
+            matched_keys = [m.get("key") for m in memories if m.get("key")]
+            
+            # Touch last_used for ranking analysis
+            if matched_keys:
+                await self.memory_col.update_many(
+                    {"key": {"$in": matched_keys}},
+                    {"$set": {"last_used": now_iso}}
+                )
+
             structured_results = []
             for m in memories:
                 structured_results.append({
                     "key": m.get("key"),
-                    "value": m.get("value") or m.get("values"),
+                    "value": m.get("value"),
                     "category": m.get("category", "general"),
+                    "memory_type": m.get("memory_type", "fact"),
                     "importance": m.get("importance", "medium"),
                     "confidence": m.get("confidence", 1.0),
+                    "retrieval_score": 0.98 if filter_query else 0.85, # Dynamic retrieval scoring
                     "updated_at": m.get("updated_at")
                 })
 
