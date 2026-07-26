@@ -18,19 +18,30 @@ class AriaBrain:
         self.documents = DocumentIndex(self.chroma, self.mongo, self.events)
         self.retrieval = RetrievalEngine(self.chroma, self.mongo, self.cache)
 
-    async def recall(self, request: BrainRequest) -> dict:
-        """Cognitive Mode: Recall memories or profile data."""
-        return await self.retrieval.search(request)
-
     async def search(self, request: BrainRequest) -> dict:
-        """Cognitive Mode: Unified search across all stores."""
-        return await self.retrieval.search(request)
+        """Kernel Orchestrator: Intent inspection and parallel context building."""
+        lower_q = request.query.lower()
+
+        # Intent Routing: Bypass heavy retrieval for targeted profile queries
+        if any(k in lower_q for k in ["my name", "who am i", "my profile"]):
+            profile = {}
+            if self.mongo.profile is not None:
+                profile = await self.mongo.profile.find_one({"_id": "master_profile"}) or {}
+            return {"source": "profile", "profile": profile}
+
+        # Intent Routing: Standard parallel retrieval across stores
+        return await self.retrieval.parallel_search(request)
+
+    async def recall(self, request: BrainRequest) -> dict:
+        return await self.search(request)
 
     async def learn(self, request: BrainRequest, filename: str, text: str):
         """Cognitive Mode: Ingest and learn new artifacts."""
         return await self.documents.index_document(request, filename, text)
 
     async def reason(self, request: BrainRequest) -> str:
-        """Cognitive Mode: Synthesize answers."""
         res = await self.search(request)
         return str(res)
+
+    def store_knowledge(self, question: str, answer: str):
+        self.cache.set(question, answer)
