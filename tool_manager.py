@@ -9,7 +9,9 @@ from io import BytesIO
 # Multi-format parsers
 from pypdf import PdfReader
 import docx
+from pptx import Presentation
 import pandas as pd
+from bs4 import BeautifulSoup
 
 class BaseTool:
     NAME = "base"
@@ -38,8 +40,8 @@ class MemoryTool(BaseTool):
 
 class DocumentTool(BaseTool):
     NAME = "documents"
-    DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, office files, notes, and spreadsheets."
-    CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes", "docx"]
+    DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, office files, presentations, and notes."
+    CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes", "docx", "pptx"]
 
     async def execute(self, query: str, documents_collection, chat_id: str = None) -> dict:
         if documents_collection is None: 
@@ -72,7 +74,7 @@ class SearchTool(BaseTool):
                 elif results_count == 1: confidence = 0.70
                 else: confidence = 0.40
 
-                # Structured Formatter for Weather & News
+                # Structured Formatter for Weather & News (No raw JSON leakage)
                 if "weather" in query.lower():
                     snippet = raw_results[0]['content'] if raw_results else "Data unavailable"
                     content = (
@@ -92,22 +94,22 @@ class SearchTool(BaseTool):
 
 class MediaVaultTool(BaseTool):
     NAME = "media"
-    DESCRIPTION = "Manage, parse multi-format files (PDF, DOCX, TXT, CSV, XLSX), detect smart duplicates, and dispatch documents."
-    CAPABILITIES = ["dispatch file", "list documents", "parse docx", "parse pdf", "smart duplicate detection", "resume"]
+    DESCRIPTION = "Manage, parse multi-format files (PDF, DOCX, PPTX, TXT, CSV, XLSX), detect semantic duplicates, and dispatch documents."
+    CAPABILITIES = ["dispatch file", "list documents", "parse pptx", "parse pdf", "smart duplicate detection", "resume"]
 
     def _auto_categorize(self, filename: str) -> str:
         fn = filename.lower()
         if any(w in fn for w in ["resume", "cv", "portfolio"]): return "Resume"
         if any(w in fn for w in ["pan", "passport", "id"]): return "Identity"
         if any(w in fn for w in ["cert", "certificate", "course"]): return "Certificates"
-        if any(w in fn for w in ["note", "memo", "study", "syllabus"]): return "College Notes"
+        if any(w in fn for w in ["note", "memo", "study", "syllabus", "presentation", "slides"]): return "College Notes"
         return "General"
 
     def _extract_text_multi_format(self, file_name: str, raw_bytes: bytes) -> tuple[str, dict]:
-        """Parses PDF, DOCX, TXT, CSV, XLSX, and extracts rich metadata."""
+        """Parses PDF, DOCX, PPTX, TXT, CSV, XLSX with rich metadata extraction."""
         ext = file_name.split(".")[-1].lower()
         extracted_text = ""
-        meta = {"file_type": ext, "page_count": 1, "size_bytes": len(raw_bytes)}
+        meta = {"file_type": ext, "size_bytes": len(raw_bytes)}
 
         try:
             if ext == "pdf":
@@ -122,6 +124,20 @@ class MediaVaultTool(BaseTool):
                 for para in doc.paragraphs:
                     if para.text: extracted_text += para.text + "\n"
             
+            elif ext == "pptx":
+                prs = Presentation(BytesIO(raw_bytes))
+                meta["slide_count"] = len(prs.slides)
+                slide_texts = []
+                for idx, slide in enumerate(prs.slides):
+                    slide_content = f"--- Slide {idx+1} ---\n"
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            slide_content += shape.text + "\n"
+                        if shape.has_notes_slide and shape.notes_slide.notes_text_frame:
+                            slide_content += f"[Notes]: {shape.notes_slide.notes_text_frame.text}\n"
+                    slide_texts.append(slide_content)
+                extracted_text = "\n".join(slide_texts)
+
             elif ext in ["txt", "md"]:
                 extracted_text = raw_bytes.decode("utf-8", errors="ignore")
             
@@ -141,17 +157,15 @@ class MediaVaultTool(BaseTool):
         return extracted_text.strip(), meta
 
     def _infer_profile_updates(self, text: str) -> dict:
-        """Automatically scans uploaded documents for profile entities (Resume/CV intelligence)."""
+        """Automatically scans uploaded documents for profile entities."""
         inferred = {}
         text_lower = text.lower()
         
-        # Simple heuristic extraction
         if "b.tech" in text_lower or "computer science" in text_lower:
             inferred["degree"] = "B.Tech Computer Science Engineering"
         if "gayatri" in text_lower:
             inferred["college"] = "Gayatri Vidya Parishad College"
         
-        # Look for email patterns
         emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
         if emails:
             inferred["email"] = emails[0]
@@ -159,10 +173,10 @@ class MediaVaultTool(BaseTool):
         return inferred
 
     async def ingest_or_check_duplicate(self, file_name: str, raw_bytes: bytes, media_col, documents_collection=None) -> str:
-        """Smart Duplicate Detection: Hashes extracted text content rather than binary bytes alone."""
+        """Smart Semantic Duplicate Detection: Hashes extracted normalized text content."""
         extracted_text, metadata = self._extract_text_multi_format(file_name, raw_bytes)
         
-        # Hash normalized text content for semantic near-duplicate checking
+        # Normalize and hash text content to catch near-duplicates regardless of filenames
         normalized_text = re.sub(r'\s+', ' ', extracted_text).lower().strip()
         content_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest() if normalized_text else hashlib.sha256(raw_bytes).hexdigest()
 
@@ -182,7 +196,7 @@ class MediaVaultTool(BaseTool):
         b64_payload = base64.b64encode(raw_bytes).decode("utf-8")
         category = self._auto_categorize(file_name)
         
-        # Index into Chroma vector DB if text was successfully extracted
+        # Index into Chroma vector DB
         if extracted_text and documents_collection is not None:
             chunks = [extracted_text[i:i+1000] for i in range(0, len(extracted_text), 1000)]
             for idx, chunk in enumerate(chunks):
@@ -193,7 +207,6 @@ class MediaVaultTool(BaseTool):
                     metadatas=[{"file_name": file_name, "source": "MediaVault", "hash": content_hash}]
                 )
 
-        # Profile entity auto-inference check
         profile_suggestion = ""
         if category == "Resume":
             entities = self._infer_profile_updates(extracted_text)
