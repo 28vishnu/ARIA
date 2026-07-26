@@ -1,18 +1,6 @@
-import random
-
 class PersonalityEngine:
     def __init__(self, memory_engine=None):
         self.memory_engine = memory_engine
-        self.acknowledgments = [
-            "Certainly.",
-            "Certainly, {address}.",
-            "Understood.",
-            "Right away.",
-            "I'll handle that.",
-            "Done.",
-            "Affirmative.",
-            "Working on it."
-        ]
 
     def get_system_prompt(self) -> str:
         """Returns the native elite AI-OS system behavior instructions for model generation."""
@@ -27,17 +15,15 @@ class PersonalityEngine:
         )
 
     async def apply_persona(self, raw_text: str, is_major_event: bool = False) -> str:
-        """Applies natural conversational variation instead of rigid repetitive suffixes."""
+        """Refines text formatting and ensures address preferences are respected without overriding model wording."""
         cleaned = raw_text.strip()
         
         address_style = "Sir"
         if self.memory_engine and hasattr(self.memory_engine, "get_address_style"):
             address_style = await self.memory_engine.get_address_style()
 
-        # For short or action-completion responses, optionally inject natural variety
-        if len(cleaned.split()) < 4 and not cleaned.endswith((".", "!", "?")):
-            template = random.choice(self.acknowledgments)
-            cleaned = template.format(address=address_style)
+        # Clean markdown artifacts or awkward trailing punctuation
+        cleaned = cleaned.rstrip("*_ .") + "."
 
         if is_major_event:
             cleaned += "\n\n— ARIA Neural Core"
