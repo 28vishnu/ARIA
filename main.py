@@ -17,6 +17,8 @@ from reasoner import reason
 from conversation_manager import ConversationManager
 from reflection_engine import ReflectionEngine
 from brain import AriaBrain
+from profile_engine import ProfileEngine
+from workers import BackgroundWorkers
 
 # Provider SDKs
 from groq import Groq
@@ -62,7 +64,6 @@ class GroqProvider(LLMProvider):
 class OpenRouterProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client_key = api_key
-        # Configurable model pool with automatic runtime blacklisting for dead/404 endpoints
         self.models = [
             "meta-llama/llama-3-70b-instruct",
             "mistralai/mixtral-8x7b-instruct",
@@ -86,9 +87,8 @@ class OpenRouterProvider(LLMProvider):
                         )
                         data = res.json()
                         
-                        # Handle 404 / unavailable endpoints by blacklisting dynamically
                         if res.status_code == 404 or "No endpoints found" in str(data):
-                            print(f"[OpenRouter Dynamic Blacklist]: Model {model} returned 404/Unavailable. Removing from active rotation.")
+                            print(f"[OpenRouter Dynamic Blacklist]: Model {model} returned 404/Unavailable.")
                             self.blacklisted_models.add(model)
                             break
 
@@ -98,7 +98,6 @@ class OpenRouterProvider(LLMProvider):
                             continue
                         
                         if "choices" not in data:
-                            print(f"[OpenRouter Invalid Response Key]: {data}")
                             raise Exception(f"Invalid OpenRouter payload: {data}")
 
                         res.raise_for_status()
@@ -212,7 +211,6 @@ def get_mongo():
 def get_chroma():
     global _chroma_client
     if _chroma_client is None:
-        # Use Render persistent disk path if available to prevent model re-downloads on spin-down
         persist_path = os.getenv("RENDER_PERSISTENT_DIR", "./aria_vectors")
         os.makedirs(persist_path, exist_ok=True)
         _chroma_client = chromadb.PersistentClient(path=persist_path)
@@ -246,6 +244,33 @@ def get_temporal() -> str:
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
 PENDING_STATES = {}
+
+# -------------------------------------------------------------
+# STARTUP EVENT: INITIALIZE PROFILE & BACKGROUND WORKERS
+# -------------------------------------------------------------
+@app.on_event("startup")
+async def startup_event():
+    print("[ARIA OS]: Initializing background intelligence workers and schedulers...")
+    mongo_db = get_mongo()
+    if mongo_db is not None:
+        db_inst = mongo_db["aria_db"]
+        
+        # Initialize Profile Engine
+        profile_eng = ProfileEngine(db_inst)
+        profile = await profile_eng.get_profile()
+        print(f"[ARIA OS]: User Profile Loaded for: {profile.get('name', 'User')}")
+
+        # Initialize Background Workers
+        workers = BackgroundWorkers(db_inst, llm_router, get_tavily())
+
+        # Schedule Workers using APScheduler
+        scheduler.add_job(workers.morning_briefing_worker, "cron", hour=9, minute=0)
+        scheduler.add_job(workers.night_summary_worker, "cron", hour=22, minute=0)
+        scheduler.add_job(workers.inactivity_worker, "interval", days=1)
+        scheduler.add_job(workers.api_health_monitor_worker, "interval", hours=1)
+        
+        scheduler.start()
+        print("[ARIA OS]: Background Intelligence Workers active and running.")
 
 # -------------------------------------------------------------
 # TASK PROCESSING PIPELINE WITH PERSISTENT LOCATION MEMORY
@@ -326,7 +351,7 @@ async def process_task(user_text: str, session_id: str) -> str:
 
     # 5. WEATHER INJECTION WITH PERSISTENT LOCATION MEMORY
     if "weather" in lower_txt:
-        loc_query = "Visakhapatnam" # Default fallback
+        loc_query = "Visakhapatnam"
         if mem_col is not None:
             loc_hit = mem_col.get(ids=["user_persistent_location"])
             if loc_hit and loc_hit.get("metadatas") and len(loc_hit["metadatas"]) > 0:
@@ -340,12 +365,12 @@ async def process_task(user_text: str, session_id: str) -> str:
     media_intent_keywords = [
         "resume", "cv", "portfolio", "aadhar", "aadhaar", "pan", "passport", 
         "certificate", "memo", "marks memo", "pdf", "document", "file", 
-        "download", "licence", "license", "id card", "my file", "send document"
+        "download", "licence", "license", "id card", "my file", "send document", "what documents"
     ]
     if any(keyword in lower_txt for keyword in media_intent_keywords):
         print(f"[INTENT BYPASS] Expanded Media/Document Tool trigger for query: '{user_text}'")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
-        if not res.get("success"):
+        if not res.get("success") and not res.get("metadata", {}).get("requires_clarification"):
             PENDING_STATES[session_id] = {"tool": "media", "query": user_text}
         return res.get("content")
 
