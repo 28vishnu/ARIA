@@ -126,8 +126,8 @@ async def sync_ram_cache():
                 sch_entry = f"• Task: {tdoc.get('task')} | Slot: {tdoc.get('timing')}"
                 if sch_entry not in schedules: schedules.append(sch_entry)
 
-            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(8)
-            chat_docs = await chat_cursor.to_list(length=8)
+            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(10)
+            chat_docs = await chat_cursor.to_list(length=10)
             for cdoc in reversed(chat_docs):
                 chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
 
@@ -144,16 +144,17 @@ async def sync_ram_cache():
 # 3. DIRECT FILE DISPATCH & AUTONOMOUS TOOLS
 # -------------------------------------------------------------
 async def send_file_from_vault(file_query: str, chat_id: str) -> str:
-    """Finds the matching document in MongoDB and dispatches the raw file directly via Telegram."""
+    """Finds matching document in MongoDB and sends binary file directly via Telegram."""
     if mongo_media_col is None:
         return "Vault database is currently offline, Sir."
 
     try:
-        q_regex = re.compile(file_query.strip(), re.IGNORECASE)
-        # Search by file name first, then content preview
-        target_doc = await mongo_media_col.find_one({"file_name": q_regex})
-        if not target_doc:
-            target_doc = await mongo_media_col.find_one({"caption": q_regex})
+        query_str = file_query.strip() if file_query else ""
+        if not query_str:
+            target_doc = await mongo_media_col.find_one({}, sort=[("_id", -1)])
+        else:
+            q_regex = re.compile(query_str, re.IGNORECASE)
+            target_doc = await mongo_media_col.find_one({"$or": [{"file_name": q_regex}, {"caption": q_regex}]})
 
         if not target_doc:
             return f"I searched the vault, Sir, but could not find any document matching '{file_query}'."
@@ -175,7 +176,27 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
         return f"File '{fname}' dispatched successfully to your Telegram, Sir."
     except Exception as e:
         print(f"[File Dispatch Error]: {e}")
-        return f"Encountered an issue dispatching '{file_query}', Sir."
+        return f"Encountered an issue dispatching document for query '{file_query}', Sir."
+
+async def query_document_vault(search_query: str) -> str:
+    """Deep document reading tool: Retrieves full parsed text of matching PDFs."""
+    if mongo_media_col is None: return "Document vault unavailable, Sir."
+    try:
+        q_regex = re.compile(search_query, re.IGNORECASE) if search_query else None
+        filter_clause = {"$or": [{"file_name": q_regex}, {"caption": q_regex}]} if q_regex else {}
+        docs = await mongo_media_col.find(filter_clause).sort("_id", -1).to_list(length=3)
+
+        if not docs:
+            return f"No document content matching '{search_query}' found in your vault, Sir."
+
+        results = []
+        for d in docs:
+            content = d.get("caption", "").strip()
+            results.append(f"DOCUMENT NAME: '{d.get('file_name')}'\nFULL TEXT CONTENT:\n{content[:3500]}")
+
+        return "\n\n====================\n\n".join(results)
+    except Exception as e:
+        return f"Document query error: {str(e)}"
 
 async def log_security_breach(unauthorized_id: str, raw_msg: str):
     if mongo_security_col is not None:
@@ -229,23 +250,6 @@ async def create_time_reminder(minutes: int, task_desc: str) -> str:
         except Exception: pass
 
     return f"Reminder established for '{task_desc}' in {minutes} minute{'s' if minutes > 1 else ''}, Sir."
-
-async def query_document_vault(search_query: str) -> str:
-    if mongo_media_col is None: return "Document vault unavailable, Sir."
-    try:
-        q_regex = re.compile(search_query, re.IGNORECASE)
-        docs = await mongo_media_col.find({"$or": [{"file_name": q_regex}, {"caption": q_regex}]}).to_list(length=5)
-
-        if not docs:
-            return f"No document content matching '{search_query}' found in your vault, Sir."
-
-        results = []
-        for d in docs:
-            results.append(f"Document '{d.get('file_name')}': {d.get('caption', '')[:300]}...")
-
-        return "RETRIEVED DOCUMENT INTELLIGENCE:\n" + "\n---\n".join(results)
-    except Exception as e:
-        return f"Document query error: {str(e)}"
 
 async def get_system_diagnostics() -> str:
     mem_count = await mongo_memory_col.count_documents({}) if mongo_memory_col is not None else 0
@@ -317,7 +321,7 @@ async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, cap
         except Exception: pass
 
     await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Text Preview: {caption[:400]}")
-    return f"{media_type.capitalize()} '{file_name}' fully parsed and secured in your document vault, Sir."
+    return f"Document '{file_name}' fully parsed and secured in your document vault, Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -375,13 +379,27 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_file_from_vault",
-            "description": "Sends the actual binary PDF/file to the user's Telegram chat when they ask to receive, download, or get a document/resume.",
+            "description": "Dispatches and sends the actual PDF file to Telegram when the user asks to receive or download a document (e.g. resume, aadhar, certificate).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_query": {"type": "string", "description": "Keyword/filename e.g. 'resume', 'certificate', 'saketh'"}
+                    "file_query": {"type": "string", "description": "Specific document keyword e.g. 'aadhar', 'resume', 'certificate', 'cs50'"}
                 },
                 "required": ["file_query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_document_vault",
+            "description": "Reads and extracts full text content from stored PDF files to answer specific questions about what is inside them.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search_query": {"type": "string", "description": "Topic or keyword to read inside uploaded PDFs"}
+                },
+                "required": ["search_query"]
             }
         }
     },
@@ -419,7 +437,7 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "save_memory_fact",
-            "description": "Saves a personal profile fact, detail, or preference about the user into the permanent vault.",
+            "description": "Saves a personal profile fact or detail about the user into the permanent vault.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -427,20 +445,6 @@ GROQ_TOOLS = [
                     "fact": {"type": "string", "description": "The exact fact or detail to remember"}
                 },
                 "required": ["category", "fact"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_document_vault",
-            "description": "Reads text content inside uploaded PDF documents to answer study/project questions.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "search_query": {"type": "string", "description": "Keyword or topic to read inside documents"}
-                },
-                "required": ["search_query"]
             }
         }
     },
@@ -490,11 +494,12 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {search_context}
 
 DYNAMIC DIRECTIVES:
-- FILE REQUEST RULE: If the user asks to receive, download, or get a document/resume file, call 'send_file_from_vault' with the file query immediately.
-- USE TOOLS FREELY: Call functions automatically for reminders, tasks, document reading, and system diagnostics.
+- FILE DISPATCH vs DOCUMENT READING: 
+  * If the user wants to GET/RECEIVE/DOWNLOAD a document file, call 'send_file_from_vault'.
+  * If the user asks a question ABOUT what is inside a document or asks to read a specific point, call 'query_document_vault'.
+- NO HARDCODED DEFAULTS: Match document requests carefully using user keywords (e.g. 'aadhar', 'resume', 'certificate').
 - ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Never use scripted lines like "Good day Mr. Saketh".
-- FORMATTING: Never output bold asterisks (*), extra commas, or double spaces. Keep tone crisp, witty, intelligent, and natural.
-- CONCISENESS: Keep conversational responses brief (1-2 sentences max)."""
+- FORMATTING: Keep tone crisp, witty, intelligent, and natural."""
 
     reply_text = "All systems operational, Sir."
 
@@ -506,7 +511,7 @@ DYNAMIC DIRECTIVES:
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
                     tools=GROQ_TOOLS,
                     tool_choice="auto",
-                    temperature=0.3, max_tokens=180
+                    temperature=0.3, max_tokens=300
                 )
                 return response.choices[0].message
 
@@ -518,15 +523,30 @@ DYNAMIC DIRECTIVES:
                     fn_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
 
                     if fn_name == "send_file_from_vault":
-                        reply_text = await send_file_from_vault(fn_args.get("file_query", "resume"), session_id)
+                        q_term = fn_args.get("file_query", "")
+                        # Fallback query extraction from user prompt if tool args are empty
+                        if not q_term:
+                            for term in ["aadhar", "resume", "certificate", "cs50", "passport", "guide"]:
+                                if term in cmd: q_term = term; break
+                        reply_text = await send_file_from_vault(q_term, session_id)
+
+                    elif fn_name == "query_document_vault":
+                        doc_text = await query_document_vault(fn_args.get("search_query", user_text))
+                        # Second-pass call to answer user query using retrieved document text
+                        qa_prompt = f"The user asked: '{user_text}'\n\nDOCUMENT CONTENTS:\n{doc_text}\n\nProvide a precise, direct answer based strictly on the document text above. Address the user as Sir."
+                        qa_comp = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
+                            temperature=0.3, max_tokens=250
+                        )
+                        reply_text = qa_comp.choices[0].message.content.strip()
+
                     elif fn_name == "create_time_reminder":
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
                     elif fn_name == "save_scheduled_task":
                         reply_text = await save_scheduled_task(fn_args.get("task"), fn_args.get("timing"))
                     elif fn_name == "save_memory_fact":
                         reply_text = await save_memory_fact(fn_args.get("category", "general"), fn_args.get("fact"))
-                    elif fn_name == "query_document_vault":
-                        reply_text = await query_document_vault(fn_args.get("search_query", ""))
                     elif fn_name == "get_system_diagnostics":
                         reply_text = await get_system_diagnostics()
             elif msg.content:
@@ -616,7 +636,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Direct File Dispatch Core]: Fully Active.")
+    print("[J.A.R.V.I.S. Context Engine]: Fully Active.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -647,208 +667,12 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA Direct File Dispatcher Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Context Engine Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-        <title>{ASSISTANT_NAME}</title>
-        <style>
-            * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }}
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #020617; color: #f8fafc;
-                min-height: 100vh; display: flex; flex-direction: column;
-                align-items: center; justify-content: center;
-                overflow: hidden; position: relative;
-            }}
-            canvas#particleCanvas {{
-                position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-                z-index: 1; pointer-events: none;
-            }}
-            .ui-layer {{
-                position: relative; z-index: 2;
-                display: flex; flex-direction: column; align-items: center; justify-content: center;
-            }}
-            .hud-orb {{
-                position: relative; width: 240px; height: 240px;
-                display: flex; align-items: center; justify-content: center; cursor: pointer;
-            }}
-            .ring-outer {{
-                position: absolute; width: 100%; height: 100%; border-radius: 50%;
-                border: 2px dashed rgba(56, 189, 248, 0.4);
-                animation: spin 20s linear infinite;
-            }}
-            .ring-inner {{
-                position: absolute; width: 78%; height: 78%; border-radius: 50%;
-                border: 2px solid rgba(129, 140, 248, 0.5);
-                box-shadow: 0 0 30px rgba(56, 189, 248, 0.3);
-            }}
-            .core-node {{
-                width: 50%; height: 50%; border-radius: 50%;
-                background: radial-gradient(circle, #38bdf8 0%, #0284c7 60%, #0369a1 100%);
-                box-shadow: 0 0 50px rgba(56, 189, 248, 0.8);
-                transition: all 0.3s ease;
-            }}
-            .hud-orb.speaking .core-node {{
-                animation: pulse 0.8s ease-in-out infinite alternate;
-                background: radial-gradient(circle, #818cf8 0%, #4f46e5 70%, #3730a3 100%);
-                box-shadow: 0 0 80px rgba(129, 140, 248, 1);
-            }}
-            @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
-            @keyframes pulse {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
-
-            #dropZone {{
-                position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                background: rgba(2, 6, 23, 0.85); backdrop-filter: blur(12px);
-                border: 3px dashed #38bdf8; z-index: 10;
-                display: flex; align-items: center; justify-content: center;
-                font-size: 1.5rem; color: #38bdf8; letter-spacing: 2px;
-                opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
-            }}
-            #dropZone.active {{ opacity: 1; pointer-events: all; }}
-        </style>
-    </head>
-    <body>
-        <canvas id="particleCanvas"></canvas>
-        <div id="dropZone">Drop media or document files here to save in MongoDB vault</div>
-
-        <div class="ui-layer">
-            <div class="hud-orb" id="hudOrb" onclick="toggleMic()">
-                <div class="ring-outer"></div>
-                <div class="ring-inner"></div>
-                <div class="core-node"></div>
-            </div>
-        </div>
-
-        <script>
-            const canvas = document.getElementById('particleCanvas');
-            const ctx = canvas.getContext('2d');
-            let particles = [];
-            function resize() {{ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }}
-            window.addEventListener('resize', resize); resize();
-            class Particle {{
-                constructor() {{
-                    this.x = Math.random() * canvas.width; this.y = Math.random() * canvas.height;
-                    this.vx = (Math.random() - 0.5) * 0.7; this.vy = (Math.random() - 0.5) * 0.7;
-                }}
-                update() {{
-                    this.x += this.vx; this.y += this.vy;
-                    if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
-                    if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
-                }}
-                draw() {{
-                    ctx.beginPath(); ctx.arc(this.x, this.y, 1.5, 0, Math.PI * 2);
-                    ctx.fillStyle = 'rgba(56, 189, 248, 0.4)'; ctx.fill();
-                }}
-            }}
-            for (let i = 0; i < 55; i++) particles.push(new Particle());
-            function render() {{
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                particles.forEach((p, i) => {{
-                    p.update(); p.draw();
-                    for (let j = i + 1; j < particles.length; j++) {{
-                        const dist = Math.hypot(p.x - particles[j].x, p.y - particles[j].y);
-                        if (dist < 100) {{
-                            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(particles[j].x, particles[j].y);
-                            ctx.strokeStyle = `rgba(56, 189, 248, ${{0.15 * (1 - dist / 100)}})`;
-                            ctx.stroke();
-                        }}
-                    }}
-                }});
-                requestAnimationFrame(render);
-            }}
-            render();
-
-            let ws, currentAudio = null, userLocation = null, isPlayingAudio = false;
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            let recognition;
-
-            if ("geolocation" in navigator) {{
-                navigator.geolocation.getCurrentPosition((pos) => {{ userLocation = pos.coords.latitude + "," + pos.coords.longitude; }});
-            }}
-
-            function initWebSocket() {{
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(`${{protocol}}//${{window.location.host}}/ws`);
-                ws.onmessage = (event) => {{
-                    const payload = JSON.parse(event.data);
-                    playNeuralAudio(payload.audio);
-                }};
-            }}
-            initWebSocket();
-
-            function startListeningSafely() {{
-                if (!recognition || isPlayingAudio) return;
-                try {{ recognition.start(); }} catch (e) {{}}
-            }}
-
-            if (SpeechRecognition) {{
-                recognition = new SpeechRecognition();
-                recognition.continuous = true;
-                recognition.interimResults = false;
-                recognition.lang = 'en-US';
-
-                recognition.onresult = (event) => {{
-                    const speech = event.results[event.results.length - 1][0].transcript.trim();
-                    if (!speech) return;
-                    stopAudio();
-                    if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: speech, location: userLocation }}));
-                    }}
-                }};
-
-                recognition.onend = () => {{ if (!isPlayingAudio) setTimeout(startListeningSafely, 200); }};
-                recognition.onerror = (event) => {{ if (event.error !== 'aborted' && !isPlayingAudio) setTimeout(startListeningSafely, 300); }};
-                window.addEventListener('load', () => {{ startListeningSafely(); }});
-            }}
-
-            function stopAudio() {{
-                if (currentAudio) {{ currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }}
-                isPlayingAudio = false;
-                document.getElementById('hudOrb').classList.remove('speaking');
-            }}
-
-            function toggleMic() {{ stopAudio(); startListeningSafely(); }}
-
-            function playNeuralAudio(b64Data) {{
-                stopAudio();
-                if (recognition) {{ try {{ recognition.stop(); }} catch(e) {{}} }}
-                isPlayingAudio = true;
-                currentAudio = new Audio("data:audio/mp3;base64," + b64Data);
-                document.getElementById('hudOrb').classList.add('speaking');
-                currentAudio.onended = () => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }};
-                currentAudio.onerror = () => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }};
-                currentAudio.play().catch(err => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }});
-            }}
-
-            const dropZone = document.getElementById('dropZone');
-            window.addEventListener('dragover', (e) => {{ e.preventDefault(); dropZone.classList.add('active'); }});
-            window.addEventListener('dragleave', (e) => {{ if (e.clientX <= 0 || e.clientY <= 0) dropZone.classList.remove('active'); }});
-            window.addEventListener('drop', async (e) => {{
-                e.preventDefault();
-                dropZone.classList.remove('active');
-                if (e.dataTransfer.files.length > 0) {{
-                    const file = e.dataTransfer.files[0];
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    formData.append('category', 'documents');
-                    await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
-                    if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: "I uploaded " + file.name + " to my MongoDB document vault.", location: userLocation }}));
-                    }}
-                }}
-            }});
-        </script>
-    </body>
-    </html>
-    """
+    return f"<h1>ARIA Context Engine Online</h1>"
 
 # -------------------------------------------------------------
 # 8. WEBSOCKET STREAMING & UPLOAD ROUTE
