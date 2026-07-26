@@ -1,25 +1,18 @@
 class RetrievalEngine:
-    def __init__(self, document_index, memory_engine, graph_manager, cache_manager):
-        self.docs = document_index
-        self.memory = memory_engine
-        self.graph = graph_manager
-        self.cache = cache_manager
+    def __init__(self, chroma_repo, mongo_repo, cache_mgr):
+        self.chroma = chroma_repo
+        self.mongo = mongo_repo
+        self.cache = cache_mgr
 
-    async def unified_search(self, query: str) -> dict:
-        """Executes a multi-source parallel search across cache, documents, and memory, returning ranked results."""
-        # 1. Check QA Cache First
-        cached_ans = self.cache.search_cache(query)
-        if cached_ans:
-            return {"type": "cache", "content": cached_ans, "score": 0.99}
+    async def search(self, request):
+        cached = self.cache.get(request.query)
+        if cached:
+            return {"source": "cache", "content": cached}
 
-        # 2. Parallel retrieve from Documents and Memories
-        doc_results = await self.docs.search(query)
-        memory_results = await self.memory.get_relevant_memories(query) if self.memory else ""
+        docs = []
+        if self.chroma.docs:
+            res = self.chroma.docs.query(query_texts=[request.query], n_results=3)
+            if res and res.get("metadatas") and len(res["metadatas"][0]) > 0:
+                docs = res["metadatas"][0]
 
-        # 3. Compile and Rank
-        ranked = {
-            "documents": doc_results,
-            "memories": memory_results,
-            "has_results": bool(doc_results or memory_results)
-        }
-        return ranked
+        return {"source": "retrieval", "documents": docs}
