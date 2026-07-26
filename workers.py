@@ -1,6 +1,6 @@
 import os
 import httpx
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 class BackgroundWorkers:
     def __init__(self, mongo_db, llm_router, tavily_client):
@@ -9,7 +9,7 @@ class BackgroundWorkers:
         self.tavily = tavily_client
         self.chats_col = mongo_db["chat_history"] if mongo_db is not None else None
         self.token = os.getenv("TELEGRAM_TOKEN")
-        self.admin_chat_id = os.getenv("ADMIN_CHAT_ID") # Set your Telegram chat ID in environment variables
+        self.admin_chat_id = os.getenv("ADMIN_CHAT_ID")
 
     async def send_telegram_notification(self, text: str):
         """Dispatches proactive background notifications to Telegram."""
@@ -31,7 +31,6 @@ class BackgroundWorkers:
         print("[BACKGROUND WORKER]: Running Morning Briefing check...")
         if self.chats_col is None: return
 
-        # Check if user already talked today
         now_utc = datetime.now(timezone.utc)
         start_of_day = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         recent_chat = await self.chats_col.find_one({"timestamp": {"$gte": start_of_day}})
@@ -40,7 +39,6 @@ class BackgroundWorkers:
             print("[Morning Worker]: User already active today. Skipping briefing.")
             return
 
-        # Fetch brief weather and intelligence
         weather_info = "Weather data unavailable."
         try:
             if self.tavily:
@@ -54,20 +52,20 @@ class BackgroundWorkers:
             f"Good morning, Sir. ARIA systems online.\n\n"
             f"🌤 **Morning Briefing**:\n"
             f"• Weather: {weather_info}\n"
-            f"• Active Project: ARIA AI (Progress: 80%)\n"
-            f"• Current Focus: Document Intelligence & Knowledge Graph\n\n"
+            f"• Active Project: ARIA AI (Progress: 85%)\n"
+            f"• Current Focus: Document Intelligence & Autonomous Workers\n\n"
             f"Standing by for your instructions today, Sir."
         )
         await self.send_telegram_notification(briefing)
 
     async def night_summary_worker(self):
-        """Night Worker (Runs daily at 10:00 PM): Provides daily wrap-up and tomorrow schedule."""
+        """Night Worker (Runs daily at 10:00 PM): Provides daily wrap-up."""
         print("[BACKGROUND WORKER]: Running Night Summary...")
         summary_msg = (
             f"Good evening, Sir. Daily operational wrap-up:\n\n"
             f"🌙 **Night Summary**:\n"
             f"• Systems status: Optimal across all fallback routers.\n"
-            f"• Active project milestone: Document vault indexing verified.\n\n"
+            f"• Active project milestone: Background intelligence workers operational.\n\n"
             f"Rest well, Sir. Systems remain active in background monitoring."
         )
         await self.send_telegram_notification(summary_msg)
@@ -86,7 +84,7 @@ class BackgroundWorkers:
                 await self.send_telegram_notification(msg)
 
     async def api_health_monitor_worker(self):
-        """API Health Monitor (Runs hourly): Verifies LLM routers and notifies if all cloud providers fail."""
+        """API Health Monitor (Runs hourly): Verifies LLM routers."""
         print("[BACKGROUND WORKER]: Running API Health Monitor check...")
         try:
             test_msg = [{"role": "user", "content": "ping"}]
