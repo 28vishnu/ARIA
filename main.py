@@ -246,11 +246,11 @@ def get_temporal() -> str:
 PENDING_STATES = {}
 
 # -------------------------------------------------------------
-# STARTUP EVENT: INITIALIZE PROFILE & BACKGROUND WORKERS
+# STARTUP EVENT: INITIALIZE PROFILE, GRAPH & BACKGROUND WORKERS
 # -------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    print("[ARIA OS]: Initializing background intelligence workers and schedulers...")
+    print("[ARIA OS]: Initializing background intelligence workers and knowledge graph...")
     mongo_db = get_mongo()
     if mongo_db is not None:
         db_inst = mongo_db["aria_db"]
@@ -260,7 +260,16 @@ async def startup_event():
         profile = await profile_eng.get_profile()
         print(f"[ARIA OS]: User Profile Loaded for: {profile.get('name', 'User')}")
 
-        # Initialize Background Workers
+        # Initialize Knowledge Graph and Seed Core Relationships (Phase 3)
+        brain = get_brain()
+        brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
+        brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
+        brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
+        brain.link_concepts("Saketh", "prefers", "Telegram", category="interface")
+        brain.link_concepts("ARIA AI", "stored_in", "Media Vault", category="architecture")
+        print("[ARIA OS]: Knowledge Graph successfully seeded with core entities.")
+
+        # Initialize Background Workers (Phase 2)
         workers = BackgroundWorkers(db_inst, llm_router, get_tavily())
 
         # Schedule Workers using APScheduler
