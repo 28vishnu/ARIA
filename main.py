@@ -372,7 +372,7 @@ async def process_task(user_text: str, session_id: str) -> str:
 
     # 6. EXPANDED MEDIA & DOCUMENT INTENT BYPASS
     media_intent_keywords = [
-        "resume", "cv", "portfolio", "aadhar", "aadhaar", "pan", "passport", 
+        "resume", "cv", "portfolio", "pan", "passport", 
         "certificate", "memo", "marks memo", "pdf", "document", "file", 
         "download", "licence", "license", "id card", "my file", "send document", "what documents"
     ]
