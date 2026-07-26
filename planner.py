@@ -43,7 +43,7 @@ If no further tools are needed, return an empty list for tools:
     try:
         raw = await llm_router.chat(messages, temperature=0.1, max_tokens=200)
         
-        # Safeguard: if quota error string returned instead of JSON
+        # Safeguard: if quota error string or plain text is returned instead of JSON
         if not raw or not raw.strip().startswith("{"):
             print(f"[Planner Warning]: Non-JSON response received: {raw}")
             return {"goal": "fallback", "action": "retrieve", "tools": []}
