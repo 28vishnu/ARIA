@@ -1,6 +1,9 @@
 import os
 import re
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger("aria")
 
 class MemoryEngine:
     def __init__(self, mongo_db):
@@ -8,62 +11,137 @@ class MemoryEngine:
         self.memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 
     def _should_extract(self, text: str) -> bool:
-        """Determines if a user message contains storable facts while respecting privacy rules."""
+        """Skips non-fact statements (greetings, math, simple queries) and filters sensitive IDs."""
+        lower = text.lower().strip()
+        
+        # Security Guardrail: Never extract sensitive IDs
         aadhaar_pattern = r'\b\d{4}\s?\d{4}\s?\d{4}\b'
         if re.search(aadhaar_pattern, text):
             return False
+
+        # Skip non-storable conversational utterances
+        skip_phrases = ["hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening", "bye"]
+        if lower in skip_phrases or any(lower.startswith(p) for p in ["what's", "what is", "how ", "where ", "who "]):
+            if not any(k in lower for k in ["my name", "my favorite", "i prefer"]):
+                return False
+
+        # Skip basic math expressions
+        if bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', text)):
+            return False
+
         return True
 
+    def _normalize(self, value: str) -> str:
+        """Normalizes extracted text values by stripping punctuation and collapsing whitespace."""
+        cleaned = value.lower().strip()
+        cleaned = re.sub(r'[^\w\s]', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        return cleaned
+
     async def deterministic_extract_and_store(self, user_text: str):
-        """Captures facts using flexible regex rules (Zero-LLM mode)."""
+        """Extracts structured key-value memories deterministically with overwrite/accumulate rules."""
         if self.memory_col is None or not self._should_extract(user_text):
             return
 
         lower = user_text.lower().strip()
-        fact_to_store = None
-        category = "general"
+        key, value, category = None, None, "preference"
+        is_list_accumulate = False
 
-        # Pattern 1: "my favorite X is Y" or "favorite X is Y"
+        # Pattern 1: Favorite subject/thing
         fav_match = re.search(r'(?:my )?favorite\s+([a-zA-Z0-9\s]+?)\s+is\s+([a-zA-Z0-9\s]+)', lower)
-        # Pattern 2: "Y is my favorite X"
         rev_fav_match = re.search(r'([a-zA-Z0-9\s]+?)\s+is\s+my\s+favorite\s+([a-zA-Z0-9\s]+)', lower)
-        # Pattern 3: "I prefer X" or "I like X" or "I love X"
+        
+        # Pattern 2: Preferences (Likes/Loves/Prefers) -> Accumulate into lists
         pref_match = re.search(r'i\s+(?:prefer|like|love)\s+([a-zA-Z0-9\s]+)', lower)
 
         if fav_match:
-            subject, value = fav_match.groups()
-            fact_to_store = f"Favorite {subject.strip()}: {value.strip()}"
+            subj, val = fav_match.groups()
+            key = f"favorite_{self._normalize(subj)}"
+            value = self._normalize(val)
             category = "preference"
         elif rev_fav_match:
-            value, subject = rev_fav_match.groups()
-            fact_to_store = f"Favorite {subject.strip()}: {value.strip()}"
+            val, subj = rev_fav_match.groups()
+            key = f"favorite_{self._normalize(subj)}"
+            value = self._normalize(val)
             category = "preference"
         elif pref_match:
-            pref = pref_match.group(1).strip()
-            fact_to_store = f"User preference: {pref}"
+            key = "user_likes"
+            value = self._normalize(pref_match.group(1))
             category = "preference"
+            is_list_accumulate = True
         elif "birthday" in lower or "born on" in lower:
-            fact_to_store = f"Personal detail: {user_text}"
+            key = "birthday"
+            value = user_text
             category = "personal"
 
-        if fact_to_store:
-            await self.memory_col.update_one(
-                {"fact": fact_to_store},
-                {"$set": {"fact": fact_to_store, "category": category, "updated_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True
-            )
-            print(f"[MemoryEngine]: Deterministically stored fact: '{fact_to_store}'")
+        if key and value:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            
+            if is_list_accumulate:
+                # Accumulate values into an array without duplicating
+                await self.memory_col.update_one(
+                    {"key": key},
+                    {
+                        "$addToSet": {"values": value},
+                        "$set": {"category": category, "updated_at": now_iso},
+                        "$setOnInsert": {"confidence": 1.0, "source": "regex"}
+                    },
+                    upsert=True
+                )
+            else:
+                # Singular facts overwrite the previous value
+                await self.memory_col.update_one(
+                    {"key": key},
+                    {
+                        "$set": {
+                            "key": key,
+                            "value": value,
+                            "category": category,
+                            "confidence": 1.0,
+                            "source": "regex",
+                            "updated_at": now_iso
+                        }
+                    },
+                    upsert=True
+                )
+
+            logger.info("[MemoryEngine] Extracted: %s | Value: %s | Source: regex", key, value)
 
     async def get_relevant_memories(self, query: str) -> str:
-        """Retrieves permanent memories relevant to the query."""
+        """Query-aware structured memory retrieval filtering by category or keyword."""
         if self.memory_col is None:
             return ""
         try:
-            cursor = self.memory_col.find({}).limit(10)
+            lower_q = query.lower()
+            filter_query = {}
+
+            # Query-aware category/key mapping
+            if "like" in lower_q or "preference" in lower_q or "favorite" in lower_q:
+                filter_query = {"category": "preference"}
+            elif "birthday" in lower_q or "born" in lower_q:
+                filter_query = {"key": "birthday"}
+            elif "personal" in lower_q:
+                filter_query = {"category": "personal"}
+
+            cursor = self.memory_col.find(filter_query).limit(10)
             memories = await cursor.to_list(length=10)
+            
+            if not memories and filter_query:
+                # Fallback to broader search if specific category yielded nothing
+                cursor = self.memory_col.find({}).limit(10)
+                memories = await cursor.to_list(length=10)
+
             if not memories:
                 return ""
-            return "\n".join([f"• [{m.get('category', 'general').upper()}] {m.get('fact')}" for m in memories])
+
+            formatted_memories = []
+            for m in memories:
+                if "values" in m:
+                    formatted_memories.append(f"• [{m.get('category', 'general').upper()}] {m.get('key')}: {', '.join(m['values'])}")
+                else:
+                    formatted_memories.append(f"• [{m.get('category', 'general').upper()}] {m.get('key')}: {m.get('value')}")
+
+            return "\n".join(formatted_memories)
         except Exception as e:
-            print(f"[Memory Retrieval Error]: {e}")
+            logger.exception("[Memory Retrieval Error]")
             return ""
