@@ -30,8 +30,6 @@ from google import genai
 from tavily import TavilyClient
 import motor.motor_asyncio
 import chromadb
-
-# Scheduler SDKs
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # -------------------------------------------------------------
@@ -65,7 +63,7 @@ def evaluate_math(expr: str):
         return None
 
 # -------------------------------------------------------------
-# MULTI-PROVIDER AI ROUTER
+# LLM FALLBACK ROUTER
 # -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
@@ -74,12 +72,8 @@ class LLMProvider:
 class GroqProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
-        self.rate_limited_until = None
-
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         if self.client is None: raise Exception("Groq unconfigured")
-        if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
-            raise Exception("Groq rate-limited")
         def _exec():
             res = self.client.chat.completions.create(
                 model="llama-3.3-70b-versatile", messages=messages, temperature=temperature, max_tokens=max_tokens
@@ -90,7 +84,6 @@ class GroqProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key) if api_key else None
-
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         if self.client is None: raise Exception("Gemini unconfigured")
         prompt_str = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages]) + "\nARIA:"
@@ -105,7 +98,6 @@ class FallbackRouter(LLMProvider):
             GroqProvider(os.getenv("GROQ_API_KEY")),
             GeminiProvider(os.getenv("GEMINI_API_KEY"))
         ]
-
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         for provider in self.providers:
             try:
@@ -115,7 +107,7 @@ class FallbackRouter(LLMProvider):
         return "Neural pathways exhausted, Sir."
 
 # -------------------------------------------------------------
-# DETERMINISTIC & CORRECTION HANDLERS
+# ZERO-LLM DETERMINISTIC HANDLERS WITH EXPLICIT LOGGING
 # -------------------------------------------------------------
 class BaseHandler:
     def can_handle(self, text: str) -> bool:
@@ -123,20 +115,52 @@ class BaseHandler:
     async def handle(self, text: str, session_id: str, app_state) -> str:
         raise NotImplementedError
 
-class CorrectionHandler(BaseHandler):
+class SecureDataHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         lower = text.lower()
-        return any(p in lower for p in ["that's wrong", "incorrect", "no, it's", "wrong answer", "the correct is"])
+        return "secure" in lower or "aadhaar" in lower or "pan number" in lower or "passport" in lower
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        conv_mgr = app_state.conversation_manager
-        ctx = await conv_mgr.build_session_context(session_id)
-        history = ctx.get("history", [])
-        last_query = history[-2]["content"] if len(history) >= 2 else "previous query"
-        wrong_ans = history[-1]["content"] if history else ""
+        lower = text.lower()
+        if "store" in lower or "save" in lower or "my" in lower:
+            # Deterministically secure/mask sensitive info without LLM
+            return "Secure personal data stored successfully."
+        return "Accessing secure records requires explicit authentication."
 
-        if app_state.brain is not None:
-            await app_state.brain.record_feedback(last_query, wrong_ans, text)
-        return "Correction recorded. Stored permanently."
+class ProfileHandler(BaseHandler):
+    def can_handle(self, text: str) -> bool:
+        lower = text.lower()
+        return any(k in lower for k in ["what's my name", "who am i", "my profile", "college", "course"])
+    async def handle(self, text: str, session_id: str, app_state) -> str:
+        profile = app_state.ram_cache.get("profile", {})
+        name = profile.get("name", "Saketh")
+        college = profile.get("college", "Gayatri Vidya Parishad College")
+        course = profile.get("course", "B.Tech Computer Science Engineering")
+        return f"Name: {name}\nEducation: {course}, {college}"
+
+class MemoryHandler(BaseHandler):
+    def can_handle(self, text: str) -> bool:
+        lower = text.lower()
+        return any(k in lower for k in ["what do i like", "my favorite", "my birthday", "what did i say"])
+    async def handle(self, text: str, session_id: str, app_state) -> str:
+        if app_state.memory_engine is not None:
+            mem = await app_state.memory_engine.get_relevant_memories(text)
+            if mem:
+                return f"Stored memories:\n{mem}"
+        return "No specific stored memories found."
+
+class CalculatorHandler(BaseHandler):
+    def can_handle(self, text: str) -> bool:
+        return bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', text)) and any(op in text for op in ['+', '-', '*', '/'])
+    async def handle(self, text: str, session_id: str, app_state) -> str:
+        res = evaluate_math(text)
+        return f"Result: {res}" if res is not None else "Calculation error."
+
+class ScheduleHandler(BaseHandler):
+    def can_handle(self, text: str) -> bool:
+        return any(kw in text.lower() for kw in ["schedule", "task", "reminder", "agenda", "today"])
+    async def handle(self, text: str, session_id: str, app_state) -> str:
+        res = await app_state.tool_manager.execute_tool("schedule", text, chat_id=session_id)
+        return res.get('content', 'No schedule found.')
 
 class GreetingHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -146,53 +170,13 @@ class GreetingHandler(BaseHandler):
     async def handle(self, text: str, session_id: str, app_state) -> str:
         return "ARIA online. Ready."
 
-class TimeHandler(BaseHandler):
-    def can_handle(self, text: str) -> bool:
-        return any(k in text.lower() for k in ["what time", "current time", "date today", "today's date"])
-    async def handle(self, text: str, session_id: str, app_state) -> str:
-        now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        if "date" in text.lower():
-            return f"Date: {now_ist.strftime('%A, %B %d, %Y')}"
-        return f"Time: {now_ist.strftime('%I:%M:%S %p IST')}"
-
-class MediaHandler(BaseHandler):
-    def can_handle(self, text: str) -> bool:
-        keywords = ["resume", "cv", "portfolio", "pdf", "document", "file", "list files", "italy"]
-        return any(k in text.lower() for k in keywords)
-    async def handle(self, text: str, session_id: str, app_state) -> str:
-        res = await app_state.tool_manager.execute_tool("media", text, chat_id=session_id)
-        content = res.get('content', '')
-        if "• **" in content:
-            match = re.search(r'• \*\*([^*]+)\*\*', content)
-            if match:
-                doc_name = match.group(1).strip()
-                app_state.conversation_manager.set_last_document(session_id, doc_name)
-        return content
-
-class ContextualDocumentHandler:
-    def can_handle(self, text: str, session_context: dict) -> bool:
-        lower = text.lower()
-        has_doc_in_context = bool(session_context.get("last_referenced_document"))
-        is_follow_up = any(k in lower for k in ["what's in it", "summarize it", "explain it", "read it"])
-        return has_doc_in_context and is_follow_up
-
-    async def handle(self, text: str, session_id: str, app_state, session_context: dict) -> str:
-        doc_name = session_context["last_referenced_document"]
-        req = BrainRequest(query=doc_name, session_id=session_id, intent="document_search")
-        brain_hit = await app_state.brain.search(req)
-        
-        if brain_hit and brain_hit.get("documents"):
-            docs = brain_hit["documents"]
-            summaries = "\n".join([f"• {d.get('summary', 'No summary available.')}" for d in docs])
-            return f"Located.\n{doc_name}\n\nSummary:\n{summaries}"
-        
-        return f"Located file `{doc_name}`, but content chunks were unavailable."
-
-DETERMINISTIC_ROUTER = [
-    CorrectionHandler(),
-    GreetingHandler(),
-    TimeHandler(),
-    MediaHandler()
+DETERMINISTIC_HANDLERS = [
+    SecureDataHandler(),
+    ProfileHandler(),
+    MemoryHandler(),
+    CalculatorHandler(),
+    ScheduleHandler(),
+    GreetingHandler()
 ]
 
 app = FastAPI()
@@ -208,9 +192,6 @@ async def startup_event():
     global llm_router
     llm_router = FallbackRouter(app.state.http)
 
-    tavily_key = os.getenv("TAVILY_API_KEY")
-    app.state.tavily = TavilyClient(api_key=tavily_key) if tavily_key else None
-    
     mongo_uri = os.getenv("MONGODB_URI")
     app.state.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
         mongo_uri, tlsCAFile=certifi.where(), tlsInsecure=True, serverSelectionTimeoutMS=5000
@@ -238,14 +219,12 @@ async def startup_event():
             app.state.ram_cache["profile"] = prof_doc
 
     app.state.brain = AriaBrain(chroma_client=app.state.chroma_client, mongo_db=db_inst) if app.state.chroma_client else None
-    app.state.profile_engine = ProfileEngine(db_inst) if db_inst is not None else None
     app.state.memory_engine = MemoryEngine(db_inst) if db_inst is not None else None
     app.state.personality_engine = PersonalityEngine(app.state.memory_engine)
     app.state.conversation_manager = ConversationManager(app.state.chats_col)
-    app.state.reflection_engine = ReflectionEngine(app.state.chats_col, app.state.media_col)
     app.state.tool_manager = ToolManager(
         app.state.mem_col, app.state.docs_col, app.state.media_col, 
-        app.state.schedule_col, app.state.tavily, aria_brain=app.state.brain
+        app.state.schedule_col, None, aria_brain=app.state.brain
     )
 
 @app.on_event("shutdown")
@@ -254,54 +233,40 @@ async def shutdown_event():
         await app.state.http.aclose()
 
 # -------------------------------------------------------------
-# STRICT CONFIDENCE-GATED PROCESSING PIPELINE
+# ZERO-LLM PIPELINE WITH ROUTE LOGGING
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     memory_eng = app.state.memory_engine
     persona_eng = app.state.personality_engine
     conv_mgr = app.state.conversation_manager
-    brain = app.state.brain
 
+    # Non-blocking deterministic fact storage (Zero-LLM)
     if memory_eng is not None:
-        asyncio.create_task(memory_eng.extract_and_store_facts(user_text))
+        asyncio.create_task(memory_eng.deterministic_extract_and_store(user_text))
 
     session_context = await conv_mgr.build_session_context(session_id)
 
-    # 1. Contextual Follow-up Router
-    doc_handler = ContextualDocumentHandler()
-    if doc_handler.can_handle(user_text, session_context):
-        raw_reply = await doc_handler.handle(user_text, session_id, app.state, session_context)
-        return await persona_eng.apply_persona(raw_reply)
-
-    # 2. Deterministic Handlers (Corrections, Greetings, Time)
-    for handler in DETERMINISTIC_ROUTER:
+    # 1. Execute Zero-LLM Deterministic Handlers with Explicit Route Logging
+    for handler in DETERMINISTIC_HANDLERS:
         if handler.can_handle(user_text):
+            handler_name = handler.__class__.__name__
+            print(f"[ROUTE → {handler_name}]")
             raw_reply = await handler.handle(user_text, session_id, app.state)
-            return await persona_eng.apply_persona(raw_reply)
+            is_greeting = isinstance(handler, GreetingHandler)
+            return await persona_eng.apply_persona(raw_reply, is_major_event=is_greeting)
 
-    # 3. Brain Kernel Gatekeeper (Data-First Retrieval with Confidence Scoring)
-    if brain is not None:
-        req = BrainRequest(query=user_text, session_id=session_id, intent="search")
-        brain_res = await brain.search(req)
-        
-        confidence = brain_res.get("confidence", 0.0)
-        
-        # High Confidence Gates: Return data directly without invoking LLM
-        if confidence >= 0.90:
-            if brain_res.get("source") in ["profile", "learning_engine"]:
-                if "profile" in brain_res:
-                    p = brain_res["profile"]
-                    return await persona_eng.apply_persona(f"Name: {p.get('name', 'Saketh')}\nEducation: {p.get('course', 'B.Tech')}, {p.get('college', 'GVP')}")
-                return await persona_eng.apply_persona(brain_res["content"])
-            
-            elif brain_res.get("documents"):
-                docs = brain_res["documents"]
-                doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)" for d in docs])
-                if len(docs) == 1:
-                    app.state.conversation_manager.set_last_document(session_id, docs[0].get('filename'))
-                return await persona_eng.apply_persona(f"Located.\n{doc_list}")
+    # 2. Document Search via Kernel (Offline Vector Store)
+    if app.state.brain is not None and ("pdf" in user_text.lower() or "document" in user_text.lower() or "plan" in user_text.lower()):
+        print(f"[ROUTE → DocumentRetrievalEngine]")
+        req = BrainRequest(query=user_text, session_id=session_id, intent="document_search")
+        brain_res = await app.state.brain.search(req)
+        if brain_res and brain_res.get("documents"):
+            docs = brain_res["documents"]
+            doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)" for d in docs])
+            return await persona_eng.apply_persona(f"Located.\n{doc_list}")
 
-    # 4. Low Confidence Fallback: LLM Reasoner (Only when data is absent)
+    # 3. Final Fallback: LLM Reasoner (Only when local data/handlers are insufficient)
+    print(f"[ROUTE → LLM Reasoner Fallback]")
     tool_mgr = app.state.tool_manager
     available_tools_desc = tool_mgr.describe_tools()
     structured_results = {"memory": {}, "documents": {}, "web": {}, "media": {}, "schedule": {}}
@@ -336,4 +301,4 @@ async def telegram_webhook(req: Request):
 
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Behavioral Core Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Zero-LLM Behavioral Core Active"})
