@@ -16,6 +16,7 @@ import edge_tts
 # Provider SDKs
 from groq import Groq
 from google import genai
+from google.genai import types
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
@@ -52,7 +53,7 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# CLEAN MONGODB CLIENT FOR MOTOR / PYMONGO 4+
+# CLEAN MONGODB CLIENT
 def init_mongo_client():
     if not MONGODB_URI: return None
     try:
@@ -83,10 +84,9 @@ LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
-# 2. TEXT SANITIZATION & FORMATTING ENGINE
+# 2. UTILITY & TEXT SANITIZATION ENGINE
 # -------------------------------------------------------------
 def clean_response_text(raw_text: str) -> str:
-    """Sanitizes text by stripping artifacts, excess commas, double spaces, and awkward markdown."""
     if not raw_text: return ""
     text = raw_text.strip()
     text = re.sub(r'\*+', '', text)
@@ -139,12 +139,10 @@ async def sync_ram_cache():
     return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
-# 3. DYNAMIC REMINDER DISPATCH SYSTEM
+# 3. AUTONOMOUS TOOL EXECUTORS (FUNCTION CALLING BACKEND)
 # -------------------------------------------------------------
 async def send_scheduled_reminder(reminder_text: str):
-    """Sends a timed reminder alert directly to Telegram."""
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
-    
     msg = f"Alert, Sir: You have a scheduled reminder — '{reminder_text}'."
     async with httpx.AsyncClient() as client:
         try:
@@ -152,11 +150,9 @@ async def send_scheduled_reminder(reminder_text: str):
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg}
             )
-        except Exception as e:
-            print(f"[Reminder Delivery Error]: {e}")
+        except Exception as e: print(f"[Reminder Error]: {e}")
 
 async def create_time_reminder(minutes: int, task_desc: str) -> str:
-    """Schedules a delayed reminder and persists it to MongoDB."""
     run_time = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     job_id = f"reminder_{int(run_time.timestamp())}"
     
@@ -171,30 +167,26 @@ async def create_time_reminder(minutes: int, task_desc: str) -> str:
     if mongo_reminders_col is not None:
         try:
             await mongo_reminders_col.insert_one({
-                "task": task_desc,
-                "duration_minutes": minutes,
-                "deliver_at": run_time.isoformat(),
-                "status": "pending"
+                "task": task_desc, "duration_minutes": minutes,
+                "deliver_at": run_time.isoformat(), "status": "pending"
             })
-        except Exception as e: print(f"[Reminder Save Error]: {e}")
+        except Exception: pass
 
-    return f"Understood, Sir. I will remind you to '{task_desc}' in {minutes} minute{'s' if minutes > 1 else ''}."
+    return f"Reminder established for '{task_desc}' in {minutes} minute{'s' if minutes > 1 else ''}, Sir."
 
-# -------------------------------------------------------------
-# 4. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
-# -------------------------------------------------------------
-async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
-    global LAST_USER_INTERACTION_TIME
-    LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
-    if mongo_chats_col is not None:
+async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -> str:
+    sch_entry = f"• Task: {task} | Slot: {timing}"
+    if sch_entry not in RAM_SCHEDULE_CACHE: RAM_SCHEDULE_CACHE.append(sch_entry)
+
+    if mongo_tasks_col is not None:
         try:
-            await mongo_chats_col.insert_one({
-                "session_id": session_id,
-                "user_msg": user_msg,
-                "aria_reply": aria_reply,
+            await mongo_tasks_col.insert_one({
+                "task": task, "timing": timing, "date": date_str, "status": "active",
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
-        except Exception as e: print(f"[Chat Log Error]: {e}")
+        except Exception: pass
+
+    return f"Task '{task}' scheduled for {timing}, Sir."
 
 async def save_memory_fact(category: str, fact: str) -> str:
     cat = category.lower().strip()
@@ -204,24 +196,9 @@ async def save_memory_fact(category: str, fact: str) -> str:
     if mongo_memory_col is not None:
         try:
             await mongo_memory_col.insert_one({"category": cat, "fact": fact_str, "timestamp": datetime.now(timezone.utc).isoformat()})
-        except Exception as e: print(f"[Memory Save Error]: {e}")
+        except Exception: pass
 
-    return "Saved permanently in your vault, Sir."
-
-async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -> str:
-    sch_entry = f"• Task: {task} | Slot: {timing}"
-    if sch_entry not in RAM_SCHEDULE_CACHE:
-        RAM_SCHEDULE_CACHE.append(sch_entry)
-
-    if mongo_tasks_col is not None:
-        try:
-            await mongo_tasks_col.insert_one({
-                "task": task, "timing": timing, "date": date_str, "status": "active",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-        except Exception as e: print(f"[Task Save Error]: {e}")
-
-    return f"Task '{task}' scheduled for {timing}, Sir."
+    return "Information saved permanently in your vault, Sir."
 
 async def purge_all_vault_data() -> str:
     if mongo_memory_col is not None: await mongo_memory_col.delete_many({})
@@ -236,19 +213,27 @@ async def purge_all_vault_data() -> str:
     RAM_RECENT_CHATS = []
     return "All database records and session vault data have been completely purged, Sir."
 
+async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
+    global LAST_USER_INTERACTION_TIME
+    LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
+    if mongo_chats_col is not None:
+        try:
+            await mongo_chats_col.insert_one({
+                "session_id": session_id, "user_msg": user_msg,
+                "aria_reply": aria_reply, "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception: pass
+
 async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = ""):
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
-
     if mongo_media_col is not None:
         try:
             await mongo_media_col.insert_one({
-                "file_name": file_name,
-                "media_type": media_type,
-                "caption": caption.lower().strip(),
-                "b64_payload": b64_payload,
+                "file_name": file_name, "media_type": media_type,
+                "caption": caption.lower().strip(), "b64_payload": b64_payload,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
-        except Exception as e: print(f"[Media Vault Error]: {e}")
+        except Exception: pass
 
     await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Caption: {caption}")
     return f"{media_type.capitalize()} file '{file_name}' successfully secured in your vault, Sir."
@@ -263,8 +248,7 @@ def fetch_web_search(query: str) -> str:
     return ""
 
 async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str:
-    if not location_info or "," not in location_info:
-        location_info = "17.6868,83.2185"
+    if not location_info or "," not in location_info: location_info = "17.6868,83.2185"
     try:
         lat, lon = location_info.split(",")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
@@ -277,23 +261,18 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
     return ""
 
 # -------------------------------------------------------------
-# 5. PROACTIVE TASK CHECK-IN DAEMON (JARVIS AUTONOMY)
+# 4. PROACTIVE TASK CHECK-IN DAEMON
 # -------------------------------------------------------------
 async def autonomous_proactive_checkin():
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
-    
     now = datetime.now(timezone.utc)
-    time_since_last_talk = (now - LAST_USER_INTERACTION_TIME).total_seconds() / 60.0
-
-    if time_since_last_talk < 25: return
+    if (now - LAST_USER_INTERACTION_TIME).total_seconds() / 60.0 < 25: return
 
     _, cached_schedules, _ = await sync_ram_cache()
     if not cached_schedules: return
 
     active_task = cached_schedules[0]
-    checkin_prompt = f"""You are J.A.R.V.I.S. The user is currently in a scheduled task window: '{active_task}'.
-The user has been working silently for over 25 minutes.
-Generate a brief, proactive check-in (1 sentence) asking if they need any assistance, code review, or status update on this task. Address him as 'Sir' or 'Master'."""
+    checkin_prompt = f"You are J.A.R.V.I.S. The user is in task '{active_task}' and silent for 25 mins. Briefly ask if they need assistance or a status check. Address as Sir."
 
     if groq_client:
         try:
@@ -304,15 +283,61 @@ Generate a brief, proactive check-in (1 sentence) asking if they need any assist
             )
             msg = clean_response_text(comp.choices[0].message.content)
             async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg}
-                )
-        except Exception as e: print(f"[Proactive Check-In Error]: {e}")
+                await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg})
+        except Exception: pass
 
 # -------------------------------------------------------------
-# 6. EVOLVING ADAPTIVE PERSONA CORE
+# 5. DYNAMIC FUNCTION-CALLING HYBRID INFERENCE ENGINE
 # -------------------------------------------------------------
+# Tool declarations for Groq / Llama
+GROQ_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_time_reminder",
+            "description": "Sets a timed alert or reminder to trigger after a specific number of minutes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "minutes": {"type": "integer", "description": "Number of minutes from now to send the reminder alert"},
+                    "task_desc": {"type": "string", "description": "What the user needs to be reminded to do"}
+                },
+                "required": ["minutes", "task_desc"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_scheduled_task",
+            "description": "Schedules a task or event into the user's daily calendar/agenda.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task name or description"},
+                    "timing": {"type": "string", "description": "Time slot string e.g. '10am-11am' or '5:00 PM'"}
+                },
+                "required": ["task", "timing"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory_fact",
+            "description": "Saves a personal profile fact, detail, or preference about the user into the permanent vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Fact category e.g. personal_profile, study, preferences"},
+                    "fact": {"type": "string", "description": "The exact fact or detail to remember"}
+                },
+                "required": ["category", "fact"]
+            }
+        }
+    }
+]
+
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
@@ -321,53 +346,26 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         pending = PENDING_SECURITY_ACTIONS[session_id]
         if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "clear"]):
             del PENDING_SECURITY_ACTIONS[session_id]
-            if pending["type"] == "purge_vault":
-                return await purge_all_vault_data()
+            if pending["type"] == "purge_vault": return await purge_all_vault_data()
         elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
             del PENDING_SECURITY_ACTIONS[session_id]
             return "Security action aborted, Sir."
-        else:
-            return "Awaiting explicit authorization, Sir. Shall I proceed with clearing all database records?"
 
     if any(k in cmd for k in ["delete all data", "clear database", "purge vault", "erase everything"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
         return "Security Protocol Alert: This will permanently wipe all vault records, schedules, and memory. Do you authorize this action, Sir?"
 
-    # 2. AUTOMATIC REMINDER DETECTOR (e.g., "remind me in 5 minutes to submit record")
-    reminder_match = re.search(r"remind\s+me\s+in\s+(\d+)\s*(mins?|minutes?)\s*(?:to|for)?\s*(.+)", cmd)
-    if reminder_match:
-        minutes = int(reminder_match.group(1))
-        task_desc = reminder_match.group(3).strip()
-        if not task_desc: task_desc = "Scheduled reminder"
-        return await create_time_reminder(minutes, task_desc.capitalize())
-
-    # 3. AUTOMATIC TASK & TIMING PARSER
-    timing_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", cmd)
-    if timing_match:
-        timing_str = timing_match.group(1)
-        task_desc = cmd.replace(timing_str, "").replace("schedule", "").replace("is better to complete my", "").replace("for my", "").strip()
-        if not task_desc: task_desc = "Scheduled Event"
-        await save_scheduled_task(task_desc.capitalize(), timing_str)
-
-    # 4. AUTO PROFILE SAVER
-    auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
-    if any(trigger in cmd for trigger in auto_save_triggers):
-        await save_memory_fact("personal_profile", user_text)
-
-    # 5. SYNC RAM CACHE & CONSTRUCT CONTEXT
+    # 2. SYNC RAM CACHE & CONSTRUCT CONTEXT
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
-
     temporal_context = get_current_temporal_context()
-    weather_context = ""
-    if any(kw in cmd for kw in ["weather", "temperature", "rain", "forecast", "climate"]):
-        weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185")
+    weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185") if any(k in cmd for k in ["weather", "temp", "rain"]) else ""
+    search_context = fetch_web_search(user_text) if any(k in cmd for k in ["search", "latest", "news", "who is"]) else ""
 
-    search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price"]) else ""
     memory_context = "\nSTORED VAULT MEMORY:\n" + "\n".join(cached_facts) if cached_facts else ""
     schedule_context = "\nACTIVE SCHEDULED TASKS & EVENTS:\n" + ("\n".join(cached_schedules) if cached_schedules else "No tasks scheduled.")
     history_context = "\nRECENT CONVERSATION HISTORY:\n" + ("\n---\n".join(cached_chats) if cached_chats else "None.")
 
-    system_prompt = f"""You are {ASSISTANT_NAME}, an evolving, hyper-intelligent AI combining J.A.R.V.I.S. (loyal, articulate, composed) and Spider-Man's Karen (witty, encouraging, supportive peer).
+    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent AI assistant combining J.A.R.V.I.S. and Spider-Man's Karen.
 
 {temporal_context}
 {weather_context}
@@ -376,30 +374,48 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {history_context}
 {search_context}
 
-DYNAMIC PERSONA & FORMATTING DIRECTIVES:
-- NO EXTRA CHARACTERS: Never output unwanted markdown bold asterisks (*), extra commas, double spaces, or trailing slashes. Keep formatting clean and crisp.
-- ADDRESS & SALUTATIONS: Address the user as 'Sir' by default, or 'Master' when executing heavy engineering/technical tasks. NEVER use scripted, repetitive lines like "Good day Mr. Saketh".
-- PROACTIVE ENGAGEMENT: Whenever the user is working on a task, watching a movie, or studying, finish your response by offering a quick, relevant follow-up question.
-- EFFICIENCY: Keep conversational responses concise (1-2 sentences max), articulate, and sharp."""
+DYNAMIC DIRECTIVES:
+- USE TOOLS FREELY: When the user asks you to remind them, schedule a task, or remember a fact, call the appropriate tool immediately.
+- ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Never use scripted lines like "Good day Mr. Saketh".
+- FORMATTING: Never output bold asterisks (*), extra commas, or double spaces. Keep tone crisp, witty, intelligent, and natural.
+- CONCISENESS: Keep conversational responses brief (1-2 sentences max)."""
 
     reply_text = "All systems operational, Sir."
 
-    # Groq Llama 3.3 70B Engine (<300ms)
+    # Primary Function-Calling Execution (Groq Llama 3.3 70B)
     if groq_client:
         try:
-            def _groq_sync():
-                comp = groq_client.chat.completions.create(
+            def _groq_exec():
+                response = groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                    temperature=0.35, max_tokens=180
+                    tools=GROQ_TOOLS,
+                    tool_choice="auto",
+                    temperature=0.3, max_tokens=180
                 )
-                return comp.choices[0].message.content
-            reply = await asyncio.to_thread(_groq_sync)
-            if reply and len(reply.strip()) > 0:
-                reply_text = reply.strip()
-        except Exception as e: print(f"[Groq Error]: {e}")
+                return response.choices[0].message
 
-    # Fallback Gemini 2.0 Flash
+            msg = await asyncio.to_thread(_groq_exec)
+
+            # Check if LLM requested a function execution
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    fn_name = tool_call.function.name
+                    fn_args = json.loads(tool_call.function.arguments)
+
+                    if fn_name == "create_time_reminder":
+                        reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
+                    elif fn_name == "save_scheduled_task":
+                        reply_text = await save_scheduled_task(fn_args.get("task"), fn_args.get("timing"))
+                    elif fn_name == "save_memory_fact":
+                        reply_text = await save_memory_fact(fn_args.get("category", "general"), fn_args.get("fact"))
+            elif msg.content:
+                reply_text = msg.content.strip()
+
+        except Exception as e:
+            print(f"[Groq Function Execution Error]: {e}")
+
+    # Fallback to Gemini 2.0 Flash
     if reply_text == "All systems operational, Sir." and gemini_client:
         try:
             def _gemini_sync():
@@ -408,8 +424,7 @@ DYNAMIC PERSONA & FORMATTING DIRECTIVES:
                 )
                 return res.text
             reply = await asyncio.to_thread(_gemini_sync)
-            if reply and len(reply.strip()) > 0:
-                reply_text = reply.strip()
+            if reply and len(reply.strip()) > 0: reply_text = reply.strip()
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     cleaned_reply = clean_response_text(reply_text)
@@ -417,7 +432,7 @@ DYNAMIC PERSONA & FORMATTING DIRECTIVES:
     return cleaned_reply
 
 # -------------------------------------------------------------
-# 7. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH)
+# 6. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -512,10 +527,10 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Adaptive Core]: Online, Synced, Timed Reminders & Autonomous Daemon Active.")
+    print("[J.A.R.V.I.S. Autonomous Tool Core]: Online, Function Calling Active.")
 
 # -------------------------------------------------------------
-# 8. SPEECH & FRONTEND HUD
+# 7. SPEECH & FRONTEND HUD
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-RyanNeural") -> str:
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
@@ -543,7 +558,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Reminders Enabled"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Function Calling Enabled"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
@@ -747,7 +762,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# 9. WEBSOCKET STREAMING & UPLOAD ROUTE
+# 8. WEBSOCKET STREAMING & UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
