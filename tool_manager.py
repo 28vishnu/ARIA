@@ -4,8 +4,12 @@ import os
 import re
 import hashlib
 from datetime import datetime, timezone
-from pypdf import PdfReader
 from io import BytesIO
+
+# Multi-format parsers
+from pypdf import PdfReader
+import docx
+import pandas as pd
 
 class BaseTool:
     NAME = "base"
@@ -34,8 +38,8 @@ class MemoryTool(BaseTool):
 
 class DocumentTool(BaseTool):
     NAME = "documents"
-    DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, resumes, certificates, and spreadsheets."
-    CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes"]
+    DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, office files, notes, and spreadsheets."
+    CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes", "docx"]
 
     async def execute(self, query: str, documents_collection, chat_id: str = None) -> dict:
         if documents_collection is None: 
@@ -68,18 +72,18 @@ class SearchTool(BaseTool):
                 elif results_count == 1: confidence = 0.70
                 else: confidence = 0.40
 
-                # Formatted human-readable output (No raw API JSON)
+                # Structured Formatter for Weather & News
                 if "weather" in query.lower():
                     snippet = raw_results[0]['content'] if raw_results else "Data unavailable"
                     content = (
                         f"🌤 Weather Report — {query.title()}\n\n"
-                        f"• Conditions: {snippet[:200]}\n\n"
+                        f"• Condition & Details: {snippet[:250]}\n\n"
                         f"☔ Recommendation:\n"
-                        f"Check local parameters before heading out, Sir."
+                        f"Verify local conditions before departure, Sir."
                     )
                 else:
-                    items = [f"• **{item['title']}**\n  {item['content'][:180]}..." for item in raw_results]
-                    content = "📰 **Live Intelligence Radar**:\n\n" + "\n\n".join(items)
+                    headlines = [f"• **{item['title']}**\n  {item['content'][:160]}..." for item in raw_results]
+                    content = "📰 **Live Intelligence & News Radar**:\n\n" + "\n\n".join(headlines)
 
                 return {"success": True, "source": "web", "content": content, "confidence": confidence, "metadata": {"results_count": results_count}}
         except Exception as e:
@@ -88,20 +92,80 @@ class SearchTool(BaseTool):
 
 class MediaVaultTool(BaseTool):
     NAME = "media"
-    DESCRIPTION = "Manage, list, index, categorise, and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
-    CAPABILITIES = ["dispatch file", "list documents", "categorise documents", "resume", "send document", "download pdf", "pan", "certificate"]
+    DESCRIPTION = "Manage, parse multi-format files (PDF, DOCX, TXT, CSV, XLSX), detect smart duplicates, and dispatch documents."
+    CAPABILITIES = ["dispatch file", "list documents", "parse docx", "parse pdf", "smart duplicate detection", "resume"]
 
     def _auto_categorize(self, filename: str) -> str:
         fn = filename.lower()
         if any(w in fn for w in ["resume", "cv", "portfolio"]): return "Resume"
         if any(w in fn for w in ["pan", "passport", "id"]): return "Identity"
-        if any(w in fn for w in ["cert", "certificate", "course", "completion"]): return "Certificates"
+        if any(w in fn for w in ["cert", "certificate", "course"]): return "Certificates"
         if any(w in fn for w in ["note", "memo", "study", "syllabus"]): return "College Notes"
         return "General"
 
+    def _extract_text_multi_format(self, file_name: str, raw_bytes: bytes) -> tuple[str, dict]:
+        """Parses PDF, DOCX, TXT, CSV, XLSX, and extracts rich metadata."""
+        ext = file_name.split(".")[-1].lower()
+        extracted_text = ""
+        meta = {"file_type": ext, "page_count": 1, "size_bytes": len(raw_bytes)}
+
+        try:
+            if ext == "pdf":
+                reader = PdfReader(BytesIO(raw_bytes))
+                meta["page_count"] = len(reader.pages)
+                for page in reader.pages:
+                    txt = page.extract_text()
+                    if txt: extracted_text += txt + "\n"
+            
+            elif ext in ["docx", "doc"]:
+                doc = docx.Document(BytesIO(raw_bytes))
+                for para in doc.paragraphs:
+                    if para.text: extracted_text += para.text + "\n"
+            
+            elif ext in ["txt", "md"]:
+                extracted_text = raw_bytes.decode("utf-8", errors="ignore")
+            
+            elif ext == "csv":
+                df = pd.read_csv(BytesIO(raw_bytes))
+                extracted_text = df.to_string()
+                meta["rows"] = len(df)
+            
+            elif ext in ["xlsx", "xls"]:
+                df = pd.read_excel(BytesIO(raw_bytes))
+                extracted_text = df.to_string()
+                meta["rows"] = len(df)
+
+        except Exception as e:
+            print(f"[Multi-format Parse Error for {file_name}]: {e}")
+
+        return extracted_text.strip(), meta
+
+    def _infer_profile_updates(self, text: str) -> dict:
+        """Automatically scans uploaded documents for profile entities (Resume/CV intelligence)."""
+        inferred = {}
+        text_lower = text.lower()
+        
+        # Simple heuristic extraction
+        if "b.tech" in text_lower or "computer science" in text_lower:
+            inferred["degree"] = "B.Tech Computer Science Engineering"
+        if "gayatri" in text_lower:
+            inferred["college"] = "Gayatri Vidya Parishad College"
+        
+        # Look for email patterns
+        emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+        if emails:
+            inferred["email"] = emails[0]
+
+        return inferred
+
     async def ingest_or_check_duplicate(self, file_name: str, raw_bytes: bytes, media_col, documents_collection=None) -> str:
-        """SHA-256 duplicate detection engine. If identical content exists, skips storage and updates telemetry."""
-        content_hash = hashlib.sha256(raw_bytes).hexdigest()
+        """Smart Duplicate Detection: Hashes extracted text content rather than binary bytes alone."""
+        extracted_text, metadata = self._extract_text_multi_format(file_name, raw_bytes)
+        
+        # Hash normalized text content for semantic near-duplicate checking
+        normalized_text = re.sub(r'\s+', ' ', extracted_text).lower().strip()
+        content_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest() if normalized_text else hashlib.sha256(raw_bytes).hexdigest()
+
         existing = await media_col.find_one({"content_hash": content_hash})
 
         if existing:
@@ -113,42 +177,42 @@ class MediaVaultTool(BaseTool):
                 }
             )
             existing_name = existing.get("file_name", "document")
-            return f"I already have this document stored under '{existing_name}' (Identical content hash detected). Access count updated, Sir."
+            return f"I already have this document stored under '{existing_name}' (Semantic content hash match detected). Access count updated, Sir."
 
         b64_payload = base64.b64encode(raw_bytes).decode("utf-8")
         category = self._auto_categorize(file_name)
         
-        extracted_text = ""
-        if file_name.lower().endswith(".pdf") and documents_collection is not None:
-            try:
-                reader = PdfReader(BytesIO(raw_bytes))
-                for page in reader.pages:
-                    txt = page.extract_text()
-                    if txt: extracted_text += txt + "\n"
-                
-                chunks = [extracted_text[i:i+1000] for i in range(0, len(extracted_text), 1000)]
-                for idx, chunk in enumerate(chunks):
-                    chunk_id = f"doc_{content_hash[:8]}_{idx}"
-                    documents_collection.upsert(
-                        ids=[chunk_id],
-                        documents=[chunk],
-                        metadatas=[{"file_name": file_name, "source": "MediaVault", "hash": content_hash}]
-                    )
-            except Exception as e:
-                print(f"[Document Parsing Error]: {e}")
+        # Index into Chroma vector DB if text was successfully extracted
+        if extracted_text and documents_collection is not None:
+            chunks = [extracted_text[i:i+1000] for i in range(0, len(extracted_text), 1000)]
+            for idx, chunk in enumerate(chunks):
+                chunk_id = f"doc_{content_hash[:8]}_{idx}"
+                documents_collection.upsert(
+                    ids=[chunk_id],
+                    documents=[chunk],
+                    metadatas=[{"file_name": file_name, "source": "MediaVault", "hash": content_hash}]
+                )
+
+        # Profile entity auto-inference check
+        profile_suggestion = ""
+        if category == "Resume":
+            entities = self._infer_profile_updates(extracted_text)
+            if entities:
+                profile_suggestion = f"\n\n💡 **Profile Auto-Inference**: I detected updated details ({', '.join(entities.keys())}) in this document. Shall I update your profile, Sir?"
 
         doc_record = {
             "file_name": file_name,
             "b64_payload": b64_payload,
             "content_hash": content_hash,
             "category": category,
+            "metadata": metadata,
             "indexed": True,
             "send_count": 1,
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
             "last_accessed": datetime.now(timezone.utc).isoformat()
         }
         await media_col.insert_one(doc_record)
-        return f"Document '{file_name}' successfully ingested, indexed, and categorized as '{category}', Sir."
+        return f"Document '{file_name}' successfully parsed, indexed, and categorized as '{category}' ({metadata.get('file_type', 'file')} format).{profile_suggestion}, Sir."
 
     async def execute(self, query: str, media_col, chat_id: str = None, documents_collection = None) -> dict:
         print(f"[TOOL - MEDIA] Executing document intelligence operation for query: '{query}'")
@@ -159,7 +223,7 @@ class MediaVaultTool(BaseTool):
             clean_q = query.lower().strip()
 
             if any(k in clean_q for k in ["what documents", "list files", "stored files", "document list", "vault inventory", "categories"]):
-                cursor = media_col.find({}, {"file_name": 1, "category": 1, "uploaded_at": 1})
+                cursor = media_col.find({}, {"file_name": 1, "category": 1, "metadata": 1, "uploaded_at": 1})
                 all_files = await cursor.to_list(length=100)
                 
                 if not all_files:
@@ -168,13 +232,14 @@ class MediaVaultTool(BaseTool):
                 categories = {}
                 for f in all_files:
                     cat = f.get("category") or self._auto_categorize(f.get("file_name", ""))
-                    categories.setdefault(cat, []).append(f.get("file_name"))
+                    ftype = f.get("metadata", {}).get("file_type", "file")
+                    categories.setdefault(cat, []).append(f"{f.get('file_name')} [{ftype.upper()}]")
 
                 cat_summary = "Categories\n────────────\n"
                 for cat, files in categories.items():
                     cat_summary += f"• {cat} ({len(files)}):\n" + "".join([f"   - {fn}\n" for fn in files])
 
-                inventory_msg = f"I currently manage {len(all_files)} documents in your Media Vault, Sir:\n\n{cat_summary}"
+                inventory_msg = f"I currently manage {len(all_files)} multi-format documents in your Media Vault, Sir:\n\n{cat_summary}"
                 return {"success": True, "source": "media", "content": inventory_msg, "confidence": 1.0, "metadata": {"count": len(all_files)}}
 
             target = None
@@ -189,8 +254,7 @@ class MediaVaultTool(BaseTool):
                 "$or": [
                     {"aliases": {"$in": search_terms}},
                     {"file_name": term_regex},
-                    {"caption": term_regex},
-                    {"tags": term_regex}
+                    {"category": term_regex}
                 ]
             }
 
@@ -206,11 +270,11 @@ class MediaVaultTool(BaseTool):
                     file_list_str = "\n".join([f"• {f.get('file_name')}" for f in available_files])
                     clarification_msg = (
                         f"I couldn't find a matching document for your request in your Media Vault, Sir.\n\n"
-                        f"Here are the documents currently stored in your vault:\n{file_list_str}\n\n"
+                        f"Here are the documents currently stored:\n{file_list_str}\n\n"
                         f"Which one would you like me to send?"
                     )
                 else:
-                    clarification_msg = "Your Media Vault is currently empty, Sir. If you upload documents, I'll store and remember them permanently."
+                    clarification_msg = "Your Media Vault is currently empty, Sir."
 
                 return {
                     "success": False, 
@@ -231,21 +295,14 @@ class MediaVaultTool(BaseTool):
                     files={"document": (fname, raw_bytes, "application/octet-stream")}
                 )
                 res.raise_for_status()
-                telegram_resp = res.json()
-                
-                if not telegram_resp.get("ok"):
-                    raise Exception(f"Telegram rejected document transmission: {telegram_resp}")
 
-            try:
-                await media_col.update_one(
-                    {"_id": target["_id"]},
-                    {
-                        "$set": {"last_sent": datetime.now(timezone.utc).isoformat()},
-                        "$inc": {"send_count": 1}
-                    }
-                )
-            except Exception:
-                pass
+            await media_col.update_one(
+                {"_id": target["_id"]},
+                {
+                    "$set": {"last_sent": datetime.now(timezone.utc).isoformat()},
+                    "$inc": {"send_count": 1}
+                }
+            )
 
             return {
                 "success": True, 
