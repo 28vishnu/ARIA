@@ -316,6 +316,41 @@ async def save_memory_fact(category: str, fact: str) -> str:
     except Exception: pass
     return "Saved permanently to vector vault, Sir."
 
+async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
+    global LAST_USER_INTERACTION_TIME
+    LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
+    _, _, _, chats_col, _, _ = get_mongo_collections()
+    if chats_col is not None:
+        try:
+            await chats_col.insert_one({
+                "session_id": session_id,
+                "user_msg": user_msg,
+                "aria_reply": aria_reply,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception as e:
+            print(f"[Log Chat Error]: {e}")
+
+async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = "", is_encrypted: bool = False):
+    b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
+    _, _, media_col, _, _, _ = get_mongo_collections()
+    if media_col is not None:
+        try:
+            await media_col.insert_one({
+                "file_name": file_name, "media_type": media_type,
+                "caption": caption.lower().strip(), "b64_payload": b64_payload,
+                "is_encrypted": is_encrypted,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception: pass
+
+    if not is_encrypted:
+        index_into_chroma(file_name, media_type, caption)
+
+    await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}'")
+    status_msg = "is encrypted and secured under Privacy Protocol." if is_encrypted else "fully parsed and indexed in your vector vault."
+    return f"Document '{file_name}' {status_msg}, Sir."
+
 # -------------------------------------------------------------
 # 4. BACKGROUND TASKS
 # -------------------------------------------------------------
