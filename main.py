@@ -21,6 +21,8 @@ from reflection_engine import ReflectionEngine
 from brain import AriaBrain
 from profile_engine import ProfileEngine
 from workers import BackgroundWorkers
+from memory_engine import MemoryEngine
+from personality_engine import PersonalityEngine
 
 # Provider SDKs
 from groq import Groq
@@ -198,22 +200,22 @@ class CommandHandler(BaseHandler):
     async def handle(self, text: str, session_id: str, app_state) -> str:
         lower = text.lower()
         if lower.startswith("/start"):
-            return "Welcome back, Sir.\nARIA Neural Core online.\nAll systems operational.\nHow may I assist you today?"
+            return "Welcome back, Sir. ARIA Neural Core online. All systems operational. How may I assist you today"
         if lower.startswith("/help"):
-            return "**ARIA Operating System Command Manual**:\n\n• Ask for live weather, news, or calculations.\n• Request documents ('Send my resume', 'What documents do you store?').\n• Manage tasks and schedules ('What is on my schedule today?')."
+            return "ARIA Operating System Command Manual:\n\n• Ask for live weather, news, or calculations.\n• Request documents ('Send my resume', 'What documents do you store?').\n• Manage tasks and schedules ('What is on my schedule today?')."
         if lower.startswith("/settings"):
-            return "ARIA System Settings:\n• Interface: Telegram\n• Vector Store: ChromaDB Persistent\n• LLM Tier: Multi-Provider Failover Active, Sir."
+            return "ARIA System Settings:\n• Interface: Telegram\n• Vector Store: ChromaDB Persistent\n• LLM Tier: Multi-Provider Failover Active"
         if lower.startswith("/about"):
-            return "ARIA (Autonomous Responsive Intelligent Assistant) v3.5 AI Operating System, built for Saketh, Sir."
+            return "ARIA (Autonomous Responsive Intelligent Assistant) v3.5 AI Operating System, built for Saketh"
         if lower.startswith("/ping"):
-            return "Pong! All systems optimal, Sir."
+            return "Pong! All systems optimal"
         return "Unknown command, Sir. Type /help for assistance."
 
 class IdentityHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return any(k in text.lower() for k in ["who are you", "what are you", "your name"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        return "I am ARIA (Autonomous Responsive Intelligent Assistant), your dedicated AI operating system, built to manage your files, schedules, code, and intelligence feeds, Sir."
+        return "I am ARIA (Autonomous Responsive Intelligent Assistant), your dedicated AI operating system, built to manage your files, schedules, code, and intelligence feeds"
 
 class ProfileHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -236,12 +238,11 @@ class ProfileHandler(BaseHandler):
         project = profile.get("active_project", {}).get("name", "ARIA AI")
 
         return (
-            f"Here's what I currently know about you, Sir.\n\n"
-            f"👤 **Name**\n• {name}\n\n"
-            f"🎓 **Education**\n• {course}\n• {college}\n\n"
-            f"🚀 **Active Project**\n• {project}\n\n"
-            f"📂 **Stored Documents & Vault**\n{file_list_str}\n\n"
-            f"If any of this is outdated, let me know and I'll update my knowledge, Sir."
+            f"Here's what I currently know about you.\n\n"
+            f"Name: {name}\n"
+            f"Education: {course}, {college}\n"
+            f"Active Project: {project}\n"
+            f"Stored Documents:\n{file_list_str}"
         )
 
 class BatchUploadHandler(BaseHandler):
@@ -255,13 +256,8 @@ class BatchUploadHandler(BaseHandler):
         return any(p in lower for p in phrases)
     async def handle(self, text: str, session_id: str, app_state) -> str:
         return (
-            "Certainly, Sir.\n\n"
-            "Send your documents one by one or in batches. I'll automatically:\n"
-            "• Read and extract their contents.\n"
-            "• Index them for semantic vector search.\n"
-            "• Detect and skip duplicate content.\n"
-            "• Categorize them and store originals in your Media Vault.\n\n"
-            "Standing by for your files, Sir."
+            "Send your documents one by one or in batches. I'll automatically read and extract their contents, "
+            "index them for semantic search, detect duplicates, and store originals securely in your Media Vault"
         )
 
 class GreetingHandler(BaseHandler):
@@ -272,7 +268,7 @@ class GreetingHandler(BaseHandler):
     async def handle(self, text: str, session_id: str, app_state) -> str:
         now_hour = datetime.now(timezone.utc).astimezone().hour
         time_greeting = "Good morning" if now_hour < 12 else ("Good afternoon" if now_hour < 17 else "Good evening")
-        return f"{time_greeting}, Sir. ARIA online. What would you like to work on today?"
+        return f"{time_greeting}. ARIA online. What would you like to work on today"
 
 class TimeHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -282,8 +278,8 @@ class TimeHandler(BaseHandler):
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         lower = text.lower()
         if "date" in lower or "day" in lower:
-            return f"Today is {now_ist.strftime('%A, %B %d, %Y')}, Sir."
-        return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')}, Sir."
+            return f"Today is {now_ist.strftime('%A, %B %d, %Y')}"
+        return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')}"
 
 class LocationHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -297,8 +293,8 @@ class LocationHandler(BaseHandler):
                 {"$set": {"location": location_name}},
                 upsert=True
             )
-            return f"Location locked as {location_name.title()}, Sir. Saved in profile for future local queries."
-        return "Location update received, Sir."
+            return f"Location locked as {location_name.title()}. Saved in profile for future local queries"
+        return "Location update received"
 
 class CalculatorHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -306,8 +302,8 @@ class CalculatorHandler(BaseHandler):
     async def handle(self, text: str, session_id: str, app_state) -> str:
         res = evaluate_math(text)
         if res is not None:
-            return f"Result: {res}, Sir."
-        return "Calculation error, Sir."
+            return f"Result: {res}"
+        return "Calculation error"
 
 class WeatherHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -323,13 +319,12 @@ class WeatherHandler(BaseHandler):
 
 class ScheduleHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
-        # Excludes generic word 'today' to prevent conflict with TimeHandler
         return any(kw in text.lower() for kw in ["schedule", "task", "reminder", "agenda", "meeting"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
         res = await app_state.tool_manager.execute_tool("schedule", text, chat_id=session_id)
         if res.get("success"):
-            return f"{res.get('content')}, Sir."
-        return "No scheduled tasks found, Sir."
+            return f"{res.get('content')}"
+        return "No scheduled tasks found"
 
 class MediaHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -339,7 +334,6 @@ class MediaHandler(BaseHandler):
         res = await app_state.tool_manager.execute_tool("media", text, chat_id=session_id)
         return f"{res.get('content')}"
 
-# Corrected handler precedence (TimeHandler ordered strictly before ScheduleHandler)
 DETERMINISTIC_ROUTER = [
     CommandHandler(),
     IdentityHandler(),
@@ -354,7 +348,6 @@ DETERMINISTIC_ROUTER = [
     MediaHandler()
 ]
 
-# Single application instance
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
@@ -416,6 +409,8 @@ async def startup_event():
 
     app.state.brain = AriaBrain(app.state.chroma_client) if app.state.chroma_client else None
     app.state.profile_engine = ProfileEngine(db_inst) if db_inst is not None else None
+    app.state.memory_engine = MemoryEngine(db_inst) if db_inst is not None else None
+    app.state.personality_engine = PersonalityEngine(app.state.memory_engine)
     app.state.conversation_manager = ConversationManager(app.state.chats_col)
     app.state.reflection_engine = ReflectionEngine(app.state.chats_col, app.state.media_col)
     app.state.tool_manager = ToolManager(
@@ -433,7 +428,6 @@ async def startup_event():
         except Exception as e:
             print(f"[Profile Load Warning]: {e}")
 
-    # Idempotent Knowledge Graph Seeding
     if app.state.brain is not None:
         try:
             app.state.brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
@@ -458,7 +452,7 @@ async def startup_event():
             print(f"[Worker Scheduler Warning]: {e}")
 
 # -------------------------------------------------------------
-# SHUTDOWN EVENT: SAFE RESOURCE CLEANUP
+# SHUTDOWN EVENT
 # -------------------------------------------------------------
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -470,16 +464,25 @@ async def shutdown_event():
     print("[ARIA OS]: Graceful shutdown complete.")
 
 # -------------------------------------------------------------
-# TASK PROCESSING PIPELINE
+# TASK PROCESSING PIPELINE WITH CONTINUOUS MEMORY & PERSONA
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE -1] Processing task for session {session_id}: '{user_text}'")
 
-    # 1. Modular Deterministic Router Bypass
+    memory_eng = app.state.memory_engine
+    persona_eng = app.state.personality_engine
+
+    # 1. Continuous Memory Extraction (Background task for every interaction)
+    if memory_eng is not None:
+        asyncio.create_task(memory_eng.extract_and_store_facts(user_text))
+
+    # 2. Modular Deterministic Router Bypass
     for handler in DETERMINISTIC_ROUTER:
         if handler.can_handle(user_text):
             print(f"[DETERMINISTIC ROUTER]: Handled by {handler.__class__.__name__}")
-            return await handler.handle(user_text, session_id, app.state)
+            raw_reply = await handler.handle(user_text, session_id, app.state)
+            is_greeting = isinstance(handler, GreetingHandler) or text_starts_with_greeting(user_text)
+            return await persona_eng.apply_persona(raw_reply, is_major_event=is_greeting)
 
     # =========================================================
     # STAGE 0 & ABOVE: REFLECTION, BRAIN, PLANNER, & REASONER
@@ -494,12 +497,13 @@ async def process_task(user_text: str, session_id: str) -> str:
     correction = await reflection_eng.evaluate_feedback(user_text, session_id)
     if correction and correction.get("needs_retry"):
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
-        return f"{correction['explanation']}\n\n{res.get('content', '')}"
+        raw_retry = f"{correction['explanation']}\n\n{res.get('content', '')}"
+        return await persona_eng.apply_persona(raw_retry)
 
     if aria_brain is not None:
         cached_brain_hit = aria_brain.search_brain(user_text)
         if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
-            return cached_brain_hit["answer"]
+            return await persona_eng.apply_persona(cached_brain_hit["answer"])
 
     print("[PLANNING STAGE]: Running single-pass action planner...")
     session_context = await conv_mgr.build_session_context(session_id)
@@ -515,9 +519,8 @@ async def process_task(user_text: str, session_id: str) -> str:
     if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
         if mem_col is not None:
             mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
-        return "Information stored permanently in your vector vault, Sir."
+        return await persona_eng.apply_persona("Information stored permanently in your vector vault")
 
-    # Parallel Tool Execution via asyncio.gather()
     if tools_to_run:
         print(f"[PARALLEL TOOL EXECUTION]: Dispatching tools: {tools_to_run}")
         tasks = [tool_mgr.execute_tool(t_name, user_text, chat_id=session_id) for t_name in tools_to_run if t_name not in executed_tools]
@@ -557,7 +560,12 @@ async def process_task(user_text: str, session_id: str) -> str:
                 pass
         asyncio.create_task(save_chat())
 
-    return cleaned
+    return await persona_eng.apply_persona(cleaned)
+
+def text_starts_with_greeting(text: str) -> bool:
+    greetings = ["hi", "hello", "hey", "good morning", "greetings"]
+    lower = text.lower().strip()
+    return any(lower.startswith(g) for g in greetings)
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -585,9 +593,9 @@ async def telegram_webhook(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Polished Modular State-Optimized Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Autonomous Continuous Learning Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Polished Autonomous Core Active</h1>"
+    return "<h1>ARIA Autonomous Core Active</h1>"
