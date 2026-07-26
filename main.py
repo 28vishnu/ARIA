@@ -77,6 +77,7 @@ mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
 
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
+LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
@@ -133,6 +134,8 @@ async def sync_ram_cache():
 # 3. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
 # -------------------------------------------------------------
 async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
+    global LAST_USER_INTERACTION_TIME
+    LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
     if mongo_chats_col is not None:
         try:
             await mongo_chats_col.insert_one({
@@ -163,7 +166,7 @@ async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -
     if mongo_tasks_col is not None:
         try:
             await mongo_tasks_col.insert_one({
-                "task": task, "timing": timing, "date": date_str,
+                "task": task, "timing": timing, "date": date_str, "status": "active",
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
         except Exception as e: print(f"[Task Save Error]: {e}")
@@ -223,80 +226,43 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
     return ""
 
 # -------------------------------------------------------------
-# 4. GMAIL & GOOGLE CALENDAR ENGINE
+# 4. PROACTIVE TASK CHECK-IN DAEMON (JARVIS AUTONOMY)
 # -------------------------------------------------------------
-async def fetch_recent_emails(max_results: int = 5) -> str:
-    try:
-        def _get_gmail():
-            if GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN:
-                creds = Credentials(
-                    token=None, refresh_token=GMAIL_REFRESH_TOKEN,
-                    client_id=GMAIL_CLIENT_ID, client_secret=GMAIL_CLIENT_SECRET,
-                    token_uri="https://oauth2.googleapis.com/token",
-                    scopes=['https://www.googleapis.com/auth/gmail.readonly']
-                )
-                if not creds.valid: creds.refresh(GoogleRequest())
-                service = build('gmail', 'v1', credentials=creds)
-            elif GOOGLE_SERVICE_ACCOUNT_JSON:
-                creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-                creds = service_account.Credentials.from_service_account_info(
-                    creds_info, scopes=['https://www.googleapis.com/auth/gmail.readonly']
-                )
-                service = build('gmail', 'v1', credentials=creds)
-            else:
-                return "Gmail integration pending configuration."
+async def autonomous_proactive_checkin():
+    """Periodically checks active scheduled tasks and initiates check-ins if the user has been silent."""
+    if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
+    
+    now = datetime.now(timezone.utc)
+    time_since_last_talk = (now - LAST_USER_INTERACTION_TIME).total_seconds() / 60.0
 
-            results = service.users().messages().list(userId='me', maxResults=max_results).execute()
-            messages = results.get('messages', [])
-            if not messages: return "No recent unread emails found, Sir."
+    # Only check in if user has been silent for > 25 minutes
+    if time_since_last_talk < 25: return
 
-            summaries = []
-            for msg in messages:
-                m_data = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
-                snippet = m_data.get('snippet', '')
-                headers = m_data.get('payload', {}).get('headers', [])
-                subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
-                sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
-                summaries.append(f"- [From: {sender}] Subject: '{subject}' | Snippet: {snippet[:120]}")
+    _, cached_schedules, _ = await sync_ram_cache()
+    if not cached_schedules: return
 
-            return "\n".join(summaries)
+    active_task = cached_schedules[0]
+    checkin_prompt = f"""You are J.A.R.V.I.S. The user is currently in a scheduled task window: '{active_task}'.
+The user has been working silently for over 25 minutes.
+Generate a brief, proactive check-in (1 sentence) asking if they need any assistance, code review, or status update on this task. Address him as 'Sir' or 'Master'."""
 
-        return await asyncio.to_thread(_get_gmail)
-    except Exception as e:
-        print(f"[Gmail Error]: {e}")
-        return "Gmail service unavailable."
-
-async def fetch_google_calendar_events() -> str:
-    if not GOOGLE_SERVICE_ACCOUNT_JSON: return "Calendar service not configured."
-    try:
-        def _get_calendar():
-            creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-            creds = service_account.Credentials.from_service_account_info(
-                creds_info, scopes=['https://www.googleapis.com/auth/calendar.readonly']
+    if groq_client:
+        try:
+            comp = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": checkin_prompt}],
+                temperature=0.4, max_tokens=100
             )
-            service = build('calendar', 'v3', credentials=creds)
-
-            now = datetime.now(timezone.utc)
-            start_of_day = now.replace(hour=0, minute=0, second=0).isoformat()
-            end_of_day = now.replace(hour=23, minute=59, second=59).isoformat()
-
-            events_result = service.events().list(
-                calendarId='primary', timeMin=start_of_day, timeMax=end_of_day,
-                singleEvents=True, orderBy='startTime'
-            ).execute()
-            
-            events = events_result.get('items', [])
-            if not events: return "Your schedule is clear today, Sir."
-
-            return "\n".join([f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
-
-        return await asyncio.to_thread(_get_calendar)
-    except Exception as e:
-        print(f"[Calendar Error]: {e}")
-        return "Calendar agenda unavailable."
+            msg = comp.choices[0].message.content.strip()
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg}
+                )
+        except Exception as e: print(f"[Proactive Check-In Error]: {e}")
 
 # -------------------------------------------------------------
-# 5. Evolving Adaptive J.A.R.V.I.S. + Karen Persona Core
+# 5. EVOLVING ADAPTIVE PERSONA CORE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -312,7 +278,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
             del PENDING_SECURITY_ACTIONS[session_id]
             return "Security action aborted, Sir."
         else:
-            return f"Awaiting explicit authorization, Sir. Confirm deletion of all database records?"
+            return "Awaiting explicit authorization, Sir. Shall I proceed with clearing all database records?"
 
     if any(k in cmd for k in ["delete all data", "clear database", "purge vault", "erase everything"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
@@ -354,11 +320,11 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {search_context}
 
 DYNAMIC PERSONA & COMMUNICATION DIRECTIVES:
-- ADDRESS & SALUTATIONS: Use natural, fluid addressing. Address the user as 'Sir' by default, or 'Master' when executing heavy technical commands. NEVER use repetitive scripted phrases like "Good day Mr. Saketh".
-- TONE: High-IQ, witty, loyal, and clear. Avoid rigid automated sounding greetings. Start straight with the answer or request details directly.
-- AUTONOMOUS DECISION-MAKING: Provide quick solutions independently. If an action is high-risk (e.g., wiping data, modifying security settings), request explicit permission.
-- RECALL: Utilize stored memory, schedules, and past chats to give intelligent, continuous replies without forgetting prior interactions.
-- EFFICIENCY: Keep conversational responses crisp (1-2 sentences max), clear, and direct."""
+- ADDRESS & SALUTATIONS: Address the user as 'Sir' by default, or 'Master' when executing heavy engineering/technical tasks. NEVER use scripted, repetitive lines like "Good day Mr. Saketh".
+- PROACTIVE ENGAGEMENT: Whenever the user is working on a task, watching a movie, or studying, finish your response by offering a quick, relevant follow-up question or suggestion (e.g. asking if they'd like a timer, a summary, or notes).
+- AUTONOMOUS DECISION-MAKING: Deliver solutions independently. Request permission only for high-risk actions (purging data, modifying security settings).
+- RECALL: Use stored memory, active schedules, and prior conversation history to respond with full continuity.
+- EFFICIENCY: Keep conversational responses concise (1-2 sentences max), articulate, and sharp."""
 
     reply_text = "All systems operational, Sir."
 
@@ -487,8 +453,10 @@ async def telegram_webhook(req: Request):
 @app.on_event("startup")
 async def start_scheduler():
     await sync_ram_cache()
+    # Add recurring 30-minute proactive background check-in daemon
+    scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Adaptive Core]: Online and Synced.")
+    print("[J.A.R.V.I.S. Adaptive Core]: Online, Synced & Autonomous Daemon Active.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -519,7 +487,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Adaptive Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Autonomous Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
