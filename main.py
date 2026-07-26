@@ -186,7 +186,7 @@ class FallbackRouter(LLMProvider):
         return "All neural pathways across Groq, OpenRouter, Mistral, and Gemini are currently exhausted, Sir."
 
 # -------------------------------------------------------------
-# MODULAR DETERMINISTIC HANDLERS
+# MODULAR DETERMINISTIC & CONTEXTUAL HANDLERS
 # -------------------------------------------------------------
 class BaseHandler:
     def can_handle(self, text: str) -> bool:
@@ -200,22 +200,22 @@ class CommandHandler(BaseHandler):
     async def handle(self, text: str, session_id: str, app_state) -> str:
         lower = text.lower()
         if lower.startswith("/start"):
-            return "Welcome back, Sir. ARIA Neural Core online. All systems operational. How may I assist you today"
+            return "ARIA online. Systems operational."
         if lower.startswith("/help"):
-            return "ARIA Operating System Command Manual:\n\n• Ask for live weather, news, or calculations.\n• Request documents ('Send my resume', 'What documents do you store?').\n• Manage tasks and schedules ('What is on my schedule today?')."
+            return "Commands: /start, /help, /settings, /about, /ping"
         if lower.startswith("/settings"):
-            return "ARIA System Settings:\n• Interface: Telegram\n• Vector Store: ChromaDB Persistent\n• LLM Tier: Multi-Provider Failover Active"
+            return "Interface: Telegram\nStore: ChromaDB\nTier: Multi-Provider Failover"
         if lower.startswith("/about"):
-            return "ARIA (Autonomous Responsive Intelligent Assistant) v3.5 AI Operating System, built for Saketh"
+            return "ARIA v3.5 AI Operating System"
         if lower.startswith("/ping"):
-            return "Pong! All systems optimal"
-        return "Unknown command, Sir. Type /help for assistance."
+            return "Pong."
+        return "Unknown command."
 
 class IdentityHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return any(k in text.lower() for k in ["who are you", "what are you", "your name"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        return "I am ARIA (Autonomous Responsive Intelligent Assistant), your dedicated AI operating system, built to manage your files, schedules, code, and intelligence feeds"
+        return "ARIA (Autonomous Responsive Intelligent Assistant)."
 
 class ProfileHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -223,41 +223,17 @@ class ProfileHandler(BaseHandler):
     async def handle(self, text: str, session_id: str, app_state) -> str:
         profile = app_state.ram_cache.get("profile", {})
         name = profile.get("name", "Saketh")
-        college = profile.get("college", "Gayatri Vidya Parishad College for Degree and PG Courses")
+        college = profile.get("college", "Gayatri Vidya Parishad College")
         course = profile.get("course", "B.Tech Computer Science Engineering")
-        project = profile.get("active_project", {}).get("name", "ARIA AI")
-
-        return (
-            f"Here's what I currently know about you.\n\n"
-            f"Name: {name}\n"
-            f"Education: {course}, {college}\n"
-            f"Active Project: {project}"
-        )
-
-class BatchUploadHandler(BaseHandler):
-    def can_handle(self, text: str) -> bool:
-        phrases = [
-            "send all my documents", "upload my documents", "here are my files", 
-            "i'll send my documents", "batch upload", "read these", "save these", 
-            "store this", "remember these", "archive these", "index these files", "these are my"
-        ]
-        lower = text.lower()
-        return any(p in lower for p in phrases)
-    async def handle(self, text: str, session_id: str, app_state) -> str:
-        return (
-            "Send your documents one by one or in batches. I'll automatically read and extract their contents, "
-            "index them for semantic search, detect duplicates, and store originals securely in your Media Vault"
-        )
+        return f"Name: {name}\nEducation: {course}, {college}"
 
 class GreetingHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
-        greetings = ["hi", "hello", "hey", "good morning", "good evening", "good afternoon", "greetings", "be10x"]
+        greetings = ["hi", "hello", "hey", "good morning", "good evening", "good afternoon", "greetings"]
         lower = text.lower().strip()
         return lower in greetings or any(lower.startswith(g) for g in ["hi ", "hello ", "hey "])
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        now_hour = datetime.now(timezone.utc).astimezone().hour
-        time_greeting = "Good morning" if now_hour < 12 else ("Good afternoon" if now_hour < 17 else "Good evening")
-        return f"{time_greeting}. ARIA online. What would you like to work on today"
+        return "ARIA online. Ready."
 
 class TimeHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
@@ -265,71 +241,73 @@ class TimeHandler(BaseHandler):
         return any(k in lower for k in ["what time is it", "current time", "time now", "what's the time", "date today", "what day is it", "today's date", "today date"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        lower = text.lower()
-        if "date" in lower or "day" in lower:
-            return f"Today is {now_ist.strftime('%A, %B %d, %Y')}"
-        return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')}"
-
-class LocationHandler(BaseHandler):
-    def can_handle(self, text: str) -> bool:
-        lower = text.lower()
-        return "i'm in" in lower or "i am in" in lower or "my location is" in lower
-    async def handle(self, text: str, session_id: str, app_state) -> str:
-        location_name = re.sub(r".*?(i'm in|i am in|my location is)\s+", "", text.lower()).strip()
-        if location_name and app_state.profile_col is not None:
-            await app_state.profile_col.update_one(
-                {"_id": "master_profile"},
-                {"$set": {"location": location_name}},
-                upsert=True
-            )
-            app_state.ram_cache["profile"]["location"] = location_name
-            return f"Location locked as {location_name.title()}. Saved in profile for future local queries"
-        return "Location update received"
+        if "date" in text.lower() or "day" in text.lower():
+            return f"Date: {now_ist.strftime('%A, %B %d, %Y')}"
+        return f"Time: {now_ist.strftime('%I:%M:%S %p IST')}"
 
 class CalculatorHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', text)) and any(op in text for op in ['+', '-', '*', '/'])
     async def handle(self, text: str, session_id: str, app_state) -> str:
         res = evaluate_math(text)
-        if res is not None:
-            return f"Result: {res}"
-        return "Calculation error"
+        return f"Result: {res}" if res is not None else "Calculation error."
 
 class WeatherHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return "weather" in text.lower()
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        loc_query = app_state.ram_cache.get("profile", {}).get("location", "Visakhapatnam")
-        res = await app_state.tool_manager.execute_tool("web", f"current weather in {loc_query}", chat_id=session_id)
-        return f"{res.get('content', 'Weather data unavailable.')}"
+        loc = app_state.ram_cache.get("profile", {}).get("location", "Visakhapatnam")
+        res = await app_state.tool_manager.execute_tool("web", f"current weather in {loc}", chat_id=session_id)
+        return f"{res.get('content', 'Unavailable.')}"
 
 class ScheduleHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return any(kw in text.lower() for kw in ["schedule", "task", "reminder", "agenda", "meeting"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
         res = await app_state.tool_manager.execute_tool("schedule", text, chat_id=session_id)
-        if res.get("success"):
-            return f"{res.get('content')}"
-        return "No scheduled tasks found"
+        return f"{res.get('content', 'No schedule found.')}"
 
 class MediaHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
-        keywords = ["resume", "cv", "portfolio", "pan", "passport", "certificate", "memo", "pdf", "document", "file", "download", "licence", "license", "id card", "my file", "send document", "what documents", "list files", "stored files", "search my files", "list media"]
+        keywords = ["resume", "cv", "portfolio", "pan", "passport", "certificate", "memo", "pdf", "document", "file", "download", "licence", "license", "id card", "my file", "send document", "what documents", "list files"]
         return any(k in text.lower() for k in keywords)
     async def handle(self, text: str, session_id: str, app_state) -> str:
         res = await app_state.tool_manager.execute_tool("media", text, chat_id=session_id)
-        return f"{res.get('content')}"
+        content = res.get('content', '')
+        # Track last referenced document if a file match is found
+        if "• **" in content:
+            match = re.search(r'• \*\*([^*]+)\*\*', content)
+            if match:
+                doc_name = match.group(1).strip()
+                app_state.conversation_manager.set_last_document(session_id, doc_name)
+        return content
+
+class ContextualDocumentHandler:
+    def can_handle(self, text: str, session_context: dict) -> bool:
+        lower = text.lower()
+        has_doc_in_context = bool(session_context.get("last_referenced_document"))
+        is_follow_up = any(k in lower for k in ["what's in it", "summarize it", "explain it", "read it", "what is inside"])
+        return has_doc_in_context and is_follow_up
+
+    async def handle(self, text: str, session_id: str, app_state, session_context: dict) -> str:
+        doc_name = session_context["last_referenced_document"]
+        req = BrainRequest(query=doc_name, session_id=session_id, intent="document_search")
+        brain_hit = await app_state.brain.search(req)
+        
+        if brain_hit and brain_hit.get("documents"):
+            docs = brain_hit["documents"]
+            summaries = "\n".join([f"• {d.get('summary', 'No summary available.')}" for d in docs])
+            return f"Located.\n{doc_name}\n\nSummary:\n{summaries}"
+        
+        return f"Located file `{doc_name}`, but content chunks were unavailable."
 
 DETERMINISTIC_ROUTER = [
     CommandHandler(),
     IdentityHandler(),
     ProfileHandler(),
-    BatchUploadHandler(),
     GreetingHandler(),
     TimeHandler(),
     ScheduleHandler(),
-    LocationHandler(),
-    CalculatorHandler(),
     WeatherHandler(),
     MediaHandler()
 ]
@@ -351,7 +329,7 @@ def get_temporal() -> str:
 # -------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    print("[ARIA OS]: Initializing kernel state and warming up models...")
+    print("[ARIA OS]: Initializing kernel state...")
     
     app.state.http = httpx.AsyncClient(timeout=15.0)
     global llm_router
@@ -366,8 +344,7 @@ async def startup_event():
             app.state.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 mongo_uri, tlsCAFile=certifi.where(), tlsInsecure=True, serverSelectionTimeoutMS=5000
             )
-        except Exception as e:
-            print(f"[Startup Warning]: MongoDB connection degraded: {e}")
+        except Exception:
             app.state.mongo_client = None
     else:
         app.state.mongo_client = None
@@ -387,35 +364,23 @@ async def startup_event():
         app.state.docs_col = app.state.chroma_client.get_or_create_collection(name="documents")
         app.state.mem_col = app.state.chroma_client.get_or_create_collection(name="memory")
         
-        # Warm up Chroma embedding model to eliminate first-query lag
         warm_col = app.state.chroma_client.get_or_create_collection(name="warmup_collection")
         warm_col.upsert(ids=["1"], documents=["warmup embedding text"])
         warm_col.query(query_texts=["warmup"], n_results=1)
-        print("[ARIA OS]: ChromaDB embedding model warmed up successfully.")
-    except Exception as e:
-        print(f"[Startup Warning]: ChromaDB initialization/warmup degraded: {e}")
+    except Exception:
         app.state.chroma_client = None
-        app.state.docs_col = None
-        app.state.mem_col = None
 
-    # Initialize RAM Cache and Profile Data
     app.state.ram_cache = {"profile": {}}
     if db_inst is not None:
         try:
             prof_doc = await db_inst["user_profile"].find_one({"_id": "master_profile"})
             if prof_doc:
                 app.state.ram_cache["profile"] = prof_doc
-                print("[ARIA OS]: Master Profile loaded and cached in RAM.")
-        except Exception as e:
-            print(f"[RAM Profile Cache Warning]: {e}")
+        except Exception:
+            pass
 
-    # Initialize AriaBrain Kernel
     if app.state.chroma_client:
-        app.state.brain = AriaBrain(
-            chroma_client=app.state.chroma_client,
-            mongo_db=db_inst
-        )
-        print("[ARIA OS]: AriaBrain Kernel initialized successfully.")
+        app.state.brain = AriaBrain(chroma_client=app.state.chroma_client, mongo_db=db_inst)
     else:
         app.state.brain = None
 
@@ -425,143 +390,112 @@ async def startup_event():
     app.state.conversation_manager = ConversationManager(app.state.chats_col)
     app.state.reflection_engine = ReflectionEngine(app.state.chats_col, app.state.media_col)
     app.state.tool_manager = ToolManager(
-        app.state.mem_col, 
-        app.state.docs_col, 
-        app.state.media_col, 
-        app.state.schedule_col, 
-        app.state.tavily,
-        aria_brain=app.state.brain
+        app.state.mem_col, app.state.docs_col, app.state.media_col, 
+        app.state.schedule_col, app.state.tavily, aria_brain=app.state.brain
     )
 
     if app.state.brain is not None:
         try:
             await app.state.brain.graph.link("Saketh", "studies_at", "Gayatri Vidya Parishad College")
             await app.state.brain.graph.link("Saketh", "pursuing", "B.Tech Computer Science Engineering")
-            await app.state.brain.graph.link("Saketh", "builds", "ARIA AI")
-            print("[ARIA OS]: Knowledge Graph successfully seeded via Brain Kernel.")
-        except Exception as e:
-            print(f"[Graph Seeding Warning]: {e}")
+        except Exception:
+            pass
 
     if db_inst is not None:
         try:
             workers = BackgroundWorkers(db_inst, llm_router, app.state.tavily)
             scheduler.add_job(workers.morning_briefing_worker, "cron", hour=9, minute=0, id="morning_briefing", replace_existing=True)
             scheduler.add_job(workers.night_summary_worker, "cron", hour=22, minute=0, id="night_summary", replace_existing=True)
-            scheduler.add_job(workers.inactivity_worker, "interval", days=1, id="inactivity", replace_existing=True)
-            scheduler.add_job(workers.api_health_monitor_worker, "interval", hours=1, id="health_monitor", replace_existing=True)
-            
             if not scheduler.running:
                 scheduler.start()
-                print("[ARIA OS]: Background Intelligence Workers active.")
-        except Exception as e:
-            print(f"[Worker Scheduler Warning]: {e}")
+        except Exception:
+            pass
 
-# -------------------------------------------------------------
-# SHUTDOWN EVENT
-# -------------------------------------------------------------
 @app.on_event("shutdown")
 async def shutdown_event():
-    print("[ARIA OS]: Shutting down systems...")
     if hasattr(app.state, "http") and app.state.http:
         await app.state.http.aclose()
     if scheduler.running:
         scheduler.shutdown(wait=False)
-    print("[ARIA OS]: Graceful shutdown complete.")
 
 # -------------------------------------------------------------
-# SUB-SECOND FAST TASK PROCESSING PIPELINE
+# TASK PROCESSING PIPELINE
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
-    print(f"[STAGE -1] Processing task for session {session_id}: '{user_text}'")
-
     memory_eng = app.state.memory_engine
     persona_eng = app.state.personality_engine
+    conv_mgr = app.state.conversation_manager
     brain = app.state.brain
     lower_text = user_text.lower().strip()
 
-    # 1. Non-blocking Background Memory Extraction
     if memory_eng is not None:
         asyncio.create_task(memory_eng.extract_and_store_facts(user_text))
 
-    # 2. FAST ROUTER: Instant RAM Profile Lookup (< 10ms)
+    session_context = await conv_mgr.build_session_context(session_id)
+
+    # 1. Fast Path: Contextual Follow-up Document Router
+    doc_handler = ContextualDocumentHandler()
+    if doc_handler.can_handle(user_text, session_context):
+        raw_reply = await doc_handler.handle(user_text, session_id, app.state, session_context)
+        return await persona_eng.apply_persona(raw_reply)
+
+    # 2. Fast Path: RAM Profile Lookup
     if any(k in lower_text for k in ["what's my name", "who am i", "my profile"]):
         profile = app.state.ram_cache.get("profile", {})
         name = profile.get("name", "Saketh")
-        college = profile.get("college", "Gayatri Vidya Parishad College")
-        return await persona_eng.apply_persona(f"You are {name}, currently studying at {college}.")
+        return await persona_eng.apply_persona(f"You are {name}.")
 
-    # 3. FAST ROUTER: Deterministic Handlers (Time, Math, Greetings)
+    # 3. Fast Path: Deterministic Handlers
     for handler in DETERMINISTIC_ROUTER:
         if handler.can_handle(user_text):
-            print(f"[FAST ROUTER]: Handled by {handler.__class__.__name__}")
             raw_reply = await handler.handle(user_text, session_id, app.state)
             is_greeting = isinstance(handler, GreetingHandler)
             return await persona_eng.apply_persona(raw_reply, is_major_event=is_greeting)
 
-    # 4. FAST ROUTER: Brain Kernel Fast-Path (Cache & Document Metadata < 100ms)
+    # 4. Fast Path: Brain Kernel Search Cache & Metadata
     if brain is not None:
         req = BrainRequest(query=user_text, session_id=session_id, intent="search")
         brain_hit = await brain.search(req)
-        
         if brain_hit and brain_hit.get("source") == "cache":
             return await persona_eng.apply_persona(brain_hit["content"])
-            
         elif brain_hit and brain_hit.get("documents") and len(brain_hit["documents"]) > 0:
             docs = brain_hit["documents"]
             doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)" for d in docs])
-            return await persona_eng.apply_persona(f"I found matching records in your repository:\n\n{doc_list}")
+            if len(docs) == 1:
+                app.state.conversation_manager.set_last_document(session_id, docs[0].get('filename'))
+            return await persona_eng.apply_persona(f"Located.\n{doc_list}")
 
-    # =========================================================
-    # 5. HEAVY FALLBACK: PLANNER & REASONER PIPELINE (Only when needed)
-    # =========================================================
+    # 5. Heavy Fallback: Planner & Reasoner Pipeline
     tool_mgr = app.state.tool_manager
     chats_col = app.state.chats_col
-    conv_mgr = app.state.conversation_manager
     reflection_eng = app.state.reflection_engine
 
     correction = await reflection_eng.evaluate_feedback(user_text, session_id)
     if correction and correction.get("needs_retry"):
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
-        raw_retry = f"{correction['explanation']}\n\n{res.get('content', '')}"
-        return await persona_eng.apply_persona(raw_retry)
+        return await persona_eng.apply_persona(f"{correction['explanation']}\n\n{res.get('content', '')}")
 
-    print("[PLANNING STAGE]: Running action planner...")
-    session_context = await conv_mgr.build_session_context(session_id)
     available_tools_desc = tool_mgr.describe_tools()
-
     executed_tools = []
     structured_results = {"memory": {}, "documents": {}, "web": {}, "media": {}, "schedule": {}}
 
     plan = await action_planner(user_text, session_context, available_tools_desc, executed_tools, llm_router)
     tools_to_run = plan.get("tools", [])
-    action = plan.get("action", "retrieve")
-
-    if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
-        return await persona_eng.apply_persona("Information stored permanently in your vector vault")
 
     if tools_to_run:
-        print(f"[PARALLEL TOOL EXECUTION]: Dispatching tools: {tools_to_run}")
         tasks = [tool_mgr.execute_tool(t_name, user_text, chat_id=session_id) for t_name in tools_to_run if t_name not in executed_tools]
         results = await asyncio.gather(*tasks)
         for t_name, result in zip(tools_to_run, results):
             structured_results[t_name] = result
-            executed_tools.append(t_name)
 
-    print("[REASONER STAGE]: Synthesizing response...")
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
-
-    has_valid_source = any(res.get("success") for res in structured_results.values())
-    if has_valid_source and brain is not None:
-        brain.store_knowledge(question=user_text, answer=cleaned)
 
     if chats_col is not None:
         async def save_chat():
             try:
                 await chats_col.insert_one({
-                    "session_id": session_id,
-                    "user_msg": user_text,
-                    "aria_reply": cleaned,
+                    "session_id": session_id, "user_msg": user_text, "aria_reply": cleaned,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             except Exception:
@@ -596,9 +530,9 @@ async def telegram_webhook(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Sub-Second Optimized Kernel Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "JARVIS Kernel Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Sub-Second Optimized Kernel Active</h1>"
+    return "<h1>ARIA Kernel Active</h1>"
