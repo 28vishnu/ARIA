@@ -347,7 +347,7 @@ DETERMINISTIC_ROUTER = [
     MediaHandler()
 ]
 
-# Single application instance
+# EXACTLY ONE FastAPI application instance
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
@@ -429,6 +429,7 @@ async def startup_event():
     # Idempotent Knowledge Graph Seeding
     if app.state.brain is not None:
         try:
+            # Check if concepts are already present or use idempotent link logic if available
             app.state.brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
             app.state.brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
             app.state.brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
@@ -451,7 +452,7 @@ async def startup_event():
             print(f"[Worker Scheduler Warning]: {e}")
 
 # -------------------------------------------------------------
-# SHUTDOWN EVENT: RESOURCE CLEANUP
+# SHUTDOWN EVENT: SAFE RESOURCE CLEANUP
 # -------------------------------------------------------------
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -460,7 +461,7 @@ async def shutdown_event():
         await app.state.http.aclose()
     if scheduler.running:
         scheduler.shutdown(wait=False)
-    print("[ARIA OS]: Shutdown complete.")
+    print("[ARIA OS]: Graceful shutdown complete.")
 
 # -------------------------------------------------------------
 # TASK PROCESSING PIPELINE
