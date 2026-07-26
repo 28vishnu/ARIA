@@ -150,17 +150,31 @@ def get_temporal() -> str:
 
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
-    lower_txt = user_text.lower()
+    lower_txt = user_text.lower().strip()
 
-    if lower_txt in ["/start", "hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening"]:
-        return "Online and fully operational, Sir. How may I assist you today?"
+    # 0. Zero-Token Intent Bypass (Saves AI Quota for Pleasantries)
+    zero_token_responses = {
+        "hello": "Greetings, Sir. How may I assist you today?",
+        "hi": "Hello, Sir. ARIA systems online.",
+        "hey": "I am here, Sir. What do you need?",
+        "thanks": "You are very welcome, Sir.",
+        "thank you": "My pleasure, Sir.",
+        "great": "Excellent, Sir. Standing by.",
+        "awesome": "Glad to be of service, Sir.",
+        "good job": "Thank you, Sir. I aim to please.",
+        "good morning": "Good morning, Sir. Systems are optimal.",
+        "good evening": "Good evening, Sir. Ready when you are."
+    }
+    if lower_txt in zero_token_responses:
+        print("[INTENT BYPASS] Zero-Token response triggered.")
+        return zero_token_responses[lower_txt]
 
     tavily = get_tavily()
     docs_col, mem_col = get_collections()
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
     tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
 
-    # 1. Reflection & Correction Engine Check (Catches feedback like "It's not my resume")
+    # 1. Reflection & Correction Engine Check
     reflection_eng = ReflectionEngine(chats_col, media_col)
     correction_response = await reflection_eng.evaluate_feedback(user_text, session_id)
     if correction_response:
