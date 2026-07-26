@@ -1,23 +1,27 @@
 class PersonalityEngine:
-    @staticmethod
-    def format_response(response_text: str, tone: str = "jarvis", celebration: bool = False, encouragement: bool = False) -> str:
-        """Applies a consistent, sophisticated assistant persona with dynamic tone control."""
-        clean_text = response_text.strip()
+    def __init__(self, memory_engine=None):
+        self.memory_engine = memory_engine
+
+    async def apply_persona(self, raw_text: str, is_major_event: bool = False) -> str:
+        """Applies a concise, confident JARVIS persona dynamically adapted to user preferences."""
+        cleaned = raw_text.strip()
         
-        # Add celebratory flair if a milestone or achievement is reached
-        if celebration and not any(w in clean_text.lower() for w in ["congratulations", "excellent", "brilliant"]):
-            clean_text = f"Outstanding work, Sir. {clean_text}"
+        # Retrieve dynamic address style from memory if available
+        address_style = "Sir"
+        if self.memory_engine and hasattr(self.memory_engine, "get_address_style"):
+            address_style = await self.memory_engine.get_address_style()
 
-        # Add motivational encouragement during complex tasks
-        elif encouragement and not any(w in clean_w := clean_text.lower() for w in ["keep", "push", "steady"]):
-            clean_text = f"We are making solid progress, Sir. {clean_text}"
+        # Clean up any redundant trailing punctuation before appending salutation
+        cleaned = cleaned.rstrip(".")
+        
+        # Format with preferred address style if not already present
+        if address_style and address_style.lower() not in cleaned.lower():
+            cleaned = f"{cleaned}, {address_style}."
+        else:
+            cleaned = f"{cleaned}."
 
-        # Ensure a polished, professional signature ending if not already present
-        if not clean_text.endswith("Sir.") and not clean_text.endswith("Sir"):
-            # Check if it ends with punctuation
-            if clean_text.endswith(('.', '!', '?')):
-                clean_text += " Standing by, Sir."
-            else:
-                clean_text += ", Sir."
-
-        return clean_text
+        # Only append formal signatures for major events, system reports, or greetings
+        if is_major_event:
+            cleaned += "\n\n— ARIA Neural Core"
+            
+        return cleaned
