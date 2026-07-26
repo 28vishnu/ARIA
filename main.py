@@ -5,7 +5,6 @@ import base64
 import re
 import asyncio
 import certifi
-import ssl
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
@@ -52,25 +51,20 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# HARDENED MONGODB ATLAS SSL/TLS ENGINE
+# CLEAN MONGODB CLIENT FOR MOTOR / PYMONGO 4+
 def init_mongo_client():
     if not MONGODB_URI: return None
-    uri = MONGODB_URI
-    if "tls=" not in uri and "ssl=" not in uri:
-        delimiter = "&" if "?" in uri else "?"
-        uri = f"{uri}{delimiter}tls=true&tlsAllowInvalidCertificates=true"
-
     try:
-        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-
         return motor.motor_asyncio.AsyncIOMotorClient(
-            uri, ssl_context=ssl_ctx, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000
+            MONGODB_URI,
+            tlsCAFile=certifi.where(),
+            tlsInsecure=True,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
         )
     except Exception as e:
-        print(f"[Mongo Client Context Error]: {e}")
-        return motor.motor_asyncio.AsyncIOMotorClient(uri, tls=True, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
+        print(f"[Mongo Init Exception]: {e}")
+        return motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
 
 mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
@@ -177,7 +171,6 @@ async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -
     return f"Task '{task}' scheduled for {timing}, Sir."
 
 async def purge_all_vault_data() -> str:
-    """Removes all stored tasks, memory facts, and chats."""
     if mongo_memory_col is not None: await mongo_memory_col.delete_many({})
     if mongo_tasks_col is not None: await mongo_tasks_col.delete_many({})
     if mongo_chats_col is not None: await mongo_chats_col.delete_many({})
@@ -321,7 +314,6 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         else:
             return f"Awaiting explicit authorization, Sir. Confirm deletion of all database records?"
 
-    # Check for security triggers
     if any(k in cmd for k in ["delete all data", "clear database", "purge vault", "erase everything"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
         return "Security Protocol Alert: This will permanently wipe all vault records, schedules, and memory. Do you authorize this action, Sir?"
