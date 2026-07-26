@@ -1,28 +1,17 @@
-import os
 from datetime import datetime, timezone
-import chromadb
 
 class CacheManager:
-    def __init__(self, chroma_client):
-        self.chroma = chroma_client
-        self.cache_col = chroma_client.get_or_create_collection(name="aria_brain_cache")
+    def __init__(self, chroma_repo):
+        self.chroma = chroma_repo
 
-    def search_cache(self, query: str) -> str | None:
-        """Searches verified QA cache with semantic similarity."""
-        try:
-            hits = self.cache_col.query(query_texts=[query], n_results=1)
-            if hits and hits.get("documents") and len(hits["documents"][0]) > 0:
-                dist = hits.get("distances", [[1.0]])[0][0]
-                if dist < 0.35:  # High confidence threshold
-                    return hits["documents"][0][0]
-        except Exception as e:
-            print(f"[Cache Search Error]: {e}")
+    def get(self, query: str):
+        if not self.chroma.cache: return None
+        hits = self.chroma.cache.query(query_texts=[query], n_results=1)
+        if hits and hits.get("documents") and hits.get("distances") and len(hits["distances"][0]) > 0:
+            if hits["distances"][0][0] < 0.35:
+                return hits["documents"][0][0]
         return None
 
-    def store_cache(self, question: str, answer: str, confidence: float = 0.96):
-        """Stores verified Q&A into cache."""
-        self.cache_col.upsert(
-            ids=[str(datetime.now(timezone.utc).timestamp())],
-            documents=[answer],
-            metadatas=[{"question": question, "confidence": confidence}]
-        )
+    def set(self, query: str, answer: str):
+        if self.chroma.cache:
+            self.chroma.cache.upsert(ids=[str(datetime.now(timezone.utc).timestamp())], documents=[answer], metadatas=[{"question": query}])
