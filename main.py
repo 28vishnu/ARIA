@@ -4,6 +4,7 @@ import httpx
 import base64
 import re
 import asyncio
+import certifi
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
@@ -50,11 +51,24 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# SINGLE PRIMARY DATABASE: MongoDB Atlas
-mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
+# FIXED MONGODB ATLAS SSL HANDSHAKE CLIENT
+def init_mongo_client():
+    if not MONGODB_URI: return None
+    try:
+        # Pass certifi CA bundle to fix Linux/Render OpenSSL TLS issues
+        return motor.motor_asyncio.AsyncIOMotorClient(
+            MONGODB_URI,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=5000
+        )
+    except Exception as e:
+        print(f"[Mongo Client Init Error]: {e}")
+        return motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
+
+mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 
-# MongoDB Collections (Created Automatically by MongoDB)
+# MongoDB Collections
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
@@ -73,7 +87,6 @@ RAM_RECENT_CHATS = []
 LAST_CACHE_UPDATE = 0
 
 def get_current_temporal_context() -> str:
-    """Provides precise real-time timestamps in UTC and IST."""
     now_utc = datetime.now(timezone.utc)
     ist_offset = timedelta(hours=5, minutes=30)
     now_ist = now_utc + ist_offset
@@ -85,7 +98,6 @@ LIVE TEMPORAL CONTEXT:
 """
 
 async def sync_ram_cache():
-    """Performs parallel fetching from MongoDB into RAM cache."""
     global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS, LAST_CACHE_UPDATE
     now = datetime.now().timestamp()
     if now - LAST_CACHE_UPDATE < 20 and len(RAM_MEMORY_CACHE) > 1:
@@ -115,7 +127,7 @@ async def sync_ram_cache():
             for cdoc in reversed(chat_docs):
                 chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
 
-        except Exception as e: print(f"[RAM Sync Error]: {e}")
+        except Exception as e: print(f"[RAM Sync Status]: {e}")
 
     RAM_MEMORY_CACHE = facts
     RAM_SCHEDULE_CACHE = schedules
@@ -127,7 +139,6 @@ async def sync_ram_cache():
 # 3. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
 # -------------------------------------------------------------
 async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
-    """Logs raw multi-turn conversation logs into MongoDB asynchronously."""
     if mongo_chats_col is not None:
         try:
             await mongo_chats_col.insert_one({
@@ -151,7 +162,6 @@ async def save_memory_fact(category: str, fact: str) -> str:
     return "Understood, Sir. Saved permanently in your MongoDB vault."
 
 async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -> str:
-    """Stores a scheduled event/task into MongoDB and RAM cache instantly."""
     sch_entry = f"• Task: {task} | Time Slot: {timing} | Scheduled On: {date_str}"
     if sch_entry not in RAM_SCHEDULE_CACHE:
         RAM_SCHEDULE_CACHE.append(sch_entry)
@@ -169,14 +179,13 @@ async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -
     return f"Task '{task}' scheduled for {timing} successfully recorded in your database, Sir."
 
 async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = ""):
-    """Stores PDF documents, voice clips, videos, and images into MongoDB binary vault."""
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
 
     if mongo_media_col is not None:
         try:
             await mongo_media_col.insert_one({
                 "file_name": file_name,
-                "media_type": media_type,  # 'document', 'voice', 'video', 'image'
+                "media_type": media_type,
                 "caption": caption.lower().strip(),
                 "b64_payload": b64_payload,
                 "timestamp": datetime.now(timezone.utc).isoformat()
@@ -196,7 +205,6 @@ def fetch_web_search(query: str) -> str:
     return ""
 
 async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str:
-    """Fetches instant live weather with strict 2-second timeout."""
     if not location_info or "," not in location_info:
         location_info = "17.6868,83.2185"
     try:
@@ -326,7 +334,6 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     cmd = user_text.lower().strip()
 
     # 1. AUTOMATIC TASK & TIMING PARSER
-    # Handles inputs like: "10am-11am is better to complete my record", "schedule DWDM record 10am-11am"
     timing_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", cmd)
     if timing_match:
         timing_str = timing_match.group(1)
@@ -339,7 +346,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 3. SYNC RAM CACHE & BUILD CONTEXT (Profile, Tasks, & Recent Chats)
+    # 3. SYNC RAM CACHE & BUILD CONTEXT
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
 
     temporal_context = get_current_temporal_context()
@@ -397,7 +404,6 @@ CORE DIRECTIVES:
                 reply_text = reply.strip()
         except Exception as e: print(f"[Gemini Error]: {e}")
 
-    # Asynchronously log interaction into chat_history
     asyncio.create_task(log_chat_interaction(user_text, reply_text, session_id))
     return reply_text
 
@@ -423,7 +429,6 @@ async def telegram_webhook(req: Request):
         if ALLOWED_TELEGRAM_USER_ID and str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
             return {"status": "unauthorized"}
 
-        # 1. Isolated /start Command
         if text.lower() == "/start":
             async with httpx.AsyncClient() as client:
                 await client.post(
@@ -432,7 +437,6 @@ async def telegram_webhook(req: Request):
                 )
             return {"status": "ok"}
 
-        # 2. Multi-Modal Media Uploads (PDF, Voice, Video, Photos)
         file_obj, media_type, default_name = None, "document", "file.dat"
         if document: file_obj, media_type, default_name = document, "document", document.get("file_name", "document.pdf")
         elif voice: file_obj, media_type, default_name = voice, "voice", "voice_note.ogg"
@@ -452,7 +456,6 @@ async def telegram_webhook(req: Request):
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 3. Direct Fast File Retrieval (Sub-2 Seconds)
         if text:
             cmd = text.lower()
             media_triggers = [
@@ -487,7 +490,6 @@ async def telegram_webhook(req: Request):
                         )
                 return {"status": "ok"}
 
-            # 4. Standard Conversational Fast Response
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
@@ -502,7 +504,7 @@ async def start_scheduler():
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC")  # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Single-DB Engine]: MongoDB Atlas Fully Calibrated & Synced.")
+    print("[J.A.R.V.I.S. Single-DB Engine]: MongoDB Atlas Fully Calibrated & Connected.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & PDF ENGINE
