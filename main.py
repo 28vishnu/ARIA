@@ -126,8 +126,8 @@ async def sync_ram_cache():
                 sch_entry = f"• Task: {tdoc.get('task')} | Slot: {tdoc.get('timing')}"
                 if sch_entry not in schedules: schedules.append(sch_entry)
 
-            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(10)
-            chat_docs = await chat_cursor.to_list(length=10)
+            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(6)
+            chat_docs = await chat_cursor.to_list(length=6)
             for cdoc in reversed(chat_docs):
                 chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
 
@@ -151,13 +151,13 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
     try:
         query_str = file_query.strip() if file_query else ""
         if not query_str:
-            target_doc = await mongo_media_col.find_one({}, sort=[("_id", -1)])
+            target_doc = await mongo_media_col.find_one({"media_type": "document"}, sort=[("_id", -1)])
         else:
             q_regex = re.compile(query_str, re.IGNORECASE)
             target_doc = await mongo_media_col.find_one({"$or": [{"file_name": q_regex}, {"caption": q_regex}]})
 
         if not target_doc:
-            return f"I searched the vault, Sir, but could not find any document matching '{file_query}'."
+            return f"I searched your vault, Sir, but could not locate any document matching '{file_query}'."
 
         fname = target_doc.get("file_name", "document.pdf")
         mtype = target_doc.get("media_type", "document")
@@ -178,21 +178,21 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
         print(f"[File Dispatch Error]: {e}")
         return f"Encountered an issue dispatching document for query '{file_query}', Sir."
 
-async def query_document_vault(search_query: str) -> str:
-    """Deep document reading tool: Retrieves full parsed text of matching PDFs."""
+async def query_document_vault(doc_keyword: str, specific_question: str) -> str:
+    """Deep document reading tool: Retrieves extracted text of specific documents to answer target questions."""
     if mongo_media_col is None: return "Document vault unavailable, Sir."
     try:
-        q_regex = re.compile(search_query, re.IGNORECASE) if search_query else None
+        q_regex = re.compile(doc_keyword.strip(), re.IGNORECASE) if doc_keyword else None
         filter_clause = {"$or": [{"file_name": q_regex}, {"caption": q_regex}]} if q_regex else {}
-        docs = await mongo_media_col.find(filter_clause).sort("_id", -1).to_list(length=3)
+        docs = await mongo_media_col.find(filter_clause).sort("_id", -1).to_list(length=2)
 
         if not docs:
-            return f"No document content matching '{search_query}' found in your vault, Sir."
+            return f"No document matching '{doc_keyword}' was found in your vault, Sir."
 
         results = []
         for d in docs:
             content = d.get("caption", "").strip()
-            results.append(f"DOCUMENT NAME: '{d.get('file_name')}'\nFULL TEXT CONTENT:\n{content[:3500]}")
+            results.append(f"DOCUMENT NAME: '{d.get('file_name')}'\nEXTRACTED TEXT:\n{content[:4000]}")
 
         return "\n\n====================\n\n".join(results)
     except Exception as e:
@@ -379,11 +379,11 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_file_from_vault",
-            "description": "Dispatches and sends the actual PDF file to Telegram when the user asks to receive or download a document (e.g. resume, aadhar, certificate).",
+            "description": "Dispatches and sends the actual binary PDF or file to Telegram ONLY when the user explicitly asks to receive, download, or get a PDF file.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_query": {"type": "string", "description": "Specific document keyword e.g. 'aadhar', 'resume', 'certificate', 'cs50'"}
+                    "file_query": {"type": "string", "description": "Document keyword e.g. 'aadhar', 'resume', 'certificate', 'cs50'"}
                 },
                 "required": ["file_query"]
             }
@@ -393,13 +393,14 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_document_vault",
-            "description": "Reads and extracts full text content from stored PDF files to answer specific questions about what is inside them.",
+            "description": "Reads text content inside stored PDFs to answer questions about specific points inside a document (e.g. projects in resume, grades, or details).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "search_query": {"type": "string", "description": "Topic or keyword to read inside uploaded PDFs"}
+                    "doc_keyword": {"type": "string", "description": "Keyword identifying which document to read e.g. 'resume', 'aadhar', 'proposal'"},
+                    "specific_question": {"type": "string", "description": "The exact question or point the user is asking about"}
                 },
-                "required": ["search_query"]
+                "required": ["doc_keyword", "specific_question"]
             }
         }
     },
@@ -436,21 +437,6 @@ GROQ_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "save_memory_fact",
-            "description": "Saves a personal profile fact or detail about the user into the permanent vault.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "category": {"type": "string", "description": "Fact category e.g. personal_profile, study, preferences"},
-                    "fact": {"type": "string", "description": "The exact fact or detail to remember"}
-                },
-                "required": ["category", "fact"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_system_diagnostics",
             "description": "Audits assistant health, database metrics, security incidents, and active tasks.",
             "parameters": {"type": "object", "properties": {}}
@@ -460,6 +446,10 @@ GROQ_TOOLS = [
 
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
+
+    # Simple greeting bypass: Prevents accidental tool re-triggers on 'hello' or 'hi'
+    if cmd in ["hello", "hi", "hey", "hola", "start", "/start"]:
+        return "At your service, Sir. How may I assist you today?"
 
     # Security Confirmation Dialogue
     if session_id in PENDING_SECURITY_ACTIONS:
@@ -493,14 +483,15 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {history_context}
 {search_context}
 
-DYNAMIC DIRECTIVES:
-- FILE DISPATCH vs DOCUMENT READING: 
-  * If the user wants to GET/RECEIVE/DOWNLOAD a document or PDF file, call 'send_file_from_vault'.
-  * If the user asks a question ABOUT what is inside a document, asks for details from a document, or asks for diagnostic telemetry, call 'query_document_vault' or 'get_system_diagnostics'.
-- PRIVACY & DIRECT DISPATCH FOR ID DOCUMENTS:
-  * For requests regarding sensitive identity documents (like Aadhaar card), summarize non-sensitive text or offer/execute sending the document PDF directly via 'send_file_from_vault'.
-- ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Never use scripted lines like "Good day Mr. Saketh".
-- FORMATTING: Keep tone crisp, witty, intelligent, and natural."""
+DYNAMIC DIRECTIVES & PRIVACY RULES:
+1. GREETINGS & CONVERSATION: If the user says 'hello' or simple greetings, respond directly and naturally without calling tools.
+2. SENSITIVE IDENTIFIER PRIVACY (AADHAAR / RRN / MYNUMBER):
+   * NEVER print out the numeric digits of an Aadhaar card, RRN, or MyNumber in chat text under any circumstances.
+   * If asked for an Aadhaar number, state: "For security and privacy protocols, I cannot print government ID numbers directly in text. However, I can dispatch your official Aadhaar PDF directly to your Telegram chat." Then offer or call 'send_file_from_vault' with file_query='aadhar'.
+3. FILE DISPATCH vs SPECIFIC TEXT EXTRACTION:
+   * If the user wants the PDF document file itself, call 'send_file_from_vault'.
+   * If the user asks a specific question about content INSIDE a PDF (e.g., 'What is my CGPA in my transcript?', 'Extract project details from my resume'), call 'query_document_vault'.
+4. ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Keep responses concise (1-2 sentences max), articulate, and sharp."""
 
     reply_text = ""
 
@@ -512,7 +503,7 @@ DYNAMIC DIRECTIVES:
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
                     tools=GROQ_TOOLS,
                     tool_choice="auto",
-                    temperature=0.3, max_tokens=300
+                    temperature=0.2, max_tokens=300
                 )
                 return response.choices[0].message
 
@@ -531,12 +522,24 @@ DYNAMIC DIRECTIVES:
                         reply_text = await send_file_from_vault(q_term, session_id)
 
                     elif fn_name == "query_document_vault":
-                        doc_text = await query_document_vault(fn_args.get("search_query", user_text))
-                        qa_prompt = f"The user asked: '{user_text}'\n\nDOCUMENT CONTENTS:\n{doc_text}\n\nProvide a precise, direct answer based on the document text above. Address the user as Sir."
+                        doc_keyword = fn_args.get("doc_keyword", user_text)
+                        specific_q = fn_args.get("specific_question", user_text)
+                        retrieved_doc_text = await query_document_vault(doc_keyword, specific_q)
+
+                        qa_prompt = f"""The user asked: '{user_text}'
+
+RETRIEVED DOCUMENT CONTENT:
+{retrieved_doc_text}
+
+INSTRUCTIONS:
+Extract and answer the specific point requested from the document content above concisely.
+Rule: Do not output numeric digits of sensitive government IDs like Aadhaar.
+Address the user as Sir."""
+
                         qa_comp = groq_client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
-                            temperature=0.3, max_tokens=250
+                            temperature=0.2, max_tokens=250
                         )
                         reply_text = qa_comp.choices[0].message.content.strip()
 
@@ -544,10 +547,9 @@ DYNAMIC DIRECTIVES:
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
                     elif fn_name == "save_scheduled_task":
                         reply_text = await save_scheduled_task(fn_args.get("task"), fn_args.get("timing"))
-                    elif fn_name == "save_memory_fact":
-                        reply_text = await save_memory_fact(fn_args.get("category", "general"), fn_args.get("fact"))
                     elif fn_name == "get_system_diagnostics":
                         reply_text = await get_system_diagnostics()
+
             elif msg.content:
                 reply_text = msg.content.strip()
 
@@ -566,7 +568,7 @@ DYNAMIC DIRECTIVES:
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     if not reply_text:
-        reply_text = "All systems operational, Sir."
+        reply_text = "At your service, Sir. All neural systems operational."
 
     cleaned_reply = clean_response_text(reply_text)
     asyncio.create_task(log_chat_interaction(user_text, cleaned_reply, session_id))
@@ -638,7 +640,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Context Engine]: Fully Active.")
+    print("[J.A.R.V.I.S. High-Precision Engine]: Online and Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -669,12 +671,12 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Engine Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Core Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"<h1>ARIA Engine Online</h1>"
+    return f"<h1>ARIA High-Precision Engine Online</h1>"
 
 # -------------------------------------------------------------
 # 8. WEBSOCKET STREAMING & UPLOAD ROUTE
