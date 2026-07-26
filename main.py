@@ -15,7 +15,6 @@ import edge_tts
 # Provider SDKs
 from groq import Groq
 from google import genai
-from supabase import create_client
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
@@ -34,8 +33,6 @@ app = FastAPI()
 # -------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")
@@ -52,13 +49,15 @@ USER_FULL_NAME = "N. Vishnu Saketh"
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
+# SINGLE PRIMARY DATABASE: MongoDB Atlas
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 mongo_db = mongo_client["aria_db"] if mongo_client else None
-mongo_docs_col = mongo_db["documents"] if mongo_db is not None else None
-mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
+
+# MongoDB Collections
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
+mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
+mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
 
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
@@ -68,6 +67,7 @@ scheduler = AsyncIOScheduler()
 # 2. IN-MEMORY RAM CACHE & TEMPORAL ENGINE
 # -------------------------------------------------------------
 RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
+RAM_SCHEDULE_CACHE = []
 LAST_CACHE_UPDATE = 0
 
 def get_current_temporal_context() -> str:
@@ -82,114 +82,87 @@ LIVE TEMPORAL CONTEXT:
 - Date & Time (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}
 """
 
-async def update_ram_cache():
-    """Fetches long-term memory into RAM to eliminate DB latency."""
-    global RAM_MEMORY_CACHE, LAST_CACHE_UPDATE
+async def sync_ram_cache():
+    """Performs parallel fetching from MongoDB into RAM cache."""
+    global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, LAST_CACHE_UPDATE
     now = datetime.now().timestamp()
-    if now - LAST_CACHE_UPDATE < 60 and len(RAM_MEMORY_CACHE) > 1:
-        return RAM_MEMORY_CACHE
+    if now - LAST_CACHE_UPDATE < 20 and len(RAM_MEMORY_CACHE) > 1:
+        return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE
 
     facts = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
-    if mongo_memory_col is not None:
+    schedules = []
+
+    if mongo_db is not None:
         try:
+            # 1. Fetch Memory Facts
             cursor = mongo_memory_col.find({})
             async for doc in cursor:
                 fact_entry = f"[{doc.get('category', 'MEMORY').upper()}]: {doc.get('fact', '')}"
-                if fact_entry not in facts:
-                    facts.append(fact_entry)
-        except Exception: pass
+                if fact_entry not in facts: facts.append(fact_entry)
+
+            # 2. Fetch Tasks & Schedules
+            task_cursor = mongo_tasks_col.find({}).sort("_id", -1)
+            async for tdoc in task_cursor:
+                sch_entry = f"• Task: {tdoc.get('task')} | Time Slot: {tdoc.get('timing')} | Scheduled On: {tdoc.get('date', 'Today')}"
+                if sch_entry not in schedules: schedules.append(sch_entry)
+
+        except Exception as e: print(f"[RAM Sync Error]: {e}")
 
     RAM_MEMORY_CACHE = facts
+    RAM_SCHEDULE_CACHE = schedules
     LAST_CACHE_UPDATE = now
-    return RAM_MEMORY_CACHE
+    return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE
 
 # -------------------------------------------------------------
-# 3. DYNAMIC SMART STORAGE & MULTI-MODAL MEDIA ENGINE
+# 3. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
 # -------------------------------------------------------------
-def get_stored_user_voice() -> str:
-    if supabase:
-        try:
-            res = supabase.table("personal_memory").select("fact").eq("category", "user_voice_preference").execute()
-            if res.data and len(res.data) > 0:
-                return res.data[0]["fact"].strip()
-        except Exception: pass
-    return "en-GB-RyanNeural"
-
-def save_stored_user_voice(voice_short_name: str):
-    if supabase:
-        try:
-            supabase.table("personal_memory").delete().eq("category", "user_voice_preference").execute()
-            supabase.table("personal_memory").insert({
-                "category": "user_voice_preference",
-                "fact": voice_short_name
-            }).execute()
-        except Exception: pass
-
 async def save_memory_fact(category: str, fact: str) -> str:
     cat = category.lower().strip()
     fact_str = fact.strip()
-
     RAM_MEMORY_CACHE.append(f"[{cat.upper()}]: {fact_str}")
 
-    async def _async_persisters():
-        if mongo_memory_col is not None:
-            try: await mongo_memory_col.insert_one({"category": cat, "fact": fact_str})
-            except Exception: pass
-        if supabase:
-            try: supabase.table("personal_memory").insert({"category": cat, "fact": fact_str}).execute()
-            except Exception: pass
+    if mongo_memory_col is not None:
+        try:
+            await mongo_memory_col.insert_one({"category": cat, "fact": fact_str, "timestamp": datetime.now(timezone.utc).isoformat()})
+        except Exception as e: print(f"[Memory Save Error]: {e}")
 
-    asyncio.create_task(_async_persisters())
-    return "Understood, Sir. Duly recorded in your personal vault."
+    return "Understood, Sir. Saved permanently in your MongoDB vault."
+
+async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -> str:
+    """Stores a scheduled event/task into MongoDB and RAM cache instantly."""
+    sch_entry = f"• Task: {task} | Time Slot: {timing} | Scheduled On: {date_str}"
+    if sch_entry not in RAM_SCHEDULE_CACHE:
+        RAM_SCHEDULE_CACHE.append(sch_entry)
+
+    if mongo_tasks_col is not None:
+        try:
+            await mongo_tasks_col.insert_one({
+                "task": task,
+                "timing": timing,
+                "date": date_str,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception as e: print(f"[Task Save Error]: {e}")
+
+    return f"Task '{task}' scheduled for {timing} successfully recorded in your database, Sir."
 
 async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = ""):
-    """Stores voice clips, videos, and multi-format documents into MongoDB binary vault."""
+    """Stores PDF documents, voice clips, videos, and images into MongoDB binary vault."""
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
 
     if mongo_media_col is not None:
         try:
             await mongo_media_col.insert_one({
                 "file_name": file_name,
-                "media_type": media_type,  # 'voice', 'video', 'document'
+                "media_type": media_type,  # 'document', 'voice', 'video', 'image'
                 "caption": caption.lower().strip(),
                 "b64_payload": b64_payload,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
-        except Exception as e: print(f"[Media Save Error]: {e}")
+        except Exception as e: print(f"[Media Vault Error]: {e}")
 
     await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Caption: {caption}")
-    return f"{media_type.capitalize()} file '{file_name}' successfully indexed in your neural vault, Sir."
-
-async def purge_memory_category(category: str) -> str:
-    cat = category.lower().strip()
-    if mongo_memory_col is not None:
-        try: await mongo_memory_col.delete_many({"category": cat})
-        except Exception: pass
-    if mongo_docs_col is not None and cat in ["documents", "exams", "stored_files"]:
-        try: await mongo_docs_col.delete_many({})
-        except Exception: pass
-    if mongo_media_col is not None and cat in ["media_vault", "stored_files"]:
-        try: await mongo_media_col.delete_many({})
-        except Exception: pass
-    if supabase:
-        try: supabase.table("personal_memory").delete().eq("category", cat).execute()
-        except Exception: pass
-
-    global RAM_MEMORY_CACHE
-    RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
-    return f"All records associated with '{category}' have been purged, Sir."
-
-def fetch_user_news_and_mentions() -> str:
-    """Monitors live web mentions and news related to you or your digital presence."""
-    if not tavily_client: return ""
-    try:
-        query = f'"{USER_FULL_NAME}" OR "cine.critiq" OR "movie.details"'
-        res = tavily_client.search(query=query, max_results=3)
-        results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
-        if results:
-            return "\nLATEST WEB MENTIONS & NEWS:\n" + "\n".join(results) + "\n"
-    except Exception: pass
-    return ""
+    return f"{media_type.capitalize()} file '{file_name}' successfully secured in your MongoDB vault, Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -300,13 +273,14 @@ async def send_daily_morning_brief():
     calendar_agenda = await fetch_google_calendar_events()
     emails_summary = await fetch_recent_emails(max_results=3)
     weather_info = await fetch_weather_by_coords("17.6868,83.2185")
-    cached_facts = await update_ram_cache()
+    cached_facts, cached_schedules = await sync_ram_cache()
     temporal_str = get_current_temporal_context()
 
     brief_prompt = f"""Synthesize a high-IQ, proactive J.A.R.V.I.S. + Karen hybrid morning briefing for Sir ({USER_FULL_NAME}).
 {temporal_str}
 WEATHER: {weather_info}
 SCHEDULED AGENDA: {calendar_agenda}
+SCHEDULED TASKS: {cached_schedules}
 INBOX PREVIEW: {emails_summary}
 VAULT CONTEXT: {cached_facts}
 
@@ -323,73 +297,53 @@ DIRECTIVES:
             json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": brief_text}
         )
 
-@app.on_event("startup")
-async def start_scheduler():
-    await update_ram_cache()
-    trigger = CronTrigger(hour=1, minute=30, timezone="UTC")  # 07:00 AM IST
-    scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
-    scheduler.start()
-    print("[J.A.R.V.I.S. Core]: Online with high-speed temporal & hybrid persona engine.")
-
 # -------------------------------------------------------------
-# 5. HYBRID J.A.R.V.I.S. + KAREN INFERENCE ENGINE (<300MS)
+# 5. SUB-SECOND HYBRID INFERENCE ENGINE (<300MS)
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. PENDING SECURITY ACTIONS
-    if session_id in PENDING_SECURITY_ACTIONS:
-        pending = PENDING_SECURITY_ACTIONS[session_id]
-        if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "ok"]):
-            del PENDING_SECURITY_ACTIONS[session_id]
-            if pending["type"] == "purge_category":
-                return await purge_memory_category(pending["category"])
-        elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
-            del PENDING_SECURITY_ACTIONS[session_id]
-            return "Security action aborted, Sir."
-        else:
-            return f"Awaiting authorization, Sir. Shall I purge all {pending['category']} records?"
+    # 1. AUTOMATIC TASK & TIMING PARSER
+    # Handles: "10am-11am is better to complete my record", "schedule DWDM record 10am-11am"
+    timing_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", cmd)
+    if timing_match:
+        timing_str = timing_match.group(1)
+        task_desc = cmd.replace(timing_str, "").replace("schedule", "").replace("is better to complete my", "").replace("for my", "").strip()
+        if not task_desc: task_desc = "Scheduled Event"
+        await save_scheduled_task(task_desc.capitalize(), timing_str)
 
-    # 2. GMAIL INTENT DETECTOR
-    if any(k in cmd for k in ["check email", "read emails", "my mails", "summarize emails", "check my inbox", "important mail"]):
-        email_data = await fetch_recent_emails(max_results=5)
-        user_text = f"Here are my recent inbox emails:\n{email_data}\n\nPlease summarize these concise briefs for me, Sir."
-
-    # 3. AUTO-SAVER (Instant RAM capture)
+    # 2. AUTO PROFILE SAVER
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 4. TEMPORAL & WEATHER & NEWS INJECTION
+    # 3. SYNC RAM CACHE & BUILD CONTEXT
+    cached_facts, cached_schedules = await sync_ram_cache()
+
     temporal_context = get_current_temporal_context()
     weather_context = ""
     if any(kw in cmd for kw in ["weather", "temperature", "rain", "forecast", "climate"]):
         weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185")
 
-    news_context = ""
-    if any(kw in cmd for kw in ["news about me", "my news", "web mentions", "my articles", "online presence"]):
-        news_context = fetch_user_news_and_mentions()
-
     search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price"]) else ""
-    cached_facts = await update_ram_cache()
-    memory_context = "\nVAULT CONTEXT:\n" + "\n".join(cached_facts) if cached_facts else ""
+    memory_context = "\nSTORED VAULT MEMORY:\n" + "\n".join(cached_facts) if cached_facts else ""
+    schedule_context = "\nACTIVE SCHEDULED TASKS & EVENTS:\n" + ("\n".join(cached_schedules) if cached_schedules else "No tasks scheduled.")
 
-    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous AI assistant combining J.A.R.V.I.S. (loyal, articulate, calm, strategic) and Spider-Man's Karen (witty, encouraging, sharp, supportive peer).
+    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous AI assistant combining J.A.R.V.I.S. (loyal, articulate, strategic) and Spider-Man's Karen (witty, sharp, supportive peer).
 
 {temporal_context}
 {weather_context}
-{news_context}
+{schedule_context}
 {memory_context}
 {search_context}
 
 CORE DIRECTIVES:
 - PERSONA: Impeccably polite, clever, loyal, witty, and sharp. Act as a high-IQ digital sidekick for a Computer Science Engineer and cinema enthusiast.
 - ADDRESS: Always address the user naturally as 'Sir' or 'Mr. Saketh'.
-- GREETING RULES: NEVER use informal, local, or regional greetings like "Namesthe", "Namaskaram", "Hey buddy". Use crisp J.A.R.V.I.S. / Karen greetings ("Good day, Sir", "At your service, Sir", "Ready when you are, Sir").
-- PROACTIVE AGENT: Don't just answer; offer clever next steps, code optimizations, or movie/study insights.
-- EFFICIENCY: Keep responses brief (1-2 sentences max), intelligent, and direct."""
+- ACCURATE RECALL: You have access to active scheduled tasks above. Always refer to them accurately when asked about timings or schedules.
+- EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct."""
 
-    # Fast Primary Stream via Groq Llama-3.3-70b (<300ms)
+    # Primary High-Speed Groq Engine (<300ms)
     if groq_client:
         try:
             def _groq_sync():
@@ -400,12 +354,10 @@ CORE DIRECTIVES:
                 )
                 return comp.choices[0].message.content
             reply = await asyncio.to_thread(_groq_sync)
-            if reply and len(reply.strip()) > 0:
-                return reply.strip()
-        except Exception as e:
-            print(f"[Groq Error]: {e}")
+            if reply and len(reply.strip()) > 0: return reply.strip()
+        except Exception as e: print(f"[Groq Error]: {e}")
 
-    # Fallback to Gemini 2.0 Flash
+    # Fallback Gemini 2.0 Flash
     if gemini_client:
         try:
             def _gemini_sync():
@@ -414,15 +366,13 @@ CORE DIRECTIVES:
                 )
                 return res.text
             reply = await asyncio.to_thread(_gemini_sync)
-            if reply and len(reply.strip()) > 0:
-                return reply.strip()
-        except Exception as e:
-            print(f"[Gemini Error]: {e}")
+            if reply and len(reply.strip()) > 0: return reply.strip()
+        except Exception as e: print(f"[Gemini Error]: {e}")
 
     return "All neural systems operational, Sir."
 
 # -------------------------------------------------------------
-# 6. INSTANT TELEGRAM WEBHOOK (DIRECT MULTI-MODAL DISPATCH)
+# 6. INSTANT TELEGRAM WEBHOOK (MULTI-MODAL & DIRECT DISPATCH)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -437,10 +387,9 @@ async def telegram_webhook(req: Request):
         document = message.get("document", None)
         voice = message.get("voice", None)
         video = message.get("video", None)
+        photo = message.get("photo", None)
 
         if not chat_id: return {"status": "no chat_id"}
-
-        # Security Lock
         if ALLOWED_TELEGRAM_USER_ID and str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
             return {"status": "unauthorized"}
 
@@ -453,27 +402,27 @@ async def telegram_webhook(req: Request):
                 )
             return {"status": "ok"}
 
-        # 2. Multi-Modal Upload Handling (PDF, Voice, Video)
+        # 2. Multi-Modal Media Uploads (PDF, Voice, Video, Photos)
         file_obj, media_type, default_name = None, "document", "file.dat"
         if document: file_obj, media_type, default_name = document, "document", document.get("file_name", "document.pdf")
         elif voice: file_obj, media_type, default_name = voice, "voice", "voice_note.ogg"
         elif video: file_obj, media_type, default_name = video, "video", "video_clip.mp4"
+        elif photo: file_obj, media_type, default_name = photo[-1], "image", "photo.jpg"
 
         if file_obj:
             file_id = file_obj.get("file_id")
             async with httpx.AsyncClient() as client:
-                file_info_res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}")
-                file_path = file_info_res.json().get("result", {}).get("file_path")
+                file_info = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}")
+                file_path = file_info.json().get("result", {}).get("file_path")
                 raw_bytes_res = await client.get(f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}")
                 raw_bytes = raw_bytes_res.content
 
             save_reply = await save_media_file(default_name, media_type, raw_bytes, caption=text)
-
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
 
-        # 3. Fast Direct File/Media Retrieval Dispatches
+        # 3. Direct Fast File Retrieval (Sub-2 Seconds)
         if text:
             cmd = text.lower()
             media_triggers = [
@@ -492,8 +441,9 @@ async def telegram_webhook(req: Request):
                         raw_bytes = base64.b64decode(target_doc["b64_payload"])
                         fname = target_doc.get("file_name", "file.dat")
                         mtype = target_doc.get("media_type", "document")
-                        endpoint = "sendVoice" if mtype == "voice" else ("sendVideo" if mtype == "video" else "sendDocument")
-                        param_name = "voice" if mtype == "voice" else ("video" if mtype == "video" else "document")
+                        
+                        endpoint = "sendVoice" if mtype == "voice" else ("sendVideo" if mtype == "video" else ("sendPhoto" if mtype == "image" else "sendDocument"))
+                        param_name = "voice" if mtype == "voice" else ("video" if mtype == "video" else ("photo" if mtype == "image" else "document"))
 
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{endpoint}",
@@ -507,30 +457,27 @@ async def telegram_webhook(req: Request):
                         )
                 return {"status": "ok"}
 
-            # 4. Standard Fast Conversational AI
+            # 4. Standard Conversational Fast Response
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
             return {"status": "ok"}
 
-    except Exception as e:
-        print(f"[Webhook Error]: {e}")
-
+    except Exception as e: print(f"[Webhook Error]: {e}")
     return {"status": "ok"}
 
-@app.post("/set-telegram-webhook")
-async def set_telegram_webhook(req: Request):
-    data = await req.json()
-    webhook_url = data.get("url") + "/telegram-webhook"
-    async with httpx.AsyncClient() as client:
-        res = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
-        return res.json()
+@app.on_event("startup")
+async def start_scheduler():
+    await sync_ram_cache()
+    trigger = CronTrigger(hour=1, minute=30, timezone="UTC")  # 07:00 AM IST
+    scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
+    scheduler.start()
+    print("[J.A.R.V.I.S. Single-DB Engine]: MongoDB Atlas Fully Calibrated & Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & PDF ENGINE
 # -------------------------------------------------------------
-async def generate_speech_audio_b64(text: str, selected_voice: str = None) -> str:
-    if not selected_voice: selected_voice = get_stored_user_voice()
+async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-RyanNeural") -> str:
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
     voice_to_use = "te-IN-MohanNeural" if (is_telugu_script and "te-IN" not in selected_voice) else selected_voice
 
@@ -574,20 +521,12 @@ async def get_voices_list():
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
 
-    active_voice = get_stored_user_voice()
-    return {"voices": CACHE_VOICES, "activeVoice": active_voice}
-
-@app.post("/api/set-voice")
-async def set_voice_preference(req: Request):
-    data = await req.json()
-    voice = data.get("voice", "en-GB-RyanNeural")
-    save_stored_user_voice(voice)
-    return {"status": "success", "voice": voice}
+    return {"voices": CACHE_VOICES, "activeVoice": "en-GB-RyanNeural"}
 
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "system": "ARIA AI"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
@@ -644,47 +583,6 @@ def serve_webapp():
             @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
             @keyframes pulse {{ 0% {{ transform: scale(0.95); }} 100% {{ transform: scale(1.15); }} }}
 
-            .settings-btn {{
-                position: absolute; top: 25px; right: 25px; z-index: 5;
-                background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3);
-                color: #38bdf8; font-size: 1.2rem; padding: 10px 14px; border-radius: 50%;
-                cursor: pointer; backdrop-filter: blur(8px);
-            }}
-
-            #voiceModal {{
-                position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                background: rgba(2, 6, 23, 0.92); backdrop-filter: blur(16px);
-                z-index: 100; display: none; flex-direction: column;
-                align-items: center; justify-content: center; padding: 20px;
-            }}
-            #voiceModal.active {{ display: flex; }}
-            .modal-content {{
-                width: 100%; max-width: 480px; height: 80vh;
-                background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.3);
-                border-radius: 20px; padding: 20px; display: flex; flex-direction: column;
-            }}
-            .modal-header {{
-                display: flex; justify-content: space-between; align-items: center;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px; margin-bottom: 15px;
-            }}
-            .search-box {{
-                width: 100%; padding: 10px 15px; border-radius: 10px;
-                border: 1px solid rgba(56, 189, 248, 0.3); background: rgba(30, 41, 59, 0.8);
-                color: #f8fafc; margin-bottom: 15px; font-size: 0.9rem;
-            }}
-            .voice-list {{
-                flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
-            }}
-            .voice-item {{
-                padding: 12px 16px; border-radius: 12px;
-                background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.05);
-                display: flex; justify-content: space-between; align-items: center;
-                cursor: pointer; transition: all 0.2s;
-            }}
-            .voice-item:hover, .voice-item.selected {{
-                background: rgba(56, 189, 248, 0.2); border-color: #38bdf8;
-            }}
-
             #dropZone {{
                 position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
                 background: rgba(2, 6, 23, 0.85); backdrop-filter: blur(12px);
@@ -698,7 +596,6 @@ def serve_webapp():
     </head>
     <body>
         <canvas id="particleCanvas"></canvas>
-        <button class="settings-btn" onclick="openVoiceModal()">⚙️</button>
         <div id="dropZone">Drop media or document files here to save in MongoDB vault</div>
 
         <div class="ui-layer">
@@ -706,19 +603,6 @@ def serve_webapp():
                 <div class="ring-outer"></div>
                 <div class="ring-inner"></div>
                 <div class="core-node"></div>
-            </div>
-        </div>
-
-        <div id="voiceModal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3 style="color: #38bdf8; letter-spacing: 1px;">Neural Voice Catalog</h3>
-                    <button style="background: none; border: none; color: #64748b; font-size: 1.5rem; cursor: pointer;" onclick="closeVoiceModal()">✕</button>
-                </div>
-                <input type="text" id="voiceSearch" class="search-box" placeholder="Search language or voice (e.g. Telugu, Ryan, India)..." oninput="filterVoices()">
-                <div class="voice-list" id="voiceList">
-                    <div style="color: #64748b; text-align: center; margin-top: 20px;">Loading catalog...</div>
-                </div>
             </div>
         </div>
 
@@ -761,7 +645,7 @@ def serve_webapp():
             }}
             render();
 
-            let ws, currentAudio = null, userLocation = null, allVoices = [], activeVoice = "", isPlayingAudio = false;
+            let ws, currentAudio = null, userLocation = null, isPlayingAudio = false;
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
@@ -795,7 +679,7 @@ def serve_webapp():
                     if (!speech) return;
                     stopAudio();
                     if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: speech, location: userLocation, voice: activeVoice }}));
+                        ws.send(JSON.stringify({{ prompt: speech, location: userLocation }}));
                     }}
                 }};
 
@@ -823,47 +707,6 @@ def serve_webapp():
                 currentAudio.play().catch(err => {{ isPlayingAudio = false; document.getElementById('hudOrb').classList.remove('speaking'); startListeningSafely(); }});
             }}
 
-            async function openVoiceModal() {{
-                document.getElementById('voiceModal').classList.add('active');
-                if (allVoices.length === 0) {{
-                    const res = await fetch('/api/voices');
-                    const data = await res.json();
-                    allVoices = data.voices; activeVoice = data.activeVoice;
-                }}
-                renderVoices(allVoices);
-            }}
-
-            function closeVoiceModal() {{ document.getElementById('voiceModal').classList.remove('active'); }}
-
-            function renderVoices(voices) {{
-                const listContainer = document.getElementById('voiceList');
-                listContainer.innerHTML = "";
-                voices.slice(0, 100).forEach(v => {{
-                    const isSelected = v.shortName === activeVoice;
-                    const item = document.createElement('div');
-                    item.className = `voice-item ${{isSelected ? 'selected' : ''}}`;
-                    item.innerHTML = `<div><div style="font-weight: 600; color: #e2e8f0;">${{v.friendlyName}}</div><div style="font-size: 0.75rem; color: #64748b;">${{v.shortName}}</div></div><span style="font-size: 0.8rem; color: #38bdf8;">${{v.gender}}</span>`;
-                    item.onclick = () => selectVoice(v.shortName);
-                    listContainer.appendChild(item);
-                }});
-            }}
-
-            function filterVoices() {{
-                const q = document.getElementById('voiceSearch').value.toLowerCase();
-                const filtered = allVoices.filter(v => v.shortName.toLowerCase().includes(q) || v.locale.toLowerCase().includes(q) || v.friendlyName.toLowerCase().includes(q));
-                renderVoices(filtered);
-            }}
-
-            async function selectVoice(shortName) {{
-                activeVoice = shortName;
-                renderVoices(allVoices);
-                await fetch('/api/set-voice', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ voice: shortName }}) }});
-                closeVoiceModal();
-                if (ws && ws.readyState === WebSocket.OPEN) {{
-                    ws.send(JSON.stringify({{ prompt: "Switched voice to " + shortName, location: userLocation, voice: activeVoice }}));
-                }}
-            }}
-
             const dropZone = document.getElementById('dropZone');
             window.addEventListener('dragover', (e) => {{ e.preventDefault(); dropZone.classList.add('active'); }});
             window.addEventListener('dragleave', (e) => {{ if (e.clientX <= 0 || e.clientY <= 0) dropZone.classList.remove('active'); }});
@@ -877,7 +720,7 @@ def serve_webapp():
                     formData.append('category', 'documents');
                     await fetch('/upload-pdf', {{ method: 'POST', body: formData }});
                     if (ws && ws.readyState === WebSocket.OPEN) {{
-                        ws.send(JSON.stringify({{ prompt: "I uploaded " + file.name + " to my MongoDB document vault.", location: userLocation, voice: activeVoice }}));
+                        ws.send(JSON.stringify({{ prompt: "I uploaded " + file.name + " to my MongoDB document vault.", location: userLocation }}));
                     }}
                 }}
             }});
@@ -887,7 +730,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# 9. WEBSOCKET STREAMING & API ENDPOINTS
+# 9. WEBSOCKET STREAMING & UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -899,15 +742,12 @@ async def websocket_endpoint(websocket: WebSocket):
             data = json.loads(raw_data)
             prompt = data.get("prompt", "")
             location = data.get("location", None)
-            selected_voice = data.get("voice", None)
 
             reply_text = await process_autonomous_task(prompt, str(session_id), location)
-            audio_b64 = await generate_speech_audio_b64(reply_text, selected_voice)
+            audio_b64 = await generate_speech_audio_b64(reply_text)
             
             await websocket.send_json({"audio": audio_b64, "text": reply_text})
-    except WebSocketDisconnect:
-        if str(session_id) in PENDING_SECURITY_ACTIONS:
-            del PENDING_SECURITY_ACTIONS[str(session_id)]
+    except WebSocketDisconnect: pass
 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
