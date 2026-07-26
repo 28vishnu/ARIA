@@ -6,9 +6,15 @@ def store_or_update_knowledge(collection, question: str, answer: str, topic: str
         emb = embedding_fn(question)
         if all(v == 0.0 for v in emb): return
 
-        existing = collection.query(query_embeddings=[emb], n_results=1, include=["metadatas", "distances", "ids"])
+        # Fixed Chroma query inclusion: "ids" is omitted here, they are returned automatically
+        existing = collection.query(
+            query_embeddings=[emb], 
+            n_results=1, 
+            include=["metadatas", "distances"]
+        )
+        
         if existing and existing.get("distances") and existing["distances"][0] and existing["distances"][0][0] < 0.20:
-            doc_id = existing["ids"][0][0]
+            doc_id = existing["ids"][0][0] # IDs are safely accessed here
             meta = existing["metadatas"][0][0]
             meta["answer"] = answer
             meta["summary"] = summary
