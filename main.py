@@ -32,8 +32,6 @@ import chromadb
 # Scheduler SDKs
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-app = FastAPI()
-
 # -------------------------------------------------------------
 # SAFE AST CALCULATOR
 # -------------------------------------------------------------
@@ -100,11 +98,15 @@ class OpenRouterProvider(LLMProvider):
     def __init__(self, api_key: str, http_client: httpx.AsyncClient):
         self.client_key = api_key
         self.http = http_client
-        self.models = [
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "mistralai/mistral-small-3.1-24b-instruct:free",
-            "nvidia/nemotron-3-nano-30b-a3b:free"
-        ]
+        env_models = os.getenv("OPENROUTER_MODELS")
+        if env_models:
+            self.models = [m.strip() for m in env_models.split(",")]
+        else:
+            self.models = [
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "mistralai/mistral-small-3.1-24b-instruct:free",
+                "nvidia/nemotron-3-nano-30b-a3b:free"
+            ]
         self.blacklisted_models = set()
 
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
@@ -345,6 +347,7 @@ DETERMINISTIC_ROUTER = [
     MediaHandler()
 ]
 
+# Single application instance
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
@@ -359,7 +362,7 @@ def get_temporal() -> str:
 PENDING_STATES = {}
 
 # -------------------------------------------------------------
-# STARTUP EVENT
+# STARTUP EVENT & RESILIENT INITIALIZATION
 # -------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
@@ -378,8 +381,9 @@ async def startup_event():
             app.state.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 mongo_uri, tlsCAFile=certifi.where(), tlsInsecure=True, serverSelectionTimeoutMS=5000
             )
-        except Exception:
-            app.state.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(mongo_uri)
+        except Exception as e:
+            print(f"[Startup Warning]: MongoDB connection degraded: {e}")
+            app.state.mongo_client = None
     else:
         app.state.mongo_client = None
 
@@ -391,13 +395,19 @@ async def startup_event():
     app.state.schedule_col = db_inst["tasks_schedule"] if db_inst is not None else None
     app.state.profile_col = db_inst["user_profile"] if db_inst is not None else None
 
-    persist_path = os.getenv("RENDER_PERSISTENT_DIR", "./aria_vectors")
-    os.makedirs(persist_path, exist_ok=True)
-    app.state.chroma_client = chromadb.PersistentClient(path=persist_path)
-    app.state.docs_col = app.state.chroma_client.get_or_create_collection(name="documents")
-    app.state.mem_col = app.state.chroma_client.get_or_create_collection(name="memory")
+    try:
+        persist_path = os.getenv("RENDER_PERSISTENT_DIR", "./aria_vectors")
+        os.makedirs(persist_path, exist_ok=True)
+        app.state.chroma_client = chromadb.PersistentClient(path=persist_path)
+        app.state.docs_col = app.state.chroma_client.get_or_create_collection(name="documents")
+        app.state.mem_col = app.state.chroma_client.get_or_create_collection(name="memory")
+    except Exception as e:
+        print(f"[Startup Warning]: ChromaDB initialization degraded: {e}")
+        app.state.chroma_client = None
+        app.state.docs_col = None
+        app.state.mem_col = None
 
-    app.state.brain = AriaBrain(app.state.chroma_client)
+    app.state.brain = AriaBrain(app.state.chroma_client) if app.state.chroma_client else None
     app.state.profile_engine = ProfileEngine(db_inst) if db_inst is not None else None
     app.state.conversation_manager = ConversationManager(app.state.chats_col)
     app.state.reflection_engine = ReflectionEngine(app.state.chats_col, app.state.media_col)
@@ -410,32 +420,55 @@ async def startup_event():
     )
 
     if app.state.profile_engine is not None:
-        profile = await app.state.profile_engine.get_profile()
-        print(f"[ARIA OS]: User Profile Loaded for: {profile.get('name', 'User')}")
+        try:
+            profile = await app.state.profile_engine.get_profile()
+            print(f"[ARIA OS]: User Profile Loaded for: {profile.get('name', 'User')}")
+        except Exception as e:
+            print(f"[Profile Load Warning]: {e}")
 
-    app.state.brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
-    app.state.brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
-    app.state.brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
-    print("[ARIA OS]: Knowledge Graph successfully seeded with core entities.")
+    # Idempotent Knowledge Graph Seeding
+    if app.state.brain is not None:
+        try:
+            app.state.brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
+            app.state.brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
+            app.state.brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
+            print("[ARIA OS]: Knowledge Graph successfully seeded with core entities.")
+        except Exception as e:
+            print(f"[Graph Seeding Warning]: {e}")
 
     if db_inst is not None:
-        workers = BackgroundWorkers(db_inst, llm_router, app.state.tavily)
-        scheduler.add_job(workers.morning_briefing_worker, "cron", hour=9, minute=0)
-        scheduler.add_job(workers.night_summary_worker, "cron", hour=22, minute=0)
-        scheduler.add_job(workers.inactivity_worker, "interval", days=1)
-        scheduler.add_job(workers.api_health_monitor_worker, "interval", hours=1)
-        
-        if not scheduler.running:
-            scheduler.start()
-            print("[ARIA OS]: Background Intelligence Workers active and running.")
+        try:
+            workers = BackgroundWorkers(db_inst, llm_router, app.state.tavily)
+            scheduler.add_job(workers.morning_briefing_worker, "cron", hour=9, minute=0, id="morning_briefing", replace_existing=True)
+            scheduler.add_job(workers.night_summary_worker, "cron", hour=22, minute=0, id="night_summary", replace_existing=True)
+            scheduler.add_job(workers.inactivity_worker, "interval", days=1, id="inactivity", replace_existing=True)
+            scheduler.add_job(workers.api_health_monitor_worker, "interval", hours=1, id="health_monitor", replace_existing=True)
+            
+            if not scheduler.running:
+                scheduler.start()
+                print("[ARIA OS]: Background Intelligence Workers active and running.")
+        except Exception as e:
+            print(f"[Worker Scheduler Warning]: {e}")
 
 # -------------------------------------------------------------
-# TASK PROCESSING PIPELINE WITH MODULAR ROUTER & PARALLEL TOOLS
+# SHUTDOWN EVENT: RESOURCE CLEANUP
+# -------------------------------------------------------------
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("[ARIA OS]: Shutting down systems and closing HTTP connections...")
+    if hasattr(app.state, "http") and app.state.http:
+        await app.state.http.aclose()
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+    print("[ARIA OS]: Shutdown complete.")
+
+# -------------------------------------------------------------
+# TASK PROCESSING PIPELINE
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE -1] Processing task for session {session_id}: '{user_text}'")
 
-    # 1. Modular Deterministic Router Bypass (Zero-Token & Low Latency)
+    # 1. Modular Deterministic Router Bypass
     for handler in DETERMINISTIC_ROUTER:
         if handler.can_handle(user_text):
             print(f"[DETERMINISTIC ROUTER]: Handled by {handler.__class__.__name__}")
@@ -456,9 +489,10 @@ async def process_task(user_text: str, session_id: str) -> str:
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
         return f"{correction['explanation']}\n\n{res.get('content', '')}"
 
-    cached_brain_hit = aria_brain.search_brain(user_text)
-    if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
-        return cached_brain_hit["answer"]
+    if aria_brain is not None:
+        cached_brain_hit = aria_brain.search_brain(user_text)
+        if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
+            return cached_brain_hit["answer"]
 
     print("[PLANNING STAGE]: Running single-pass action planner...")
     session_context = await conv_mgr.build_session_context(session_id)
@@ -490,7 +524,7 @@ async def process_task(user_text: str, session_id: str) -> str:
     cleaned = clean_text(raw_answer)
 
     has_valid_source = any(res.get("success") for res in structured_results.values())
-    if has_valid_source:
+    if has_valid_source and aria_brain is not None:
         aria_brain.store_knowledge(
             question=user_text,
             answer=cleaned,
@@ -531,7 +565,7 @@ async def telegram_webhook(req: Request):
 
         reply_text = await process_task(text, str(chat_id))
 
-        async with app.state.http as client:
+        async with httpx.AsyncClient() as client:
             await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": reply_text}
@@ -544,9 +578,9 @@ async def telegram_webhook(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Modular State-Optimized Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Polished Modular State-Optimized Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Modular Autonomous Core Active</h1>"
+    return "<h1>ARIA Polished Autonomous Core Active</h1>"
