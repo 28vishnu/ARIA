@@ -152,7 +152,20 @@ async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower().strip()
 
-    # 0. Zero-Token Intent Bypass (Saves AI Quota for Pleasantries)
+    tavily = get_tavily()
+    docs_col, mem_col = get_collections()
+    mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
+    tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
+
+    # 1. REFLECTION ENGINE RUNS FIRST (Catches feedback/corrections before bypasses)
+    reflection_eng = ReflectionEngine(chats_col, media_col)
+    correction = await reflection_eng.evaluate_feedback(user_text, session_id)
+    if correction and correction.get("needs_retry"):
+        print("[REFLECTION TRIGGERED]: Retrying media vault search...")
+        res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
+        return f"{correction['explanation']}\n\n{res.get('content', '')}"
+
+    # 2. ZERO-TOKEN INTENT BYPASS (Pleasantries)
     zero_token_responses = {
         "hello": "Greetings, Sir. How may I assist you today?",
         "hi": "Hello, Sir. ARIA systems online.",
@@ -169,20 +182,10 @@ async def process_task(user_text: str, session_id: str) -> str:
         print("[INTENT BYPASS] Zero-Token response triggered.")
         return zero_token_responses[lower_txt]
 
-    tavily = get_tavily()
-    docs_col, mem_col = get_collections()
-    mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
-    tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
-
-    # 1. Reflection & Correction Engine Check
-    reflection_eng = ReflectionEngine(chats_col, media_col)
-    correction_response = await reflection_eng.evaluate_feedback(user_text, session_id)
-    if correction_response:
-        return correction_response
-
-    # 2. Deterministic Intent Bypasses (Files & Schedules)
-    if any(kw in lower_txt for kw in ["resume", "cv", "pdf", "file", "document", "send"]):
-        print("[INTENT BYPASS] Triggering Media Vault Tool directly.")
+    # 3. STRICT INTENT DETECTION FOR MEDIA (Avoids over-broad keyword matching)
+    media_intent_patterns = ["resume", "cv", "portfolio", "my file", "send document", "download pdf"]
+    if any(pattern in lower_txt for pattern in media_intent_patterns):
+        print("[INTENT BYPASS] Strict Media Tool trigger.")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
         if res.get("success") or res.get("metadata", {}).get("requires_clarification"):
             return res.get("content")
@@ -193,14 +196,14 @@ async def process_task(user_text: str, session_id: str) -> str:
         if res.get("success"):
             return res.get("content")
 
-    # 3. Brain Search First
+    # 4. BRAIN SEARCH WITH STRICT CONFIDENCE THRESHOLD (> 0.92)
     aria_brain = get_brain()
     cached_brain_hit = aria_brain.search_brain(user_text)
-    if cached_brain_hit:
-        print(f"[BRAIN HIT]: Serving answer instantly from persistent knowledge base (Confidence: {cached_brain_hit['confidence']})")
+    if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
+        print(f"[BRAIN HIT]: Serving high-confidence answer (Confidence: {cached_brain_hit['confidence']})")
         return cached_brain_hit["answer"]
 
-    print("[BRAIN MISS]: Proceeding to autonomous planner & reasoner...")
+    print("[BRAIN MISS or LOW CONFIDENCE]: Proceeding to autonomous planner & reasoner...")
 
     conv_mgr = ConversationManager(chats_col)
     session_context = await conv_mgr.build_session_context(session_id)
@@ -235,21 +238,26 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # 4. Learning Loop
-    is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
-    knowledge_type = "DYNAMIC" if is_time_sensitive else "STATIC"
-    
-    aria_brain.store_knowledge(
-        question=user_text,
-        answer=cleaned,
-        topic="general",
-        category="general",
-        summary=cleaned[:150],
-        source="AI",
-        confidence=0.95,
-        verified=False,
-        knowledge_type=knowledge_type
-    )
+    # 5. ANTI-HALLUCINATION GUARD: Only store in Brain if verified or derived from document/tool sources
+    has_valid_source = any(res.get("success") for res in structured_results.values())
+    if has_valid_source:
+        is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
+        knowledge_type = "DYNAMIC" if is_time_sensitive else "STATIC"
+        
+        aria_brain.store_knowledge(
+            question=user_text,
+            answer=cleaned,
+            topic="general",
+            category="general",
+            summary=cleaned[:150],
+            source="Verified Tool/AI",
+            confidence=0.96,
+            verified=True,
+            knowledge_type=knowledge_type
+        )
+        print("[LEARNING ENGINE]: Verified response successfully stored in Brain.")
+    else:
+        print("[LEARNING ENGINE]: Skipping brain storage — response lacked verified tool backing to prevent hallucination caching.")
 
     if chats_col is not None:
         async def save_chat():
