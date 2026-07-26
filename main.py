@@ -16,7 +16,6 @@ import edge_tts
 # Provider SDKs
 from groq import Groq
 from google import genai
-from google.genai import types
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
@@ -26,13 +25,12 @@ import motor.motor_asyncio
 
 # Scheduler SDKs
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 app = FastAPI()
 
 # -------------------------------------------------------------
-# 1. ENVIRONMENT VARIABLES & CLIENT INITIALIZATION
+# 1. ENVIRONMENT VARIABLES & GLOBAL CACHE INITIALIZATION
 # -------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -49,11 +47,17 @@ GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 ASSISTANT_NAME = "ARIA"
 USER_FULL_NAME = "N. Vishnu Saketh"
 
+# Fix NameError by explicitly defining global cache variables first
+RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
+RAM_SCHEDULE_CACHE = []
+RAM_RECENT_CHATS = []
+LAST_CACHE_UPDATE = 0
+
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# CLEAN MONGODB CLIENT
+# CLEAN MONGODB CLIENT FOR MOTOR / PYMONGO 4+
 def init_mongo_client():
     if not MONGODB_URI: return None
     try:
@@ -139,7 +143,7 @@ async def sync_ram_cache():
     return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
-# 3. AUTONOMOUS TOOL EXECUTORS (FUNCTION CALLING BACKEND)
+# 3. AUTONOMOUS TOOL EXECUTORS
 # -------------------------------------------------------------
 async def send_scheduled_reminder(reminder_text: str):
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
@@ -150,7 +154,7 @@ async def send_scheduled_reminder(reminder_text: str):
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg}
             )
-        except Exception as e: print(f"[Reminder Error]: {e}")
+        except Exception as e: print(f"[Reminder Delivery Error]: {e}")
 
 async def create_time_reminder(minutes: int, task_desc: str) -> str:
     run_time = datetime.now(timezone.utc) + timedelta(minutes=minutes)
@@ -289,7 +293,6 @@ async def autonomous_proactive_checkin():
 # -------------------------------------------------------------
 # 5. DYNAMIC FUNCTION-CALLING HYBRID INFERENCE ENGINE
 # -------------------------------------------------------------
-# Tool declarations for Groq / Llama
 GROQ_TOOLS = [
     {
         "type": "function",
@@ -397,7 +400,6 @@ DYNAMIC DIRECTIVES:
 
             msg = await asyncio.to_thread(_groq_exec)
 
-            # Check if LLM requested a function execution
             if msg.tool_calls:
                 for tool_call in msg.tool_calls:
                     fn_name = tool_call.function.name
@@ -527,7 +529,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Autonomous Tool Core]: Online, Function Calling Active.")
+    print("[J.A.R.V.I.S. Autonomous Core]: Online and Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -558,7 +560,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Function Calling Enabled"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Function Calling Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
