@@ -54,10 +54,11 @@ tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 
-# MongoDB Collections
+# MongoDB Collections (Created Automatically by MongoDB)
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
+mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
 
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
@@ -68,6 +69,7 @@ scheduler = AsyncIOScheduler()
 # -------------------------------------------------------------
 RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
 RAM_SCHEDULE_CACHE = []
+RAM_RECENT_CHATS = []
 LAST_CACHE_UPDATE = 0
 
 def get_current_temporal_context() -> str:
@@ -84,13 +86,14 @@ LIVE TEMPORAL CONTEXT:
 
 async def sync_ram_cache():
     """Performs parallel fetching from MongoDB into RAM cache."""
-    global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, LAST_CACHE_UPDATE
+    global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS, LAST_CACHE_UPDATE
     now = datetime.now().timestamp()
     if now - LAST_CACHE_UPDATE < 20 and len(RAM_MEMORY_CACHE) > 1:
-        return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE
+        return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
     facts = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
     schedules = []
+    chats = []
 
     if mongo_db is not None:
         try:
@@ -106,16 +109,35 @@ async def sync_ram_cache():
                 sch_entry = f"• Task: {tdoc.get('task')} | Time Slot: {tdoc.get('timing')} | Scheduled On: {tdoc.get('date', 'Today')}"
                 if sch_entry not in schedules: schedules.append(sch_entry)
 
+            # 3. Fetch Recent Multi-Turn Conversations
+            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(10)
+            chat_docs = await chat_cursor.to_list(length=10)
+            for cdoc in reversed(chat_docs):
+                chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
+
         except Exception as e: print(f"[RAM Sync Error]: {e}")
 
     RAM_MEMORY_CACHE = facts
     RAM_SCHEDULE_CACHE = schedules
+    RAM_RECENT_CHATS = chats
     LAST_CACHE_UPDATE = now
-    return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE
+    return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
 # 3. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
 # -------------------------------------------------------------
+async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
+    """Logs raw multi-turn conversation logs into MongoDB asynchronously."""
+    if mongo_chats_col is not None:
+        try:
+            await mongo_chats_col.insert_one({
+                "session_id": session_id,
+                "user_msg": user_msg,
+                "aria_reply": aria_reply,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception as e: print(f"[Chat Log Error]: {e}")
+
 async def save_memory_fact(category: str, fact: str) -> str:
     cat = category.lower().strip()
     fact_str = fact.strip()
@@ -273,7 +295,7 @@ async def send_daily_morning_brief():
     calendar_agenda = await fetch_google_calendar_events()
     emails_summary = await fetch_recent_emails(max_results=3)
     weather_info = await fetch_weather_by_coords("17.6868,83.2185")
-    cached_facts, cached_schedules = await sync_ram_cache()
+    cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
     temporal_str = get_current_temporal_context()
 
     brief_prompt = f"""Synthesize a high-IQ, proactive J.A.R.V.I.S. + Karen hybrid morning briefing for Sir ({USER_FULL_NAME}).
@@ -304,7 +326,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     cmd = user_text.lower().strip()
 
     # 1. AUTOMATIC TASK & TIMING PARSER
-    # Handles: "10am-11am is better to complete my record", "schedule DWDM record 10am-11am"
+    # Handles inputs like: "10am-11am is better to complete my record", "schedule DWDM record 10am-11am"
     timing_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", cmd)
     if timing_match:
         timing_str = timing_match.group(1)
@@ -317,8 +339,8 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 3. SYNC RAM CACHE & BUILD CONTEXT
-    cached_facts, cached_schedules = await sync_ram_cache()
+    # 3. SYNC RAM CACHE & BUILD CONTEXT (Profile, Tasks, & Recent Chats)
+    cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
 
     temporal_context = get_current_temporal_context()
     weather_context = ""
@@ -328,6 +350,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     search_context = fetch_web_search(user_text) if any(kw in cmd for kw in ["search", "latest", "news", "who is", "what is", "price"]) else ""
     memory_context = "\nSTORED VAULT MEMORY:\n" + "\n".join(cached_facts) if cached_facts else ""
     schedule_context = "\nACTIVE SCHEDULED TASKS & EVENTS:\n" + ("\n".join(cached_schedules) if cached_schedules else "No tasks scheduled.")
+    history_context = "\nRECENT CONVERSATION HISTORY:\n" + ("\n---\n".join(cached_chats) if cached_chats else "None.")
 
     system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous AI assistant combining J.A.R.V.I.S. (loyal, articulate, strategic) and Spider-Man's Karen (witty, sharp, supportive peer).
 
@@ -335,13 +358,16 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {weather_context}
 {schedule_context}
 {memory_context}
+{history_context}
 {search_context}
 
 CORE DIRECTIVES:
 - PERSONA: Impeccably polite, clever, loyal, witty, and sharp. Act as a high-IQ digital sidekick for a Computer Science Engineer and cinema enthusiast.
 - ADDRESS: Always address the user naturally as 'Sir' or 'Mr. Saketh'.
-- ACCURATE RECALL: You have access to active scheduled tasks above. Always refer to them accurately when asked about timings or schedules.
+- ACCURATE RECALL: You possess full chat history and active scheduled tasks above. Refer back to them accurately.
 - EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct."""
+
+    reply_text = "All neural systems operational, Sir."
 
     # Primary High-Speed Groq Engine (<300ms)
     if groq_client:
@@ -354,11 +380,12 @@ CORE DIRECTIVES:
                 )
                 return comp.choices[0].message.content
             reply = await asyncio.to_thread(_groq_sync)
-            if reply and len(reply.strip()) > 0: return reply.strip()
+            if reply and len(reply.strip()) > 0:
+                reply_text = reply.strip()
         except Exception as e: print(f"[Groq Error]: {e}")
 
     # Fallback Gemini 2.0 Flash
-    if gemini_client:
+    if reply_text == "All neural systems operational, Sir." and gemini_client:
         try:
             def _gemini_sync():
                 res = gemini_client.models.generate_content(
@@ -366,10 +393,13 @@ CORE DIRECTIVES:
                 )
                 return res.text
             reply = await asyncio.to_thread(_gemini_sync)
-            if reply and len(reply.strip()) > 0: return reply.strip()
+            if reply and len(reply.strip()) > 0:
+                reply_text = reply.strip()
         except Exception as e: print(f"[Gemini Error]: {e}")
 
-    return "All neural systems operational, Sir."
+    # Asynchronously log interaction into chat_history
+    asyncio.create_task(log_chat_interaction(user_text, reply_text, session_id))
+    return reply_text
 
 # -------------------------------------------------------------
 # 6. INSTANT TELEGRAM WEBHOOK (MULTI-MODAL & DIRECT DISPATCH)
@@ -735,7 +765,7 @@ def serve_webapp():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    session_id = id(websocket)
+    session_id = str(id(websocket))
     try:
         while True:
             raw_data = await websocket.receive_text()
@@ -743,7 +773,7 @@ async def websocket_endpoint(websocket: WebSocket):
             prompt = data.get("prompt", "")
             location = data.get("location", None)
 
-            reply_text = await process_autonomous_task(prompt, str(session_id), location)
+            reply_text = await process_autonomous_task(prompt, session_id, location)
             audio_b64 = await generate_speech_audio_b64(reply_text)
             
             await websocket.send_json({"audio": audio_b64, "text": reply_text})
