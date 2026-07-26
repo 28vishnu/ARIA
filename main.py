@@ -77,8 +77,8 @@ mongo_db = mongo_client["aria_db"] if mongo_client else None
 
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
-mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
-mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
+mongo_media_col = mongo_db["media_vault"] if mongo_media_col is not None else None
+mongo_chats_col = mongo_db["chat_history"] if mongo_media_col is not None else None
 mongo_reminders_col = mongo_db["reminders"] if mongo_db is not None else None
 mongo_security_col = mongo_db["security_logs"] if mongo_db is not None else None
 
@@ -105,7 +105,6 @@ def get_current_temporal_context() -> str:
     return f"\nLIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}\n"
 
 def extract_text_from_pdf(file_bytes: bytes, password: str = None) -> tuple[str, bool]:
-    """Extracts text from PDF, returning (text, is_encrypted)."""
     try:
         reader = PdfReader(BytesIO(file_bytes))
         if reader.is_encrypted:
@@ -170,10 +169,7 @@ def build_fuzzy_regex(keyword: str):
     return re.compile(re.escape(kw), re.IGNORECASE)
 
 async def send_file_from_vault(file_query: str, chat_id: str) -> str:
-    """Dispatches and uploads binary PDF file directly via Telegram."""
-    if mongo_media_col is None:
-        return "Vault database is currently offline, Sir."
-
+    if mongo_media_col is None: return "Vault database is currently offline, Sir."
     try:
         query_str = file_query.strip() if file_query else ""
         if not query_str:
@@ -201,11 +197,9 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
 
         return f"File '{fname}' dispatched successfully to your Telegram, Sir."
     except Exception as e:
-        print(f"[File Dispatch Error]: {e}")
         return f"Encountered an issue dispatching document for query '{file_query}', Sir."
 
 async def query_document_vault(doc_keyword: str, specific_question: str) -> dict:
-    """Deep document reading tool: Retrieves extracted text of specific documents to answer target questions."""
     if mongo_media_col is None: return {"status": "error", "message": "Document vault unavailable, Sir."}
     try:
         q_regex = build_fuzzy_regex(doc_keyword) if doc_keyword else None
@@ -232,7 +226,6 @@ async def query_document_vault(doc_keyword: str, specific_question: str) -> dict
         return {"status": "error", "message": f"Document query error: {str(e)}"}
 
 async def unlock_encrypted_pdf(doc_id_or_name: str, password: str) -> tuple[str, bool]:
-    """Decrypts a stored PDF document with user-provided password."""
     if mongo_media_col is None: return "Database offline.", False
     try:
         q_regex = build_fuzzy_regex(doc_id_or_name)
@@ -590,9 +583,8 @@ MANDATORY DIRECTIVES:
 
 CRITICAL OPERATIONAL DIRECTIVES:
 1. SENSITIVE IDENTIFIER REDACTION (AADHAAR / RRN / MYNUMBER):
-   - Never print raw numeric sequences of Aadhaar/government IDs directly in chat text.
-   - If asked for an Aadhaar number, call 'query_document_vault' to verify its presence, then state:
-     "I have verified your Aadhaar document in the vault. Due to security protocols, I do not print raw government ID numbers in chat text, but I can dispatch your official PDF file directly to your Telegram." (and offer/execute 'send_file_from_vault').
+   - Never print raw numeric sequences of Aadhaar or government identification numbers directly in chat text.
+   - If asked for an Aadhaar number, politely state: "Per privacy protocols, I cannot display raw government ID numbers in chat text, but I can dispatch your official PDF file directly to your Telegram." (and offer/execute 'send_file_from_vault').
 2. FILE DISPATCH VS READING:
    - Call 'send_file_from_vault' ONLY when the user explicitly asks to get, download, or dispatch a document PDF file.
    - Call 'query_document_vault' when the user asks a question about text INSIDE a PDF document.
@@ -682,7 +674,9 @@ MANDATORY PRIVACY DIRECTIVE:
     # Fallback to Gemini 2.0 Flash
     if not reply_text and gemini_client:
         try:
-            if any(k in cmd for k in ["aadhar", "aadhaar", "document", "pdf", "file"]):
+            if any(k in cmd for k in ["name", "who am i", "profile"]):
+                gem_prompt = f"{system_prompt}\n\nUser Profile Full Name: {USER_FULL_NAME}\n\nUser: {user_text}\nARIA:"
+            elif any(k in cmd for k in ["aadhar", "aadhaar", "document", "pdf", "file"]):
                 doc_res = await query_document_vault(cmd, user_text)
                 if doc_res.get("status") == "success":
                     gem_prompt = f"{system_prompt}\n\nDOCUMENT TEXT FROM VAULT:\n{doc_res.get('text')}\n\nUser: {user_text}\nARIA:"
@@ -701,7 +695,13 @@ MANDATORY PRIVACY DIRECTIVE:
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     if not reply_text:
-        reply_text = "I am listening, Sir. How can I assist you?"
+        # Anti-Punting Fallback: Answer direct queries even if tools fail
+        if "name" in cmd:
+            reply_text = f"Your full name is {USER_FULL_NAME}, Sir."
+        elif "aadhar" in cmd or "aadhaar" in cmd:
+            reply_text = "Per privacy protocols, I cannot display raw government ID numbers in chat text, Sir. Would you like me to dispatch your official Aadhaar PDF directly to your Telegram?"
+        else:
+            reply_text = f"Understood, Sir. Processing your request."
 
     cleaned_reply = clean_response_text(reply_text)
     asyncio.create_task(log_chat_interaction(user_text, cleaned_reply, session_id))
