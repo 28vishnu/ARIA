@@ -20,6 +20,7 @@ from planner import action_planner
 from tool_manager import ToolManager
 from reasoner import reason
 from conversation_manager import ConversationManager
+from reflection_engine import ReflectionEngine
 from brain import AriaBrain
 
 # Provider SDKs
@@ -36,9 +37,6 @@ from apscheduler.triggers.date import DateTrigger
 
 app = FastAPI()
 
-# -------------------------------------------------------------
-# 1. LLM PROVIDER ABSTRACTION LAYER (AUTOMATIC FALLBACK)
-# -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         raise NotImplementedError
@@ -93,9 +91,6 @@ class FallbackRouter(LLMProvider):
 
 llm_router = FallbackRouter()
 
-# -------------------------------------------------------------
-# 2. CLIENT INITIALIZATION & GETTERS
-# -------------------------------------------------------------
 _tavily_client = None
 _mongo_client = None
 _chroma_client = None
@@ -153,9 +148,6 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
-# -------------------------------------------------------------
-# 3. CORE TASK PROCESSING & BRAIN LEARNING LOOP
-# -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower()
@@ -168,10 +160,17 @@ async def process_task(user_text: str, session_id: str) -> str:
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
     tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
 
+    # 1. Reflection & Correction Engine Check (Catches feedback like "It's not my resume")
+    reflection_eng = ReflectionEngine(chats_col, media_col)
+    correction_response = await reflection_eng.evaluate_feedback(user_text, session_id)
+    if correction_response:
+        return correction_response
+
+    # 2. Deterministic Intent Bypasses (Files & Schedules)
     if any(kw in lower_txt for kw in ["resume", "cv", "pdf", "file", "document", "send"]):
         print("[INTENT BYPASS] Triggering Media Vault Tool directly.")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
-        if res.get("success"):
+        if res.get("success") or res.get("metadata", {}).get("requires_clarification"):
             return res.get("content")
 
     if any(kw in lower_txt for kw in ["schedule", "task", "reminder", "today"]):
@@ -180,7 +179,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         if res.get("success"):
             return res.get("content")
 
-    # BRAIN SEARCH FIRST
+    # 3. Brain Search First
     aria_brain = get_brain()
     cached_brain_hit = aria_brain.search_brain(user_text)
     if cached_brain_hit:
@@ -222,7 +221,7 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # LEARNING LOOP: Store in Brain
+    # 4. Learning Loop
     is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
     knowledge_type = "DYNAMIC" if is_time_sensitive else "STATIC"
     
@@ -253,9 +252,6 @@ async def process_task(user_text: str, session_id: str) -> str:
 
     return cleaned
 
-# -------------------------------------------------------------
-# 4. TELEGRAM WEBHOOK & HEALTH ENDPOINTS
-# -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
     token = os.getenv("TELEGRAM_TOKEN")
