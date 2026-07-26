@@ -1,11 +1,12 @@
 import logging
-from typing import Dict, Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 logger = logging.getLogger("aria")
 
 class ServiceRegistry:
     def __init__(self):
-        self._services: Dict[str, Any] = {}
+        self._services: dict[str, Any] = {}
 
     def register(self, name: str, instance: Any):
         self._services[name] = instance
@@ -18,3 +19,17 @@ class ServiceRegistry:
 
     def has(self, name: str) -> bool:
         return name in self._services
+
+@dataclass
+class RequestContext:
+    session_id: str
+    request_id: str
+    session_manager: Any
+    memory_engine: Any
+    skill_manager: Any
+    action_manager: Any
+    planner: Any
+    executor: Any
+    personality_engine: Any
+    context_manager: Any
+    event_bus: Any
