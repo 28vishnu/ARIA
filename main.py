@@ -5,6 +5,7 @@ import base64
 import re
 import asyncio
 import certifi
+import traceback
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
@@ -13,6 +14,12 @@ from pypdf import PdfReader
 from docx import Document
 import openpyxl
 import edge_tts
+
+# Modular Imports
+from planner import action_planner
+from tool_manager import ToolManager
+from reasoner import reason
+from conversation_manager import ConversationManager
 
 # Provider SDKs
 from groq import Groq
@@ -29,7 +36,7 @@ from apscheduler.triggers.date import DateTrigger
 app = FastAPI()
 
 # -------------------------------------------------------------
-# 1. LLM PROVIDER ABSTRACTION LAYER (AUTOMATIC FALLBACK)
+# LLM PROVIDER ABSTRACTION LAYER (AUTOMATIC FALLBACK)
 # -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
@@ -40,7 +47,7 @@ class GroqProvider(LLMProvider):
         self.client = Groq(api_key=api_key) if api_key else None
 
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
-        if not self.client: raise Exception("Groq unconfigured")
+        if self.client is None: raise Exception("Groq unconfigured")
         def _exec():
             res = self.client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
@@ -56,7 +63,7 @@ class GeminiProvider(LLMProvider):
         self.client = genai.Client(api_key=api_key) if api_key else None
 
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
-        if not self.client: raise Exception("Gemini unconfigured")
+        if self.client is None: raise Exception("Gemini unconfigured")
         prompt_lines = [f"{m['role'].upper()}: {m['content']}" for m in messages]
         prompt_str = "\n".join(prompt_lines) + "\nARIA:"
         def _exec():
@@ -85,10 +92,7 @@ class FallbackRouter(LLMProvider):
 
 llm_router = FallbackRouter()
 
-# -------------------------------------------------------------
-# 2. LAZY-LOADED DATABASE & CLIENTS INITIALIZATION
-# -------------------------------------------------------------
-USER_FULL_NAME = "N. Vishnu Saketh"
+# Lazy-loaded Globals
 _tavily_client = None
 _mongo_client = None
 _chroma_client = None
@@ -120,7 +124,9 @@ def get_chroma():
 
 def get_collections():
     client = get_chroma()
-    return client.get_or_create_collection(name="documents"), client.get_or_create_collection(name="memory")
+    docs_col = client.get_or_create_collection(name="documents")
+    mem_col = client.get_or_create_collection(name="memory")
+    return docs_col, mem_col
 
 def get_mongo_collections():
     db = get_mongo()
@@ -139,69 +145,84 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
-# -------------------------------------------------------------
-# 3. CORE ASSISTANT LOGIC WITH INTENT BYPASS & FALLBACK ROUTER
-# -------------------------------------------------------------
-async def process_autonomous_task(user_text: str, session_id: str) -> str:
+async def process_task(user_text: str, session_id: str) -> str:
+    print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower()
 
     # Fast Intent Bypass for Simple Messages (Zero Token Usage)
     if lower_txt in ["/start", "hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening"]:
         return "Online and fully operational, Sir. How may I assist you today?"
 
-    # Assemble System Prompt & Context
-    system_prompt = f"""You are ARIA, an advanced J.A.R.V.I.S.-style assistant.
-{get_temporal()}
-CRITICAL DIRECTIVES:
-1. STRICT REDACTION: Never output, echo, or print raw numeric digits of Aadhaar, RRN, or MyNumber under any circumstances.
-2. Address the user as Sir. Be precise and concise."""
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_text}
-    ]
-
-    # Route through multi-provider fallback router (Groq -> Gemini Flash)
-    reply_text = await llm_router.chat(messages)
-    cleaned = clean_text(reply_text)
-
-    # Log interaction to MongoDB
+    tavily = get_tavily()
+    docs_col, mem_col = get_collections()
     _, _, chats_col = get_mongo_collections()
+
+    conv_mgr = ConversationManager(chats_col)
+    session_context = await conv_mgr.build_session_context(session_id)
+
+    tool_mgr = ToolManager(mem_col, docs_col, tavily)
+    available_tools_desc = tool_mgr.describe_tools()
+
+    # --- ITERATIVE ACTION PLANNER LOOP ---
+    executed_tools = []
+    structured_results = {"memory": {}, "documents": {}, "web": {}}
+
+    for i in range(3):  
+        print(f"[STAGE 1] Running action planner (iteration {i+1})...")
+        plan = await action_planner(user_text, session_context, available_tools_desc, executed_tools, llm_router)
+        tools_to_run = plan.get("tools", [])
+        action = plan.get("action", "retrieve")
+
+        if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
+            if mem_col is not None:
+                await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
+            return "Information stored permanently in your vector vault, Sir."
+
+        if tools_to_run is None or len(tools_to_run) == 0:
+            print("[STAGE 1] Planner completed tool selection.")
+            break
+
+        for t_name in tools_to_run:
+            if t_name not in executed_tools:
+                print(f"[STAGE 2] Executing tool: {t_name}")
+                result = await tool_mgr.execute_tool(t_name, user_text)
+                structured_results[t_name] = result
+                executed_tools.append(t_name)
+
+    # --- STATEFUL REASONER ---
+    print("[STAGE 3] Invoking reasoner...")
+    raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
+    cleaned = clean_text(raw_answer)
+
+    # Log interaction
     if chats_col is not None:
-        asyncio.create_task(chats_col.insert_one({
-            "session_id": session_id,
-            "user_msg": user_text,
-            "aria_reply": cleaned,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }))
+        asyncio.create_task(chats_col.insert_one({"session_id": session_id, "user_msg": user_text, "aria_reply": cleaned, "timestamp": datetime.now(timezone.utc).isoformat()}))
 
     return cleaned
 
-# -------------------------------------------------------------
-# 4. TELEGRAM WEBHOOK & ENDPOINTS
-# -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
     token = os.getenv("TELEGRAM_TOKEN")
     if token is None: return {"status": "no token"}
-    
     try:
         data = await req.json()
+        print(f"[WEBHOOK RECEIVED]: {data}")
         msg = data.get("message", {})
         chat_id = msg.get("chat", {}).get("id")
         text = msg.get("text", "").strip()
         if chat_id is None or not text: return {"status": "ok"}
 
-        reply_text = await process_autonomous_task(text, str(chat_id))
+        reply_text = await process_task(text, str(chat_id))
 
         async with httpx.AsyncClient() as client:
             await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": reply_text}
             )
+        print(f"[WEBHOOK REPLIED SUCCESSFULLY] to chat_id {chat_id}")
         return {"status": "ok"}
-    except Exception as e:
-        print(f"[Webhook Error]: {e}")
+    except Exception:
+        traceback.print_exc()
     return {"status": "ok"}
 
 @app.head("/health")
@@ -212,4 +233,4 @@ def health():
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Multi-Provider Fallback Core Active</h1>"
+    return "<h1>ARIA Multi-Provider Fault-Tolerant Core Active</h1>"
