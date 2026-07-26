@@ -146,8 +146,8 @@ async def sync_ram_cache():
                 sch_entry = f"• Task: {tdoc.get('task')} | Slot: {tdoc.get('timing')}"
                 if sch_entry not in schedules: schedules.append(sch_entry)
 
-            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(6)
-            chat_docs = await chat_cursor.to_list(length=6)
+            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(8)
+            chat_docs = await chat_cursor.to_list(length=8)
             for cdoc in reversed(chat_docs):
                 chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
 
@@ -161,10 +161,9 @@ async def sync_ram_cache():
     return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
-# 3. DIRECT FILE DISPATCH, ENCRYPTION & DECRYPTION TOOLS
+# 3. DIRECT FILE DISPATCH & AUTONOMOUS TOOLS
 # -------------------------------------------------------------
 def build_fuzzy_regex(keyword: str):
-    """Builds a pattern to match common variations like aadhar/aadhaar/e-aadhar."""
     kw = keyword.strip().lower()
     if "adhar" in kw or "aadhar" in kw or "aadhaar" in kw:
         return re.compile(r"(aadhar|aadhaar|e-aadhar|e_aadhar|e%20aadhar)", re.IGNORECASE)
@@ -206,7 +205,7 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
         return f"Encountered an issue dispatching document for query '{file_query}', Sir."
 
 async def query_document_vault(doc_keyword: str, specific_question: str) -> dict:
-    """Deep document reading tool: Checks encryption state and retrieves extracted text."""
+    """Deep document reading tool: Retrieves extracted text of specific documents to answer target questions."""
     if mongo_media_col is None: return {"status": "error", "message": "Document vault unavailable, Sir."}
     try:
         q_regex = build_fuzzy_regex(doc_keyword) if doc_keyword else None
@@ -227,7 +226,7 @@ async def query_document_vault(doc_keyword: str, specific_question: str) -> dict
         return {
             "status": "success",
             "file_name": target_doc.get("file_name"),
-            "text": content[:5000]
+            "text": content[:6000]
         }
     except Exception as e:
         return {"status": "error", "message": f"Document query error: {str(e)}"}
@@ -417,7 +416,7 @@ async def autonomous_proactive_checkin():
     if not cached_schedules: return
 
     active_task = cached_schedules[0]
-    checkin_prompt = f"You are J.A.R.V.I.S. The user is in task '{active_task}' and silent for 25 mins. Briefly ask if they need assistance or a status check. Address as Sir."
+    checkin_prompt = f"You are J.A.R.V.I.S. The user is in task '{active_task}' and silent for 25 mins. Ask a sharp, human-like check-in question on progress or offer assistance. Address as Sir."
 
     if groq_client:
         try:
@@ -497,6 +496,21 @@ GROQ_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "save_memory_fact",
+            "description": "Permanently saves a user preference, detail, or personal fact into the database vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Category e.g. profile, project, preference"},
+                    "fact": {"type": "string", "description": "Fact statement to record"}
+                },
+                "required": ["category", "fact"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_system_diagnostics",
             "description": "Audits assistant health, database metrics, security incidents, and active tasks.",
             "parameters": {"type": "object", "properties": {}}
@@ -507,16 +521,11 @@ GROQ_TOOLS = [
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # Conversational Bypass
-    if cmd in ["hello", "hi", "hey", "hola", "start", "/start"]:
-        return "At your service, Sir. How may I assist you today?"
-
     # 1. PERMISSION & ENCRYPTION PASSWORD GATE EVALUATION
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
         action_type = pending.get("type")
 
-        # Handle Password Input for Encrypted PDF
         if action_type == "unlock_pdf":
             pwd_match = re.search(r'\b([A-Za-z0-9@#$_]{4,25})\b', user_text.strip())
             password_input = pwd_match.group(1) if pwd_match else user_text.strip()
@@ -535,8 +544,8 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 DECRYPTED DOCUMENT TEXT FROM VAULT:
 {decrypted_text[:5000]}
 
-MANDATORY PRIVACY DIRECTIVE:
-- Answer the user's specific request using the document content above.
+MANDATORY DIRECTIVES:
+- Answer the user's request directly using the document text above.
 - Address the user as Sir or Master."""
 
             if groq_client:
@@ -549,7 +558,6 @@ MANDATORY PRIVACY DIRECTIVE:
                     return clean_response_text(qa_comp.choices[0].message.content)
                 except Exception: pass
 
-        # Handle standard Security Confirmation
         if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "agree", "allow", "grant"]):
             del PENDING_SECURITY_ACTIONS[session_id]
             if action_type == "purge_vault":
@@ -580,19 +588,21 @@ MANDATORY PRIVACY DIRECTIVE:
 {history_context}
 {search_context}
 
-CRITICAL ROUTING & PRIVACY DIRECTIVES:
-1. SENSITIVE GOVERNMENT ID REDACTION RULE (AADHAAR / RRN / MYNUMBER):
-   * NEVER print numeric digits of an Aadhaar card, RRN, or MyNumber in text output under any circumstances.
-   * If the user explicitly asks for their Aadhaar number or digits in text, call 'query_document_vault' to inspect the document, then state:
-     "I have verified your Aadhaar document in the vault. Per safety and privacy protocols, I cannot display raw government ID digits directly in plain text chat, but I can dispatch your official PDF file directly to your Telegram." (and call or offer 'send_file_from_vault' with file_query='aadhar').
-2. ROUTING DISTINCTION:
-   * Call 'send_file_from_vault' ONLY when the user explicitly asks to receive, download, or dispatch a PDF/document file.
-   * Call 'query_document_vault' when the user asks a question about information INSIDE a document.
-3. ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Keep responses concise (1-2 sentences max), articulate, and sharp."""
+CRITICAL OPERATIONAL DIRECTIVES:
+1. SENSITIVE IDENTIFIER REDACTION (AADHAAR / RRN / MYNUMBER):
+   - Never print raw 12-digit numeric sequences of Aadhaar/government IDs directly in chat text.
+   - If asked for an Aadhaar number, call 'query_document_vault' to verify its presence, then state:
+     "I have verified your Aadhaar document in the vault. Due to security protocols, I do not print raw government ID numbers in chat text, but I can dispatch your official PDF file directly to your Telegram." (and offer/execute 'send_file_from_vault').
+2. FILE DISPATCH VS READING:
+   - Call 'send_file_from_vault' ONLY when the user explicitly asks to get, download, or dispatch a document PDF file.
+   - Call 'query_document_vault' when the user asks a question about text INSIDE a PDF document.
+3. HUMAN-LIKE INTERACTION & LEARNING:
+   - Learn preferences from user interactions and save them to memory when stated.
+   - Address the user naturally as 'Sir' or 'Master'.
+   - NEVER output unnecessary boilerplate greetings. Give direct, sharp, and highly useful answers."""
 
     reply_text = ""
 
-    # Primary Groq Core
     if groq_client:
         try:
             def _groq_exec():
@@ -601,7 +611,7 @@ CRITICAL ROUTING & PRIVACY DIRECTIVES:
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
                     tools=GROQ_TOOLS,
                     tool_choice="auto",
-                    temperature=0.2, max_tokens=300
+                    temperature=0.2, max_tokens=350
                 )
                 return response.choices[0].message
 
@@ -643,8 +653,8 @@ DOCUMENT TEXT FROM VAULT:
 {doc_res.get('text')}
 
 MANDATORY PRIVACY DIRECTIVE:
-- Answer the user's specific request using the document content above.
-- STRICT RULE: Do NOT print raw digits of sensitive government IDs (Aadhaar/RRN/MyNumber). Summarize non-sensitive metadata or offer to dispatch the PDF.
+- Answer the user's specific request using the document content above concisely.
+- Do NOT output numeric digits of sensitive government IDs (Aadhaar/RRN/MyNumber). Summarize non-sensitive details or offer to dispatch the PDF.
 - Address the user as Sir or Master."""
 
                             qa_comp = groq_client.chat.completions.create(
@@ -658,6 +668,8 @@ MANDATORY PRIVACY DIRECTIVE:
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
                     elif fn_name == "save_scheduled_task":
                         reply_text = await save_scheduled_task(fn_args.get("task"), fn_args.get("timing"))
+                    elif fn_name == "save_memory_fact":
+                        reply_text = await save_memory_fact(fn_args.get("category", "profile"), fn_args.get("fact"))
                     elif fn_name == "get_system_diagnostics":
                         reply_text = await get_system_diagnostics()
 
@@ -670,9 +682,8 @@ MANDATORY PRIVACY DIRECTIVE:
     # Fallback to Gemini 2.0 Flash
     if not reply_text and gemini_client:
         try:
-            # Explicit execution trigger for Gemini
-            if "aadhar" in cmd or "aadhaar" in cmd or "document" in cmd or "pdf" in cmd:
-                doc_res = await query_document_vault("aadhar" if "aadhar" in cmd or "aadhaar" in cmd else cmd, user_text)
+            if any(k in cmd for k in ["aadhar", "aadhaar", "document", "pdf", "file"]):
+                doc_res = await query_document_vault(cmd, user_text)
                 if doc_res.get("status") == "success":
                     gem_prompt = f"{system_prompt}\n\nDOCUMENT TEXT FROM VAULT:\n{doc_res.get('text')}\n\nUser: {user_text}\nARIA:"
                 else:
@@ -690,7 +701,7 @@ MANDATORY PRIVACY DIRECTIVE:
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     if not reply_text:
-        reply_text = "At your service, Sir. All neural systems operational."
+        reply_text = "I am listening, Sir. How can I assist you?"
 
     cleaned_reply = clean_response_text(reply_text)
     asyncio.create_task(log_chat_interaction(user_text, cleaned_reply, session_id))
@@ -762,7 +773,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Autonomous Dual-LLM Core]: Online and Synced.")
+    print("[J.A.R.V.I.S. High-Intelligence Autonomous Engine]: Online and Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -787,12 +798,12 @@ async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-Ryan
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Core Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA Autonomous Engine Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"<h1>ARIA Dual-Engine Autonomous Core Online</h1>"
+    return f"<h1>ARIA Autonomous J.A.R.V.I.S. Core Online</h1>"
 
 # -------------------------------------------------------------
 # 8. WEBSOCKET STREAMING & UPLOAD ROUTE
@@ -818,5 +829,5 @@ async def websocket_endpoint(websocket: WebSocket):
 async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
     file_bytes = await file.read()
     extracted_text, is_encrypted = extract_text_from_pdf(file_bytes)
-    await save_media_file(file.filename, "document", file_bytes, caption=extracted_text[:5000], is_encrypted=is_encrypted)
+    await save_media_file(file.filename, "document", file_bytes, caption=extracted_text[:6000], is_encrypted=is_encrypted)
     return {"status": "ok"}
