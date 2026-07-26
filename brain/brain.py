@@ -3,6 +3,7 @@ from .embeddings import get_embedding
 from .search import search_knowledge_base
 from .learning import store_or_update_knowledge
 from .confidence import adjust_confidence
+from .graph import KnowledgeGraph
 
 class AriaBrain:
     def __init__(self, chroma_client=None):
@@ -10,12 +11,19 @@ class AriaBrain:
         self.knowledge_col = self.client.get_or_create_collection(name="brain_knowledge")
         self.skills_col = self.client.get_or_create_collection(name="brain_skills")
         self.code_col = self.client.get_or_create_collection(name="brain_code")
+        self.graph = KnowledgeGraph(self.client)
 
     def search_brain(self, query: str, topic: str = None) -> dict | None:
         return search_knowledge_base(self.knowledge_col, query, get_embedding, topic)
 
     def store_knowledge(self, question: str, answer: str, topic: str = "general", category: str = "general", summary: str = "", source: str = "AI", confidence: float = 0.95, verified: bool = False, knowledge_type: str = "STATIC"):
         store_or_update_knowledge(self.knowledge_col, question, answer, topic, category, summary, source, confidence, verified, knowledge_type, get_embedding)
+
+    def link_concepts(self, entity: str, relation: str, target: str, category: str = "general"):
+        self.graph.add_relation(entity, relation, target, category)
+
+    def get_connected_knowledge(self, entity: str) -> list[dict]:
+        return self.graph.query_relations(entity)
 
     def update_feedback(self, doc_id: str, feedback: str):
         try:
