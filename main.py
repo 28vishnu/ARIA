@@ -1,126 +1,203 @@
 import os
-import httpx
+import uuid
+import asyncio
+import logging
 import traceback
-from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from platform.logging_config import setup_logging
 from platform.bootstrap import bootstrap_application
+from platform.dependency_injection import RequestContext
 from personality.response import SystemResponse
 
-# Initialize structured logging
 setup_logging("INFO")
+logger = logging.getLogger("aria")
+
+# 1. Managed Background Task Manager (Refinement #7)
+class BackgroundTaskManager:
+    def __init__(self):
+        self.tasks = set()
+
+    def schedule(self, coro):
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
+    async def shutdown(self):
+        if self.tasks:
+            logger.info("[BackgroundTaskManager] Awaiting completion of %d background tasks...", len(self.tasks))
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+
+background_manager = BackgroundTaskManager()
+
+# 2. FastAPI Lifespan Context Manager (Refinement #1 & #2)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup Sequence
+    registry = await bootstrap_application()
+    app.state.registry = registry
+    app.state.bg_manager = background_manager
+    logger.info("[Lifespan] ARIA Platform successfully started.")
+    yield
+    # Shutdown Sequence (Refinement #2)
+    logger.info("[Lifespan] Shutting down ARIA platform resources...")
+    await background_manager.shutdown()
+    
+    if registry.has("scheduler"):
+        try:
+            registry.get("scheduler").shutdown()
+        except Exception:
+            pass
+
+    if registry.has("http_client"):
+        await registry.get("http_client").aclose()
+
+    if registry.has("mongo_client"):
+        registry.get("mongo_client").close()
+
+    if registry.has("plugin_manager"):
+        for p in registry.get("plugin_manager").plugins.values():
+            try:
+                await p.shutdown()
+            except Exception:
+                pass
+                
+    logger.info("[Lifespan] All resources successfully released.")
 
 app = FastAPI(
     title="ARIA AI Operating Platform",
     version="12.0.0",
-    description="Production-grade AI Operating System with 12-phase modular architecture."
+    lifespan=lifespan
 )
 
-@app.on_event("startup")
-async def startup_event():
-    """Bootstraps all 12 platform subsystems and registers them into the container on startup."""
-    registry = await bootstrap_application()
-    app.state.registry = registry
+# 3. Request ID & Logging Middleware (Refinement #12)
+@app.middleware("http")
+async def add_request_metadata(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    response: Response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Gracefully disposes of active connections and clients on shutdown."""
-    if app.state.registry.has("http_client"):
-        await app.state.registry.get("http_client").aclose()
-    if app.state.registry.has("mongo_client"):
-        app.state.registry.get("mongo_client").close()
+# 4. Global Exception Handler (Refinement #12)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("[GlobalExceptionHandler] Unhandled exception occurred: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "error": "An internal system error occurred, Sir.", "detail": str(exc)}
+    )
 
-async def process_task(user_text: str, session_id: str, app_state) -> str:
-    """Executes an incoming user message through ARIA's full 12-phase orchestration pipeline."""
+def build_request_context(session_id: str, request_id: str, registry) -> RequestContext:
+    return RequestContext(
+        session_id=session_id,
+        request_id=request_id,
+        session_manager=registry.get("session_manager"),
+        memory_engine=registry.get("memory_engine"),
+        skill_manager=registry.get("skill_manager"),
+        action_manager=registry.get("action_manager"),
+        planner=registry.get("planner"),
+        executor=registry.get("executor"),
+        personality_engine=registry.get("personality_engine"),
+        context_manager=registry.get("context_manager"),
+        event_bus=registry.get("event_bus")
+    )
+
+async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> str:
+    """Executes the task using Request-Scoped Dependency Injection and SkillManager routing."""
     registry = app_state.registry
-    session_mgr = registry.get("session_manager")
-    memory_eng = registry.get("memory_engine")
-    skill_mgr = registry.get("skill_manager")
-    planner = registry.get("planner")
-    executor = registry.get("executor")
-    personality_eng = registry.get("personality_engine")
+    ctx = build_request_context(session_id, request_id, registry)
 
-    # 1. Non-blocking deterministic memory extraction (Phase 2.1)
-    if memory_eng is not None:
-        import asyncio
-        asyncio.create_task(memory_eng.deterministic_extract_and_store(user_text))
+    # 1. Managed non-blocking memory extraction (Refinement #7)
+    if ctx.memory_engine is not None:
+        app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
 
-    # 2. Retrieve Unified Session & World State Context (Phase 6)
-    session = session_mgr.get_or_create_session(session_id)
+    # 2. Retrieve Session Context
+    session = ctx.session_manager.get_or_create_session(session_id)
     base_context = {"app_state": app_state, "session": session}
 
-    # 3. Direct Skill Routing / Zero-LLM Fast Path (Phase 4)
-    for skill in skill_mgr.skills:
-        conf = await skill.can_run(user_text, base_context)
-        if conf >= 0.90:
-            res = await skill.execute(user_text, base_context)
-            sys_res = SystemResponse(
-                success=res.success,
-                confidence=res.confidence,
-                data=res.data,
-                source=res.source,
-                error=res.error
-            )
-            return personality_eng.apply_personality(session_id, user_text, sys_res)
+    # 3. Strict SkillManager Routing (Refinement #4)
+    skill_response = await ctx.skill_manager.route_and_execute(user_text, base_context)
+    
+    if skill_response.success and skill_response.confidence >= 0.85:
+        sys_res = SystemResponse(
+            success=True,
+            confidence=skill_response.confidence,
+            data=skill_response.data,
+            source=skill_response.source
+        )
+        return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
 
-    # 4. Fallback: Planner + Executor Orchestration (Phase 5 & 10)
-    available_skills_desc = {s.name: s.description for s in skill_mgr.skills}
-    plan = await planner.create_plan(user_text, available_skills_desc, base_context)
-    exec_result = await executor.execute_plan(plan, base_context)
+    # 4. Planner + Executor Orchestration Fallback (Refinement #5 & #10)
+    plan = await ctx.planner.create_plan(user_text, base_context)
+    exec_result = await ctx.executor.execute_plan(plan, base_context)
 
     final_data = exec_result.get("task_outputs", {})
     success = exec_result.get("success", False)
 
+    # Combined Confidence Scoring (Refinement #10)
+    combined_confidence = round((plan.confidence + skill_response.confidence) / 2.0, 2)
+
     sys_res = SystemResponse(
         success=success,
-        confidence=plan.confidence,
+        confidence=combined_confidence,
         data=final_data,
         source="planner_executor",
-        error=None if success else "One or more orchestration tasks failed execution."
+        error=None if success else "Orchestration tasks encountered failures."
     )
 
-    # 5. Personality Presentation Layer (Phase 9)
-    return personality_eng.apply_personality(session_id, user_text, sys_res)
+    return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
-    """Production webhook endpoint for Telegram messaging integration."""
-    config = app.state.registry.get("config")
+    request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
+    config = req.app.state.registry.get("config")
     token = config.telegram_token
     if not token:
         return {"status": "telegram token unconfigured"}
 
-    try:
-        data = await req.json()
-        msg = data.get("message", {})
-        chat_id = msg.get("chat", {}).get("id")
-        text = msg.get("text", "").strip()
+    data = await req.json()
+    msg = data.get("message", {})
+    chat_id = msg.get("chat", {}).get("id")
+    text = msg.get("text", "").strip()
 
-        if chat_id is None or not text:
-            return {"status": "ok"}
-
-        # Process through full ARIA architecture
-        reply_text = await process_task(text, str(chat_id), app.state)
-
-        # Dispatch back via Telegram Bot API
-        http_client = app.state.registry.get("http_client")
-        await http_client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": reply_text}
-        )
+    if chat_id is None or not text:
         return {"status": "ok"}
-    except Exception:
-        traceback.print_exc()
-        return {"status": "error"}
+
+    reply_text = await process_task(text, str(chat_id), request_id, req.app.state)
+
+    http_client = req.app.state.registry.get("http_client")
+    await http_client.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": reply_text}
+    )
+    return {"status": "ok"}
 
 @app.get("/health")
-async def health():
-    """Liveness and readiness check endpoint for container orchestrators (Phase 12)."""
-    checker = app.state.registry.get("health_checker")
-    status_report = await checker.check_readiness()
-    status_code = 200 if status_report["status"] == "healthy" else 503
-    return JSONResponse(status_code=status_code, content=status_report)
+async def health(req: Request):
+    """Extended comprehensive health telemetry endpoint (Refinement #9)."""
+    registry = req.app.state.registry
+    checker = registry.get("health_checker")
+    base_health = await checker.check_readiness()
+
+    extended_status = {
+        **base_health,
+        "subsystems": {
+            "memory_engine": registry.has("memory_engine"),
+            "skill_manager": registry.has("skill_manager"),
+            "action_manager": registry.has("action_manager"),
+            "plugin_manager": registry.has("plugin_manager"),
+            "scheduler": registry.has("scheduler"),
+            "http_client": registry.has("http_client")
+        },
+        "plugins_loaded": list(registry.get("plugin_manager").plugins.keys()) if registry.has("plugin_manager") else [],
+        "version": "12.0.0"
+    }
+    
+    status_code = 200 if base_health["status"] == "healthy" else 503
+    return JSONResponse(status_code=status_code, content=extended_status)
 
 @app.get("/")
 async def root():
