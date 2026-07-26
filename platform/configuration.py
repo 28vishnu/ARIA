@@ -3,15 +3,27 @@ from dataclasses import dataclass
 
 @dataclass
 class AppConfig:
-    environment: str = os.getenv("AR_ENVIRONMENT", "production")
-    mongodb_uri: str = os.getenv("MONGODB_URI", "")
-    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
-    telegram_token: str = os.getenv("TELEGRAM_TOKEN", "")
-    vector_persist_path: str = os.getenv("RENDER_PERSISTENT_DIR", "./aria_vectors")
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    timeout_seconds: float = float(os.getenv("AR_TIMEOUT", "15.0"))
+    environment: str
+    mongodb_uri: str
+    groq_api_key: str
+    gemini_api_key: str
+    tavily_api_key: str
+    telegram_token: str
+    vector_persist_path: str
+    log_level: str
+    timeout_seconds: float
+    permission_mode: str
 
 def load_config() -> AppConfig:
-    return AppConfig()
+    return AppConfig(
+        environment=os.getenv("AR_ENVIRONMENT", "production"),
+        mongodb_uri=os.getenv("MONGODB_URI", ""),
+        groq_api_key=os.getenv("GROQ_API_KEY", ""),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
+        telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
+        vector_persist_path=os.getenv("RENDER_PERSISTENT_DIR", "./aria_vectors"),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        timeout_seconds=float(os.getenv("AR_TIMEOUT", "15.0")),
+        permission_mode=os.getenv("AR_PERMISSION_MODE", "autonomous")
+    )
