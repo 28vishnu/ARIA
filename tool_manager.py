@@ -2,6 +2,7 @@ import base64
 import httpx
 import os
 import re
+import hashlib
 from datetime import datetime, timezone
 from pypdf import PdfReader
 from io import BytesIO
@@ -79,7 +80,7 @@ class MediaVaultTool(BaseTool):
     DESCRIPTION = "Manage, list, index, and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
     CAPABILITIES = ["dispatch file", "list documents", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
 
-    async def execute(self, query: str, media_col, chat_id: str = None, documents_col = None) -> dict:
+    async def execute(self, query: str, media_col, chat_id: str = None, documents_collection = None) -> dict:
         print(f"[TOOL - MEDIA] Executing media operation for query: '{query}' and chat_id: {chat_id}")
         if media_col is None or not chat_id: 
             return {"success": False, "source": "media", "content": "Media vault offline or chat ID missing.", "confidence": 0.0, "metadata": {}}
@@ -88,7 +89,7 @@ class MediaVaultTool(BaseTool):
             clean_q = query.lower().strip()
 
             # -------------------------------------------------------------
-            # CAPABILITY 1: LIST STORED DOCUMENTS ("What documents do you store?")
+            # CAPABILITY 1: LIST STORED DOCUMENTS
             # -------------------------------------------------------------
             if any(k in clean_q for k in ["what documents", "list files", "stored files", "document list", "vault inventory", "files do you know"]):
                 cursor = media_col.find({}, {"file_name": 1, "category": 1, "uploaded_at": 1})
@@ -102,19 +103,27 @@ class MediaVaultTool(BaseTool):
                 return {"success": True, "source": "media", "content": inventory_msg, "confidence": 1.0, "metadata": {"count": len(all_files)}}
 
             # -------------------------------------------------------------
-            # CAPABILITY 2: BULK PDF INGESTION & INDEXING ("Read all PDFs")
+            # CAPABILITY 2: BULK PDF INGESTION & INDEXING WITH SHA-256 HASH DEDUPLICATION
             # -------------------------------------------------------------
             if any(k in clean_q for k in ["read every pdf", "ingest all", "index pdfs", "scan all documents"]):
                 cursor = media_col.find({})
                 vault_files = await cursor.to_list(length=100)
                 indexed_count = 0
+                skipped_count = 0
                 chunk_count = 0
 
                 for file_doc in vault_files:
                     fname = file_doc.get("file_name", "doc.pdf")
-                    if fname.lower().endswith(".pdf") and documents_col is not None:
+                    if fname.lower().endswith(".pdf") and documents_collection is not None:
                         try:
                             raw_bytes = base64.b64decode(file_doc["b64_payload"])
+                            
+                            # Generate cryptographic SHA-256 hash of file payload to prevent duplicate indexing
+                            content_hash = hashlib.sha256(raw_bytes).hexdigest()
+                            if file_doc.get("content_hash") == content_hash and file_doc.get("indexed", False):
+                                skipped_count += 1
+                                continue
+
                             reader = PdfReader(BytesIO(raw_bytes))
                             file_text = ""
                             for page in reader.pages:
@@ -122,28 +131,33 @@ class MediaVaultTool(BaseTool):
                                 if text: file_text += text + "\n"
                             
                             if file_text.strip():
-                                # Simple chunking by paragraph/length
+                                # Chunking by paragraph/length preserving context
                                 chunks = [file_text[i:i+1000] for i in range(0, len(file_text), 1000)]
                                 for idx, chunk in enumerate(chunks):
-                                    chunk_id = f"doc_{fname}_{idx}_{datetime.now().timestamp()}"
-                                    documents_col.add(
+                                    chunk_id = f"doc_{content_hash[:8]}_{idx}"
+                                    documents_collection.upsert(
                                         ids=[chunk_id],
                                         documents=[chunk],
-                                        metadatas=[{"file_name": fname, "source": "MediaVault"}]
+                                        metadatas=[{"file_name": fname, "source": "MediaVault", "hash": content_hash}]
                                     )
                                     chunk_count += 1
+                                
+                                # Mark document as indexed and save content hash in MongoDB
+                                await media_col.update_one(
+                                    {"_id": file_doc["_id"]},
+                                    {"$set": {"indexed": True, "content_hash": content_hash}}
+                                )
                                 indexed_count += 1
                         except Exception as ex:
                             print(f"[Ingestion Error for {fname}]: {ex}")
 
                 ingest_summary = (
                     f"Scanning vault documents...\n\n"
-                    f"✓ Text extracted from {indexed_count} PDFs\n"
-                    f"✓ Metadata indexed\n"
-                    f"✓ Search index updated\n\n"
-                    f"Knowledge base expanded by {chunk_count} searchable chunks, Sir."
+                    f"✓ Newly indexed PDFs: {indexed_count}\n"
+                    f"✓ Skipped (already indexed): {skipped_count}\n"
+                    f"✓ Search index updated with {chunk_count} new chunks, Sir."
                 )
-                return {"success": True, "source": "media", "content": ingest_summary, "confidence": 1.0, "metadata": {"indexed": indexed_count}}
+                return {"success": True, "source": "media", "content": ingest_summary, "confidence": 1.0, "metadata": {"indexed": indexed_count, "skipped": skipped_count}}
 
             # -------------------------------------------------------------
             # CAPABILITY 3: DOCUMENT DISPATCH & RETRIEVAL
@@ -288,7 +302,7 @@ class ToolManager:
         elif tool_name == "web":
             return await tool.execute(query, self.tavily, chat_id)
         elif tool_name == "media":
-            # Pass documents collection alongside media collection for indexing capability
+            # Correctly passing documents_collection using matching keyword parameter name
             return await tool.execute(query, self.media_col, chat_id, documents_collection=self.docs_col)
         elif tool_name == "schedule":
             return await tool.execute(query, self.schedule_col, chat_id)
