@@ -1,11 +1,20 @@
 from groq import Groq
 from personality import assemble_system_prompt
 
-async def reason(user_message: str, structured_context: dict, groq_client: Groq, temporal_ctx: str, tools_desc: dict) -> str:
+async def reason(user_message: str, structured_results: dict, groq_client: Groq, temporal_ctx: str, tools_desc: dict, session_context: str) -> str:
     if not groq_client:
         return "Neural systems offline, Sir."
 
-    system_prompt = assemble_system_prompt(temporal_ctx, structured_context, str(tools_desc))
+    # Weigh evidence based on structured confidence scores
+    context_blocks = []
+    for source_name, res in structured_results.items():
+        if res.get("success") and res.get("content"):
+            conf = res.get("confidence", 0.0)
+            context_blocks.append(f"[{source_name.upper()} SOURCE | Confidence: {conf}]:\n{res['content']}")
+
+    compiled_context = "\n\n".join(context_blocks) if context_blocks else "No external context retrieved."
+
+    system_prompt = assemble_system_prompt(temporal_ctx, compiled_context, str(tools_desc), session_context)
 
     try:
         response = groq_client.chat.completions.create(
@@ -20,18 +29,3 @@ async def reason(user_message: str, structured_context: dict, groq_client: Groq,
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"Reasoning engine error: {str(e)}"
-
-async def evaluate_confidence(answer: str, groq_client: Groq) -> int:
-    if not groq_client: return 90
-    prompt = f"Rate the completeness and accuracy of this response on a scale of 0 to 100. Return only the integer score: '{answer}'"
-    try:
-        res = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1, max_tokens=10
-        )
-        import re
-        match = re.search(r'\d+', res.choices[0].message.content)
-        return int(match.group()) if match else 85
-    except Exception:
-        return 85
