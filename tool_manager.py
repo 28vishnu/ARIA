@@ -16,7 +16,7 @@ class MemoryTool(BaseTool):
             return {"success": False, "source": "memory", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = memory_collection.query(query_texts=[query], n_results=5)
-            if results and results.get("documents") and results["documents"][0]:
+            if results is not None and results.get("documents") is not None and len(results["documents"]) > 0 and results["documents"][0] is not None:
                 content = "\n".join(results["documents"][0])
                 return {"success": True, "source": "memory", "content": content, "confidence": 0.95, "metadata": {"count": len(results["documents"][0])}}
         except Exception:
@@ -33,7 +33,7 @@ class DocumentTool(BaseTool):
             return {"success": False, "source": "documents", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = documents_collection.query(query_texts=[query], n_results=4)
-            if results and results.get("documents") and results["documents"][0]:
+            if results is not None and results.get("documents") is not None and len(results["documents"]) > 0 and results["documents"][0] is not None:
                 content = "\n".join(results["documents"][0])
                 return {"success": True, "source": "documents", "content": content, "confidence": 0.92, "metadata": {"source_files": results.get("metadatas", [{}])}}
         except Exception:
@@ -50,9 +50,10 @@ class SearchTool(BaseTool):
             return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             res = tavily_client.search(query=query, max_results=3)
-            results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
-            content = "\n".join(results)
-            return {"success": True, "source": "web", "content": content, "confidence": 0.88, "metadata": {"results_count": len(results)}}
+            if res is not None and res.get("results") is not None:
+                results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
+                content = "\n".join(results)
+                return {"success": True, "source": "web", "content": content, "confidence": 0.88, "metadata": {"results_count": len(results)}}
         except Exception:
             pass
         return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
@@ -83,9 +84,16 @@ class ToolManager:
             return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
 
         if tool_name == "memory":
+            if self.memory_col is None:
+                return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
             return await tool.execute(query, self.memory_col)
         elif tool_name == "documents":
+            if self.docs_col is None:
+                return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
             return await tool.execute(query, self.docs_col)
         elif tool_name == "web":
+            if self.tavily is None:
+                return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
             return await tool.execute(query, self.tavily)
+            
         return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
