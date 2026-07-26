@@ -5,6 +5,7 @@ import base64
 import re
 import asyncio
 import certifi
+import traceback
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
@@ -53,25 +54,25 @@ _chroma_client = None
 
 def get_groq():
     global _groq_client
-    if _groq_client is None and GROQ_API_KEY:
+    if _groq_client is None and GROQ_API_KEY is not None:
         _groq_client = Groq(api_key=GROQ_API_KEY)
     return _groq_client
 
 def get_gemini():
     global _gemini_client
-    if _gemini_client is None and GEMINI_API_KEY:
+    if _gemini_client is None and GEMINI_API_KEY is not None:
         _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     return _gemini_client
 
 def get_tavily():
     global _tavily_client
-    if _tavily_client is None and TAVILY_API_KEY:
+    if _tavily_client is None and TAVILY_API_KEY is not None:
         _tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
     return _tavily_client
 
 def get_mongo():
     global _mongo_client
-    if _mongo_client is None and MONGODB_URI:
+    if _mongo_client is None and MONGODB_URI is not None:
         try:
             _mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 MONGODB_URI, tlsCAFile=certifi.where(), tlsInsecure=True, serverSelectionTimeoutMS=5000
@@ -102,7 +103,7 @@ def get_mongo_collections():
 scheduler = AsyncIOScheduler()
 
 def clean_text(raw: str) -> str:
-    if not raw: return ""
+    if raw is None: return ""
     return re.sub(r'\*+', '', raw).strip()
 
 def get_temporal() -> str:
@@ -135,7 +136,7 @@ async def process_task(user_text: str, session_id: str) -> str:
                 await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
             return "Information stored permanently in your vector vault, Sir."
 
-        if not tools_to_run:
+        if tools_to_run is None or len(tools_to_run) == 0:
             break
 
         for t_name in tools_to_run:
@@ -173,8 +174,8 @@ async def telegram_webhook(req: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": ans})
         return {"status": "ok"}
-    except Exception as e:
-        print(f"[Webhook Error]: {e}")
+    except Exception:
+        traceback.print_exc()
     return {"status": "ok"}
 
 @app.head("/health")
