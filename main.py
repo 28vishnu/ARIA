@@ -143,6 +143,7 @@ async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower()
 
+    # 1. Fast Intent Bypass for Greetings & Simple Messages (Zero Token Usage)
     if lower_txt in ["/start", "hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening"]:
         return "Online and fully operational, Sir. How may I assist you today?"
 
@@ -150,10 +151,23 @@ async def process_task(user_text: str, session_id: str) -> str:
     docs_col, mem_col = get_collections()
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
 
+    tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
+
+    # 2. Deterministic Intent Bypasses (Guaranteed Action execution even if AI Quotas are Exceeded)
+    if any(kw in lower_txt for kw in ["resume", "cv", "pdf", "file", "document", "send"]):
+        print("[INTENT BYPASS] Triggering Media Vault Tool directly.")
+        res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
+        if res.get("success"):
+            return res.get("content")
+
+    if any(kw in lower_txt for kw in ["schedule", "task", "reminder", "today"]):
+        print("[INTENT BYPASS] Triggering Schedule Tool directly.")
+        res = await tool_mgr.execute_tool("schedule", user_text, chat_id=session_id)
+        if res.get("success"):
+            return res.get("content")
+
     conv_mgr = ConversationManager(chats_col)
     session_context = await conv_mgr.build_session_context(session_id)
-
-    tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
     available_tools_desc = tool_mgr.describe_tools()
 
     executed_tools = []
@@ -165,7 +179,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         tools_to_run = plan.get("tools", [])
         action = plan.get("action", "retrieve")
 
-        if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
+        if action == "save" and any(w in lower_txt for w in ["remember", "my ", "i like"]):
             if mem_col is not None:
                 await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
             return "Information stored permanently in your vector vault, Sir."
@@ -185,8 +199,19 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
+    # Fixed background task execution for MongoDB insert_one
     if chats_col is not None:
-        asyncio.create_task(chats_col.insert_one({"session_id": session_id, "user_msg": user_text, "aria_reply": cleaned, "timestamp": datetime.now(timezone.utc).isoformat()}))
+        async def save_chat():
+            try:
+                await chats_col.insert_one({
+                    "session_id": session_id,
+                    "user_msg": user_text,
+                    "aria_reply": cleaned,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            except Exception as e:
+                print(f"[DB Log Error]: {e}")
+        asyncio.create_task(save_chat())
 
     return cleaned
 
