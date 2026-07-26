@@ -3,6 +3,8 @@ import httpx
 import os
 import re
 from datetime import datetime, timezone
+from pypdf import PdfReader
+from io import BytesIO
 
 class BaseTool:
     NAME = "base"
@@ -74,24 +76,79 @@ class SearchTool(BaseTool):
 
 class MediaVaultTool(BaseTool):
     NAME = "media"
-    DESCRIPTION = "Locate and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
-    CAPABILITIES = ["dispatch file", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
+    DESCRIPTION = "Manage, list, index, and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
+    CAPABILITIES = ["dispatch file", "list documents", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
 
-    async def execute(self, query: str, media_col, chat_id: str = None) -> dict:
-        print(f"[TOOL - MEDIA] Locating media file for query: '{query}' and chat_id: {chat_id}")
+    async def execute(self, query: str, media_col, chat_id: str = None, documents_col = None) -> dict:
+        print(f"[TOOL - MEDIA] Executing media operation for query: '{query}' and chat_id: {chat_id}")
         if media_col is None or not chat_id: 
             return {"success": False, "source": "media", "content": "Media vault offline or chat ID missing.", "confidence": 0.0, "metadata": {}}
         
         try:
             clean_q = query.lower().strip()
-            target = None
-            term_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
 
             # -------------------------------------------------------------
-            # STEP 1: FORGIVING UNIFIED SEARCH QUERY (Aliases + Filename + Caption)
+            # CAPABILITY 1: LIST STORED DOCUMENTS ("What documents do you store?")
             # -------------------------------------------------------------
-            
-            # Extract specific search tokens if present
+            if any(k in clean_q for k in ["what documents", "list files", "stored files", "document list", "vault inventory", "files do you know"]):
+                cursor = media_col.find({}, {"file_name": 1, "category": 1, "uploaded_at": 1})
+                all_files = await cursor.to_list(length=100)
+                
+                if not all_files:
+                    return {"success": True, "source": "media", "content": "Your Media Vault is currently empty, Sir.", "confidence": 1.0, "metadata": {}}
+                
+                file_lines = [f"• {f.get('file_name')} (Category: {f.get('category', 'General')})" for f in all_files]
+                inventory_msg = f"I currently manage {len(all_files)} documents in your Media Vault, Sir:\n\n" + "\n".join(file_lines)
+                return {"success": True, "source": "media", "content": inventory_msg, "confidence": 1.0, "metadata": {"count": len(all_files)}}
+
+            # -------------------------------------------------------------
+            # CAPABILITY 2: BULK PDF INGESTION & INDEXING ("Read all PDFs")
+            # -------------------------------------------------------------
+            if any(k in clean_q for k in ["read every pdf", "ingest all", "index pdfs", "scan all documents"]):
+                cursor = media_col.find({})
+                vault_files = await cursor.to_list(length=100)
+                indexed_count = 0
+                chunk_count = 0
+
+                for file_doc in vault_files:
+                    fname = file_doc.get("file_name", "doc.pdf")
+                    if fname.lower().endswith(".pdf") and documents_col is not None:
+                        try:
+                            raw_bytes = base64.b64decode(file_doc["b64_payload"])
+                            reader = PdfReader(BytesIO(raw_bytes))
+                            file_text = ""
+                            for page in reader.pages:
+                                text = page.extract_text()
+                                if text: file_text += text + "\n"
+                            
+                            if file_text.strip():
+                                # Simple chunking by paragraph/length
+                                chunks = [file_text[i:i+1000] for i in range(0, len(file_text), 1000)]
+                                for idx, chunk in enumerate(chunks):
+                                    chunk_id = f"doc_{fname}_{idx}_{datetime.now().timestamp()}"
+                                    documents_col.add(
+                                        ids=[chunk_id],
+                                        documents=[chunk],
+                                        metadatas=[{"file_name": fname, "source": "MediaVault"}]
+                                    )
+                                    chunk_count += 1
+                                indexed_count += 1
+                        except Exception as ex:
+                            print(f"[Ingestion Error for {fname}]: {ex}")
+
+                ingest_summary = (
+                    f"Scanning vault documents...\n\n"
+                    f"✓ Text extracted from {indexed_count} PDFs\n"
+                    f"✓ Metadata indexed\n"
+                    f"✓ Search index updated\n\n"
+                    f"Knowledge base expanded by {chunk_count} searchable chunks, Sir."
+                )
+                return {"success": True, "source": "media", "content": ingest_summary, "confidence": 1.0, "metadata": {"indexed": indexed_count}}
+
+            # -------------------------------------------------------------
+            # CAPABILITY 3: DOCUMENT DISPATCH & RETRIEVAL
+            # -------------------------------------------------------------
+            target = None
             search_terms = []
             if any(k in clean_q for k in ["resume", "cv", "portfolio"]): search_terms.extend(["resume", "cv", "portfolio"])
             elif any(k in clean_q for k in ["aadhar", "aadhaar"]): search_terms.extend(["aadhar", "aadhaar"])
@@ -99,7 +156,7 @@ class MediaVaultTool(BaseTool):
             elif any(k in clean_q for k in ["certificate", "memo"]): search_terms.extend(["certificate", "memo"])
             else: search_terms.append(clean_q)
 
-            # Unified $or query checking aliases, file names, captions, and tags simultaneously
+            term_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
             unified_filter = {
                 "$or": [
                     {"aliases": {"$in": search_terms}},
@@ -110,14 +167,10 @@ class MediaVaultTool(BaseTool):
             }
 
             target = await media_col.find_one(unified_filter)
-
-            # Fallback: Broad substring match on filename if exact unified match fails
             if not target:
                 target = await media_col.find_one({"file_name": {"$regex": re.escape(clean_q), "$options": "i"}})
 
-            # Clarification Fallback if still not found
             if not target:
-                print("[TOOL - MEDIA] No matching document found via unified search order.")
                 cursor = media_col.find({}, {"file_name": 1}).limit(5)
                 available_files = await cursor.to_list(length=5)
                 
@@ -143,9 +196,7 @@ class MediaVaultTool(BaseTool):
             raw_bytes = base64.b64decode(target["b64_payload"])
             token = os.getenv("TELEGRAM_TOKEN")
             
-            # -------------------------------------------------------------
-            # STEP 2: TELEGRAM SUCCESS VERIFICATION
-            # -------------------------------------------------------------
+            # STRICT TELEGRAM SUCCESS VERIFICATION
             async with httpx.AsyncClient() as client:
                 res = await client.post(
                     f"https://api.telegram.org/bot{token}/sendDocument",
@@ -158,7 +209,6 @@ class MediaVaultTool(BaseTool):
                 if not telegram_resp.get("ok"):
                     raise Exception(f"Telegram rejected document transmission: {telegram_resp}")
 
-            # Update Extended Metadata Statistics
             try:
                 await media_col.update_one(
                     {"_id": target["_id"]},
@@ -238,7 +288,8 @@ class ToolManager:
         elif tool_name == "web":
             return await tool.execute(query, self.tavily, chat_id)
         elif tool_name == "media":
-            return await tool.execute(query, self.media_col, chat_id)
+            # Pass documents collection alongside media collection for indexing capability
+            return await tool.execute(query, self.media_col, chat_id, documents_collection=self.docs_col)
         elif tool_name == "schedule":
             return await tool.execute(query, self.schedule_col, chat_id)
             
