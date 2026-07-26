@@ -2,6 +2,7 @@ import base64
 import httpx
 import os
 import re
+from datetime import datetime, timezone
 
 class BaseTool:
     NAME = "base"
@@ -56,17 +57,30 @@ class SearchTool(BaseTool):
         try:
             res = tavily_client.search(query=query, max_results=3)
             if res is not None and res.get("results") is not None:
-                results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
-                content = "\n".join(results)
-                return {"success": True, "source": "web", "content": content, "confidence": 0.88, "metadata": {"results_count": len(results)}}
-        except Exception:
-            pass
-        return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
+                raw_results = res.get("results", [])
+                results_count = len(raw_results)
+                
+                # Dynamic Confidence Scoring based on result density and depth
+                if results_count >= 3:
+                    confidence = 0.92
+                elif results_count == 2:
+                    confidence = 0.85
+                elif results_count == 1:
+                    confidence = 0.70
+                else:
+                    confidence = 0.40
+
+                results = [f"- {item['title']}: {item['content'][:200]}" for item in raw_results]
+                content = "\n".join(results) if results else "No relevant web intelligence found."
+                return {"success": True, "source": "web", "content": content, "confidence": confidence, "metadata": {"results_count": results_count}}
+        except Exception as e:
+            print(f"[SearchTool Error]: {e}")
+        return {"success": False, "source": "web", "content": "Web search failed.", "confidence": 0.1, "metadata": {"results_count": 0}}
 
 class MediaVaultTool(BaseTool):
     NAME = "media"
     DESCRIPTION = "Locate and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
-    CAPABILITIES = ["dispatch file", "resume", "send document", "download pdf", "aadhar", "pan"]
+    CAPABILITIES = ["dispatch file", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
 
     async def execute(self, query: str, media_col, chat_id: str = None) -> dict:
         print(f"[TOOL - MEDIA] Locating media file for query: '{query}' and chat_id: {chat_id}")
@@ -75,22 +89,38 @@ class MediaVaultTool(BaseTool):
         
         try:
             clean_q = query.lower().strip()
-            search_query_filter = {}
+            target = None
+
+            # -------------------------------------------------------------
+            # STEP 1: PRIORITIZED SEARCH ORDER
+            # -------------------------------------------------------------
             
+            # 1. Alias Matching (Array or Direct String Match)
             if any(k in clean_q for k in ["resume", "cv", "portfolio"]):
-                search_query_filter = {"$or": [{"file_name": re.compile("resume|cv|portfolio", re.IGNORECASE)}, {"aliases": "resume"}]}
+                target = await media_col.find_one({"aliases": {"$in": ["resume", "cv", "portfolio"]}})
             elif any(k in clean_q for k in ["aadhar", "aadhaar"]):
-                search_query_filter = {"$or": [{"file_name": re.compile("aadhar|aadhaar", re.IGNORECASE)}, {"aliases": "aadhar"}]}
+                target = await media_col.find_one({"aliases": {"$in": ["aadhar", "aadhaar"]}})
             elif "pan" in clean_q:
-                search_query_filter = {"$or": [{"file_name": re.compile("pan", re.IGNORECASE)}, {"aliases": "pan"}]}
-            else:
-                q_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
-                search_query_filter = {"$or": [{"file_name": q_regex}, {"caption": q_regex}, {"aliases": q_regex}]}
+                target = await media_col.find_one({"aliases": "pan"})
+            elif any(k in clean_q for k in ["certificate", "memo"]):
+                target = await media_col.find_one({"aliases": {"$in": ["certificate", "marks memo", "memo"]}})
 
-            target = await media_col.find_one(search_query_filter)
-
+            # 2. Exact Filename Match
             if not target:
-                print("[TOOL - MEDIA] No matching document found via alias/query search.")
+                target = await media_col.find_one({"file_name": {"$regex": f"^{re.escape(clean_q)}$", "$options": "i"}})
+
+            # 3. Caption Match
+            if not target:
+                target = await media_col.find_one({"caption": {"$regex": re.escape(clean_q), "$options": "i"}})
+
+            # 4. Regex / Keyword Partial Match
+            if not target:
+                q_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
+                target = await media_col.find_one({"$or": [{"file_name": q_regex}, {"caption": q_regex}, {"tags": q_regex}]})
+
+            # 5. Clarification Fallback (Never guess randomly)
+            if not target:
+                print("[TOOL - MEDIA] No matching document found via prioritized search order.")
                 cursor = media_col.find({}, {"file_name": 1}).limit(5)
                 available_files = await cursor.to_list(length=5)
                 
@@ -116,14 +146,41 @@ class MediaVaultTool(BaseTool):
             raw_bytes = base64.b64decode(target["b64_payload"])
             token = os.getenv("TELEGRAM_TOKEN")
             
+            # -------------------------------------------------------------
+            # STEP 2: TELEGRAM SUCCESS VERIFICATION
+            # -------------------------------------------------------------
             async with httpx.AsyncClient() as client:
-                await client.post(
+                res = await client.post(
                     f"https://api.telegram.org/bot{token}/sendDocument",
                     data={"chat_id": chat_id, "caption": f"Here is your requested document: '{fname}', Sir."},
                     files={"document": (fname, raw_bytes, "application/octet-stream")}
                 )
-            print(f"[TOOL - MEDIA] Successfully dispatched '{fname}' to Telegram.")
-            return {"success": True, "source": "media", "content": f"File '{fname}' successfully dispatched to your Telegram chat, Sir.", "confidence": 1.0, "metadata": {"file": fname}}
+                res.raise_for_status()
+                telegram_resp = res.json()
+                
+                if not telegram_resp.get("ok"):
+                    raise Exception(f"Telegram rejected document transmission: {telegram_resp}")
+
+            # Update Extended Metadata Statistics (send_count, last_sent)
+            try:
+                await media_col.update_one(
+                    {"_id": target["_id"]},
+                    {
+                        "$set": {"last_sent": datetime.now(timezone.utc).isoformat()},
+                        "$inc": {"send_count": 1}
+                    }
+                )
+            except Exception:
+                pass
+
+            print(f"[TOOL - MEDIA] Successfully verified and dispatched '{fname}' to Telegram.")
+            return {
+                "success": True, 
+                "source": "media", 
+                "content": f"File '{fname}' successfully dispatched to your Telegram chat, Sir.", 
+                "confidence": 1.0, 
+                "metadata": {"file": fname, "send_count": target.get("send_count", 0) + 1}
+            }
         except Exception as e:
             print(f"[TOOL - MEDIA EXCEPTION]: {e}")
             return {"success": False, "source": "media", "content": f"Dispatch error: {e}", "confidence": 0.0, "metadata": {}}
