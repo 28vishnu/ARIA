@@ -33,7 +33,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 app = FastAPI()
 
 # -------------------------------------------------------------
-# DYNAMIC MULTI-PROVIDER AI ROUTER WITH MODEL BLACKLISTING
+# DYNAMIC MULTI-PROVIDER AI ROUTER WITH RATE-LIMIT BLACKLISTING
 # -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
@@ -42,24 +42,25 @@ class LLMProvider:
 class GroqProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
+        self.is_rate_limited = False
 
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
-        if self.client is None: raise Exception("Groq unconfigured")
-        for attempt in range(2):
-            try:
-                def _exec():
-                    res = self.client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                    return res.choices[0].message.content.strip()
-                return await asyncio.to_thread(_exec)
-            except Exception as e:
-                print(f"[Groq Attempt {attempt+1} Failed]: {e}")
-                if attempt == 0: await asyncio.sleep(1.0)
-                else: raise e
+        if self.client is None or self.is_rate_limited: raise Exception("Groq unconfigured or rate-limited")
+        try:
+            def _exec():
+                res = self.client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                return res.choices[0].message.content.strip()
+            return await asyncio.to_thread(_exec)
+        except Exception as e:
+            if "429" in str(e) or "rate_limit" in str(e).lower():
+                print("[Groq Rate Limit Triggered]: Blacklisting Groq temporarily.")
+                self.is_rate_limited = True
+            raise e
 
 class OpenRouterProvider(LLMProvider):
     def __init__(self, api_key: str):
@@ -76,34 +77,29 @@ class OpenRouterProvider(LLMProvider):
         async with httpx.AsyncClient() as client:
             active_models = [m for m in self.models if m not in self.blacklisted_models]
             for model in active_models:
-                for attempt in range(2):
-                    try:
-                        res = await client.post(
-                            "https://openrouter.ai/api/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
-                            json={"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
-                            timeout=15.0
-                        )
-                        data = res.json()
-                        
-                        if res.status_code == 404 or "No endpoints found" in str(data):
-                            print(f"[OpenRouter Dynamic Blacklist]: Model {model} returned 404/Unavailable.")
-                            self.blacklisted_models.add(model)
-                            break
+                try:
+                    res = await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
+                        json={"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
+                        timeout=15.0
+                    )
+                    data = res.json()
+                    
+                    if res.status_code == 404 or "No endpoints found" in str(data):
+                        self.blacklisted_models.add(model)
+                        continue
 
-                        if res.status_code in [429, 500, 503] or "error" in data:
-                            print(f"[OpenRouter Model {model} Error]: {data}")
-                            await asyncio.sleep(1.0)
-                            continue
-                        
-                        if "choices" not in data:
-                            raise Exception(f"Invalid OpenRouter payload: {data}")
+                    if res.status_code in [429, 500, 503] or "error" in data:
+                        continue
+                    
+                    if "choices" not in data:
+                        continue
 
-                        res.raise_for_status()
-                        return data["choices"][0]["message"]["content"].strip()
-                    except Exception as e:
-                        print(f"[OpenRouter Model {model} Exception]: {e}")
-                        break
+                    res.raise_for_status()
+                    return data["choices"][0]["message"]["content"].strip()
+                except Exception:
+                    continue
         raise Exception("All OpenRouter models failed or blacklisted")
 
 class MistralProvider(LLMProvider):
@@ -113,30 +109,15 @@ class MistralProvider(LLMProvider):
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         if not self.client_key: raise Exception("Mistral unconfigured")
         async with httpx.AsyncClient() as client:
-            for attempt in range(2):
-                try:
-                    res = await client.post(
-                        "https://api.mistral.ai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
-                        json={"model": "mistral-small-latest", "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
-                        timeout=15.0
-                    )
-                    data = res.json()
-                    if res.status_code in [429, 500, 503] or "error" in data:
-                        print(f"[Mistral Error]: {data}")
-                        await asyncio.sleep(1.0)
-                        continue
-                    
-                    if "choices" not in data:
-                        raise Exception(f"Invalid Mistral payload: {data}")
-
-                    res.raise_for_status()
-                    return data["choices"][0]["message"]["content"].strip()
-                except Exception as e:
-                    print(f"[Mistral Attempt {attempt+1} Failed]: {e}")
-                    if attempt == 0: await asyncio.sleep(1.0)
-                    else: raise e
-        raise Exception("Mistral provider failed")
+            res = await client.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
+                json={"model": "mistral-small-latest", "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
+                timeout=15.0
+            )
+            data = res.json()
+            res.raise_for_status()
+            return data["choices"][0]["message"]["content"].strip()
 
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str):
@@ -146,19 +127,13 @@ class GeminiProvider(LLMProvider):
         if self.client is None: raise Exception("Gemini unconfigured")
         prompt_lines = [f"{m['role'].upper()}: {m['content']}" for m in messages]
         prompt_str = "\n".join(prompt_lines) + "\nARIA:"
-        for attempt in range(2):
-            try:
-                def _exec():
-                    res = self.client.models.generate_content(
-                        model="gemini-2.0-flash",
-                        contents=prompt_str
-                    )
-                    return res.text.strip()
-                return await asyncio.to_thread(_exec)
-            except Exception as e:
-                print(f"[Gemini Attempt {attempt+1} Failed]: {e}")
-                if attempt == 0: await asyncio.sleep(1.0)
-                else: raise e
+        def _exec():
+            res = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt_str
+            )
+            return res.text.strip()
+        return await asyncio.to_thread(_exec)
 
 class FallbackRouter(LLMProvider):
     def __init__(self):
@@ -181,7 +156,7 @@ class FallbackRouter(LLMProvider):
 llm_router = FallbackRouter()
 
 # -------------------------------------------------------------
-# CLIENT INITIALIZATION WITH PERSISTENT CHROMA PATH
+# CLIENT INITIALIZATION
 # -------------------------------------------------------------
 _tavily_client = None
 _mongo_client = None
@@ -245,7 +220,7 @@ def get_temporal() -> str:
 PENDING_STATES = {}
 
 # -------------------------------------------------------------
-# STARTUP EVENT: INITIALIZE PROFILE, GRAPH & BACKGROUND WORKERS
+# STARTUP EVENT
 # -------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
@@ -254,24 +229,17 @@ async def startup_event():
     if mongo_db is not None:
         db_inst = mongo_db["aria_db"]
         
-        # Initialize Profile Engine
         profile_eng = ProfileEngine(db_inst)
         profile = await profile_eng.get_profile()
         print(f"[ARIA OS]: User Profile Loaded for: {profile.get('name', 'User')}")
 
-        # Initialize Knowledge Graph and Seed Core Relationships
         brain = get_brain()
         brain.link_concepts("Saketh", "studies_at", "Gayatri Vidya Parishad College", category="education")
         brain.link_concepts("Saketh", "pursuing", "B.Tech Computer Science Engineering", category="education")
         brain.link_concepts("Saketh", "builds", "ARIA AI", category="projects")
-        brain.link_concepts("Saketh", "prefers", "Telegram", category="interface")
-        brain.link_concepts("ARIA AI", "stored_in", "Media Vault", category="architecture")
         print("[ARIA OS]: Knowledge Graph successfully seeded with core entities.")
 
-        # Initialize Background Workers
         workers = BackgroundWorkers(db_inst, llm_router, get_tavily())
-
-        # Schedule Workers using APScheduler
         scheduler.add_job(workers.morning_briefing_worker, "cron", hour=9, minute=0)
         scheduler.add_job(workers.night_summary_worker, "cron", hour=22, minute=0)
         scheduler.add_job(workers.inactivity_worker, "interval", days=1)
@@ -296,22 +264,11 @@ async def process_task(user_text: str, session_id: str) -> str:
     # STAGE -1: DETERMINISTIC ROUTER (ZERO-TOKEN BYPASS)
     # =========================================================
 
-    # 1. Telegram Commands
+    # 1. Telegram & System Commands
     if lower_txt.startswith("/start"):
-        return (
-            "Welcome back, Sir.\n"
-            "ARIA Neural Core online.\n"
-            "All systems operational.\n"
-            "How may I assist you today?"
-        )
+        return "Welcome back, Sir.\nARIA Neural Core online.\nAll systems operational.\nHow may I assist you today?"
     if lower_txt.startswith("/help"):
-        return (
-            "**ARIA Operating System Command Manual**:\n\n"
-            "• Ask for live weather, news, or calculations.\n"
-            "• Request documents ('Send my resume', 'What documents do you store?').\n"
-            "• Manage tasks and schedules ('What is on my schedule today?').\n"
-            "• Store memories ('Remember that...')."
-        )
+        return "**ARIA Operating System Command Manual**:\n\n• Ask for live weather, news, or calculations.\n• Request documents ('Send my resume', 'What documents do you store?').\n• Manage tasks and schedules ('What is on my schedule today?')."
     if lower_txt.startswith("/settings"):
         return "ARIA System Settings:\n• Interface: Telegram\n• Vector Store: ChromaDB Persistent\n• LLM Tier: Multi-Provider Failover Active, Sir."
     if lower_txt.startswith("/about"):
@@ -319,16 +276,21 @@ async def process_task(user_text: str, session_id: str) -> str:
     if lower_txt.startswith("/ping"):
         return "Pong! All systems optimal, Sir."
 
-    # 2. "What do you know about me" Profile Handler
+    # 2. Identity Queries ("Who are you?")
+    if any(k in lower_txt for k in ["who are you", "what are you", "your name"]):
+        return "I am ARIA (Autonomous Responsive Intelligent Assistant), your dedicated AI operating system, built to manage your files, schedules, code, and intelligence feeds, Sir."
+
+    # 3. Profile Inquiries ("What do you know about me?", "Who am I?")
     if any(k in lower_txt for k in ["what do you know about me", "tell me about myself", "my profile", "who am i"]):
         profile_col = mem_mongo.database["user_profile"] if mem_mongo is not None else None
         profile = {}
         if profile_col is not None:
             profile = await profile_col.find_one({"_id": "master_profile"}) or {}
         
-        media_col_ref = media_col
-        media_cursor = media_col_ref.find({}, {"file_name": 1, "category": 1}) if media_col_ref else None
-        stored_files = await media_cursor.to_list(length=20) if media_cursor else []
+        media_cursor = None
+        if media_col is not None:
+            media_cursor = media_col.find({}, {"file_name": 1, "category": 1})
+        stored_files = await media_cursor.to_list(length=20) if media_cursor is not None else []
         file_names = [f"• {f.get('file_name')} ({f.get('category', 'General')})" for f in stored_files]
         file_list_str = "\n".join(file_names) if file_names else "• No documents stored yet."
 
@@ -342,12 +304,11 @@ async def process_task(user_text: str, session_id: str) -> str:
             f"👤 **Name**\n• {name}\n\n"
             f"🎓 **Education**\n• {course}\n• {college}\n\n"
             f"🚀 **Active Project**\n• {project}\n\n"
-            f"💻 **Core Interests**\n• Artificial Intelligence\n• Full-Stack Software Development\n• Telegram Automation\n\n"
             f"📂 **Stored Documents & Vault**\n{file_list_str}\n\n"
             f"If any of this is outdated, let me know and I'll update my knowledge, Sir."
         )
 
-    # 3. Deterministic Batch-Upload Intent Handler
+    # 4. Batch Upload Intent Handler
     upload_phrases = ["send all my documents", "upload my documents", "here are my files", "i'll send my documents", "batch upload"]
     if any(phrase in lower_txt for phrase in upload_phrases):
         return (
@@ -356,18 +317,18 @@ async def process_task(user_text: str, session_id: str) -> str:
             "• Read and extract their contents.\n"
             "• Index them for semantic vector search.\n"
             "• Detect and skip duplicate content.\n"
-            "• Categorize them and store the originals securely in your Media Vault.\n\n"
+            "• Categorize them and store originals in your Media Vault.\n\n"
             "Standing by for your files, Sir."
         )
 
-    # 4. Greetings
-    greetings = ["hi", "hello", "hey", "good morning", "good evening", "good afternoon", "greetings"]
+    # 5. Greetings
+    greetings = ["hi", "hello", "hey", "good morning", "good evening", "good afternoon", "greetings", "be10x"]
     if lower_txt in greetings or any(lower_txt.startswith(g) for g in ["hi ", "hello ", "hey "]):
         now_hour = datetime.now(timezone.utc).astimezone().hour
         time_greeting = "Good morning" if now_hour < 12 else ("Good afternoon" if now_hour < 17 else "Good evening")
         return f"{time_greeting}, Sir. ARIA online. What would you like to work on today?"
 
-    # 5. Time & Date Queries
+    # 6. Time & Date Queries
     if any(k in lower_txt for k in ["what time is it", "current time", "time now", "what's the time"]):
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')}, Sir."
@@ -375,7 +336,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         return f"Today is {now_ist.strftime('%A, %B %d, %Y')}, Sir."
 
-    # 6. Persistent Location Capture
+    # 7. Persistent Location Capture
     if "i'm in" in lower_txt or "i am in" in lower_txt or "my location is" in lower_txt:
         location_name = re.sub(r".*?(i'm in|i am in|my location is)\s+", "", lower_txt).strip()
         if location_name and mem_col is not None:
@@ -384,44 +345,39 @@ async def process_task(user_text: str, session_id: str) -> str:
                 documents=[f"User current persistent location is {location_name}"],
                 metadatas=[{"type": "location", "value": location_name}]
             )
-            print(f"[LOCATION MEMORY]: Saved persistent location: {location_name}")
-            return f"Location locked as {location_name.title()}, Sir. I have saved this for all future weather and local queries."
+            return f"Location locked as {location_name.title()}, Sir. Saved for all future local queries."
 
-    # 7. Deterministic Calculator
+    # 8. Deterministic Calculator
     if re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', user_text) and any(op in user_text for op in ['+', '-', '*', '/']):
         try:
-            calc_result = eval(user_text)
-            return f"Result: {calc_result}, Sir."
+            return f"Result: {eval(user_text)}, Sir."
         except Exception:
             pass
 
-    # 8. Weather Requests
+    # 9. Weather Requests
     if "weather" in lower_txt:
         loc_query = "Visakhapatnam"
         if mem_col is not None:
             loc_hit = mem_col.get(ids=["user_persistent_location"])
             if loc_hit and loc_hit.get("metadatas") and len(loc_hit["metadatas"]) > 0:
                 loc_query = loc_hit["metadatas"][0].get("value", "Visakhapatnam")
-        
-        print(f"[DETERMINISTIC ROUTER]: Querying live weather for persistent location: {loc_query}")
         res = await tool_mgr.execute_tool("web", f"current weather in {loc_query}", chat_id=session_id)
         return f"{res.get('content', 'Weather data unavailable.')}"
 
-    # 9. Schedule Requests
+    # 10. Schedule Requests
     if any(kw in lower_txt for kw in ["schedule", "task", "reminder", "today"]):
-        print("[DETERMINISTIC ROUTER]: Triggering Schedule Tool directly.")
         res = await tool_mgr.execute_tool("schedule", user_text, chat_id=session_id)
         if res.get("success"):
             return f"{res.get('content')}, Sir."
 
-    # 10. Media Vault & Document Requests
+    # 11. Media Vault & Document Requests ("Search my files", "List documents", etc.)
     media_intent_keywords = [
         "resume", "cv", "portfolio", "pan", "passport", 
-        "certificate", "memo", "marks memo", "pdf", "document", "file", 
-        "download", "licence", "license", "id card", "my file", "send document", "what documents"
+        "certificate", "memo", "pdf", "document", "file", 
+        "download", "licence", "license", "id card", "my file", "send document", 
+        "what documents", "list files", "stored files", "search my files", "list media"
     ]
     if any(keyword in lower_txt for keyword in media_intent_keywords):
-        print(f"[DETERMINISTIC ROUTER]: Triggering Media/Document Tool directly.")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
         if not res.get("success") and not res.get("metadata", {}).get("requires_clarification"):
             PENDING_STATES[session_id] = {"tool": "media", "query": user_text}
@@ -434,26 +390,15 @@ async def process_task(user_text: str, session_id: str) -> str:
     reflection_eng = ReflectionEngine(chats_col, media_col)
     correction = await reflection_eng.evaluate_feedback(user_text, session_id)
     if correction and correction.get("needs_retry"):
-        print("[REFLECTION TRIGGERED]: Retrying media vault search...")
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
         return f"{correction['explanation']}\n\n{res.get('content', '')}"
-
-    affirmative_triggers = ["yes", "yep", "sure", "go ahead", "send it", "do it", "please do"]
-    if lower_txt in affirmative_triggers and session_id in PENDING_STATES:
-        pending = PENDING_STATES.pop(session_id)
-        print(f"[STATEFUL INTENT]: Executing pending action: {pending}")
-        if pending.get("tool") == "media":
-            res = await tool_mgr.execute_tool("media", pending["query"], chat_id=session_id)
-            return res.get("content", "Action completed, Sir.")
 
     aria_brain = get_brain()
     cached_brain_hit = aria_brain.search_brain(user_text)
     if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
-        print(f"[BRAIN HIT]: Serving high-confidence answer (Confidence: {cached_brain_hit['confidence']})")
         return cached_brain_hit["answer"]
 
-    print("[BRAIN MISS or LOW CONFIDENCE]: Proceeding to autonomous planner & reasoner...")
-
+    print("[PLANNING STAGE]: Running single-pass action planner...")
     conv_mgr = ConversationManager(chats_col)
     session_context = await conv_mgr.build_session_context(session_id)
     available_tools_desc = tool_mgr.describe_tools()
@@ -461,37 +406,29 @@ async def process_task(user_text: str, session_id: str) -> str:
     executed_tools = []
     structured_results = {"memory": {}, "documents": {}, "web": {}, "media": {}, "schedule": {}}
 
-    for i in range(4):  
-        print(f"[STAGE 1] Running action planner (iteration {i+1})...")
-        plan = await action_planner(user_text, session_context, available_tools_desc, executed_tools, llm_router)
-        tools_to_run = plan.get("tools", [])
-        action = plan.get("action", "retrieve")
+    # Single-pass plan execution to prevent redundant loops
+    plan = await action_planner(user_text, session_context, available_tools_desc, executed_tools, llm_router)
+    tools_to_run = plan.get("tools", [])
+    action = plan.get("action", "retrieve")
 
-        if action == "save" and any(w in lower_txt for w in ["remember", "my ", "i like"]):
-            if mem_col is not None:
-                await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
-            return "Information stored permanently in your vector vault, Sir."
+    if action == "save" and any(w in lower_txt for w in ["remember", "my ", "i like"]):
+        if mem_col is not None:
+            await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
+        return "Information stored permanently in your vector vault, Sir."
 
-        if not tools_to_run or set(tools_to_run).issubset(set(executed_tools)):
-            print("[STAGE 1] Planner loop terminated: No new tools required or duplicate plan detected.")
-            break
+    for t_name in tools_to_run:
+        if t_name not in executed_tools:
+            print(f"[TOOL EXECUTION]: {t_name}")
+            result = await tool_mgr.execute_tool(t_name, user_text, chat_id=session_id)
+            structured_results[t_name] = result
+            executed_tools.append(t_name)
 
-        for t_name in tools_to_run:
-            if t_name not in executed_tools:
-                print(f"[STAGE 2] Executing tool: {t_name}")
-                result = await tool_mgr.execute_tool(t_name, user_text, chat_id=session_id)
-                structured_results[t_name] = result
-                executed_tools.append(t_name)
-
-    print("[STAGE 3] Invoking reasoner...")
+    print("[REASONER STAGE]: Synthesizing response...")
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
     has_valid_source = any(res.get("success") for res in structured_results.values())
     if has_valid_source:
-        is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
-        knowledge_type = "DYNAMIC" if is_time_sensitive else "STATIC"
-        
         aria_brain.store_knowledge(
             question=user_text,
             answer=cleaned,
@@ -501,11 +438,8 @@ async def process_task(user_text: str, session_id: str) -> str:
             source="Verified Tool/AI",
             confidence=0.96,
             verified=True,
-            knowledge_type=knowledge_type
+            knowledge_type="DYNAMIC"
         )
-        print("[LEARNING ENGINE]: Verified response successfully stored in Brain.")
-    else:
-        print("[LEARNING ENGINE]: Skipping brain storage — response lacked verified tool backing.")
 
     if chats_col is not None:
         async def save_chat():
@@ -516,8 +450,8 @@ async def process_task(user_text: str, session_id: str) -> str:
                     "aria_reply": cleaned,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
-            except Exception as e:
-                print(f"[DB Log Error]: {e}")
+            except Exception:
+                pass
         asyncio.create_task(save_chat())
 
     return cleaned
@@ -528,7 +462,6 @@ async def telegram_webhook(req: Request):
     if token is None: return {"status": "no token"}
     try:
         data = await req.json()
-        print(f"[WEBHOOK RECEIVED]: {data}")
         msg = data.get("message", {})
         chat_id = msg.get("chat", {}).get("id")
         text = msg.get("text", "").strip()
@@ -541,7 +474,6 @@ async def telegram_webhook(req: Request):
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": reply_text}
             )
-        print(f"[WEBHOOK REPLIED SUCCESSFULLY] to chat_id {chat_id}")
         return {"status": "ok"}
     except Exception:
         traceback.print_exc()
