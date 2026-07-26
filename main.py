@@ -31,7 +31,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 app = FastAPI()
 
 # -------------------------------------------------------------
-# ROBUST MULTI-PROVIDER TIERED AI ROUTER (FIXED)
+# ROBUST MULTI-PROVIDER TIERED AI ROUTER
 # -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
@@ -106,7 +106,6 @@ class MistralProvider(LLMProvider):
         async with httpx.AsyncClient() as client:
             for attempt in range(2):
                 try:
-                    # FIXED: Added correct 'api.' subdomain
                     res = await client.post(
                         "https://api.mistral.ai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {self.client_key}", "Content-Type": "application/json"},
@@ -233,8 +232,11 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
+# Stateful conversational follow-up memory
+PENDING_STATES = {}
+
 # -------------------------------------------------------------
-# TASK PROCESSING PIPELINE WITH EXPANDED INTENT BYPASS
+# TASK PROCESSING PIPELINE
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
@@ -253,7 +255,16 @@ async def process_task(user_text: str, session_id: str) -> str:
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
         return f"{correction['explanation']}\n\n{res.get('content', '')}"
 
-    # 2. EXPANDED DETERMINISTIC INTENT ENGINE (Zero-Token Handlers & Short Replies)
+    # 2. STATEFUL FOLLOW-UP INTENT HANDLER ("Yes", "Send it", etc.)
+    affirmative_triggers = ["yes", "yep", "sure", "go ahead", "send it", "do it", "please do"]
+    if lower_txt in affirmative_triggers and session_id in PENDING_STATES:
+        pending = PENDING_STATES.pop(session_id)
+        print(f"[STATEFUL INTENT]: Executing pending action: {pending}")
+        if pending.get("tool") == "media":
+            res = await tool_mgr.execute_tool("media", pending["query"], chat_id=session_id)
+            return res.get("content", "Action completed, Sir.")
+
+    # 3. DETERMINISTIC INTENT ENGINE (Zero-Token Handlers)
     zero_token_responses = {
         "hello": "Greetings, Sir. How may I assist you today?",
         "hi": "Hello, Sir. ARIA systems online.",
@@ -265,13 +276,13 @@ async def process_task(user_text: str, session_id: str) -> str:
         "good job": "Thank you, Sir. I aim to please.",
         "good morning": "Good morning, Sir. Systems are optimal.",
         "good evening": "Good evening, Sir. Ready when you are.",
-        "yes": "Understood, Sir. Proceeding.",
         "no": "Understood, Sir. Aborting.",
         "okay": "Standing by for further instructions, Sir.",
         "ok": "Standing by, Sir.",
         "continue": "Proceeding as requested, Sir."
     }
     if lower_txt in zero_token_responses:
+        PENDING_STATES.pop(session_id, None)
         print("[INTENT BYPASS] Zero-Token response triggered.")
         return zero_token_responses[lower_txt]
 
@@ -289,13 +300,17 @@ async def process_task(user_text: str, session_id: str) -> str:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')} on {now_ist.strftime('%A, %B %d, %Y')}."
 
-    # 3. STRICT INTENT DETECTION FOR MEDIA & SCHEDULE
-    media_intent_patterns = ["resume", "cv", "portfolio", "my file", "send document", "download pdf"]
-    if any(pattern in lower_txt for pattern in media_intent_patterns):
-        print("[INTENT BYPASS] Strict Media Tool trigger.")
+    # 4. BROAD MEDIA & DOCUMENT INTENT BYPASS
+    media_intent_keywords = [
+        "resume", "cv", "portfolio", "aadhar", "aadhaar", "pan", "certificate", 
+        "pdf", "document", "file", "download", "my file", "send document"
+    ]
+    if any(keyword in lower_txt for keyword in media_intent_keywords):
+        print(f"[INTENT BYPASS] Broad Media/Document Tool trigger for query: '{user_text}'")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
-        if res.get("success") or res.get("metadata", {}).get("requires_clarification"):
-            return res.get("content")
+        if not res.get("success"):
+            PENDING_STATES[session_id] = {"tool": "media", "query": user_text}
+        return res.get("content")
 
     if any(kw in lower_txt for kw in ["schedule", "task", "reminder", "today"]):
         print("[INTENT BYPASS] Triggering Schedule Tool directly.")
@@ -303,7 +318,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         if res.get("success"):
             return res.get("content")
 
-    # 4. BRAIN SEARCH WITH STRICT CONFIDENCE THRESHOLD (> 0.92)
+    # 5. BRAIN SEARCH WITH STRICT CONFIDENCE THRESHOLD (> 0.92)
     aria_brain = get_brain()
     cached_brain_hit = aria_brain.search_brain(user_text)
     if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
@@ -346,7 +361,7 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # 5. ANTI-HALLUCINATION GUARD: Only store if verified by tools
+    # 6. ANTI-HALLUCINATION GUARD: Only store if verified by tools
     has_valid_source = any(res.get("success") for res in structured_results.values())
     if has_valid_source:
         is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
