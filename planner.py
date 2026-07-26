@@ -26,7 +26,7 @@ Return ONLY a valid JSON object:
 {{
   "goal": "short description of objective",
   "action": "retrieve|save|delete|dispatch|analyze|schedule|search",
-  "tools": ["memory", "documents", "web"]
+  "tools": ["memory", "documents", "web", "media", "schedule"]
 }}
 
 If no further tools are needed, return an empty list for tools:
