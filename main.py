@@ -88,7 +88,9 @@ def get_chroma():
 
 def get_collections():
     client = get_chroma()
-    return client.get_or_create_collection(name="documents"), client.get_or_create_collection(name="memory")
+    docs_col = client.get_or_create_collection(name="documents")
+    mem_col = client.get_or_create_collection(name="memory")
+    return docs_col, mem_col
 
 def get_mongo_collections():
     db = get_mongo()
@@ -128,9 +130,9 @@ async def process_task(user_text: str, session_id: str) -> str:
         tools_to_run = plan.get("tools", [])
         action = plan.get("action", "retrieve")
 
-        # Handle Action Types (e.g. save/delete/dispatch)
         if action == "save" and any(w in user_text.lower() for w in ["remember", "my ", "i like"]):
-            await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
+            if mem_col is not None:
+                await mem_col.add(ids=[str(datetime.now().timestamp())], documents=[user_text])
             return "Information stored permanently in your vector vault, Sir."
 
         if not tools_to_run:
@@ -154,13 +156,13 @@ async def process_task(user_text: str, session_id: str) -> str:
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
-    if not TELEGRAM_TOKEN: return {"status": "no token"}
+    if TELEGRAM_TOKEN is None: return {"status": "no token"}
     try:
         data = await req.json()
         msg = data.get("message", {})
         chat_id = msg.get("chat", {}).get("id")
         text = msg.get("text", "").strip()
-        if not chat_id or not text: return {"status": "ok"}
+        if chat_id is None or not text: return {"status": "ok"}
 
         if text.lower() == "/start":
             async with httpx.AsyncClient() as client:
