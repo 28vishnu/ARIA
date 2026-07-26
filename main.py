@@ -7,15 +7,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from platform.logging_config import setup_logging
-from platform.bootstrap import bootstrap_application
-from platform.dependency_injection import RequestContext
+from core.logging_config import setup_logging
+from core.bootstrap import bootstrap_application
+from core.dependency_injection import RequestContext
 from personality.response import SystemResponse
 
 setup_logging("INFO")
 logger = logging.getLogger("aria")
 
-# 1. Managed Background Task Manager (Refinement #7)
 class BackgroundTaskManager:
     def __init__(self):
         self.tasks = set()
@@ -33,16 +32,13 @@ class BackgroundTaskManager:
 
 background_manager = BackgroundTaskManager()
 
-# 2. FastAPI Lifespan Context Manager (Refinement #1 & #2)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup Sequence
     registry = await bootstrap_application()
     app.state.registry = registry
     app.state.bg_manager = background_manager
     logger.info("[Lifespan] ARIA Platform successfully started.")
     yield
-    # Shutdown Sequence (Refinement #2)
     logger.info("[Lifespan] Shutting down ARIA platform resources...")
     await background_manager.shutdown()
     
@@ -73,7 +69,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 3. Request ID & Logging Middleware (Refinement #12)
 @app.middleware("http")
 async def add_request_metadata(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
@@ -81,7 +76,6 @@ async def add_request_metadata(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     return response
 
-# 4. Global Exception Handler (Refinement #12)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("[GlobalExceptionHandler] Unhandled exception occurred: %s", exc)
@@ -106,19 +100,15 @@ def build_request_context(session_id: str, request_id: str, registry) -> Request
     )
 
 async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> str:
-    """Executes the task using Request-Scoped Dependency Injection and SkillManager routing."""
     registry = app_state.registry
     ctx = build_request_context(session_id, request_id, registry)
 
-    # 1. Managed non-blocking memory extraction (Refinement #7)
     if ctx.memory_engine is not None:
         app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
 
-    # 2. Retrieve Session Context
     session = ctx.session_manager.get_or_create_session(session_id)
     base_context = {"app_state": app_state, "session": session}
 
-    # 3. Strict SkillManager Routing (Refinement #4)
     skill_response = await ctx.skill_manager.route_and_execute(user_text, base_context)
     
     if skill_response.success and skill_response.confidence >= 0.85:
@@ -130,14 +120,12 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         )
         return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
 
-    # 4. Planner + Executor Orchestration Fallback (Refinement #5 & #10)
     plan = await ctx.planner.create_plan(user_text, base_context)
     exec_result = await ctx.executor.execute_plan(plan, base_context)
 
     final_data = exec_result.get("task_outputs", {})
     success = exec_result.get("success", False)
 
-    # Combined Confidence Scoring (Refinement #10)
     combined_confidence = round((plan.confidence + skill_response.confidence) / 2.0, 2)
 
     sys_res = SystemResponse(
@@ -177,7 +165,6 @@ async def telegram_webhook(req: Request):
 
 @app.get("/health")
 async def health(req: Request):
-    """Extended comprehensive health telemetry endpoint (Refinement #9)."""
     registry = req.app.state.registry
     checker = registry.get("health_checker")
     base_health = await checker.check_readiness()
