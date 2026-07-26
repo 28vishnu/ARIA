@@ -495,13 +495,14 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 
 DYNAMIC DIRECTIVES:
 - FILE DISPATCH vs DOCUMENT READING: 
-  * If the user wants to GET/RECEIVE/DOWNLOAD a document file, call 'send_file_from_vault'.
-  * If the user asks a question ABOUT what is inside a document or asks to read a specific point, call 'query_document_vault'.
-- NO HARDCODED DEFAULTS: Match document requests carefully using user keywords (e.g. 'aadhar', 'resume', 'certificate').
+  * If the user wants to GET/RECEIVE/DOWNLOAD a document or PDF file, call 'send_file_from_vault'.
+  * If the user asks a question ABOUT what is inside a document, asks for details from a document, or asks for diagnostic telemetry, call 'query_document_vault' or 'get_system_diagnostics'.
+- PRIVACY & DIRECT DISPATCH FOR ID DOCUMENTS:
+  * For requests regarding sensitive identity documents (like Aadhaar card), summarize non-sensitive text or offer/execute sending the document PDF directly via 'send_file_from_vault'.
 - ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Never use scripted lines like "Good day Mr. Saketh".
 - FORMATTING: Keep tone crisp, witty, intelligent, and natural."""
 
-    reply_text = "All systems operational, Sir."
+    reply_text = ""
 
     if groq_client:
         try:
@@ -524,7 +525,6 @@ DYNAMIC DIRECTIVES:
 
                     if fn_name == "send_file_from_vault":
                         q_term = fn_args.get("file_query", "")
-                        # Fallback query extraction from user prompt if tool args are empty
                         if not q_term:
                             for term in ["aadhar", "resume", "certificate", "cs50", "passport", "guide"]:
                                 if term in cmd: q_term = term; break
@@ -532,8 +532,7 @@ DYNAMIC DIRECTIVES:
 
                     elif fn_name == "query_document_vault":
                         doc_text = await query_document_vault(fn_args.get("search_query", user_text))
-                        # Second-pass call to answer user query using retrieved document text
-                        qa_prompt = f"The user asked: '{user_text}'\n\nDOCUMENT CONTENTS:\n{doc_text}\n\nProvide a precise, direct answer based strictly on the document text above. Address the user as Sir."
+                        qa_prompt = f"The user asked: '{user_text}'\n\nDOCUMENT CONTENTS:\n{doc_text}\n\nProvide a precise, direct answer based on the document text above. Address the user as Sir."
                         qa_comp = groq_client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
@@ -555,7 +554,7 @@ DYNAMIC DIRECTIVES:
         except Exception as e:
             print(f"[Groq Execution Error]: {e}")
 
-    if reply_text == "All systems operational, Sir." and gemini_client:
+    if not reply_text and gemini_client:
         try:
             def _gemini_sync():
                 res = gemini_client.models.generate_content(
@@ -565,6 +564,9 @@ DYNAMIC DIRECTIVES:
             reply = await asyncio.to_thread(_gemini_sync)
             if reply and len(reply.strip()) > 0: reply_text = reply.strip()
         except Exception as e: print(f"[Gemini Error]: {e}")
+
+    if not reply_text:
+        reply_text = "All systems operational, Sir."
 
     cleaned_reply = clean_response_text(reply_text)
     asyncio.create_task(log_chat_interaction(user_text, cleaned_reply, session_id))
@@ -667,12 +669,12 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Context Engine Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Engine Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"<h1>ARIA Context Engine Online</h1>"
+    return f"<h1>ARIA Engine Online</h1>"
 
 # -------------------------------------------------------------
 # 8. WEBSOCKET STREAMING & UPLOAD ROUTE
