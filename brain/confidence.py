@@ -1,5 +1,4 @@
 def adjust_confidence(current_confidence: float, feedback: str) -> float:
-    """Adjusts knowledge confidence based on explicit user feedback."""
     fb = feedback.lower()
     if any(w in fb for w in ["wrong", "incorrect", "false", "bad"]):
         return max(0.1, round(current_confidence - 0.2, 2))
