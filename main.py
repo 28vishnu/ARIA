@@ -20,6 +20,7 @@ from planner import action_planner
 from tool_manager import ToolManager
 from reasoner import reason
 from conversation_manager import ConversationManager
+from brain_manager import AriaBrain
 
 # Provider SDKs
 from groq import Groq
@@ -35,6 +36,9 @@ from apscheduler.triggers.date import DateTrigger
 
 app = FastAPI()
 
+# -------------------------------------------------------------
+# 1. LLM PROVIDER ABSTRACTION LAYER (AUTOMATIC FALLBACK)
+# -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         raise NotImplementedError
@@ -89,9 +93,13 @@ class FallbackRouter(LLMProvider):
 
 llm_router = FallbackRouter()
 
+# -------------------------------------------------------------
+# 2. CLIENT INITIALIZATION & GETTERS
+# -------------------------------------------------------------
 _tavily_client = None
 _mongo_client = None
 _chroma_client = None
+_aria_brain = None
 
 def get_tavily():
     global _tavily_client
@@ -118,6 +126,12 @@ def get_chroma():
         _chroma_client = chromadb.PersistentClient(path="./aria_vectors")
     return _chroma_client
 
+def get_brain():
+    global _aria_brain
+    if _aria_brain is None:
+        _aria_brain = AriaBrain(get_chroma())
+    return _aria_brain
+
 def get_collections():
     client = get_chroma()
     return client.get_or_create_collection(name="documents"), client.get_or_create_collection(name="memory")
@@ -129,6 +143,20 @@ def get_mongo_collections():
         return db_inst["personal_memory"], db_inst["media_vault"], db_inst["chat_history"], db_inst["tasks_schedule"]
     return None, None, None, None
 
+def get_embedding(text: str) -> list[float]:
+    gem = get_gemini_client_direct()
+    if not gem: return [0.0] * 768
+    try:
+        res = gem.models.embed_content(model="text-embedding-004", contents=text[:2000])
+        return res.embedding.values
+    except Exception:
+        return [0.0] * 768
+
+def get_gemini_client_direct():
+    key = os.getenv("GEMINI_API_KEY")
+    if not key: return None
+    return genai.Client(api_key=key)
+
 scheduler = AsyncIOScheduler()
 
 def clean_text(raw: str) -> str:
@@ -139,6 +167,9 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
+# -------------------------------------------------------------
+# 3. CORE TASK PROCESSING & BRAIN LEARNING LOOP
+# -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower()
@@ -150,10 +181,9 @@ async def process_task(user_text: str, session_id: str) -> str:
     tavily = get_tavily()
     docs_col, mem_col = get_collections()
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
-
     tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
 
-    # 2. Deterministic Intent Bypasses (Guaranteed Action execution even if AI Quotas are Exceeded)
+    # 2. Deterministic Intent Bypasses (Files & Schedules)
     if any(kw in lower_txt for kw in ["resume", "cv", "pdf", "file", "document", "send"]):
         print("[INTENT BYPASS] Triggering Media Vault Tool directly.")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
@@ -165,6 +195,15 @@ async def process_task(user_text: str, session_id: str) -> str:
         res = await tool_mgr.execute_tool("schedule", user_text, chat_id=session_id)
         if res.get("success"):
             return res.get("content")
+
+    # 3. BRAIN SEARCH FIRST (Zero Token Check)
+    aria_brain = get_brain()
+    cached_brain_hit = aria_brain.search_brain(user_text, get_embedding)
+    if cached_brain_hit:
+        print(f"[BRAIN HIT]: Serving answer instantly from persistent knowledge base (Confidence: {cached_brain_hit['confidence']})")
+        return cached_brain_hit["answer"]
+
+    print("[BRAIN MISS]: Proceeding to autonomous planner & reasoner...")
 
     conv_mgr = ConversationManager(chats_col)
     session_context = await conv_mgr.build_session_context(session_id)
@@ -199,7 +238,20 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # Fixed background task execution for MongoDB insert_one
+    # 4. LEARNING LOOP: Automatically store new general knowledge in the Brain
+    is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
+    expiration_days = 1 if is_time_sensitive else None
+    
+    aria_brain.store_knowledge(
+        question=user_text,
+        answer=cleaned,
+        source="AI",
+        confidence=0.95,
+        embedding_fn=get_embedding,
+        expires_in_days=expiration_days
+    )
+
+    # Background task execution for MongoDB chat logging
     if chats_col is not None:
         async def save_chat():
             try:
@@ -215,6 +267,9 @@ async def process_task(user_text: str, session_id: str) -> str:
 
     return cleaned
 
+# -------------------------------------------------------------
+# 4. TELEGRAM WEBHOOK & HEALTH ENDPOINTS
+# -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
     token = os.getenv("TELEGRAM_TOKEN")
@@ -243,9 +298,9 @@ async def telegram_webhook(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Multi-Provider Fault-Tolerant Router"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Multi-Provider Brain-Enhanced Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Multi-Provider Fault-Tolerant Core Active</h1>"
+    return "<h1>ARIA Brain-Enhanced Autonomous Core Active</h1>"
