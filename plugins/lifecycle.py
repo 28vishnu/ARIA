@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, Any
 from plugins.base import BasePlugin
 
 logger = logging.getLogger("aria")
