@@ -47,7 +47,6 @@ GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 ASSISTANT_NAME = "ARIA"
 USER_FULL_NAME = "N. Vishnu Saketh"
 
-# In-Memory Cache Variables
 RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
 RAM_SCHEDULE_CACHE = []
 RAM_RECENT_CHATS = []
@@ -59,7 +58,6 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# CLEAN MONGODB CLIENT FOR MOTOR / PYMONGO 4+
 def init_mongo_client():
     if not MONGODB_URI: return None
     try:
@@ -77,7 +75,6 @@ def init_mongo_client():
 mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 
-# MongoDB Collections
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
@@ -144,10 +141,43 @@ async def sync_ram_cache():
     return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
-# 3. AUTONOMOUS J.A.R.V.I.S. TOOLS & SECURITY ENGINE
+# 3. DIRECT FILE DISPATCH & AUTONOMOUS TOOLS
 # -------------------------------------------------------------
+async def send_file_from_vault(file_query: str, chat_id: str) -> str:
+    """Finds the matching document in MongoDB and dispatches the raw file directly via Telegram."""
+    if mongo_media_col is None:
+        return "Vault database is currently offline, Sir."
+
+    try:
+        q_regex = re.compile(file_query.strip(), re.IGNORECASE)
+        # Search by file name first, then content preview
+        target_doc = await mongo_media_col.find_one({"file_name": q_regex})
+        if not target_doc:
+            target_doc = await mongo_media_col.find_one({"caption": q_regex})
+
+        if not target_doc:
+            return f"I searched the vault, Sir, but could not find any document matching '{file_query}'."
+
+        fname = target_doc.get("file_name", "document.pdf")
+        mtype = target_doc.get("media_type", "document")
+        raw_bytes = base64.b64decode(target_doc["b64_payload"])
+
+        endpoint = "sendVoice" if mtype == "voice" else ("sendVideo" if mtype == "video" else ("sendPhoto" if mtype == "image" else "sendDocument"))
+        param_name = "voice" if mtype == "voice" else ("video" if mtype == "video" else ("photo" if mtype == "image" else "document"))
+
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{endpoint}",
+                data={"chat_id": chat_id, "caption": f"Here is your document: '{fname}', Sir."},
+                files={param_name: (fname, raw_bytes, "application/octet-stream")}
+            )
+
+        return f"File '{fname}' dispatched successfully to your Telegram, Sir."
+    except Exception as e:
+        print(f"[File Dispatch Error]: {e}")
+        return f"Encountered an issue dispatching '{file_query}', Sir."
+
 async def log_security_breach(unauthorized_id: str, raw_msg: str):
-    """Logs security breach attempts and alerts Master via Telegram immediately."""
     if mongo_security_col is not None:
         try:
             await mongo_security_col.insert_one({
@@ -201,17 +231,13 @@ async def create_time_reminder(minutes: int, task_desc: str) -> str:
     return f"Reminder established for '{task_desc}' in {minutes} minute{'s' if minutes > 1 else ''}, Sir."
 
 async def query_document_vault(search_query: str) -> str:
-    """Document Intelligence Tool: Deep searches inside all uploaded PDFs and files in MongoDB."""
     if mongo_media_col is None: return "Document vault unavailable, Sir."
     try:
         q_regex = re.compile(search_query, re.IGNORECASE)
-        docs = await mongo_media_col.find({"caption": q_regex}).to_list(length=5)
-        if not docs:
-            # Fallback: get last 3 uploaded documents
-            docs = await mongo_media_col.find({"media_type": "document"}).sort("_id", -1).to_list(length=3)
+        docs = await mongo_media_col.find({"$or": [{"file_name": q_regex}, {"caption": q_regex}]}).to_list(length=5)
 
         if not docs:
-            return "No matching document contents found in your vault, Sir."
+            return f"No document content matching '{search_query}' found in your vault, Sir."
 
         results = []
         for d in docs:
@@ -222,7 +248,6 @@ async def query_document_vault(search_query: str) -> str:
         return f"Document query error: {str(e)}"
 
 async def get_system_diagnostics() -> str:
-    """Returns J.A.R.V.I.S. health metrics, vault record counts, and active tasks."""
     mem_count = await mongo_memory_col.count_documents({}) if mongo_memory_col is not None else 0
     task_count = await mongo_tasks_col.count_documents({}) if mongo_tasks_col is not None else 0
     doc_count = await mongo_media_col.count_documents({}) if mongo_media_col is not None else 0
@@ -317,7 +342,7 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
     return ""
 
 # -------------------------------------------------------------
-# 4. PROACTIVE DAEMON (TASK CHECK-INS & URGENT EMAIL ALERTS)
+# 4. PROACTIVE DAEMON
 # -------------------------------------------------------------
 async def autonomous_proactive_checkin():
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
@@ -343,9 +368,23 @@ async def autonomous_proactive_checkin():
         except Exception: pass
 
 # -------------------------------------------------------------
-# 5. DYNAMIC FUNCTION-CALLING HYBRID INFERENCE ENGINE
+# 5. FUNCTION-CALLING INFERENCE ENGINE
 # -------------------------------------------------------------
 GROQ_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "send_file_from_vault",
+            "description": "Sends the actual binary PDF/file to the user's Telegram chat when they ask to receive, download, or get a document/resume.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_query": {"type": "string", "description": "Keyword/filename e.g. 'resume', 'certificate', 'saketh'"}
+                },
+                "required": ["file_query"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -395,11 +434,11 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_document_vault",
-            "description": "Deep searches inside uploaded PDF documents, project specs, or study records.",
+            "description": "Reads text content inside uploaded PDF documents to answer study/project questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "search_query": {"type": "string", "description": "Keyword or topic to search inside document vault"}
+                    "search_query": {"type": "string", "description": "Keyword or topic to read inside documents"}
                 },
                 "required": ["search_query"]
             }
@@ -418,7 +457,7 @@ GROQ_TOOLS = [
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. SECURITY CONFIRMATION DIALOGUE
+    # Security Confirmation Dialogue
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
         if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "clear"]):
@@ -432,7 +471,6 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
         return "Security Protocol Alert: This will permanently wipe all vault records, schedules, and memory. Do you authorize this action, Sir?"
 
-    # 2. SYNC RAM CACHE & CONSTRUCT CONTEXT
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
     temporal_context = get_current_temporal_context()
     weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185") if any(k in cmd for k in ["weather", "temp", "rain"]) else ""
@@ -452,14 +490,14 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {search_context}
 
 DYNAMIC DIRECTIVES:
-- USE TOOLS FREELY: Call tools immediately when the user asks to remind them, schedule tasks, recall facts, search documents, or inspect system diagnostics.
+- FILE REQUEST RULE: If the user asks to receive, download, or get a document/resume file, call 'send_file_from_vault' with the file query immediately.
+- USE TOOLS FREELY: Call functions automatically for reminders, tasks, document reading, and system diagnostics.
 - ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Never use scripted lines like "Good day Mr. Saketh".
 - FORMATTING: Never output bold asterisks (*), extra commas, or double spaces. Keep tone crisp, witty, intelligent, and natural.
 - CONCISENESS: Keep conversational responses brief (1-2 sentences max)."""
 
     reply_text = "All systems operational, Sir."
 
-    # Primary Function-Calling Execution (Groq Llama 3.3 70B)
     if groq_client:
         try:
             def _groq_exec():
@@ -479,7 +517,9 @@ DYNAMIC DIRECTIVES:
                     fn_name = tool_call.function.name
                     fn_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
 
-                    if fn_name == "create_time_reminder":
+                    if fn_name == "send_file_from_vault":
+                        reply_text = await send_file_from_vault(fn_args.get("file_query", "resume"), session_id)
+                    elif fn_name == "create_time_reminder":
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
                     elif fn_name == "save_scheduled_task":
                         reply_text = await save_scheduled_task(fn_args.get("task"), fn_args.get("timing"))
@@ -495,7 +535,6 @@ DYNAMIC DIRECTIVES:
         except Exception as e:
             print(f"[Groq Execution Error]: {e}")
 
-    # Fallback to Gemini 2.0 Flash
     if reply_text == "All systems operational, Sir." and gemini_client:
         try:
             def _gemini_sync():
@@ -512,7 +551,7 @@ DYNAMIC DIRECTIVES:
     return cleaned_reply
 
 # -------------------------------------------------------------
-# 6. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH & INTRUSION DEFENSE)
+# 6. TELEGRAM WEBHOOK
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -531,7 +570,6 @@ async def telegram_webhook(req: Request):
 
         if not chat_id: return {"status": "no chat_id"}
 
-        # SECURITY INTRUSION CHECK
         if ALLOWED_TELEGRAM_USER_ID and str(from_user_id) != str(ALLOWED_TELEGRAM_USER_ID):
             await log_security_breach(from_user_id, text or "Non-text payload")
             return {"status": "unauthorized"}
@@ -565,39 +603,6 @@ async def telegram_webhook(req: Request):
             return {"status": "ok"}
 
         if text:
-            cmd = text.lower()
-            media_triggers = [
-                "give my voice note", "send voice clip", "get my video", "send my resume", 
-                "give resume", "send resume", "give that document", "save in my phone", 
-                "send document", "send pdf", "download my resume", "give me the pdf", "send file"
-            ]
-            
-            if any(trigger in cmd for trigger in media_triggers):
-                target_doc = None
-                if mongo_media_col is not None:
-                    target_doc = await mongo_media_col.find_one({}, sort=[("_id", -1)])
-
-                async with httpx.AsyncClient() as client:
-                    if target_doc:
-                        raw_bytes = base64.b64decode(target_doc["b64_payload"])
-                        fname = target_doc.get("file_name", "file.dat")
-                        mtype = target_doc.get("media_type", "document")
-                        
-                        endpoint = "sendVoice" if mtype == "voice" else ("sendVideo" if mtype == "video" else ("sendPhoto" if mtype == "image" else "sendDocument"))
-                        param_name = "voice" if mtype == "voice" else ("video" if mtype == "video" else ("photo" if mtype == "image" else "document"))
-
-                        await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{endpoint}",
-                            data={"chat_id": chat_id, "caption": f"Retrieved {mtype}: '{fname}' Sir."},
-                            files={param_name: (fname, raw_bytes, "application/octet-stream")}
-                        )
-                    else:
-                        await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                            json={"chat_id": chat_id, "text": "No matching media files found in the vault, Sir."}
-                        )
-                return {"status": "ok"}
-
             reply_text = await process_autonomous_task(text, str(chat_id))
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
@@ -611,7 +616,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Advanced Defense & Document Core]: Fully Active.")
+    print("[J.A.R.V.I.S. Direct File Dispatch Core]: Fully Active.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -642,7 +647,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA Advanced J.A.R.V.I.S. Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA Direct File Dispatcher Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
