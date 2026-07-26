@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisc
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
+from docx import Document
+import openpyxl
 import edge_tts
 
 # Provider SDKs
@@ -19,7 +21,7 @@ from google import genai
 from tavily import TavilyClient
 import motor.motor_asyncio
 
-# ChromaDB Vector Database SDK
+# ChromaDB & Embeddings SDK
 import chromadb
 from chromadb.utils import embedding_functions
 
@@ -73,16 +75,22 @@ mongo_db = mongo_client["aria_db"] if mongo_client else None
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
-mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
+mongo_chats_col = mongo_db["chat_history"] if mongo_media_col is not None else None
 mongo_reminders_col = mongo_db["reminders"] if mongo_db is not None else None
 mongo_security_col = mongo_db["security_logs"] if mongo_db is not None else None
 
 scheduler = AsyncIOScheduler()
 
-# -----------------------
-# CHROMA VECTOR DATABASE
-# -----------------------
-embedding_fn = embedding_functions.DefaultEmbeddingFunction()
+# -------------------------------------------------------------
+# 2. CHROMA VECTOR DATABASE & BETTER EMBEDDINGS (BAAI bge-small)
+# -------------------------------------------------------------
+try:
+    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="BAAI/bge-small-en-v1.5"
+    )
+except Exception:
+    embedding_fn = embedding_functions.DefaultEmbeddingFunction()
+
 chroma_client = chromadb.PersistentClient(path="./aria_vectors")
 
 documents_collection = chroma_client.get_or_create_collection(
@@ -96,7 +104,7 @@ memory_collection = chroma_client.get_or_create_collection(
 )
 
 # -------------------------------------------------------------
-# 2. SANITIZATION, ENCRYPTION & TEMPORAL ENGINE
+# 3. UNIVERSAL DOCUMENT PARSERS (PDF, DOCX, XLSX, TXT)
 # -------------------------------------------------------------
 def clean_response_text(raw_text: str) -> str:
     if not raw_text: return ""
@@ -114,85 +122,108 @@ def get_current_temporal_context() -> str:
     now_ist = now_utc + ist_offset
     return f"\nLIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}\n"
 
-def extract_text_from_pdf(file_bytes: bytes, password: str = None) -> tuple[str, bool]:
+def parse_document_bytes(file_name: str, file_bytes: bytes, password: str = None) -> tuple[str, bool]:
+    fn = file_name.lower()
+    is_encrypted = False
+    text = ""
     try:
-        reader = PdfReader(BytesIO(file_bytes))
-        if reader.is_encrypted:
-            if password:
-                try:
-                    decrypt_success = reader.decrypt(password)
-                    if not decrypt_success:
+        if fn.endswith(".pdf"):
+            reader = PdfReader(BytesIO(file_bytes))
+            if reader.is_encrypted:
+                if password:
+                    try:
+                        decrypt_success = reader.decrypt(password)
+                        if not decrypt_speed := decrypt_success:
+                            return "[INVALID_PASSWORD]", True
+                    except Exception:
                         return "[INVALID_PASSWORD]", True
-                except Exception:
-                    return "[INVALID_PASSWORD]", True
-            else:
-                return "[ENCRYPTED_PDF_LOCKED]", True
+                else:
+                    return "[ENCRYPTED_PDF_LOCKED]", True
+            text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
 
-        text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
-        return text, False
+        elif fn.endswith(".docx"):
+            doc = Document(BytesIO(file_bytes))
+            text = "\n".join([p.text for p in doc.paragraphs if p.text]).strip()
+
+        elif fn.endswith(".xlsx"):
+            wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
+            sheet_texts = []
+            for sheet in wb.sheetnames:
+                ws = wb[sheet]
+                for row in ws.iter_rows(values_only=True):
+                    row_str = " ".join([str(cell) for cell in row if cell is not None])
+                    if row_str: sheet_texts.append(row_str)
+            text = "\n".join(sheet_texts).strip()
+
+        elif fn.endswith(".txt") or fn.endswith(".csv"):
+            text = file_bytes.decode("utf-8", errors="ignore").strip()
+
+        else:
+            text = "Binary File Payload"
     except Exception as e:
-        return f"[PDF Parsing Error: {str(e)}]", False
+        text = f"[Parsing Error: {str(e)}]"
+    return text, is_encrypted
 
-async def sync_ram_cache(user_question: str = ""):
-    global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS, LAST_CACHE_UPDATE
-    
-    facts = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
-    schedules = []
-    chats = []
+# -------------------------------------------------------------
+# 4. MULTI-AGENT PLANNER & GEMINI VISION OCR AGENT
+# -------------------------------------------------------------
+async def ai_planner(user_text: str) -> dict:
+    """AI-driven planner replacing hardcoded keywords."""
+    prompt = f"""Analyze the user request and determine which agents/tools are needed.
+User Request: "{user_text}"
 
-    # Semantic Vector Retrieval via ChromaDB Memory Collection
-    if user_question:
+Return strict JSON format with boolean flags:
+{{
+  "memory": true/false (if asking about prior facts, preferences, past discussions),
+  "documents": true/false (if asking about uploaded PDFs, code, notes, spreadsheets, documents),
+  "vision": true/false (if asking about uploaded images or screenshots),
+  "internet": true/false (if asking for live web search, current news, facts, weather)
+}}"""
+    if groq_client:
         try:
-            mem_results = memory_collection.query(
-                query_texts=[user_question],
-                n_results=10
+            comp = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=150
             )
-            if mem_results and "documents" in mem_results and mem_results["documents"]:
-                for doc_list in mem_results["documents"]:
-                    for d in doc_list:
-                        if d not in facts: facts.append(d)
-        except Exception as e:
-            print(f"[Chroma Memory Query Status]: {e}")
-
-    if mongo_db is not None:
-        try:
-            task_cursor = mongo_tasks_col.find({}).sort("_id", -1)
-            async for tdoc in task_cursor:
-                sch_entry = f"• Task: {tdoc.get('task')} | Slot: {tdoc.get('timing')}"
-                if sch_entry not in schedules: schedules.append(sch_entry)
-
-            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(8)
-            chat_docs = await chat_cursor.to_list(length=8)
-            for cdoc in reversed(chat_docs):
-                chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
-        except Exception as e:
-            print(f"[RAM Sync Status]: {e}")
-
-    RAM_MEMORY_CACHE = facts
-    RAM_SCHEDULE_CACHE = schedules
-    RAM_RECENT_CHATS = chats
-    return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
-
-# -------------------------------------------------------------
-# 3. PLANNER AGENT & VECTOR CHUNKING TOOLS
-# -------------------------------------------------------------
-async def planner(user_text: str) -> dict:
-    plan = {
-        "memory": False,
-        "documents": False,
-        "vision": False,
-        "internet": False
+            raw_res = comp.choices[0].message.content.strip()
+            # Clean markdown JSON block if present
+            raw_res = re.sub(r'```json\s*|\s*```', '', raw_res)
+            return json.loads(raw_res)
+        except Exception:
+            pass
+    # Fallback heuristic planner
+    return {
+        "memory": any(w in user_text.lower() for w in ["remember", "before", "told", "my", "preference", "favorite"]),
+        "documents": any(w in user_text.lower() for w in ["pdf", "certificate", "resume", "document", "file", "sheet"]),
+        "vision": any(w in user_text.lower() for w in ["image", "photo", "screenshot", "picture"]),
+        "internet": any(w in user_text.lower() for w in ["latest", "today", "news", "search", "weather"])
     }
-    txt = user_text.lower()
-    if any(w in txt for w in ["remember", "before", "told", "my", "preference", "favorite", "like"]):
-        plan["memory"] = True
-    if any(w in txt for w in ["pdf", "certificate", "resume", "document", "aadhar", "aadhaar", "pan", "find"]):
-        plan["documents"] = True
-    if any(w in txt for w in ["latest", "today", "news", "search", "who is", "weather"]):
-        plan["internet"] = True
-    return plan
 
-def index_pdf_into_chroma(file_name: str, media_type: str, text: str):
+async def process_image_with_gemini_vision(image_bytes: bytes, file_name: str) -> str:
+    """Uses Gemini Flash Vision for deep multimodal image understanding & OCR."""
+    if not gemini_client:
+        return "Image uploaded successfully."
+    try:
+        def _gem_vision():
+            response = gemini_client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type='image/jpeg',
+                    ),
+                    "Extract all text (OCR), describe visual elements, charts, code, or handwritten notes in detail for semantic indexing."
+                ]
+            )
+            return response.text
+        # Executed via thread to keep async clean
+        description = await asyncio.to_thread(_gem_vision)
+        return description.strip()
+    except Exception as e:
+        return f"Image Vision OCR Error: {str(e)}"
+
+def index_document_into_chroma(file_name: str, media_type: str, text: str):
     try:
         chunks = [text[i:i+500] for i in range(0, len(text), 500)]
         for index, chunk in enumerate(chunks):
@@ -218,24 +249,20 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
             return f"I searched your vault, Sir, but could not locate any document matching '{file_query}'."
 
         fname = target_doc.get("file_name", "document.pdf")
-        mtype = target_doc.get("media_type", "document")
         raw_bytes = base64.b64decode(target_doc["b64_payload"])
-
-        endpoint = "sendDocument"
-        param_name = "document"
 
         async with httpx.AsyncClient() as client:
             await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{endpoint}",
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
                 data={"chat_id": chat_id, "caption": f"Here is your document: '{fname}', Sir."},
-                files={param_name: (fname, raw_bytes, "application/octet-stream")}
+                files={"document": (fname, raw_bytes, "application/octet-stream")}
             )
 
         return f"File '{fname}' dispatched successfully to your Telegram, Sir."
     except Exception as e:
         return f"Encountered an issue dispatching document for query '{file_query}', Sir."
 
-async def query_document_vault(specific_question: str) -> str:
+async def query_vector_documents(specific_question: str) -> str:
     try:
         results = documents_collection.query(
             query_texts=[specific_question],
@@ -249,6 +276,20 @@ async def query_document_vault(specific_question: str) -> str:
     except Exception as e:
         return f"Document vector query error: {str(e)}"
 
+async def query_vector_memory(user_query: str) -> str:
+    try:
+        results = memory_collection.query(
+            query_texts=[user_query],
+            n_results=8
+        )
+        if results and "documents" in results and results["documents"]:
+            docs = results["documents"][0]
+            if docs:
+                return "\n".join(docs)
+        return ""
+    except Exception as e:
+        return ""
+
 async def unlock_encrypted_pdf(doc_id_or_name: str, password: str) -> tuple[str, bool]:
     if mongo_media_col is None: return "Database offline.", False
     try:
@@ -258,7 +299,7 @@ async def unlock_encrypted_pdf(doc_id_or_name: str, password: str) -> tuple[str,
         if not target_doc: return "Document not found.", False
 
         raw_bytes = base64.b64decode(target_doc["b64_payload"])
-        decrypted_text, is_still_encrypted = extract_text_from_pdf(raw_bytes, password=password)
+        decrypted_text, is_still_encrypted = parse_document_bytes(target_doc.get("file_name", "doc.pdf"), raw_bytes, password=password)
 
         if decrypted_text == "[INVALID_PASSWORD]":
             return "Invalid password provided, Sir. Access denied.", False
@@ -267,7 +308,7 @@ async def unlock_encrypted_pdf(doc_id_or_name: str, password: str) -> tuple[str,
             {"_id": target_doc["_id"]},
             {"$set": {"caption": decrypted_text, "is_encrypted": False}}
         )
-        index_pdf_into_chroma(target_doc.get("file_name", "doc.pdf"), "document", decrypted_text)
+        index_document_into_chroma(target_doc.get("file_name", "doc.pdf"), "document", decrypted_text)
         return decrypted_text, True
     except Exception as e:
         return f"Decryption failed: {str(e)}", False
@@ -336,13 +377,11 @@ async def save_memory_fact(category: str, fact: str) -> str:
     cat = category.lower().strip()
     fact_str = fact.strip()
     
-    # Save to MongoDB
     if mongo_memory_col is not None:
         try:
             await mongo_memory_col.insert_one({"category": cat, "fact": fact_str, "timestamp": datetime.now(timezone.utc).isoformat()})
         except Exception: pass
 
-    # Save to ChromaDB Vector Memory
     try:
         memory_collection.add(
             ids=[str(datetime.now().timestamp())],
@@ -386,7 +425,7 @@ async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, cap
         except Exception: pass
 
     if not is_encrypted:
-        index_pdf_into_chroma(file_name, media_type, caption)
+        index_document_into_chroma(file_name, media_type, caption)
 
     await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}'")
     status_msg = "is encrypted and secured under Privacy Protocol." if is_encrypted else "fully parsed and indexed in your vector vault."
@@ -395,8 +434,8 @@ async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, cap
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
     try:
-        res = tavily_client.search(query=query, max_results=2)
-        results = [f"- {item['title']}: {item['content'][:150]}" for item in res.get("results", [])]
+        res = tavily_client.search(query=query, max_results=3)
+        results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
         return "\nREAL-TIME WEB INTELLIGENCE:\n" + "\n".join(results) + "\n"
     except Exception: pass
     return ""
@@ -415,21 +454,24 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
     return ""
 
 # -------------------------------------------------------------
-# 4. BACKGROUND TASKS & SCHEDULER
+# 5. BACKGROUND DAEMONS & TASKS
 # -------------------------------------------------------------
 async def autonomous_proactive_checkin():
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
     now = datetime.now(timezone.utc)
     if (now - LAST_USER_INTERACTION_TIME).total_seconds() / 60.0 < 25: return
 
-    _, cached_schedules, _ = await sync_ram_cache()
-    if not cached_schedules: return
+    try:
+        schedules = []
+        task_cursor = mongo_tasks_col.find({}).sort("_id", -1)
+        async for tdoc in task_cursor:
+            schedules.append(f"• Task: {tdoc.get('task')}")
+        if not schedules: return
 
-    active_task = cached_schedules[0]
-    checkin_prompt = f"You are J.A.R.V.I.S. The user is in task '{active_task}' and silent for 25 mins. Ask a sharp, human-like check-in question on progress. Address as Sir."
+        active_task = schedules[0]
+        checkin_prompt = f"You are J.A.R.V.I.S. The user is working on '{active_task}' and silent for 25 mins. Ask a sharp, human-like check-in question on progress. Address as Sir."
 
-    if groq_client:
-        try:
+        if groq_client:
             comp = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": checkin_prompt}],
@@ -438,7 +480,7 @@ async def autonomous_proactive_checkin():
             msg = clean_response_text(comp.choices[0].message.content)
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg})
-        except Exception: pass
+    except Exception: pass
 
 async def summarize_recent_chats():
     if mongo_chats_col is None: return
@@ -452,18 +494,18 @@ async def summarize_recent_chats():
         print(f"[Chat Summarization Error]: {e}")
 
 # -------------------------------------------------------------
-# 5. FUNCTION-CALLING INFERENCE ENGINE & SELF-REFLECTION
+# 6. FUNCTION-CALLING TOOLS & MASTER CONTEXT ENGINE
 # -------------------------------------------------------------
 GROQ_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "send_file_from_vault",
-            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram when the user asks to send, download, get, or dispatch a PDF file.",
+            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram when the user asks to send, download, get, or dispatch a file.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_query": {"type": "string", "description": "Document name e.g. 'aadhar', 'resume', 'certificate'"}
+                    "file_query": {"type": "string", "description": "Document name or keyword e.g. 'resume', 'certificate'"}
                 },
                 "required": ["file_query"]
             }
@@ -473,11 +515,11 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_document_vault",
-            "description": "Semantic vector search inside uploaded PDFs to answer specific questions.",
+            "description": "Semantic vector search across ChromaDB documents to answer specific questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "specific_question": {"type": "string", "description": "The exact question or topic to search across ChromaDB vector documents"}
+                    "specific_question": {"type": "string", "description": "The exact question or topic to search across vector documents"}
                 },
                 "required": ["specific_question"]
             }
@@ -575,39 +617,46 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         return await send_file_from_vault("aadhar", session_id)
 
     # 2. RUN PLANNER AGENT
-    plan = await planner(user_text)
+    plan = await ai_planner(user_text)
 
-    # 3. DYNAMIC MEMORY AUTO-CAPTURE (STEP 12)
+    # 3. DYNAMIC MEMORY CAPTURE
     if any(k in cmd for k in ["remember", "my favourite", "i like", "my project", "passport"]):
         await save_memory_fact("user_statement", user_text)
 
-    # 4. RETRIEVE VECTOR CONTEXT
-    cached_facts, cached_schedules, cached_chats = await sync_ram_cache(user_question=user_text)
+    # 4. BUILD MASTER CONTEXT
+    vector_memories = await query_vector_memory(user_text) if plan["memory"] else ""
+    vector_docs = await query_vector_documents(user_text) if plan["documents"] else ""
+    web_intel = fetch_web_search(user_text) if plan["internet"] else ""
     temporal_context = get_current_temporal_context()
-    weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185") if any(k in cmd for k in ["weather", "temp", "rain"]) else ""
-    search_context = fetch_web_search(user_text) if plan["internet"] else ""
+    weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185") if "weather" in cmd else ""
 
-    memory_context = "\nSTORED VECTOR MEMORY:\n" + "\n".join(cached_facts) if cached_facts else ""
-    schedule_context = "\nACTIVE SCHEDULED TASKS:\n" + ("\n".join(cached_schedules) if cached_schedules else "No tasks scheduled.")
-    history_context = "\nRECENT CONVERSATION HISTORY:\n" + ("\n---\n".join(cached_chats) if cached_chats else "None.")
+    master_context = f"""
+{temporal_context}
+{weather_context}
+--- MASTER CONTEXT PIPELINE ---
+[VECTOR MEMORY]:
+{vector_memories}
+
+[VECTOR DOCUMENTS]:
+{vector_docs}
+
+[INTERNET INTELLIGENCE]:
+{web_intel}
+-------------------------------
+"""
 
     system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous, hyper-intelligent AI assistant combining J.A.R.V.I.S. and Spider-Man's Karen.
 
-{temporal_context}
-{weather_context}
-{schedule_context}
-{memory_context}
-{history_context}
-{search_context}
+{master_context}
 
 CRITICAL OPERATIONAL DIRECTIVES:
-1. Before answering always think:
+1. THINK BEFORE SPEAKING:
    - Search memory and vector documents.
    - Use tools automatically.
    - Never ask unnecessary questions.
    - Answer naturally.
 2. SENSITIVE IDENTIFIER REDACTION (AADHAAR / RRN / MYNUMBER):
-   - Never print raw numeric sequences of Aadhaar or government IDs in chat text.
+   - Never print raw numeric sequences of Aadhaar or government identification numbers directly in chat text.
    - If asked for an Aadhaar number, state: "Per privacy protocols, I cannot display raw government ID numbers in chat text, but I can dispatch your official PDF file directly to your Telegram." (and offer/execute 'send_file_from_vault').
 3. ADDRESS & SALUTATIONS: Address the user naturally as 'Sir' or 'Master'. Keep responses precise and useful."""
 
@@ -641,23 +690,8 @@ CRITICAL OPERATIONAL DIRECTIVES:
 
                     elif fn_name == "query_document_vault":
                         specific_q = fn_args.get("specific_question", user_text)
-                        doc_text = await query_document_vault(specific_q)
-
-                        qa_prompt = f"""User Request: '{user_text}'
-
-CHROMA VECTOR SEARCH RESULTS:
-{doc_text}
-
-MANDATORY DIRECTIVE:
-- Answer the user's specific request using the document text above concisely.
-- Address the user as Sir or Master."""
-
-                        qa_comp = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
-                            temperature=0.2, max_tokens=250
-                        )
-                        reply_text = qa_comp.choices[0].message.content.strip()
+                        doc_text = await query_vector_documents(specific_q)
+                        reply_text = doc_text[:1500]
 
                     elif fn_name == "create_time_reminder":
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
@@ -677,14 +711,9 @@ MANDATORY DIRECTIVE:
     # Fallback to Gemini 2.0 Flash
     if not reply_text and gemini_client:
         try:
-            if any(k in cmd for k in ["name", "who am i", "profile"]):
-                gem_prompt = f"{system_prompt}\n\nUser Profile Full Name: {USER_FULL_NAME}\n\nUser: {user_text}\nARIA:"
-            else:
-                gem_prompt = f"{system_prompt}\n\nUser: {user_text}\nARIA:"
-
             def _gemini_sync():
                 res = gemini_client.models.generate_content(
-                    model="gemini-2.0-flash", contents=gem_prompt
+                    model="gemini-2.0-flash", contents=f"{system_prompt}\n\nUser: {user_text}\nARIA:"
                 )
                 return res.text
             reply = await asyncio.to_thread(_gemini_sync)
@@ -699,7 +728,7 @@ MANDATORY DIRECTIVE:
         else:
             reply_text = f"Understood, Sir. Processing your request."
 
-    # 5. SELF REFLECTION STEP (STEP 11)
+    # 5. CONFIDENCE-BASED SELF-REFLECTION LOOP (STEP 6 & 11)
     cleaned_reply = clean_response_text(reply_text)
     try:
         reflection_prompt = f"Question: {user_text}\nAnswer: {cleaned_reply}\nIs anything missing or incorrect? Reply only Yes or No."
@@ -718,7 +747,7 @@ MANDATORY DIRECTIVE:
     return cleaned_reply
 
 # -------------------------------------------------------------
-# 6. TELEGRAM WEBHOOK
+# 7. TELEGRAM WEBHOOK & UNIVERSAL UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -763,7 +792,12 @@ async def telegram_webhook(req: Request):
                 raw_bytes_res = await client.get(f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}")
                 raw_bytes = raw_bytes_res.content
 
-            extracted_text, is_encrypted = extract_text_from_pdf(raw_bytes) if default_name.lower().endswith(".pdf") else ("Binary File", False)
+            if media_type == "image":
+                extracted_text = await process_image_with_gemini_vision(raw_bytes, default_name)
+                is_encrypted = False
+            else:
+                extracted_text, is_encrypted = parse_document_bytes(default_name, raw_bytes)
+
             save_reply = await save_media_file(default_name, media_type, raw_bytes, caption=extracted_text, is_encrypted=is_encrypted)
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
@@ -780,14 +814,13 @@ async def telegram_webhook(req: Request):
 
 @app.on_event("startup")
 async def start_scheduler():
-    await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.add_job(summarize_recent_chats, 'interval', hours=6, id="summarize_chats_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Chroma Vector & Multi-Agent Core]: Online and Synced.")
+    print("[J.A.R.V.I.S. Multi-Agent Vector Core]: Online and Synced.")
 
 # -------------------------------------------------------------
-# 7. SPEECH & FRONTEND HUD
+# 8. SPEECH & FRONTEND HUD
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-RyanNeural") -> str:
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
@@ -809,15 +842,15 @@ async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-Ryan
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas + ChromaDB", "system": "ARIA Vector Core Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas + ChromaDB", "system": "ARIA Multi-Agent Vector Core Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"<h1>ARIA Vector-Indexed J.A.R.V.I.S. Core Online</h1>"
+    return f"<h1>ARIA Multi-Agent Vector-Indexed J.A.R.V.I.S. Core Online</h1>"
 
 # -------------------------------------------------------------
-# 8. WEBSOCKET STREAMING & UPLOAD ROUTE
+# 9. WEBSOCKET STREAMING & UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -836,9 +869,14 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json({"audio": audio_b64, "text": reply_text})
     except WebSocketDisconnect: pass
 
-@app.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
+@app.post("/upload-file")
+async def upload_file(file: UploadFile = File(...), category: str = "documents"):
     file_bytes = await file.read()
-    extracted_text, is_encrypted = extract_text_from_pdf(file_bytes)
-    await save_media_file(file.filename, "document", file_bytes, caption=extracted_text[:6000], is_encrypted=is_encrypted)
-    return {"status": "ok"}
+    if file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+        extracted_text = await process_image_with_gemini_vision(file_bytes, file.filename)
+        is_encrypted = False
+    else:
+        extracted_text, is_encrypted = parse_document_bytes(file.filename, file_bytes)
+    
+    save_reply = await save_media_file(file.filename, "document", file_bytes, caption=extracted_text[:6000], is_encrypted=is_encrypted)
+    return {"status": "ok", "message": save_reply}
