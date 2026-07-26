@@ -2,16 +2,16 @@ import json
 import re
 from groq import Groq
 
-async def iterative_planner(user_message: str, tool_descriptions: dict, executed_tools: list, groq_client: Groq) -> dict:
-    """Iterative planner that evaluates if more tools are needed based on execution history."""
+async def action_planner(user_message: str, session_context: str, tool_descriptions: dict, executed_tools: list, groq_client: Groq) -> dict:
+    """Action-based iterative planner that determines goal, action type, and required tools."""
     if not groq_client:
-        return {"goal": "default", "reason": "No client", "tools": []}
+        return {"goal": "default", "action": "retrieve", "tools": []}
 
     tools_json = json.dumps(tool_descriptions, indent=2)
     already_run = json.dumps(executed_tools)
 
     prompt = f"""
-You are an iterative AI task planner for ARIA. Your job is to select the next required tool or conclude planning.
+You are an autonomous action planner for ARIA, a J.A.R.V.I.S.-style assistant.
 
 Available Registered Tools & Capabilities:
 {tools_json}
@@ -19,19 +19,25 @@ Available Registered Tools & Capabilities:
 Tools already executed in previous steps:
 {already_run}
 
+Recent Session Context:
+{session_context}
+
 User Request: "{user_message}"
 
-Analyze if additional tools are required to fully answer the user. Return ONLY a valid JSON object:
+Analyze the user request and determine the primary action and required tools. 
+Action types allowed: retrieve, save, delete, dispatch, analyze, schedule, search.
+
+Return ONLY a valid JSON object:
 {{
-  "goal": "short description of current objective",
-  "reason": "why this tool is needed or why no more tools are needed",
-  "tools": ["tool_name_1"]
+  "goal": "short description of objective",
+  "action": "retrieve|save|delete|dispatch|analyze|schedule|search",
+  "tools": ["memory", "documents", "web"]
 }}
 
 If no further tools are needed, return an empty list for tools:
 {{
   "goal": "complete",
-  "reason": "all required data gathered",
+  "action": "retrieve",
   "tools": []
 }}
 """
@@ -40,11 +46,11 @@ If no further tools are needed, return an empty list for tools:
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=150
+            max_tokens=200
         )
         raw = response.choices[0].message.content.strip()
         raw = re.sub(r'```json\s*|\s*```', '', raw)
         return json.loads(raw)
     except Exception as e:
-        print(f"[Iterative Planner Error]: {e}")
-        return {"goal": "error", "reason": str(e), "tools": []}
+        print(f"[Action Planner Error]: {e}")
+        return {"goal": "error", "action": "retrieve", "tools": []}
