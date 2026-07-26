@@ -1,26 +1,44 @@
+import random
+
 class PersonalityEngine:
     def __init__(self, memory_engine=None):
         self.memory_engine = memory_engine
+        self.acknowledgments = [
+            "Certainly.",
+            "Certainly, {address}.",
+            "Understood.",
+            "Right away.",
+            "I'll handle that.",
+            "Done.",
+            "Affirmative.",
+            "Working on it."
+        ]
+
+    def get_system_prompt(self) -> str:
+        """Returns the native elite AI-OS system behavior instructions for model generation."""
+        return (
+            "You are ARIA, an elite AI operating system. "
+            "Speak with concise confidence. "
+            "Never introduce yourself unless explicitly asked. "
+            "Never sign messages. "
+            "Never say 'I'm your assistant.' "
+            "Avoid unnecessary apologies and excessive enthusiasm. "
+            "Prioritize clarity, technical precision, and authority."
+        )
 
     async def apply_persona(self, raw_text: str, is_major_event: bool = False) -> str:
-        """Applies a concise, confident JARVIS persona dynamically adapted to user preferences."""
+        """Applies natural conversational variation instead of rigid repetitive suffixes."""
         cleaned = raw_text.strip()
         
-        # Retrieve dynamic address style from memory if available
         address_style = "Sir"
         if self.memory_engine and hasattr(self.memory_engine, "get_address_style"):
             address_style = await self.memory_engine.get_address_style()
 
-        # Clean up any redundant trailing punctuation before appending salutation
-        cleaned = cleaned.rstrip(".")
-        
-        # Format with preferred address style if not already present
-        if address_style and address_style.lower() not in cleaned.lower():
-            cleaned = f"{cleaned}, {address_style}."
-        else:
-            cleaned = f"{cleaned}."
+        # For short or action-completion responses, optionally inject natural variety
+        if len(cleaned.split()) < 4 and not cleaned.endswith((".", "!", "?")):
+            template = random.choice(self.acknowledgments)
+            cleaned = template.format(address=address_style)
 
-        # Only append formal signatures for major events, system reports, or greetings
         if is_major_event:
             cleaned += "\n\n— ARIA Neural Core"
             
