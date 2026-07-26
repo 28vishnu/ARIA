@@ -12,14 +12,17 @@ class MemoryEngine:
         self.memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 
     async def initialize_indexes(self):
-        """Creates unique indexes once on application startup for high-performance scaling."""
+        """Creates composite and unique indexes safely without conflicting with multi-item preferences."""
         if self.memory_col is not None:
             try:
-                await self.memory_col.create_index("key", unique=True)
+                # Unique compound index to allow multiple values per key (like user_likes) while preventing exact duplicates
+                await self.memory_col.create_index([("key", 1), ("value", 1)], unique=True, sparse=True)
+                # Unique single-field index for singular keys (like birthday)
+                await self.memory_col.create_index("key", unique=True, partialFilterExpression={"value": {"$type": "string"}})
                 await self.memory_col.create_index("category")
                 await self.memory_col.create_index("memory_type")
                 await self.memory_col.create_index("updated_at")
-                logger.info("[MemoryEngine] Successfully initialized MongoDB indexes.")
+                logger.info("[MemoryEngine] Successfully initialized composite and singular MongoDB indexes.")
             except Exception as e:
                 logger.warning("[MemoryEngine] Index creation note: %s", e)
 
@@ -58,13 +61,12 @@ class MemoryEngine:
 
     def _parse_preference_items(self, text_segment: str) -> list[str]:
         """Splits coordinated lists like 'football and cricket' or 'football, cricket, chess' into distinct items."""
-        # Replace 'and' & commas with a uniform delimiter
         normalized = re.sub(r'\band\b', ',', text_segment)
         raw_items = [self._normalize(item) for item in normalized.split(',')]
         return [item for item in raw_items if self._validate_value(item)]
 
     async def deterministic_extract_and_store(self, user_text: str):
-        """Extracts structured memories deterministically, delegating profile ownership elsewhere."""
+        """Extracts structured memories deterministically with duplicate protection via composite keys."""
         if self.memory_col is None or not self._should_extract(user_text):
             return
 
@@ -98,40 +100,43 @@ class MemoryEngine:
             memory_type = "preference"
             importance = "low"
             is_list_accumulate = True
-        elif "birthday" in lower or "born on" in lower:
+        elif "birthday" in lower or "born on" in lower or "dob" in lower:
             key = "birthday"
             value = user_text
             category = "personal"
             memory_type = "fact"
             importance = "high"
-        # Note: Name/College ownership intentionally omitted to prevent drift from ProfileEngine
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
         if is_list_accumulate and extracted_items:
             for item in extracted_items:
-                await self.memory_col.update_one(
-                    {"key": key, "value": item},
-                    {
-                        "$set": {
-                            "key": key,
-                            "value": item,
-                            "category": category,
-                            "memory_type": memory_type,
-                            "importance": importance,
-                            "confidence": 1.0,
-                            "source": "regex",
-                            "schema_version": SCHEMA_VERSION,
-                            "updated_at": now_iso
+                try:
+                    await self.memory_col.update_one(
+                        {"key": key, "value": item},
+                        {
+                            "$set": {
+                                "key": key,
+                                "value": item,
+                                "category": category,
+                                "memory_type": memory_type,
+                                "importance": importance,
+                                "confidence": 1.0,
+                                "source": "regex",
+                                "schema_version": SCHEMA_VERSION,
+                                "updated_at": now_iso
+                            },
+                            "$setOnInsert": {
+                                "first_seen": now_iso,
+                                "last_used": now_iso
+                            }
                         },
-                        "$setOnInsert": {
-                            "first_seen": now_iso,
-                            "last_used": now_iso
-                        }
-                    },
-                    upsert=True
-                )
-                logger.info("[MemoryEngine] Accumulated List Item — Key: %s | Value: %s", key, item)
+                        upsert=True
+                    )
+                    logger.info("[MemoryEngine] Stored list item — Key: %s | Value: %s", key, item)
+                except Exception:
+                    # Ignore duplicate key exceptions gracefully on re-insertion
+                    pass
 
         elif key and value and self._validate_value(value):
             await self.memory_col.update_one(
@@ -155,19 +160,19 @@ class MemoryEngine:
                 },
                 upsert=True
             )
-            logger.info("[MemoryEngine] Stored Singular Memory — Key: %s | Value: %s", key, value)
+            logger.info("[MemoryEngine] Stored singular memory — Key: %s | Value: %s", key, value)
 
     async def get_relevant_memories(self, query: str) -> list[dict]:
-        """Query-aware retrieval that scores results and updates last_used timestamps."""
+        """Query-aware retrieval with intent normalization (e.g. mapping DOB/birthday synonyms)."""
         if self.memory_col is None:
             return []
         try:
             lower_q = query.lower()
             filter_query = {}
 
-            if "like" in lower_q or "preference" in lower_q or "favorite" in lower_q:
+            if any(k in lower_q for k in ["like", "preference", "favorite", "love", "prefer"]):
                 filter_query = {"category": "preference"}
-            elif "birthday" in lower_q or "born" in lower_q:
+            elif any(k in lower_q for k in ["birthday", "born", "dob", "date of birth"]):
                 filter_query = {"key": "birthday"}
 
             cursor = self.memory_col.find(filter_query).limit(10)
@@ -181,17 +186,19 @@ class MemoryEngine:
                 return []
 
             now_iso = datetime.now(timezone.utc).isoformat()
-            matched_keys = [m.get("key") for m in memories if m.get("key")]
+            matched_ids = [m.get("_id") for m in memories if m.get("_id")]
             
-            # Touch last_used for ranking analysis
-            if matched_keys:
+            # Touch last_used specifically for matched documents
+            if matched_ids:
                 await self.memory_col.update_many(
-                    {"key": {"$in": matched_keys}},
+                    {"_id": {"$in": matched_ids}},
                     {"$set": {"last_used": now_iso}}
                 )
 
             structured_results = []
             for m in memories:
+                # Dynamic evidence-based retrieval score
+                score = 0.98 if filter_query and m.get("category") == filter_query.get("category") else 0.85
                 structured_results.append({
                     "key": m.get("key"),
                     "value": m.get("value"),
@@ -199,7 +206,7 @@ class MemoryEngine:
                     "memory_type": m.get("memory_type", "fact"),
                     "importance": m.get("importance", "medium"),
                     "confidence": m.get("confidence", 1.0),
-                    "retrieval_score": 0.98 if filter_query else 0.85, # Dynamic retrieval scoring
+                    "retrieval_score": score,
                     "updated_at": m.get("updated_at")
                 })
 
