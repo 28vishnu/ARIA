@@ -66,7 +66,7 @@ class SearchTool(BaseTool):
 class MediaVaultTool(BaseTool):
     NAME = "media"
     DESCRIPTION = "Locate and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
-    CAPABILITIES = ["dispatch file", "resume", "send document", "download pdf"]
+    CAPABILITIES = ["dispatch file", "resume", "send document", "download pdf", "aadhar", "pan"]
 
     async def execute(self, query: str, media_col, chat_id: str = None) -> dict:
         print(f"[TOOL - MEDIA] Locating media file for query: '{query}' and chat_id: {chat_id}")
@@ -76,8 +76,13 @@ class MediaVaultTool(BaseTool):
         try:
             clean_q = query.lower().strip()
             search_query_filter = {}
+            
             if any(k in clean_q for k in ["resume", "cv", "portfolio"]):
                 search_query_filter = {"$or": [{"file_name": re.compile("resume|cv|portfolio", re.IGNORECASE)}, {"aliases": "resume"}]}
+            elif any(k in clean_q for k in ["aadhar", "aadhaar"]):
+                search_query_filter = {"$or": [{"file_name": re.compile("aadhar|aadhaar", re.IGNORECASE)}, {"aliases": "aadhar"}]}
+            elif "pan" in clean_q:
+                search_query_filter = {"$or": [{"file_name": re.compile("pan", re.IGNORECASE)}, {"aliases": "pan"}]}
             else:
                 q_regex = re.compile(re.escape(clean_q), re.IGNORECASE)
                 search_query_filter = {"$or": [{"file_name": q_regex}, {"caption": q_regex}, {"aliases": q_regex}]}
@@ -92,12 +97,12 @@ class MediaVaultTool(BaseTool):
                 if available_files:
                     file_list_str = "\n".join([f"• {f.get('file_name')}" for f in available_files])
                     clarification_msg = (
-                        f"I couldn't find a matching document for '{query}' in your Media Vault, Sir.\n\n"
+                        f"I couldn't find a matching document for your request in your Media Vault, Sir.\n\n"
                         f"Here are the documents currently stored in your vault:\n{file_list_str}\n\n"
                         f"Which one would you like me to send?"
                     )
                 else:
-                    clarification_msg = "Your Media Vault is currently empty, Sir. If you upload your resume or documents, I'll store and remember them permanently."
+                    clarification_msg = "Your Media Vault is currently empty, Sir. If you upload documents, I'll store and remember them permanently."
 
                 return {
                     "success": False, 
