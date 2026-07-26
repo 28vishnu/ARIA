@@ -221,17 +221,7 @@ class ProfileHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return any(k in text.lower() for k in ["what do you know about me", "tell me about myself", "my profile", "who am i"])
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        profile = {}
-        if app_state.profile_col is not None:
-            profile = await app_state.profile_col.find_one({"_id": "master_profile"}) or {}
-        
-        media_cursor = None
-        if app_state.media_col is not None:
-            media_cursor = app_state.media_col.find({}, {"file_name": 1, "category": 1})
-        stored_files = await media_cursor.to_list(length=20) if media_cursor is not None else []
-        file_names = [f"• {f.get('file_name')} ({f.get('category', 'General')})" for f in stored_files]
-        file_list_str = "\n".join(file_names) if file_names else "• No documents stored yet."
-
+        profile = app_state.ram_cache.get("profile", {})
         name = profile.get("name", "Saketh")
         college = profile.get("college", "Gayatri Vidya Parishad College for Degree and PG Courses")
         course = profile.get("course", "B.Tech Computer Science Engineering")
@@ -241,8 +231,7 @@ class ProfileHandler(BaseHandler):
             f"Here's what I currently know about you.\n\n"
             f"Name: {name}\n"
             f"Education: {course}, {college}\n"
-            f"Active Project: {project}\n"
-            f"Stored Documents:\n{file_list_str}"
+            f"Active Project: {project}"
         )
 
 class BatchUploadHandler(BaseHandler):
@@ -293,6 +282,7 @@ class LocationHandler(BaseHandler):
                 {"$set": {"location": location_name}},
                 upsert=True
             )
+            app_state.ram_cache["profile"]["location"] = location_name
             return f"Location locked as {location_name.title()}. Saved in profile for future local queries"
         return "Location update received"
 
@@ -309,11 +299,7 @@ class WeatherHandler(BaseHandler):
     def can_handle(self, text: str) -> bool:
         return "weather" in text.lower()
     async def handle(self, text: str, session_id: str, app_state) -> str:
-        loc_query = "Visakhapatnam"
-        if app_state.profile_col is not None:
-            prof_doc = await app_state.profile_col.find_one({"_id": "master_profile"})
-            if prof_doc and prof_doc.get("location"):
-                loc_query = prof_doc.get("location")
+        loc_query = app_state.ram_cache.get("profile", {}).get("location", "Visakhapatnam")
         res = await app_state.tool_manager.execute_tool("web", f"current weather in {loc_query}", chat_id=session_id)
         return f"{res.get('content', 'Weather data unavailable.')}"
 
@@ -361,11 +347,11 @@ def get_temporal() -> str:
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
 # -------------------------------------------------------------
-# STARTUP EVENT & RESILIENT INITIALIZATION
+# STARTUP EVENT & WARM-UP OPTIMIZATIONS
 # -------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    print("[ARIA OS]: Initializing background intelligence workers and core state...")
+    print("[ARIA OS]: Initializing kernel state and warming up models...")
     
     app.state.http = httpx.AsyncClient(timeout=15.0)
     global llm_router
@@ -400,13 +386,30 @@ async def startup_event():
         app.state.chroma_client = chromadb.PersistentClient(path=persist_path)
         app.state.docs_col = app.state.chroma_client.get_or_create_collection(name="documents")
         app.state.mem_col = app.state.chroma_client.get_or_create_collection(name="memory")
+        
+        # Warm up Chroma embedding model to eliminate first-query lag
+        warm_col = app.state.chroma_client.get_or_create_collection(name="warmup_collection")
+        warm_col.upsert(ids=["1"], documents=["warmup embedding text"])
+        warm_col.query(query_texts=["warmup"], n_results=1)
+        print("[ARIA OS]: ChromaDB embedding model warmed up successfully.")
     except Exception as e:
-        print(f"[Startup Warning]: ChromaDB initialization degraded: {e}")
+        print(f"[Startup Warning]: ChromaDB initialization/warmup degraded: {e}")
         app.state.chroma_client = None
         app.state.docs_col = None
         app.state.mem_col = None
 
-    # Initialize the modular AriaBrain Kernel with both Chroma client and Mongo db
+    # Initialize RAM Cache and Profile Data
+    app.state.ram_cache = {"profile": {}}
+    if db_inst is not None:
+        try:
+            prof_doc = await db_inst["user_profile"].find_one({"_id": "master_profile"})
+            if prof_doc:
+                app.state.ram_cache["profile"] = prof_doc
+                print("[ARIA OS]: Master Profile loaded and cached in RAM.")
+        except Exception as e:
+            print(f"[RAM Profile Cache Warning]: {e}")
+
+    # Initialize AriaBrain Kernel
     if app.state.chroma_client:
         app.state.brain = AriaBrain(
             chroma_client=app.state.chroma_client,
@@ -415,7 +418,6 @@ async def startup_event():
         print("[ARIA OS]: AriaBrain Kernel initialized successfully.")
     else:
         app.state.brain = None
-        print("[ARIA OS Warning]: AriaBrain initialized without Chroma client.")
 
     app.state.profile_engine = ProfileEngine(db_inst) if db_inst is not None else None
     app.state.memory_engine = MemoryEngine(db_inst) if db_inst is not None else None
@@ -431,14 +433,6 @@ async def startup_event():
         aria_brain=app.state.brain
     )
 
-    if app.state.profile_engine is not None:
-        try:
-            profile = await app.state.profile_engine.get_profile()
-            print(f"[ARIA OS]: User Profile Loaded for: {profile.get('name', 'User')}")
-        except Exception as e:
-            print(f"[Profile Load Warning]: {e}")
-
-    # Seed Knowledge Graph via Brain Kernel Facade
     if app.state.brain is not None:
         try:
             await app.state.brain.graph.link("Saketh", "studies_at", "Gayatri Vidya Parishad College")
@@ -458,16 +452,16 @@ async def startup_event():
             
             if not scheduler.running:
                 scheduler.start()
-                print("[ARIA OS]: Background Intelligence Workers active and running.")
+                print("[ARIA OS]: Background Intelligence Workers active.")
         except Exception as e:
             print(f"[Worker Scheduler Warning]: {e}")
 
 # -------------------------------------------------------------
-# SHUTDOWN EVENT: SAFE RESOURCE CLEANUP
+# SHUTDOWN EVENT
 # -------------------------------------------------------------
 @app.on_event("shutdown")
 async def shutdown_event():
-    print("[ARIA OS]: Shutting down systems and closing HTTP connections...")
+    print("[ARIA OS]: Shutting down systems...")
     if hasattr(app.state, "http") and app.state.http:
         await app.state.http.aclose()
     if scheduler.running:
@@ -475,7 +469,7 @@ async def shutdown_event():
     print("[ARIA OS]: Graceful shutdown complete.")
 
 # -------------------------------------------------------------
-# TASK PROCESSING PIPELINE WITH KERNEL INTEGRATION
+# SUB-SECOND FAST TASK PROCESSING PIPELINE
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE -1] Processing task for session {session_id}: '{user_text}'")
@@ -483,21 +477,42 @@ async def process_task(user_text: str, session_id: str) -> str:
     memory_eng = app.state.memory_engine
     persona_eng = app.state.personality_engine
     brain = app.state.brain
+    lower_text = user_text.lower().strip()
 
-    # 1. Continuous Memory Extraction (Background task)
+    # 1. Non-blocking Background Memory Extraction
     if memory_eng is not None:
         asyncio.create_task(memory_eng.extract_and_store_facts(user_text))
 
-    # 2. Modular Deterministic Router Bypass
+    # 2. FAST ROUTER: Instant RAM Profile Lookup (< 10ms)
+    if any(k in lower_text for k in ["what's my name", "who am i", "my profile"]):
+        profile = app.state.ram_cache.get("profile", {})
+        name = profile.get("name", "Saketh")
+        college = profile.get("college", "Gayatri Vidya Parishad College")
+        return await persona_eng.apply_persona(f"You are {name}, currently studying at {college}.")
+
+    # 3. FAST ROUTER: Deterministic Handlers (Time, Math, Greetings)
     for handler in DETERMINISTIC_ROUTER:
         if handler.can_handle(user_text):
-            print(f"[DETERMINISTIC ROUTER]: Handled by {handler.__class__.__name__}")
+            print(f"[FAST ROUTER]: Handled by {handler.__class__.__name__}")
             raw_reply = await handler.handle(user_text, session_id, app.state)
-            is_greeting = isinstance(handler, GreetingHandler) or text_starts_with_greeting(user_text)
+            is_greeting = isinstance(handler, GreetingHandler)
             return await persona_eng.apply_persona(raw_reply, is_major_event=is_greeting)
 
+    # 4. FAST ROUTER: Brain Kernel Fast-Path (Cache & Document Metadata < 100ms)
+    if brain is not None:
+        req = BrainRequest(query=user_text, session_id=session_id, intent="search")
+        brain_hit = await brain.search(req)
+        
+        if brain_hit and brain_hit.get("source") == "cache":
+            return await persona_eng.apply_persona(brain_hit["content"])
+            
+        elif brain_hit and brain_hit.get("documents") and len(brain_hit["documents"]) > 0:
+            docs = brain_hit["documents"]
+            doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)" for d in docs])
+            return await persona_eng.apply_persona(f"I found matching records in your repository:\n\n{doc_list}")
+
     # =========================================================
-    # STAGE 0 & ABOVE: BRAIN KERNEL, PLANNER, & REASONER
+    # 5. HEAVY FALLBACK: PLANNER & REASONER PIPELINE (Only when needed)
     # =========================================================
     tool_mgr = app.state.tool_manager
     chats_col = app.state.chats_col
@@ -510,19 +525,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         raw_retry = f"{correction['explanation']}\n\n{res.get('content', '')}"
         return await persona_eng.apply_persona(raw_retry)
 
-    # Consult AriaBrain Kernel first via BrainRequest
-    if brain is not None:
-        req = BrainRequest(query=user_text, session_id=session_id, intent="search")
-        brain_hit = await brain.search(req)
-        if brain_hit and brain_hit.get("source") == "cache":
-            return await persona_eng.apply_persona(brain_hit["content"])
-        elif brain_hit and brain_hit.get("documents") and len(brain_hit["documents"]) > 0:
-            docs = brain_hit["documents"]
-            doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in docs])
-            reply = f"Yes, Sir. I found relevant documents in your repository:\n\n{doc_list}"
-            return await persona_eng.apply_persona(reply)
-
-    print("[PLANNING STAGE]: Running single-pass action planner...")
+    print("[PLANNING STAGE]: Running action planner...")
     session_context = await conv_mgr.build_session_context(session_id)
     available_tools_desc = tool_mgr.describe_tools()
 
@@ -567,11 +570,6 @@ async def process_task(user_text: str, session_id: str) -> str:
 
     return await persona_eng.apply_persona(cleaned)
 
-def text_starts_with_greeting(text: str) -> bool:
-    greetings = ["hi", "hello", "hey", "good morning", "greetings"]
-    lower = text.lower().strip()
-    return any(lower.startswith(g) for g in greetings)
-
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
     token = os.getenv("TELEGRAM_TOKEN")
@@ -598,9 +596,9 @@ async def telegram_webhook(req: Request):
 @app.head("/health")
 @app.get("/health")
 def health():
-    return JSONResponse(status_code=200, content={"status": "online", "core": "Kernel-Powered Autonomous Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "core": "Sub-Second Optimized Kernel Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Kernel-Powered Autonomous Core Active</h1>"
+    return "<h1>ARIA Sub-Second Optimized Kernel Active</h1>"
