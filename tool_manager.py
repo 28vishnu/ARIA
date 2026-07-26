@@ -77,49 +77,59 @@ class SearchTool(BaseTool):
 
 class MediaVaultTool(BaseTool):
     NAME = "media"
-    DESCRIPTION = "Manage, list, index, and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
-    CAPABILITIES = ["dispatch file", "list documents", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
+    DESCRIPTION = "Manage, list, index, categorise, and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
+    CAPABILITIES = ["dispatch file", "list documents", "categorise documents", "resume", "send document", "download pdf", "aadhar", "pan", "certificate"]
+
+    def _auto_categorize(self, filename: str) -> str:
+        """Automatically categorises documents based on filename heuristics."""
+        fn = filename.lower()
+        if any(w in fn for w in ["resume", "cv", "portfolio"]): return "Resume"
+        if any(w in fn for w in ["aadhar", "aadhaar", "pan", "passport", "id"]): return "Identity"
+        if any(w in fn for w in ["cert", "certificate", "course", "completion"]): return "Certificates"
+        if any(w in fn for w in ["note", "memo", "study", "syllabus"]): return "College Notes"
+        return "General"
 
     async def execute(self, query: str, media_col, chat_id: str = None, documents_collection = None) -> dict:
-        print(f"[TOOL - MEDIA] Executing media operation for query: '{query}' and chat_id: {chat_id}")
+        print(f"[TOOL - MEDIA] Executing document intelligence operation for query: '{query}'")
         if media_col is None or not chat_id: 
             return {"success": False, "source": "media", "content": "Media vault offline or chat ID missing.", "confidence": 0.0, "metadata": {}}
         
         try:
             clean_q = query.lower().strip()
 
-            # -------------------------------------------------------------
-            # CAPABILITY 1: LIST STORED DOCUMENTS
-            # -------------------------------------------------------------
-            if any(k in clean_q for k in ["what documents", "list files", "stored files", "document list", "vault inventory", "files do you know"]):
+            # 1. DOCUMENT INVENTORY & AUTOMATED CATEGORISATION
+            if any(k in clean_q for k in ["what documents", "list files", "stored files", "document list", "vault inventory", "categories"]):
                 cursor = media_col.find({}, {"file_name": 1, "category": 1, "uploaded_at": 1})
                 all_files = await cursor.to_list(length=100)
                 
                 if not all_files:
                     return {"success": True, "source": "media", "content": "Your Media Vault is currently empty, Sir.", "confidence": 1.0, "metadata": {}}
                 
-                file_lines = [f"• {f.get('file_name')} (Category: {f.get('category', 'General')})" for f in all_files]
-                inventory_msg = f"I currently manage {len(all_files)} documents in your Media Vault, Sir:\n\n" + "\n".join(file_lines)
+                categories = {}
+                for f in all_files:
+                    cat = f.get("category") or self._auto_categorize(f.get("file_name", ""))
+                    categories.setdefault(cat, []).append(f.get("file_name"))
+
+                cat_summary = "Categories\n────────────\n"
+                for cat, files in categories.items():
+                    cat_summary += f"• {cat} ({len(files)}):\n" + "".join([f"   - {fn}\n" for fn in files])
+
+                inventory_msg = f"I currently manage {len(all_files)} documents in your Media Vault, Sir:\n\n{cat_summary}"
                 return {"success": True, "source": "media", "content": inventory_msg, "confidence": 1.0, "metadata": {"count": len(all_files)}}
 
-            # -------------------------------------------------------------
-            # CAPABILITY 2: BULK PDF INGESTION & INDEXING WITH SHA-256 HASH DEDUPLICATION
-            # -------------------------------------------------------------
+            # 2. BULK PDF INGESTION & INTELLIGENT INDEXING
             if any(k in clean_q for k in ["read every pdf", "ingest all", "index pdfs", "scan all documents"]):
                 cursor = media_col.find({})
                 vault_files = await cursor.to_list(length=100)
-                indexed_count = 0
-                skipped_count = 0
-                chunk_count = 0
+                indexed_count, skipped_count, chunk_count = 0, 0, 0
 
                 for file_doc in vault_files:
                     fname = file_doc.get("file_name", "doc.pdf")
                     if fname.lower().endswith(".pdf") and documents_collection is not None:
                         try:
                             raw_bytes = base64.b64decode(file_doc["b64_payload"])
-                            
-                            # Generate cryptographic SHA-256 hash of file payload to prevent duplicate indexing
                             content_hash = hashlib.sha256(raw_bytes).hexdigest()
+                            
                             if file_doc.get("content_hash") == content_hash and file_doc.get("indexed", False):
                                 skipped_count += 1
                                 continue
@@ -131,7 +141,6 @@ class MediaVaultTool(BaseTool):
                                 if text: file_text += text + "\n"
                             
                             if file_text.strip():
-                                # Chunking by paragraph/length preserving context
                                 chunks = [file_text[i:i+1000] for i in range(0, len(file_text), 1000)]
                                 for idx, chunk in enumerate(chunks):
                                     chunk_id = f"doc_{content_hash[:8]}_{idx}"
@@ -142,10 +151,10 @@ class MediaVaultTool(BaseTool):
                                     )
                                     chunk_count += 1
                                 
-                                # Mark document as indexed and save content hash in MongoDB
+                                assigned_category = self._auto_categorize(fname)
                                 await media_col.update_one(
                                     {"_id": file_doc["_id"]},
-                                    {"$set": {"indexed": True, "content_hash": content_hash}}
+                                    {"$set": {"indexed": True, "content_hash": content_hash, "category": assigned_category}}
                                 )
                                 indexed_count += 1
                         except Exception as ex:
@@ -155,13 +164,11 @@ class MediaVaultTool(BaseTool):
                     f"Scanning vault documents...\n\n"
                     f"✓ Newly indexed PDFs: {indexed_count}\n"
                     f"✓ Skipped (already indexed): {skipped_count}\n"
-                    f"✓ Search index updated with {chunk_count} new chunks, Sir."
+                    f"✓ Search index updated with {chunk_count} searchable chunks, Sir."
                 )
-                return {"success": True, "source": "media", "content": ingest_summary, "confidence": 1.0, "metadata": {"indexed": indexed_count, "skipped": skipped_count}}
+                return {"success": True, "source": "media", "content": ingest_summary, "confidence": 1.0, "metadata": {"indexed": indexed_count}}
 
-            # -------------------------------------------------------------
-            # CAPABILITY 3: DOCUMENT DISPATCH & RETRIEVAL
-            # -------------------------------------------------------------
+            # 3. DOCUMENT DISPATCH & RETRIEVAL
             target = None
             search_terms = []
             if any(k in clean_q for k in ["resume", "cv", "portfolio"]): search_terms.extend(["resume", "cv", "portfolio"])
@@ -210,7 +217,6 @@ class MediaVaultTool(BaseTool):
             raw_bytes = base64.b64decode(target["b64_payload"])
             token = os.getenv("TELEGRAM_TOKEN")
             
-            # STRICT TELEGRAM SUCCESS VERIFICATION
             async with httpx.AsyncClient() as client:
                 res = await client.post(
                     f"https://api.telegram.org/bot{token}/sendDocument",
@@ -234,13 +240,12 @@ class MediaVaultTool(BaseTool):
             except Exception:
                 pass
 
-            print(f"[TOOL - MEDIA] Successfully verified and dispatched '{fname}' to Telegram.")
             return {
                 "success": True, 
                 "source": "media", 
                 "content": f"File '{fname}' successfully dispatched to your Telegram chat, Sir.", 
                 "confidence": 1.0, 
-                "metadata": {"file": fname, "send_count": target.get("send_count", 0) + 1}
+                "metadata": {"file": fname}
             }
         except Exception as e:
             print(f"[TOOL - MEDIA EXCEPTION]: {e}")
@@ -302,7 +307,6 @@ class ToolManager:
         elif tool_name == "web":
             return await tool.execute(query, self.tavily, chat_id)
         elif tool_name == "media":
-            # Correctly passing documents_collection using matching keyword parameter name
             return await tool.execute(query, self.media_col, chat_id, documents_collection=self.docs_col)
         elif tool_name == "schedule":
             return await tool.execute(query, self.schedule_col, chat_id)
