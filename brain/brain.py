@@ -18,7 +18,6 @@ class AriaBrain:
         store_or_update_knowledge(self.knowledge_col, question, answer, topic, category, summary, source, confidence, verified, knowledge_type, get_embedding)
 
     def update_feedback(self, doc_id: str, feedback: str):
-        """Updates confidence based on user feedback."""
         try:
             res = self.knowledge_col.get(ids=[doc_id], include=["metadatas"])
             if res and res.get("metadatas") and res["metadatas"][0]:
