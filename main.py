@@ -52,37 +52,25 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# HARDENED MONGODB ATLAS SSL/TLS HANDSHAKE ENGINE
+# HARDENED MONGODB ATLAS SSL/TLS ENGINE
 def init_mongo_client():
-    if not MONGODB_URI:
-        return None
-    
-    # 1. Append TLS parameters to URI string if not explicitly present
+    if not MONGODB_URI: return None
     uri = MONGODB_URI
     if "tls=" not in uri and "ssl=" not in uri:
         delimiter = "&" if "?" in uri else "?"
         uri = f"{uri}{delimiter}tls=true&tlsAllowInvalidCertificates=true"
 
     try:
-        # Create a permissive SSL context for Linux Docker environments
         ssl_ctx = ssl.create_default_context(cafile=certifi.where())
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
         return motor.motor_asyncio.AsyncIOMotorClient(
-            uri,
-            ssl_context=ssl_ctx,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
+            uri, ssl_context=ssl_ctx, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000
         )
     except Exception as e:
-        print(f"[Mongo SSL Context Fallback Triggered]: {e}")
-        return motor.motor_asyncio.AsyncIOMotorClient(
-            uri,
-            tls=True,
-            tlsAllowInvalidCertificates=True,
-            serverSelectionTimeoutMS=5000
-        )
+        print(f"[Mongo Client Context Error]: {e}")
+        return motor.motor_asyncio.AsyncIOMotorClient(uri, tls=True, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
 
 mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
@@ -109,12 +97,7 @@ def get_current_temporal_context() -> str:
     now_utc = datetime.now(timezone.utc)
     ist_offset = timedelta(hours=5, minutes=30)
     now_ist = now_utc + ist_offset
-    
-    return f"""
-LIVE TEMPORAL CONTEXT:
-- Date & Time (IST): {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}
-- Date & Time (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}
-"""
+    return f"\nLIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}\n"
 
 async def sync_ram_cache():
     global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS, LAST_CACHE_UPDATE
@@ -128,21 +111,18 @@ async def sync_ram_cache():
 
     if mongo_db is not None:
         try:
-            # 1. Fetch Memory Facts
             cursor = mongo_memory_col.find({})
             async for doc in cursor:
                 fact_entry = f"[{doc.get('category', 'MEMORY').upper()}]: {doc.get('fact', '')}"
                 if fact_entry not in facts: facts.append(fact_entry)
 
-            # 2. Fetch Tasks & Schedules
             task_cursor = mongo_tasks_col.find({}).sort("_id", -1)
             async for tdoc in task_cursor:
-                sch_entry = f"• Task: {tdoc.get('task')} | Time Slot: {tdoc.get('timing')} | Scheduled On: {tdoc.get('date', 'Today')}"
+                sch_entry = f"• Task: {tdoc.get('task')} | Slot: {tdoc.get('timing')}"
                 if sch_entry not in schedules: schedules.append(sch_entry)
 
-            # 3. Fetch Recent Multi-Turn Conversations
-            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(10)
-            chat_docs = await chat_cursor.to_list(length=10)
+            chat_cursor = mongo_chats_col.find({}).sort("_id", -1).limit(8)
+            chat_docs = await chat_cursor.to_list(length=8)
             for cdoc in reversed(chat_docs):
                 chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
 
@@ -179,24 +159,35 @@ async def save_memory_fact(category: str, fact: str) -> str:
             await mongo_memory_col.insert_one({"category": cat, "fact": fact_str, "timestamp": datetime.now(timezone.utc).isoformat()})
         except Exception as e: print(f"[Memory Save Error]: {e}")
 
-    return "Understood, Sir. Saved permanently in your MongoDB vault."
+    return "Saved permanently in your vault, Sir."
 
 async def save_scheduled_task(task: str, timing: str, date_str: str = "Today") -> str:
-    sch_entry = f"• Task: {task} | Time Slot: {timing} | Scheduled On: {date_str}"
+    sch_entry = f"• Task: {task} | Slot: {timing}"
     if sch_entry not in RAM_SCHEDULE_CACHE:
         RAM_SCHEDULE_CACHE.append(sch_entry)
 
     if mongo_tasks_col is not None:
         try:
             await mongo_tasks_col.insert_one({
-                "task": task,
-                "timing": timing,
-                "date": date_str,
+                "task": task, "timing": timing, "date": date_str,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
         except Exception as e: print(f"[Task Save Error]: {e}")
 
-    return f"Task '{task}' scheduled for {timing} successfully recorded in your database, Sir."
+    return f"Task '{task}' scheduled for {timing}, Sir."
+
+async def purge_all_vault_data() -> str:
+    """Removes all stored tasks, memory facts, and chats."""
+    if mongo_memory_col is not None: await mongo_memory_col.delete_many({})
+    if mongo_tasks_col is not None: await mongo_tasks_col.delete_many({})
+    if mongo_chats_col is not None: await mongo_chats_col.delete_many({})
+    if mongo_media_col is not None: await mongo_media_col.delete_many({})
+    
+    global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
+    RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
+    RAM_SCHEDULE_CACHE = []
+    RAM_RECENT_CHATS = []
+    return "All database records and session vault data have been completely purged, Sir."
 
 async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = ""):
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
@@ -213,7 +204,7 @@ async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, cap
         except Exception as e: print(f"[Media Vault Error]: {e}")
 
     await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Caption: {caption}")
-    return f"{media_type.capitalize()} file '{file_name}' successfully secured in your MongoDB vault, Sir."
+    return f"{media_type.capitalize()} file '{file_name}' successfully secured in your vault, Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -234,7 +225,7 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
             res = await client.get(url, timeout=2.0)
             if res.status_code == 200:
                 data = res.json().get("current_weather", {})
-                return f"\nLIVE ATMOSPHERIC DATA: Temperature {data.get('temperature')}°C, Wind Speed {data.get('windspeed')} km/h.\n"
+                return f"\nLIVE WEATHER: Temperature {data.get('temperature')}°C, Wind Speed {data.get('windspeed')} km/h.\n"
     except Exception: pass
     return ""
 
@@ -246,15 +237,12 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
         def _get_gmail():
             if GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN:
                 creds = Credentials(
-                    token=None,
-                    refresh_token=GMAIL_REFRESH_TOKEN,
-                    client_id=GMAIL_CLIENT_ID,
-                    client_secret=GMAIL_CLIENT_SECRET,
+                    token=None, refresh_token=GMAIL_REFRESH_TOKEN,
+                    client_id=GMAIL_CLIENT_ID, client_secret=GMAIL_CLIENT_SECRET,
                     token_uri="https://oauth2.googleapis.com/token",
                     scopes=['https://www.googleapis.com/auth/gmail.readonly']
                 )
-                if not creds.valid:
-                    creds.refresh(GoogleRequest())
+                if not creds.valid: creds.refresh(GoogleRequest())
                 service = build('gmail', 'v1', credentials=creds)
             elif GOOGLE_SERVICE_ACCOUNT_JSON:
                 creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
@@ -263,12 +251,11 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
                 )
                 service = build('gmail', 'v1', credentials=creds)
             else:
-                return "Gmail API authorization pending."
+                return "Gmail integration pending configuration."
 
             results = service.users().messages().list(userId='me', maxResults=max_results).execute()
             messages = results.get('messages', [])
-            if not messages:
-                return "No unread communications in your inbox, Sir."
+            if not messages: return "No recent unread emails found, Sir."
 
             summaries = []
             for msg in messages:
@@ -284,11 +271,10 @@ async def fetch_recent_emails(max_results: int = 5) -> str:
         return await asyncio.to_thread(_get_gmail)
     except Exception as e:
         print(f"[Gmail Error]: {e}")
-        return "Gmail service temporarily unavailable."
+        return "Gmail service unavailable."
 
 async def fetch_google_calendar_events() -> str:
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        return "Calendar service not configured."
+    if not GOOGLE_SERVICE_ACCOUNT_JSON: return "Calendar service not configured."
     try:
         def _get_calendar():
             creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
@@ -307,53 +293,40 @@ async def fetch_google_calendar_events() -> str:
             ).execute()
             
             events = events_result.get('items', [])
-            if not events:
-                return "Your schedule is completely clear for today, Sir."
+            if not events: return "Your schedule is clear today, Sir."
 
             return "\n".join([f"- {e.get('summary')} at {e['start'].get('dateTime', e['start'].get('date'))}" for e in events])
 
         return await asyncio.to_thread(_get_calendar)
     except Exception as e:
         print(f"[Calendar Error]: {e}")
-        return "Calendar agenda temporarily unavailable."
-
-async def send_daily_morning_brief():
-    if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
-
-    calendar_agenda = await fetch_google_calendar_events()
-    emails_summary = await fetch_recent_emails(max_results=3)
-    weather_info = await fetch_weather_by_coords("17.6868,83.2185")
-    cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
-    temporal_str = get_current_temporal_context()
-
-    brief_prompt = f"""Synthesize a high-IQ, proactive J.A.R.V.I.S. + Karen hybrid morning briefing for Sir ({USER_FULL_NAME}).
-{temporal_str}
-WEATHER: {weather_info}
-SCHEDULED AGENDA: {calendar_agenda}
-SCHEDULED TASKS: {cached_schedules}
-INBOX PREVIEW: {emails_summary}
-VAULT CONTEXT: {cached_facts}
-
-DIRECTIVES:
-- Open with a dignified, witty morning greeting addressing him as 'Sir'.
-- Provide a crisp bulleted summary covering current date/time, weather, calendar obligations, and active engineering project status (TaskFlow, WealthFlow AI).
-- Conclude with a sharp, tactical focus statement."""
-
-    brief_text = await process_autonomous_task(brief_prompt, "system_cron")
-
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": brief_text}
-        )
+        return "Calendar agenda unavailable."
 
 # -------------------------------------------------------------
-# 5. SUB-SECOND HYBRID INFERENCE ENGINE (<300MS)
+# 5. Evolving Adaptive J.A.R.V.I.S. + Karen Persona Core
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. AUTOMATIC TASK & TIMING PARSER
+    # 1. SECURITY CONFIRMATION DIALOGUE
+    if session_id in PENDING_SECURITY_ACTIONS:
+        pending = PENDING_SECURITY_ACTIONS[session_id]
+        if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "clear"]):
+            del PENDING_SECURITY_ACTIONS[session_id]
+            if pending["type"] == "purge_vault":
+                return await purge_all_vault_data()
+        elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
+            del PENDING_SECURITY_ACTIONS[session_id]
+            return "Security action aborted, Sir."
+        else:
+            return f"Awaiting explicit authorization, Sir. Confirm deletion of all database records?"
+
+    # Check for security triggers
+    if any(k in cmd for k in ["delete all data", "clear database", "purge vault", "erase everything"]):
+        PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
+        return "Security Protocol Alert: This will permanently wipe all vault records, schedules, and memory. Do you authorize this action, Sir?"
+
+    # 2. AUTOMATIC TASK & TIMING PARSER
     timing_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", cmd)
     if timing_match:
         timing_str = timing_match.group(1)
@@ -361,12 +334,12 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         if not task_desc: task_desc = "Scheduled Event"
         await save_scheduled_task(task_desc.capitalize(), timing_str)
 
-    # 2. AUTO PROFILE SAVER
+    # 3. AUTO PROFILE SAVER
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 3. SYNC RAM CACHE & BUILD CONTEXT
+    # 4. SYNC RAM CACHE & CONSTRUCT EVOLVING CONTEXT
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
 
     temporal_context = get_current_temporal_context()
@@ -379,7 +352,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     schedule_context = "\nACTIVE SCHEDULED TASKS & EVENTS:\n" + ("\n".join(cached_schedules) if cached_schedules else "No tasks scheduled.")
     history_context = "\nRECENT CONVERSATION HISTORY:\n" + ("\n---\n".join(cached_chats) if cached_chats else "None.")
 
-    system_prompt = f"""You are {ASSISTANT_NAME}, an autonomous AI assistant combining J.A.R.V.I.S. (loyal, articulate, strategic) and Spider-Man's Karen (witty, sharp, supportive peer).
+    system_prompt = f"""You are {ASSISTANT_NAME}, an evolving, hyper-intelligent AI combining J.A.R.V.I.S. (loyal, articulate, composed) and Spider-Man's Karen (witty, encouraging, supportive peer).
 
 {temporal_context}
 {weather_context}
@@ -388,22 +361,23 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {history_context}
 {search_context}
 
-CORE DIRECTIVES:
-- PERSONA: Impeccably polite, clever, loyal, witty, and sharp. Act as a high-IQ digital sidekick for a Computer Science Engineer and cinema enthusiast.
-- ADDRESS: Always address the user naturally as 'Sir' or 'Mr. Saketh'.
-- ACCURATE RECALL: You possess full chat history and active scheduled tasks above. Refer back to them accurately.
-- EFFICIENCY: Keep conversational responses brief (1-2 sentences max), highly intelligent, and direct."""
+DYNAMIC PERSONA & COMMUNICATION DIRECTIVES:
+- ADDRESS & SALUTATIONS: Use natural, fluid addressing. Address the user as 'Sir' by default, or 'Master' when executing heavy technical commands. NEVER use repetitive scripted phrases like "Good day Mr. Saketh".
+- TONE: High-IQ, witty, loyal, and clear. Avoid rigid automated sounding greetings. Start straight with the answer or request details directly.
+- AUTONOMOUS DECISION-MAKING: Provide quick solutions independently. If an action is high-risk (e.g., wiping data, modifying security settings), request explicit permission.
+- RECALL: Utilize stored memory, schedules, and past chats to give intelligent, continuous replies without forgetting prior interactions.
+- EFFICIENCY: Keep conversational responses crisp (1-2 sentences max), clear, and direct."""
 
-    reply_text = "All neural systems operational, Sir."
+    reply_text = "All systems operational, Sir."
 
-    # Primary High-Speed Groq Engine (<300ms)
+    # Groq Llama 3.3 70B Engine (<300ms)
     if groq_client:
         try:
             def _groq_sync():
                 comp = groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                    temperature=0.3, max_tokens=180
+                    temperature=0.35, max_tokens=180
                 )
                 return comp.choices[0].message.content
             reply = await asyncio.to_thread(_groq_sync)
@@ -412,11 +386,11 @@ CORE DIRECTIVES:
         except Exception as e: print(f"[Groq Error]: {e}")
 
     # Fallback Gemini 2.0 Flash
-    if reply_text == "All neural systems operational, Sir." and gemini_client:
+    if reply_text == "All systems operational, Sir." and gemini_client:
         try:
             def _gemini_sync():
                 res = gemini_client.models.generate_content(
-                    model="gemini-2.0-flash", contents=f"{system_prompt}\n\nSir: {user_text}\nARIA:"
+                    model="gemini-2.0-flash", contents=f"{system_prompt}\n\nUser: {user_text}\nARIA:"
                 )
                 return res.text
             reply = await asyncio.to_thread(_gemini_sync)
@@ -428,7 +402,7 @@ CORE DIRECTIVES:
     return reply_text
 
 # -------------------------------------------------------------
-# 6. INSTANT TELEGRAM WEBHOOK (MULTI-MODAL & DIRECT DISPATCH)
+# 6. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -453,7 +427,7 @@ async def telegram_webhook(req: Request):
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": "Good day, Sir. I am ARIA, your personal neural assistant. All systems online."}
+                    json={"chat_id": chat_id, "text": "Online and fully operational, Sir. How may I assist you today?"}
                 )
             return {"status": "ok"}
 
@@ -500,13 +474,13 @@ async def telegram_webhook(req: Request):
 
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{endpoint}",
-                            data={"chat_id": chat_id, "caption": f"Here is your {mtype}: '{fname}' Sir."},
+                            data={"chat_id": chat_id, "caption": f"Retrieved {mtype}: '{fname}' Sir."},
                             files={param_name: (fname, raw_bytes, "application/octet-stream")}
                         )
                     else:
                         await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                            json={"chat_id": chat_id, "text": "I possess your profile details in text memory, Sir, but no stored media file matching your request was found in the vault yet."}
+                            json={"chat_id": chat_id, "text": "No matching media files found in the vault, Sir."}
                         )
                 return {"status": "ok"}
 
@@ -521,13 +495,11 @@ async def telegram_webhook(req: Request):
 @app.on_event("startup")
 async def start_scheduler():
     await sync_ram_cache()
-    trigger = CronTrigger(hour=1, minute=30, timezone="UTC")  # 07:00 AM IST
-    scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Single-DB Engine]: MongoDB Atlas Connected & Synced.")
+    print("[J.A.R.V.I.S. Adaptive Core]: Online and Synced.")
 
 # -------------------------------------------------------------
-# 7. SPEECH & PDF ENGINE
+# 7. SPEECH & FRONTEND HUD
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-RyanNeural") -> str:
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
@@ -552,33 +524,10 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         return "".join([page.extract_text() or "" for page in reader.pages]).strip()
     except Exception: return ""
 
-# -------------------------------------------------------------
-# 8. API ROUTES & FRONTEND HUD
-# -------------------------------------------------------------
-@app.get("/api/voices")
-async def get_voices_list():
-    global CACHE_VOICES
-    if not CACHE_VOICES:
-        try:
-            all_voices = await edge_tts.list_voices()
-            CACHE_VOICES = [
-                {
-                    "shortName": v["ShortName"],
-                    "gender": v["Gender"],
-                    "locale": v["Locale"],
-                    "friendlyName": f"{v['ShortName'].split('-')[-1].replace('Neural','')} ({v['Locale']})"
-                }
-                for v in all_voices
-            ]
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
-
-    return {"voices": CACHE_VOICES, "activeVoice": "en-GB-RyanNeural"}
-
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Adaptive Core"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
@@ -782,7 +731,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# 9. WEBSOCKET STREAMING & UPLOAD ROUTE
+# 8. WEBSOCKET STREAMING & UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
