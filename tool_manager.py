@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+import asyncio
 from datetime import datetime, timezone
 
 class ToolManager:
@@ -40,7 +41,7 @@ class ToolManager:
             return {"success": False, "content": f"Unknown tool requested: {tool_name}"}
 
     async def _handle_memory(self, query: str) -> dict:
-        if not self.mem_col:
+        if self.mem_col is None:
             return {"success": False, "content": "Memory vector store offline, Sir."}
         try:
             hits = self.mem_col.query(query_texts=[query], n_results=3)
@@ -54,15 +55,15 @@ class ToolManager:
     async def _handle_documents(self, query: str) -> dict:
         # First consult AriaBrain for unified metadata and alias hits
         if self.brain is not None:
-            brain_res = self.brain.search(query)
-            if brain_res.get("documents"):
-                doc_list = "\n".join([f"• **{d['title']}** (`{d['filename']}`)\n  *{d['summary']}*" for d in brain_res["documents"]])
+            brain_res = await self.brain.search(query) if hasattr(self.brain.search, '__code__') and asyncio.iscoroutinefunction(self.brain.search) else self.brain.search(query)
+            if brain_res and brain_res.get("documents"):
+                doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in brain_res["documents"]])
                 return {
                     "success": True,
                     "content": f"Yes, Sir. I found documents matching your request:\n\n{doc_list}"
                 }
 
-        if not self.docs_col:
+        if self.docs_col is None:
             return {"success": False, "content": "Document vector store offline, Sir."}
         try:
             hits = self.docs_col.query(query_texts=[query], n_results=3)
@@ -74,7 +75,7 @@ class ToolManager:
             return {"success": False, "content": f"Document search failed: {e}"}
 
     async def _handle_web(self, query: str) -> dict:
-        if not self.tavily:
+        if self.tavily is None:
             return {"success": False, "content": "Web search unconfigured — Tavily API key missing, Sir."}
         try:
             def _search():
@@ -91,15 +92,15 @@ class ToolManager:
     async def _handle_media(self, query: str) -> dict:
         """Unified media vault lookup with AriaBrain alias and summary matching."""
         if self.brain is not None:
-            brain_res = self.brain.search(query)
-            if brain_res.get("documents"):
-                doc_list = "\n".join([f"• **{d['title']}** (`{d['filename']}`)\n  *{d['summary']}*" for d in brain_res["documents"]])
+            brain_res = await self.brain.search(query) if hasattr(self.brain.search, '__code__') and asyncio.iscoroutinefunction(self.brain.search) else self.brain.search(query)
+            if brain_res and brain_res.get("documents"):
+                doc_list = "\n".join([f"• **{d.get('title')}** (`{d.get('filename')}`)\n  *{d.get('summary')}*" for d in brain_res["documents"]])
                 return {
                     "success": True,
                     "content": f"Yes, Sir. I located the following files in your Media Vault:\n\n{doc_list}"
                 }
 
-        if not self.media_col:
+        if self.media_col is None:
             return {"success": False, "content": "Media Vault storage offline, Sir."}
         try:
             cursor = self.media_col.find({})
@@ -107,7 +108,6 @@ class ToolManager:
             if not files:
                 return {"success": True, "content": "Your Media Vault is currently empty, Sir."}
             
-            # Filter files by query relevance
             q_lower = query.lower()
             matched = []
             for f in files:
@@ -117,7 +117,7 @@ class ToolManager:
                     matched.append(f)
 
             if not matched and not ("list" in q_lower or "all" in q_lower):
-                matched = files[:10] # Return recent files as default fallback
+                matched = files[:10]
 
             file_strs = [f"• **{f.get('file_name')}** (Category: {f.get('category', 'General')})" for f in matched]
             return {
@@ -128,7 +128,7 @@ class ToolManager:
             return {"success": False, "content": f"Media vault lookup failed: {e}"}
 
     async def _handle_schedule(self, query: str) -> dict:
-        if not self.schedule_col:
+        if self.schedule_col is None:
             return {"success": False, "content": "Schedule subsystem offline, Sir."}
         try:
             cursor = self.schedule_col.find({})
@@ -141,7 +141,7 @@ class ToolManager:
             return {"success": False, "content": f"Schedule retrieval failed: {e}"}
 
     async def ingest_uploaded_file(self, file_id: str, filename: str, file_bytes: bytes, category: str = "document"):
-        """Ingests uploaded files into Mongo Media Vault, vector store, and registers rich metadata in AriaBrain."""
+        """Ingests uploaded files into Mongo Media Vault and registers rich metadata in AriaBrain."""
         if self.media_col is not None:
             await self.media_col.update_one(
                 {"file_name": filename},
@@ -157,40 +157,14 @@ class ToolManager:
                 upsert=True
             )
 
-        # Extract basic text representation for indexing
-        extracted_text = f"Document filename: {filename}. Category: {category}."
-        if filename.endswith(".pdf"):
-            extracted_text += " [PDF Document Content]"
-        
-        # Register into AriaBrain for smart alias mapping
         if self.brain is not None:
-            title = filename.replace("_", " ").replace(".pdf", "").replace(".docx", "").title()
-            summary = f"Official stored record for {title}, categorized under {category}."
-            
-            # Smart automatic aliases
-            aliases = [
-                title.lower(),
-                filename.replace("_", " ").lower(),
-                title.replace("Encyclopedia", "").strip().lower()
-            ]
-            if "italy" in filename.lower():
-                aliases.extend(["italy masters plan", "italy study plan", "masters in italy", "italy guide"])
-            if "study" in filename.lower():
-                aliases.extend(["study abroad plan", "global study guide"])
-
-            keywords = [w.strip() for w in title.split() if len(w) > 3]
-
-            self.brain.register_document(
-                doc_id=file_id,
-                filename=filename,
-                title=title,
-                summary=summary,
-                keywords=keywords,
-                aliases=aliases
-            )
+            extracted_text = f"Document filename: {filename}. Category: {category}."
+            from brain.models.request import BrainRequest
+            req = BrainRequest(query=filename, metadata={"doc_id": file_id})
+            if hasattr(self.brain, "learn"):
+                await self.brain.learn(req, filename, extracted_text)
 
         print(f"[ToolManager]: Successfully ingested and registered file '{filename}' across Vault and Brain, Sir.")
 
 async def asyncio_to_thread_safe(func, *args, **kwargs):
-    import asyncio
     return await asyncio.to_thread(func, *args, **kwargs)
