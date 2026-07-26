@@ -1,41 +1,38 @@
+import os
+import json
 from datetime import datetime, timezone
-from .freshness import calculate_expiration
 
-def store_or_update_knowledge(collection, question: str, answer: str, topic: str, category: str, summary: str, source: str, confidence: float, verified: bool, knowledge_type: str, embedding_fn):
-    try:
-        emb = embedding_fn(question)
-        if all(v == 0.0 for v in emb): return
+class LearningEngine:
+    def __init__(self, mongo_db):
+        self.db = mongo_db
+        self.corrections_col = mongo_db["corrections_ledger"] if mongo_db is not None else None
 
-        # Fixed Chroma query inclusion: "ids" is omitted here, they are returned automatically
-        existing = collection.query(
-            query_embeddings=[emb], 
-            n_results=1, 
-            include=["metadatas", "distances"]
-        )
-        
-        if existing and existing.get("distances") and existing["distances"][0] and existing["distances"][0][0] < 0.20:
-            doc_id = existing["ids"][0][0] # IDs are safely accessed here
-            meta = existing["metadatas"][0][0]
-            meta["answer"] = answer
-            meta["summary"] = summary
-            meta["confidence"] = max(meta.get("confidence", 0.9), confidence)
-            meta["last_used"] = datetime.now(timezone.utc).isoformat()
-            meta["uses"] = meta.get("uses", 0) + 1
-            
-            combined_doc = f"Topic: {topic} | Category: {category} | Question: {meta.get('question')} | Summary: {summary}"
-            collection.update(ids=[doc_id], embeddings=[embedding_fn(combined_doc)], metadatas=[meta])
+    async def record_correction(self, previous_query: str, wrong_answer: str, user_correction: str):
+        """Records user corrections permanently so ARIA adapts and improves over time."""
+        if self.corrections_col is None:
             return
-
-        doc_id = f"brain_{datetime.now().timestamp()}"
-        combined_doc = f"Topic: {topic}\nCategory: {category}\nQuestion: {question}\nSummary: {summary}"
         
-        metadata = {
-            "topic": topic.lower(), "category": category.lower(), "question": question,
-            "answer": answer, "summary": summary, "knowledge_type": knowledge_type.upper(),
-            "source": source, "confidence": confidence, "verified": verified, "uses": 1,
-            "created": datetime.now(timezone.utc).isoformat(), "last_used": datetime.now(timezone.utc).isoformat(),
-            "expires_at": calculate_expiration(knowledge_type) or ""
+        correction_doc = {
+            "query_pattern": previous_query.lower().strip(),
+            "wrong_answer": wrong_answer,
+            "correction": user_correction,
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        collection.add(ids=[doc_id], documents=[combined_doc], embeddings=[embedding_fn(combined_doc)], metadatas=[metadata])
-    except Exception as e:
-        print(f"[Learning Error]: {e}")
+        
+        await self.corrections_col.update_one(
+            {"query_pattern": correction_doc["query_pattern"]},
+            {"$set": correction_doc},
+            upsert=True
+        )
+        print(f"[LearningEngine]: Recorded correction for query pattern: '{previous_query}'")
+
+    async def check_correction(self, query: str) -> str:
+        """Checks if a user correction exists for the given query pattern."""
+        if self.corrections_col is None:
+            return None
+        
+        norm_query = query.lower().strip()
+        doc = await self.corrections_col.find_one({"query_pattern": norm_query})
+        if doc:
+            return doc.get("correction")
+        return None
