@@ -26,6 +26,7 @@ import motor.motor_asyncio
 # Scheduler SDKs
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 app = FastAPI()
 
@@ -74,6 +75,7 @@ mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
 mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
+mongo_reminders_col = mongo_db["reminders"] if mongo_db is not None else None
 
 CACHE_VOICES = []
 PENDING_SECURITY_ACTIONS = {}
@@ -87,14 +89,10 @@ def clean_response_text(raw_text: str) -> str:
     """Sanitizes text by stripping artifacts, excess commas, double spaces, and awkward markdown."""
     if not raw_text: return ""
     text = raw_text.strip()
-    # Remove unnecessary markdown bolding or bullet asterisks if present awkwardly
     text = re.sub(r'\*+', '', text)
-    # Fix repeated punctuation like ,, or .. or ,.
     text = re.sub(r'[\,\.\s]*,[\,\.\s]*', ', ', text)
     text = re.sub(r'\.\s*\.', '.', text)
-    # Fix multiple spaces
     text = re.sub(r'[ \t]+', ' ', text)
-    # Fix spacing before commas or periods
     text = re.sub(r'\s+([\.,\?!])', r'\1', text)
     return text.strip()
 
@@ -141,7 +139,49 @@ async def sync_ram_cache():
     return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
-# 3. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
+# 3. DYNAMIC REMINDER DISPATCH SYSTEM
+# -------------------------------------------------------------
+async def send_scheduled_reminder(reminder_text: str):
+    """Sends a timed reminder alert directly to Telegram."""
+    if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
+    
+    msg = f"Alert, Sir: You have a scheduled reminder — '{reminder_text}'."
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": ALLOWED_TELEGRAM_USER_ID, "text": msg}
+            )
+        except Exception as e:
+            print(f"[Reminder Delivery Error]: {e}")
+
+async def create_time_reminder(minutes: int, task_desc: str) -> str:
+    """Schedules a delayed reminder and persists it to MongoDB."""
+    run_time = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    job_id = f"reminder_{int(run_time.timestamp())}"
+    
+    scheduler.add_job(
+        send_scheduled_reminder,
+        trigger=DateTrigger(run_date=run_time),
+        args=[task_desc],
+        id=job_id,
+        replace_existing=True
+    )
+
+    if mongo_reminders_col is not None:
+        try:
+            await mongo_reminders_col.insert_one({
+                "task": task_desc,
+                "duration_minutes": minutes,
+                "deliver_at": run_time.isoformat(),
+                "status": "pending"
+            })
+        except Exception as e: print(f"[Reminder Save Error]: {e}")
+
+    return f"Understood, Sir. I will remind you to '{task_desc}' in {minutes} minute{'s' if minutes > 1 else ''}."
+
+# -------------------------------------------------------------
+# 4. SINGLE DB STORAGE & MEDIA VAULT OPERATIONS
 # -------------------------------------------------------------
 async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
     global LAST_USER_INTERACTION_TIME
@@ -188,6 +228,7 @@ async def purge_all_vault_data() -> str:
     if mongo_tasks_col is not None: await mongo_tasks_col.delete_many({})
     if mongo_chats_col is not None: await mongo_chats_col.delete_many({})
     if mongo_media_col is not None: await mongo_media_col.delete_many({})
+    if mongo_reminders_col is not None: await mongo_reminders_col.delete_many({})
     
     global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
     RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
@@ -236,7 +277,7 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
     return ""
 
 # -------------------------------------------------------------
-# 4. PROACTIVE TASK CHECK-IN DAEMON (JARVIS AUTONOMY)
+# 5. PROACTIVE TASK CHECK-IN DAEMON (JARVIS AUTONOMY)
 # -------------------------------------------------------------
 async def autonomous_proactive_checkin():
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
@@ -270,7 +311,7 @@ Generate a brief, proactive check-in (1 sentence) asking if they need any assist
         except Exception as e: print(f"[Proactive Check-In Error]: {e}")
 
 # -------------------------------------------------------------
-# 5. EVOLVING ADAPTIVE PERSONA CORE
+# 6. EVOLVING ADAPTIVE PERSONA CORE
 # -------------------------------------------------------------
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
@@ -292,7 +333,15 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
         return "Security Protocol Alert: This will permanently wipe all vault records, schedules, and memory. Do you authorize this action, Sir?"
 
-    # 2. AUTOMATIC TASK & TIMING PARSER
+    # 2. AUTOMATIC REMINDER DETECTOR (e.g., "remind me in 5 minutes to submit record")
+    reminder_match = re.search(r"remind\s+me\s+in\s+(\d+)\s*(mins?|minutes?)\s*(?:to|for)?\s*(.+)", cmd)
+    if reminder_match:
+        minutes = int(reminder_match.group(1))
+        task_desc = reminder_match.group(3).strip()
+        if not task_desc: task_desc = "Scheduled reminder"
+        return await create_time_reminder(minutes, task_desc.capitalize())
+
+    # 3. AUTOMATIC TASK & TIMING PARSER
     timing_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", cmd)
     if timing_match:
         timing_str = timing_match.group(1)
@@ -300,12 +349,12 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
         if not task_desc: task_desc = "Scheduled Event"
         await save_scheduled_task(task_desc.capitalize(), timing_str)
 
-    # 3. AUTO PROFILE SAVER
+    # 4. AUTO PROFILE SAVER
     auto_save_triggers = ["my name is", "my dob is", "i was born", "my college is", "i live in", "remember", "save this", "i am"]
     if any(trigger in cmd for trigger in auto_save_triggers):
         await save_memory_fact("personal_profile", user_text)
 
-    # 4. SYNC RAM CACHE & CONSTRUCT EVOLVING CONTEXT
+    # 5. SYNC RAM CACHE & CONSTRUCT CONTEXT
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
 
     temporal_context = get_current_temporal_context()
@@ -363,13 +412,12 @@ DYNAMIC PERSONA & FORMATTING DIRECTIVES:
                 reply_text = reply.strip()
         except Exception as e: print(f"[Gemini Error]: {e}")
 
-    # Apply final sanitization pass
     cleaned_reply = clean_response_text(reply_text)
     asyncio.create_task(log_chat_interaction(user_text, cleaned_reply, session_id))
     return cleaned_reply
 
 # -------------------------------------------------------------
-# 6. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH)
+# 7. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH)
 # -------------------------------------------------------------
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -464,10 +512,10 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Adaptive Core]: Online, Synced & Autonomous Daemon Active.")
+    print("[J.A.R.V.I.S. Adaptive Core]: Online, Synced, Timed Reminders & Autonomous Daemon Active.")
 
 # -------------------------------------------------------------
-# 7. SPEECH & FRONTEND HUD
+# 8. SPEECH & FRONTEND HUD
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-RyanNeural") -> str:
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
@@ -495,7 +543,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Autonomous Core"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA AI Reminders Enabled"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
@@ -699,7 +747,7 @@ def serve_webapp():
     """
 
 # -------------------------------------------------------------
-# 8. WEBSOCKET STREAMING & UPLOAD ROUTE
+# 9. WEBSOCKET STREAMING & UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
