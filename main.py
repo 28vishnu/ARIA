@@ -20,7 +20,7 @@ from planner import action_planner
 from tool_manager import ToolManager
 from reasoner import reason
 from conversation_manager import ConversationManager
-from brain_manager import AriaBrain
+from brain import AriaBrain
 
 # Provider SDKs
 from groq import Groq
@@ -143,20 +143,6 @@ def get_mongo_collections():
         return db_inst["personal_memory"], db_inst["media_vault"], db_inst["chat_history"], db_inst["tasks_schedule"]
     return None, None, None, None
 
-def get_embedding(text: str) -> list[float]:
-    gem = get_gemini_client_direct()
-    if not gem: return [0.0] * 768
-    try:
-        res = gem.models.embed_content(model="text-embedding-004", contents=text[:2000])
-        return res.embedding.values
-    except Exception:
-        return [0.0] * 768
-
-def get_gemini_client_direct():
-    key = os.getenv("GEMINI_API_KEY")
-    if not key: return None
-    return genai.Client(api_key=key)
-
 scheduler = AsyncIOScheduler()
 
 def clean_text(raw: str) -> str:
@@ -174,7 +160,6 @@ async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower()
 
-    # 1. Fast Intent Bypass for Greetings & Simple Messages (Zero Token Usage)
     if lower_txt in ["/start", "hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening"]:
         return "Online and fully operational, Sir. How may I assist you today?"
 
@@ -183,7 +168,6 @@ async def process_task(user_text: str, session_id: str) -> str:
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
     tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
 
-    # 2. Deterministic Intent Bypasses (Files & Schedules)
     if any(kw in lower_txt for kw in ["resume", "cv", "pdf", "file", "document", "send"]):
         print("[INTENT BYPASS] Triggering Media Vault Tool directly.")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
@@ -196,9 +180,9 @@ async def process_task(user_text: str, session_id: str) -> str:
         if res.get("success"):
             return res.get("content")
 
-    # 3. BRAIN SEARCH FIRST (Zero Token Check)
+    # BRAIN SEARCH FIRST
     aria_brain = get_brain()
-    cached_brain_hit = aria_brain.search_brain(user_text, get_embedding)
+    cached_brain_hit = aria_brain.search_brain(user_text)
     if cached_brain_hit:
         print(f"[BRAIN HIT]: Serving answer instantly from persistent knowledge base (Confidence: {cached_brain_hit['confidence']})")
         return cached_brain_hit["answer"]
@@ -238,20 +222,22 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # 4. LEARNING LOOP: Automatically store new general knowledge in the Brain
+    # LEARNING LOOP: Store in Brain
     is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
-    expiration_days = 1 if is_time_sensitive else None
+    knowledge_type = "DYNAMIC" if is_time_sensitive else "STATIC"
     
     aria_brain.store_knowledge(
         question=user_text,
         answer=cleaned,
+        topic="general",
+        category="general",
+        summary=cleaned[:150],
         source="AI",
         confidence=0.95,
-        embedding_fn=get_embedding,
-        expires_in_days=expiration_days
+        verified=False,
+        knowledge_type=knowledge_type
     )
 
-    # Background task execution for MongoDB chat logging
     if chats_col is not None:
         async def save_chat():
             try:
