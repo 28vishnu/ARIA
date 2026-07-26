@@ -11,7 +11,6 @@ class ProfileEngine:
             return {}
         profile = await self.profile_col.find_one({"_id": "master_profile"})
         if not profile:
-            # Default initial profile structure based on your architecture
             default_profile = {
                 "_id": "master_profile",
                 "name": "Saketh",
@@ -19,7 +18,7 @@ class ProfileEngine:
                 "college": "Gayatri Vidya Parishad College for Degree and PG Courses",
                 "course": "B.Tech Computer Science Engineering (Expected 2028)",
                 "routine": {"wake": "07:00 AM", "sleep": "11:30 PM", "college_start": "09:00 AM"},
-                "active_project": {"name": "ARIA AI", "progress": "80%", "next_task": "Document Intelligence & Knowledge Graph"},
+                "active_project": {"name": "ARIA AI", "progress": "85%", "next_task": "Background Workers & Knowledge Graph"},
                 "preferences": {"interface": "Telegram", "tone": "JARVIS-style, concise, professional"}
             }
             await self.profile_col.insert_one(default_profile)
