@@ -7,6 +7,14 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("aria")
 
+# 1. Configurable Ranking Weights
+AVG_SCORE_WEIGHT = 0.4
+MAX_SCORE_WEIGHT = 0.4
+VOLUME_WEIGHT = 0.2
+
+# 3. Explicit Prompt Character Budget Limit (approx. 4,000 tokens equivalent)
+MAX_PROMPT_CHAR_BUDGET = 12000
+
 @dataclass
 class ChunkRecord:
     id: str
@@ -38,20 +46,17 @@ class DocumentIntelligence:
         self.default_metric = default_metric.lower()
 
     def _compute_retrieval_score(self, distance: float, metric: str) -> float:
-        """Abstracted metric-aware score calibration for Cosine, Squared L2, and Inner Product."""
+        """Abstracted metric-aware score calibration layer (Cosine, Squared L2, Inner Product)."""
         if distance is None:
             return 0.5
         
         metric = metric.lower()
         if metric == "cosine":
-            # Cosine distance ranges from 0.0 to 2.0 (0 = identical, 2 = opposite)
             score = max(0.0, min(1.0, 1.0 - (distance / 2.0)))
         elif metric == "l2":
-            # Squared L2 distance (lower is closer; normalize via exponential decay mapping)
             import math
             score = math.exp(-distance / 2.0)
         elif metric == "ip":
-            # Inner product (-1 to 1 or higher; map to 0 to 1)
             score = max(0.0, min(1.0, (distance + 1.0) / 2.0))
         else:
             score = max(0.0, min(1.0, 1.0 - (distance / 2.0)))
@@ -59,7 +64,7 @@ class DocumentIntelligence:
         return round(score, 2)
 
     async def query_document(self, query: str, filename_filter: Optional[str] = None, n_results: int = 8) -> DocumentIntelligenceResponse:
-        """Performs semantic search, preserves all metadata, computes multi-signal document ranking."""
+        """Performs semantic search, preserves all metadata, and applies configurable multi-signal ranking."""
         if self.docs_col is None:
             return DocumentIntelligenceResponse(success=False, error="Document repository offline, Sir.")
 
@@ -85,7 +90,7 @@ class DocumentIntelligence:
                     summary="No relevant document passages found."
                 )
 
-            # 1. Structure and score chunks preserving ALL metadata
+            # Preserve all metadata returned by Chroma
             scored_chunks = []
             for chunk_id, text, meta, dist in zip(ids, documents, metadatas, distances):
                 score = self._compute_retrieval_score(dist, self.default_metric)
@@ -103,7 +108,6 @@ class DocumentIntelligence:
                     retrieval_score=score
                 ))
 
-            # 2. Group chunks by document
             doc_groups = {}
             for chunk in scored_chunks:
                 fname = chunk.filename
@@ -117,7 +121,7 @@ class DocumentIntelligence:
                 doc_groups[fname]["chunks"].append(chunk)
                 doc_groups[fname]["scores"].append(chunk.retrieval_score)
 
-            # 3. Multi-signal document ranking (Combines average score, best chunk score, and chunk volume)
+            # Document ranking using named configuration constants
             best_doc_key = None
             best_ranking_metric = -1.0
 
@@ -125,9 +129,9 @@ class DocumentIntelligence:
                 scores = group["scores"]
                 avg_score = sum(scores) / len(scores)
                 max_score = max(scores)
-                volume_weight = min(1.2, 1.0 + (len(scores) * 0.05)) # Reward multi-chunk evidence
+                volume_weight = min(1.2, 1.0 + (len(scores) * 0.05))
                 
-                composite_metric = (avg_score * 0.4) + (max_score * 0.4) + (volume_weight * 0.2)
+                composite_metric = (avg_score * AVG_SCORE_WEIGHT) + (max_score * MAX_SCORE_WEIGHT) + (volume_weight * VOLUME_WEIGHT)
                 
                 if composite_metric > best_ranking_metric:
                     best_ranking_metric = composite_metric
@@ -136,7 +140,6 @@ class DocumentIntelligence:
             primary_group = doc_groups[best_doc_key]
             primary_group["chunks"].sort(key=lambda x: x.retrieval_score, reverse=True)
 
-            # Document confidence calculation
             doc_confidence = round(sum(primary_group["scores"]) / len(primary_group["scores"]), 2)
 
             document_result = DocumentResult(
@@ -153,14 +156,23 @@ class DocumentIntelligence:
             return DocumentIntelligenceResponse(success=False, error="Document retrieval failed due to an internal error.")
 
     async def summarize_document(self, document_result: DocumentResult, query: str = "") -> str:
-        """Generates grounded summaries with conflict warnings or query-ranked extractive fallback."""
+        """Generates grounded summaries with explicit character budgeting and conflict warnings."""
         chunks = document_result.chunks
         if not chunks:
             return "No content available to summarize."
 
-        combined_text = "\n\n--- Passage ---\n".join([c.text for c in chunks[:5]])
+        # Build combined text respecting character budget limit
+        combined_passages = []
+        current_length = 0
+        for c in chunks:
+            passage_str = f"\n\n--- Passage ---\n{c.text}"
+            if current_length + len(passage_str) > MAX_PROMPT_CHAR_BUDGET:
+                break
+            combined_passages.append(passage_str)
+            current_length += len(passage_str)
 
-        # Grounded LLM Summarization with anti-hallucination & contradiction checks
+        combined_text = "".join(combined_passages)
+
         if self.llm_router is not None:
             messages = [
                 {
@@ -178,7 +190,7 @@ class DocumentIntelligence:
             except Exception:
                 logger.warning("[DocumentIntelligence] LLM summarization failed; falling back to query-ranked extractive summary.")
 
-        # Query-Ranked Extractive Fallback (No models required)
+        # Query-Ranked Extractive Fallback
         query_terms = set(re.findall(r'\w+', query.lower())) if query else set()
         scored_sentences = []
 
@@ -187,12 +199,10 @@ class DocumentIntelligence:
             for s in raw_sents:
                 s_clean = s.strip()
                 if len(s_clean) > 15:
-                    # Score by term overlap with query
                     s_terms = set(re.findall(r'\w+', s_clean.lower()))
                     overlap = len(query_terms.intersection(s_terms)) if query_terms else 1
                     scored_sentences.append((overlap, s_clean))
 
-        # Sort by query term overlap descending
         scored_sentences.sort(key=lambda x: x[0], reverse=True)
         unique_sentences = list(dict.fromkeys([s[1] for s in scored_sentences]))[:4]
 
