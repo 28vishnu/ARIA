@@ -75,10 +75,11 @@ def init_mongo_client():
 mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 
+# Fixed definitions checking mongo_db instead of undefined variables
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
-mongo_media_col = mongo_db["media_vault"] if mongo_media_col is not None else None
-mongo_chats_col = mongo_db["chat_history"] if mongo_media_col is not None else None
+mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
+mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
 mongo_reminders_col = mongo_db["reminders"] if mongo_db is not None else None
 mongo_security_col = mongo_db["security_logs"] if mongo_db is not None else None
 
@@ -695,7 +696,6 @@ MANDATORY PRIVACY DIRECTIVE:
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     if not reply_text:
-        # Anti-Punting Fallback: Answer direct queries even if tools fail
         if "name" in cmd:
             reply_text = f"Your full name is {USER_FULL_NAME}, Sir."
         elif "aadhar" in cmd or "aadhaar" in cmd:
