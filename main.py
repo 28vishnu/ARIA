@@ -300,13 +300,14 @@ async def process_task(user_text: str, session_id: str) -> str:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')} on {now_ist.strftime('%A, %B %d, %Y')}."
 
-    # 4. BROAD MEDIA & DOCUMENT INTENT BYPASS
+    # 4. EXPANDED BROAD MEDIA & DOCUMENT INTENT BYPASS (Catches aadhar, pan, certificate, memo, licence, etc.)
     media_intent_keywords = [
-        "resume", "cv", "portfolio", "aadhar", "aadhaar", "pan", "certificate", 
-        "pdf", "document", "file", "download", "my file", "send document"
+        "resume", "cv", "portfolio", "aadhar", "aadhaar", "pan", "passport", 
+        "certificate", "memo", "marks memo", "pdf", "document", "file", 
+        "download", "licence", "license", "id card", "my file", "send document"
     ]
     if any(keyword in lower_txt for keyword in media_intent_keywords):
-        print(f"[INTENT BYPASS] Broad Media/Document Tool trigger for query: '{user_text}'")
+        print(f"[INTENT BYPASS] Expanded Media/Document Tool trigger for query: '{user_text}'")
         res = await tool_mgr.execute_tool("media", user_text, chat_id=session_id)
         if not res.get("success"):
             PENDING_STATES[session_id] = {"tool": "media", "query": user_text}
