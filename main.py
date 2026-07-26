@@ -31,7 +31,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 app = FastAPI()
 
 # -------------------------------------------------------------
-# ROBUST MULTI-PROVIDER TIERED AI ROUTER
+# DYNAMIC MULTI-PROVIDER AI ROUTER WITH MODEL BLACKLISTING
 # -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
@@ -62,16 +62,20 @@ class GroqProvider(LLMProvider):
 class OpenRouterProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client_key = api_key
+        # Configurable model pool with automatic runtime blacklisting for dead/404 endpoints
         self.models = [
             "meta-llama/llama-3-70b-instruct",
             "mistralai/mixtral-8x7b-instruct",
-            "google/gemma-2-9b-it"
+            "google/gemma-2-9b-it",
+            "anthropic/claude-3-haiku"
         ]
+        self.blacklisted_models = set()
 
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         if not self.client_key: raise Exception("OpenRouter unconfigured")
         async with httpx.AsyncClient() as client:
-            for model in self.models:
+            active_models = [m for m in self.models if m not in self.blacklisted_models]
+            for model in active_models:
                 for attempt in range(2):
                     try:
                         res = await client.post(
@@ -81,6 +85,13 @@ class OpenRouterProvider(LLMProvider):
                             timeout=15.0
                         )
                         data = res.json()
+                        
+                        # Handle 404 / unavailable endpoints by blacklisting dynamically
+                        if res.status_code == 404 or "No endpoints found" in str(data):
+                            print(f"[OpenRouter Dynamic Blacklist]: Model {model} returned 404/Unavailable. Removing from active rotation.")
+                            self.blacklisted_models.add(model)
+                            break
+
                         if res.status_code in [429, 500, 503] or "error" in data:
                             print(f"[OpenRouter Model {model} Error]: {data}")
                             await asyncio.sleep(1.0)
@@ -95,7 +106,7 @@ class OpenRouterProvider(LLMProvider):
                     except Exception as e:
                         print(f"[OpenRouter Model {model} Exception]: {e}")
                         break
-        raise Exception("All OpenRouter models failed")
+        raise Exception("All OpenRouter models failed or blacklisted")
 
 class MistralProvider(LLMProvider):
     def __init__(self, api_key: str):
@@ -119,7 +130,6 @@ class MistralProvider(LLMProvider):
                         continue
                     
                     if "choices" not in data:
-                        print(f"[Mistral Invalid Response Key]: {data}")
                         raise Exception(f"Invalid Mistral payload: {data}")
 
                     res.raise_for_status()
@@ -173,7 +183,7 @@ class FallbackRouter(LLMProvider):
 llm_router = FallbackRouter()
 
 # -------------------------------------------------------------
-# CLIENT INITIALIZATION & GETTERS
+# CLIENT INITIALIZATION WITH PERSISTENT CHROMA PATH
 # -------------------------------------------------------------
 _tavily_client = None
 _mongo_client = None
@@ -202,7 +212,10 @@ def get_mongo():
 def get_chroma():
     global _chroma_client
     if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(path="./aria_vectors")
+        # Use Render persistent disk path if available to prevent model re-downloads on spin-down
+        persist_path = os.getenv("RENDER_PERSISTENT_DIR", "./aria_vectors")
+        os.makedirs(persist_path, exist_ok=True)
+        _chroma_client = chromadb.PersistentClient(path=persist_path)
     return _chroma_client
 
 def get_brain():
@@ -232,11 +245,10 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
-# Stateful conversational follow-up memory
 PENDING_STATES = {}
 
 # -------------------------------------------------------------
-# TASK PROCESSING PIPELINE
+# TASK PROCESSING PIPELINE WITH PERSISTENT LOCATION MEMORY
 # -------------------------------------------------------------
 async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
@@ -247,7 +259,19 @@ async def process_task(user_text: str, session_id: str) -> str:
     mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
     tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
 
-    # 1. REFLECTION ENGINE RUNS FIRST
+    # 1. PERSISTENT LOCATION CAPTURE ("I'm in Sujathanagar")
+    if "i'm in" in lower_txt or "i am in" in lower_txt or "my location is" in lower_txt:
+        location_name = re.sub(r".*?(i'm in|i am in|my location is)\s+", "", lower_txt).strip()
+        if location_name and mem_col is not None:
+            mem_col.upsert(
+                ids=["user_persistent_location"],
+                documents=[f"User current persistent location is {location_name}"],
+                metadatas=[{"type": "location", "value": location_name}]
+            )
+            print(f"[LOCATION MEMORY]: Saved persistent location: {location_name}")
+            return f"Location locked as {location_name.title()}, Sir. I have saved this for all future weather and local queries."
+
+    # 2. REFLECTION ENGINE RUNS FIRST
     reflection_eng = ReflectionEngine(chats_col, media_col)
     correction = await reflection_eng.evaluate_feedback(user_text, session_id)
     if correction and correction.get("needs_retry"):
@@ -255,7 +279,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         res = await tool_mgr.execute_tool(correction["retry_tool"], user_text, chat_id=session_id)
         return f"{correction['explanation']}\n\n{res.get('content', '')}"
 
-    # 2. STATEFUL FOLLOW-UP INTENT HANDLER ("Yes", "Send it", etc.)
+    # 3. STATEFUL FOLLOW-UP INTENT HANDLER
     affirmative_triggers = ["yes", "yep", "sure", "go ahead", "send it", "do it", "please do"]
     if lower_txt in affirmative_triggers and session_id in PENDING_STATES:
         pending = PENDING_STATES.pop(session_id)
@@ -264,7 +288,7 @@ async def process_task(user_text: str, session_id: str) -> str:
             res = await tool_mgr.execute_tool("media", pending["query"], chat_id=session_id)
             return res.get("content", "Action completed, Sir.")
 
-    # 3. DETERMINISTIC INTENT ENGINE (Zero-Token Handlers)
+    # 4. DETERMINISTIC INTENT ENGINE (Zero-Token Handlers)
     zero_token_responses = {
         "hello": "Greetings, Sir. How may I assist you today?",
         "hi": "Hello, Sir. ARIA systems online.",
@@ -300,7 +324,19 @@ async def process_task(user_text: str, session_id: str) -> str:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         return f"Current time is {now_ist.strftime('%I:%M:%S %p IST')} on {now_ist.strftime('%A, %B %d, %Y')}."
 
-    # 4. EXPANDED BROAD MEDIA & DOCUMENT INTENT BYPASS (Catches aadhar, pan, certificate, memo, licence, etc.)
+    # 5. WEATHER INJECTION WITH PERSISTENT LOCATION MEMORY
+    if "weather" in lower_txt:
+        loc_query = "Visakhapatnam" # Default fallback
+        if mem_col is not None:
+            loc_hit = mem_col.get(ids=["user_persistent_location"])
+            if loc_hit and loc_hit.get("metadatas") and len(loc_hit["metadatas"]) > 0:
+                loc_query = loc_hit["metadatas"][0].get("value", "Visakhapatnam")
+        
+        print(f"[WEATHER INTENT]: Querying live weather for persistent location: {loc_query}")
+        res = await tool_mgr.execute_tool("web", f"current weather in {loc_query}", chat_id=session_id)
+        return f"Weather report for {loc_query.title()}:\n\n{res.get('content', 'Weather data unavailable.')}"
+
+    # 6. EXPANDED MEDIA & DOCUMENT INTENT BYPASS
     media_intent_keywords = [
         "resume", "cv", "portfolio", "aadhar", "aadhaar", "pan", "passport", 
         "certificate", "memo", "marks memo", "pdf", "document", "file", 
@@ -319,7 +355,7 @@ async def process_task(user_text: str, session_id: str) -> str:
         if res.get("success"):
             return res.get("content")
 
-    # 5. BRAIN SEARCH WITH STRICT CONFIDENCE THRESHOLD (> 0.92)
+    # 7. BRAIN SEARCH WITH STRICT CONFIDENCE THRESHOLD (> 0.92)
     aria_brain = get_brain()
     cached_brain_hit = aria_brain.search_brain(user_text)
     if cached_brain_hit and cached_brain_hit["confidence"] > 0.92:
@@ -335,7 +371,6 @@ async def process_task(user_text: str, session_id: str) -> str:
     executed_tools = []
     structured_results = {"memory": {}, "documents": {}, "web": {}, "media": {}, "schedule": {}}
 
-    # SMART PLANNER LOOP WITH REPEAT-DETECTION TERMINATION
     for i in range(4):  
         print(f"[STAGE 1] Running action planner (iteration {i+1})...")
         plan = await action_planner(user_text, session_context, available_tools_desc, executed_tools, llm_router)
@@ -362,7 +397,6 @@ async def process_task(user_text: str, session_id: str) -> str:
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # 6. ANTI-HALLUCINATION GUARD: Only store if verified by tools
     has_valid_source = any(res.get("success") for res in structured_results.values())
     if has_valid_source:
         is_time_sensitive = any(w in lower_txt for w in ["today", "now", "current", "weather", "news", "president"])
