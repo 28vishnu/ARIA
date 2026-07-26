@@ -5,7 +5,8 @@ class ConversationManager:
         self.chats_col = mongo_chats_col
 
     async def get_session_history(self, session_id: str, limit: int = 15) -> list[dict]:
-        if not self.chats_col: return []
+        if self.chats_col is None: 
+            return []
         try:
             cursor = self.chats_col.find({"session_id": session_id}).sort("_id", -1).limit(limit)
             docs = await cursor.to_list(length=limit)
