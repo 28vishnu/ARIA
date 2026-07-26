@@ -1,46 +1,59 @@
-import base64
-import re
-import httpx
-from datetime import datetime, timezone, timedelta
-from docx import Document
-from pypdf import PdfReader
-import openpyxl
-from io import BytesIO
+class BaseTool:
+    NAME = "base"
+    DESCRIPTION = "Base tool"
+    CAPABILITIES = []
 
-class MemoryTool:
+    async def execute(self, query: str, context_handle) -> str:
+        raise NotImplementedError
+
+class MemoryTool(BaseTool):
+    NAME = "memory"
+    DESCRIPTION = "Search past personal facts, user statements, preferences, and long-term notes."
+    CAPABILITIES = ["preferences", "past facts", "user statements", "history"]
+
     async def execute(self, query: str, memory_collection) -> str:
+        if not memory_collection: return ""
         try:
             results = memory_collection.query(query_texts=[query], n_results=5)
             if results and results.get("documents"):
-                return "[VECTOR MEMORY]:\n" + "\n".join(results["documents"][0])
+                return "\n".join(results["documents"][0])
         except Exception:
             pass
         return ""
 
-class DocumentTool:
+class DocumentTool(BaseTool):
+    NAME = "documents"
+    DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, resumes, certificates, and spreadsheets."
+    CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes"]
+
     async def execute(self, query: str, documents_collection) -> str:
+        if not documents_collection: return ""
         try:
             results = documents_collection.query(query_texts=[query], n_results=4)
             if results and results.get("documents"):
-                return "[VECTOR DOCUMENTS]:\n" + "\n".join(results["documents"][0])
+                return "\n".join(results["documents"][0])
         except Exception:
             pass
         return ""
 
-class SearchTool:
+class SearchTool(BaseTool):
+    NAME = "web"
+    DESCRIPTION = "Search live internet intelligence, news, current events, and weather."
+    CAPABILITIES = ["news", "weather", "current events", "live facts"]
+
     async def execute(self, query: str, tavily_client) -> str:
         if not tavily_client: return ""
         try:
             res = tavily_client.search(query=query, max_results=3)
             results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
-            return "[WEB INTELLIGENCE]:\n" + "\n".join(results)
+            return "\n".join(results)
         except Exception:
             pass
         return ""
 
 class ToolManager:
     def __init__(self, memory_col, docs_col, tavily):
-        self.tools = {
+        self.registry = {
             "memory": MemoryTool(),
             "documents": DocumentTool(),
             "web": SearchTool()
@@ -49,19 +62,24 @@ class ToolManager:
         self.docs_col = docs_col
         self.tavily = tavily
 
-    async def execute_plan(self, plan: dict, user_message: str) -> str:
-        collected_context = []
-        tools_to_run = plan.get("tools", [])
+    def describe_tools(self) -> dict:
+        """Dynamically inspects registered tools for capability discovery."""
+        descriptions = {}
+        for name, tool in self.registry.items():
+            descriptions[name] = {
+                "description": tool.DESCRIPTION,
+                "capabilities": tool.CAPABILITIES
+            }
+        return descriptions
 
-        for tool_name in tools_to_run:
-            if tool_name == "memory" and self.memory_col:
-                res = await self.tools["memory"].execute(user_message, self.memory_col)
-                if res: collected_context.append(res)
-            elif tool_name == "documents" and self.docs_col:
-                res = await self.tools["documents"].execute(user_message, self.docs_col)
-                if res: collected_context.append(res)
-            elif tool_name == "web" and self.tavily:
-                res = await self.tools["web"].execute(user_message, self.tavily)
-                if res: collected_context.append(res)
+    async def execute_tool(self, tool_name: str, query: str) -> str:
+        tool = self.registry.get(tool_name)
+        if not tool: return ""
 
-        return "\n\n".join(collected_context)
+        if tool_name == "memory":
+            return await tool.execute(query, self.memory_col)
+        elif tool_name == "documents":
+            return await tool.execute(query, self.docs_col)
+        elif tool_name == "web":
+            return await tool.execute(query, self.tavily)
+        return ""
