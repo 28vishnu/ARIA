@@ -5,6 +5,7 @@ import base64
 import re
 import asyncio
 import certifi
+import ssl
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
@@ -51,19 +52,37 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-# FIXED MONGODB ATLAS SSL HANDSHAKE CLIENT
+# HARDENED MONGODB ATLAS SSL/TLS HANDSHAKE ENGINE
 def init_mongo_client():
-    if not MONGODB_URI: return None
+    if not MONGODB_URI:
+        return None
+    
+    # 1. Append TLS parameters to URI string if not explicitly present
+    uri = MONGODB_URI
+    if "tls=" not in uri and "ssl=" not in uri:
+        delimiter = "&" if "?" in uri else "?"
+        uri = f"{uri}{delimiter}tls=true&tlsAllowInvalidCertificates=true"
+
     try:
-        # Pass certifi CA bundle to fix Linux/Render OpenSSL TLS issues
+        # Create a permissive SSL context for Linux Docker environments
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
         return motor.motor_asyncio.AsyncIOMotorClient(
-            MONGODB_URI,
-            tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=5000
+            uri,
+            ssl_context=ssl_ctx,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
         )
     except Exception as e:
-        print(f"[Mongo Client Init Error]: {e}")
-        return motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
+        print(f"[Mongo SSL Context Fallback Triggered]: {e}")
+        return motor.motor_asyncio.AsyncIOMotorClient(
+            uri,
+            tls=True,
+            tlsAllowInvalidCertificates=True,
+            serverSelectionTimeoutMS=5000
+        )
 
 mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
@@ -127,7 +146,8 @@ async def sync_ram_cache():
             for cdoc in reversed(chat_docs):
                 chats.append(f"User: {cdoc.get('user_msg')}\nARIA: {cdoc.get('aria_reply')}")
 
-        except Exception as e: print(f"[RAM Sync Status]: {e}")
+        except Exception as e:
+            print(f"[RAM Sync Status]: {e}")
 
     RAM_MEMORY_CACHE = facts
     RAM_SCHEDULE_CACHE = schedules
@@ -504,7 +524,7 @@ async def start_scheduler():
     trigger = CronTrigger(hour=1, minute=30, timezone="UTC")  # 07:00 AM IST
     scheduler.add_job(send_daily_morning_brief, trigger, id="morning_brief_job", replace_existing=True)
     scheduler.start()
-    print("[J.A.R.V.I.S. Single-DB Engine]: MongoDB Atlas Fully Calibrated & Connected.")
+    print("[J.A.R.V.I.S. Single-DB Engine]: MongoDB Atlas Connected & Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & PDF ENGINE
