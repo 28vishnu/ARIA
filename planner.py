@@ -2,6 +2,11 @@ import json
 import re
 
 async def action_planner(user_message: str, session_context: str, tool_descriptions: dict, executed_tools: list, llm_router) -> dict:
+    # Loop-breaking safeguard: if tools have already run and match previous iterations, halt execution to prevent token waste
+    if len(executed_tools) >= 2:
+        print("[Planner Safeguard]: Maximum tool iterations reached. Stopping loop.")
+        return {"goal": "complete", "action": "retrieve", "tools": []}
+
     tools_json = json.dumps(tool_descriptions, indent=2)
     already_run = json.dumps(executed_tools)
 
@@ -42,8 +47,6 @@ If no further tools are needed, return an empty list for tools:
     ]
     try:
         raw = await llm_router.chat(messages, temperature=0.1, max_tokens=200)
-        
-        # Strip markdown fences BEFORE checking structure
         cleaned_raw = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
         
         if not cleaned_raw.startswith("{"):
