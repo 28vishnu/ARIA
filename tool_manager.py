@@ -3,7 +3,7 @@ class BaseTool:
     DESCRIPTION = "Base tool"
     CAPABILITIES = []
 
-    async def execute(self, query: str, context_handle) -> str:
+    async def execute(self, query: str, context_handle) -> dict:
         raise NotImplementedError
 
 class MemoryTool(BaseTool):
@@ -11,45 +11,51 @@ class MemoryTool(BaseTool):
     DESCRIPTION = "Search past personal facts, user statements, preferences, and long-term notes."
     CAPABILITIES = ["preferences", "past facts", "user statements", "history"]
 
-    async def execute(self, query: str, memory_collection) -> str:
-        if not memory_collection: return ""
+    async def execute(self, query: str, memory_collection) -> dict:
+        if not memory_collection: 
+            return {"success": False, "source": "memory", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = memory_collection.query(query_texts=[query], n_results=5)
-            if results and results.get("documents"):
-                return "\n".join(results["documents"][0])
+            if results and results.get("documents") and results["documents"][0]:
+                content = "\n".join(results["documents"][0])
+                return {"success": True, "source": "memory", "content": content, "confidence": 0.95, "metadata": {"count": len(results["documents"][0])}}
         except Exception:
             pass
-        return ""
+        return {"success": False, "source": "memory", "content": "", "confidence": 0.0, "metadata": {}}
 
 class DocumentTool(BaseTool):
     NAME = "documents"
     DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, resumes, certificates, and spreadsheets."
     CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes"]
 
-    async def execute(self, query: str, documents_collection) -> str:
-        if not documents_collection: return ""
+    async def execute(self, query: str, documents_collection) -> dict:
+        if not documents_collection: 
+            return {"success": False, "source": "documents", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = documents_collection.query(query_texts=[query], n_results=4)
-            if results and results.get("documents"):
-                return "\n".join(results["documents"][0])
+            if results and results.get("documents") and results["documents"][0]:
+                content = "\n".join(results["documents"][0])
+                return {"success": True, "source": "documents", "content": content, "confidence": 0.92, "metadata": {"source_files": results.get("metadatas", [{}])}}
         except Exception:
             pass
-        return ""
+        return {"success": False, "source": "documents", "content": "", "confidence": 0.0, "metadata": {}}
 
 class SearchTool(BaseTool):
     NAME = "web"
     DESCRIPTION = "Search live internet intelligence, news, current events, and weather."
     CAPABILITIES = ["news", "weather", "current events", "live facts"]
 
-    async def execute(self, query: str, tavily_client) -> str:
-        if not tavily_client: return ""
+    async def execute(self, query: str, tavily_client) -> dict:
+        if not tavily_client: 
+            return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             res = tavily_client.search(query=query, max_results=3)
             results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
-            return "\n".join(results)
+            content = "\n".join(results)
+            return {"success": True, "source": "web", "content": content, "confidence": 0.88, "metadata": {"results_count": len(results)}}
         except Exception:
             pass
-        return ""
+        return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
 
 class ToolManager:
     def __init__(self, memory_col, docs_col, tavily):
@@ -63,7 +69,6 @@ class ToolManager:
         self.tavily = tavily
 
     def describe_tools(self) -> dict:
-        """Dynamically inspects registered tools for capability discovery."""
         descriptions = {}
         for name, tool in self.registry.items():
             descriptions[name] = {
@@ -72,9 +77,10 @@ class ToolManager:
             }
         return descriptions
 
-    async def execute_tool(self, tool_name: str, query: str) -> str:
+    async def execute_tool(self, tool_name: str, query: str) -> dict:
         tool = self.registry.get(tool_name)
-        if not tool: return ""
+        if not tool: 
+            return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
 
         if tool_name == "memory":
             return await tool.execute(query, self.memory_col)
@@ -82,4 +88,4 @@ class ToolManager:
             return await tool.execute(query, self.docs_col)
         elif tool_name == "web":
             return await tool.execute(query, self.tavily)
-        return ""
+        return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
