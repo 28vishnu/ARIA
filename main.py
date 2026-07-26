@@ -75,7 +75,6 @@ def init_mongo_client():
 mongo_client = init_mongo_client()
 mongo_db = mongo_client["aria_db"] if mongo_client else None
 
-# Fixed definitions checking mongo_db instead of undefined variables
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
@@ -432,7 +431,7 @@ GROQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_file_from_vault",
-            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram ONLY when the user explicitly requests to send, download, or get a PDF file.",
+            "description": "Dispatches and uploads the actual binary PDF or media file to Telegram when the user asks to send, download, get, or dispatch a PDF file or document.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -515,7 +514,7 @@ GROQ_TOOLS = [
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # 1. PERMISSION & ENCRYPTION PASSWORD GATE EVALUATION
+    # 1. PERMISSION & PENDING ACTION EVALUATION
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
         action_type = pending.get("type")
@@ -557,11 +556,15 @@ MANDATORY DIRECTIVES:
             if action_type == "purge_vault":
                 return await purge_all_vault_data()
             elif action_type == "send_file":
-                return await send_file_from_vault(pending["data"].get("file_query", ""), session_id)
+                return await send_file_from_vault(pending["data"].get("file_query", "aadhar"), session_id)
 
         elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont", "deny", "refuse"]):
             del PENDING_SECURITY_ACTIONS[session_id]
             return "Security authorization withheld. Action canceled, Sir."
+
+    # Direct confirmation trigger for Aadhaar dispatch ("Yes" after privacy prompt)
+    if cmd in ["yes", "yeah", "sure", "do it", "send it"] and session_id not in PENDING_SECURITY_ACTIONS:
+        return await send_file_from_vault("aadhar", session_id)
 
     # 2. STANDARD HYBRID LLM TOOL EXECUTION
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
@@ -587,7 +590,7 @@ CRITICAL OPERATIONAL DIRECTIVES:
    - Never print raw numeric sequences of Aadhaar or government identification numbers directly in chat text.
    - If asked for an Aadhaar number, politely state: "Per privacy protocols, I cannot display raw government ID numbers in chat text, but I can dispatch your official PDF file directly to your Telegram." (and offer/execute 'send_file_from_vault').
 2. FILE DISPATCH VS READING:
-   - Call 'send_file_from_vault' ONLY when the user explicitly asks to get, download, or dispatch a document PDF file.
+   - Call 'send_file_from_vault' when the user asks to get, download, or dispatch a document PDF file (e.g. 'Give my aadhar pdf').
    - Call 'query_document_vault' when the user asks a question about text INSIDE a PDF document.
 3. HUMAN-LIKE INTERACTION & LEARNING:
    - Learn preferences from user interactions and save them to memory when stated.
@@ -696,10 +699,12 @@ MANDATORY PRIVACY DIRECTIVE:
         except Exception as e: print(f"[Gemini Error]: {e}")
 
     if not reply_text:
-        if "name" in cmd:
+        if "name" in cmd or "who am i" in cmd:
             reply_text = f"Your full name is {USER_FULL_NAME}, Sir."
         elif "aadhar" in cmd or "aadhaar" in cmd:
             reply_text = "Per privacy protocols, I cannot display raw government ID numbers in chat text, Sir. Would you like me to dispatch your official Aadhaar PDF directly to your Telegram?"
+        elif "diagnostic" in cmd:
+            reply_text = await get_system_diagnostics()
         else:
             reply_text = f"Understood, Sir. Processing your request."
 
