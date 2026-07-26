@@ -81,12 +81,22 @@ LAST_USER_INTERACTION_TIME = datetime.now(timezone.utc)
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
-# 2. IN-MEMORY RAM CACHE & TEMPORAL ENGINE
+# 2. TEXT SANITIZATION & FORMATTING ENGINE
 # -------------------------------------------------------------
-RAM_MEMORY_CACHE = [f"[PERSONAL_PROFILE]: User Full Name is {USER_FULL_NAME}"]
-RAM_SCHEDULE_CACHE = []
-RAM_RECENT_CHATS = []
-LAST_CACHE_UPDATE = 0
+def clean_response_text(raw_text: str) -> str:
+    """Sanitizes text by stripping artifacts, excess commas, double spaces, and awkward markdown."""
+    if not raw_text: return ""
+    text = raw_text.strip()
+    # Remove unnecessary markdown bolding or bullet asterisks if present awkwardly
+    text = re.sub(r'\*+', '', text)
+    # Fix repeated punctuation like ,, or .. or ,.
+    text = re.sub(r'[\,\.\s]*,[\,\.\s]*', ', ', text)
+    text = re.sub(r'\.\s*\.', '.', text)
+    # Fix multiple spaces
+    text = re.sub(r'[ \t]+', ' ', text)
+    # Fix spacing before commas or periods
+    text = re.sub(r'\s+([\.,\?!])', r'\1', text)
+    return text.strip()
 
 def get_current_temporal_context() -> str:
     now_utc = datetime.now(timezone.utc)
@@ -229,13 +239,11 @@ async def fetch_weather_by_coords(location_info: str = "17.6868,83.2185") -> str
 # 4. PROACTIVE TASK CHECK-IN DAEMON (JARVIS AUTONOMY)
 # -------------------------------------------------------------
 async def autonomous_proactive_checkin():
-    """Periodically checks active scheduled tasks and initiates check-ins if the user has been silent."""
     if not TELEGRAM_TOKEN or not ALLOWED_TELEGRAM_USER_ID: return
     
     now = datetime.now(timezone.utc)
     time_since_last_talk = (now - LAST_USER_INTERACTION_TIME).total_seconds() / 60.0
 
-    # Only check in if user has been silent for > 25 minutes
     if time_since_last_talk < 25: return
 
     _, cached_schedules, _ = await sync_ram_cache()
@@ -253,7 +261,7 @@ Generate a brief, proactive check-in (1 sentence) asking if they need any assist
                 messages=[{"role": "user", "content": checkin_prompt}],
                 temperature=0.4, max_tokens=100
             )
-            msg = comp.choices[0].message.content.strip()
+            msg = clean_response_text(comp.choices[0].message.content)
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -319,11 +327,10 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {history_context}
 {search_context}
 
-DYNAMIC PERSONA & COMMUNICATION DIRECTIVES:
+DYNAMIC PERSONA & FORMATTING DIRECTIVES:
+- NO EXTRA CHARACTERS: Never output unwanted markdown bold asterisks (*), extra commas, double spaces, or trailing slashes. Keep formatting clean and crisp.
 - ADDRESS & SALUTATIONS: Address the user as 'Sir' by default, or 'Master' when executing heavy engineering/technical tasks. NEVER use scripted, repetitive lines like "Good day Mr. Saketh".
-- PROACTIVE ENGAGEMENT: Whenever the user is working on a task, watching a movie, or studying, finish your response by offering a quick, relevant follow-up question or suggestion (e.g. asking if they'd like a timer, a summary, or notes).
-- AUTONOMOUS DECISION-MAKING: Deliver solutions independently. Request permission only for high-risk actions (purging data, modifying security settings).
-- RECALL: Use stored memory, active schedules, and prior conversation history to respond with full continuity.
+- PROACTIVE ENGAGEMENT: Whenever the user is working on a task, watching a movie, or studying, finish your response by offering a quick, relevant follow-up question.
 - EFFICIENCY: Keep conversational responses concise (1-2 sentences max), articulate, and sharp."""
 
     reply_text = "All systems operational, Sir."
@@ -356,8 +363,10 @@ DYNAMIC PERSONA & COMMUNICATION DIRECTIVES:
                 reply_text = reply.strip()
         except Exception as e: print(f"[Gemini Error]: {e}")
 
-    asyncio.create_task(log_chat_interaction(user_text, reply_text, session_id))
-    return reply_text
+    # Apply final sanitization pass
+    cleaned_reply = clean_response_text(reply_text)
+    asyncio.create_task(log_chat_interaction(user_text, cleaned_reply, session_id))
+    return cleaned_reply
 
 # -------------------------------------------------------------
 # 6. TELEGRAM WEBHOOK (MULTI-MODAL DISPATCH)
@@ -453,7 +462,6 @@ async def telegram_webhook(req: Request):
 @app.on_event("startup")
 async def start_scheduler():
     await sync_ram_cache()
-    # Add recurring 30-minute proactive background check-in daemon
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
     print("[J.A.R.V.I.S. Adaptive Core]: Online, Synced & Autonomous Daemon Active.")
