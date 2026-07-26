@@ -86,7 +86,7 @@ CACHE_VOICES = []
 scheduler = AsyncIOScheduler()
 
 # -------------------------------------------------------------
-# 2. SANITIZATION & TEMPORAL ENGINE
+# 2. SANITIZATION, ENCRYPTION & TEMPORAL ENGINE
 # -------------------------------------------------------------
 def clean_response_text(raw_text: str) -> str:
     if not raw_text: return ""
@@ -103,6 +103,26 @@ def get_current_temporal_context() -> str:
     ist_offset = timedelta(hours=5, minutes=30)
     now_ist = now_utc + ist_offset
     return f"\nLIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}\n"
+
+def extract_text_from_pdf(file_bytes: bytes, password: str = None) -> tuple[str, bool]:
+    """Extracts text from PDF, returning (text, is_encrypted)."""
+    try:
+        reader = PdfReader(BytesIO(file_bytes))
+        if reader.is_encrypted:
+            if password:
+                try:
+                    decrypt_success = reader.decrypt(password)
+                    if not decrypt_success:
+                        return "[INVALID_PASSWORD]", True
+                except Exception:
+                    return "[INVALID_PASSWORD]", True
+            else:
+                return "[ENCRYPTED_PDF_LOCKED]", True
+
+        text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
+        return text, False
+    except Exception as e:
+        return f"[PDF Parsing Error: {str(e)}]", False
 
 async def sync_ram_cache():
     global RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS, LAST_CACHE_UPDATE
@@ -141,7 +161,7 @@ async def sync_ram_cache():
     return RAM_MEMORY_CACHE, RAM_SCHEDULE_CACHE, RAM_RECENT_CHATS
 
 # -------------------------------------------------------------
-# 3. DIRECT FILE DISPATCH & AUTONOMOUS TOOLS
+# 3. DIRECT FILE DISPATCH, ENCRYPTION & DECRYPTION TOOLS
 # -------------------------------------------------------------
 async def send_file_from_vault(file_query: str, chat_id: str) -> str:
     """Dispatches and uploads binary PDF file directly via Telegram."""
@@ -178,25 +198,58 @@ async def send_file_from_vault(file_query: str, chat_id: str) -> str:
         print(f"[File Dispatch Error]: {e}")
         return f"Encountered an issue dispatching document for query '{file_query}', Sir."
 
-async def query_document_vault(doc_keyword: str, specific_question: str) -> str:
-    """Deep document reading tool: Retrieves extracted text of specific documents to answer target questions."""
-    if mongo_media_col is None: return "Document vault unavailable, Sir."
+async def query_document_vault(doc_keyword: str, specific_question: str) -> dict:
+    """Deep document reading tool: Checks encryption state and retrieves extracted text."""
+    if mongo_media_col is None: return {"status": "error", "message": "Document vault unavailable, Sir."}
     try:
         q_regex = re.compile(doc_keyword.strip(), re.IGNORECASE) if doc_keyword else None
         filter_clause = {"$or": [{"file_name": q_regex}, {"caption": q_regex}]} if q_regex else {}
-        docs = await mongo_media_col.find(filter_clause).sort("_id", -1).to_list(length=3)
+        target_doc = await mongo_media_col.find_one(filter_clause, sort=[("_id", -1)])
 
-        if not docs:
-            return f"No document matching '{doc_keyword}' was found in your vault, Sir."
+        if not target_doc:
+            return {"status": "error", "message": f"No document matching '{doc_keyword}' was found in your vault, Sir."}
 
-        results = []
-        for d in docs:
-            content = d.get("caption", "").strip()
-            results.append(f"DOCUMENT NAME: '{d.get('file_name')}'\nEXTRACTED TEXT:\n{content[:5000]}")
+        # Check if file is encrypted and locked
+        if target_doc.get("is_encrypted") and target_doc.get("caption") == "[ENCRYPTED_PDF_LOCKED]":
+            return {
+                "status": "encrypted",
+                "file_name": target_doc.get("file_name"),
+                "doc_id": str(target_doc.get("_id"))
+            }
 
-        return "\n\n====================\n\n".join(results)
+        content = target_doc.get("caption", "").strip()
+        return {
+            "status": "success",
+            "file_name": target_doc.get("file_name"),
+            "text": content[:5000]
+        }
     except Exception as e:
-        return f"Document query error: {str(e)}"
+        return {"status": "error", "message": f"Document query error: {str(e)}"}
+
+async def unlock_encrypted_pdf(doc_id_or_name: str, password: str) -> tuple[str, bool]:
+    """Decrypts a stored PDF document with user-provided password."""
+    if mongo_media_col is None: return "Database offline.", False
+    try:
+        q_regex = re.compile(doc_id_or_name.strip(), re.IGNORECASE)
+        target_doc = await mongo_media_col.find_one({"$or": [{"file_name": q_regex}, {"caption": q_regex}]})
+        
+        if not target_doc: return "Document not found.", False
+
+        raw_bytes = base64.b64decode(target_doc["b64_payload"])
+        decrypted_text, is_still_encrypted = extract_text_from_pdf(raw_bytes, password=password)
+
+        if decrypted_text == "[INVALID_PASSWORD]":
+            return "Invalid password provided, Sir. Access denied.", False
+
+        # Update document in MongoDB with decrypted text
+        await mongo_media_col.update_one(
+            {"_id": target_doc["_id"]},
+            {"$set": {"caption": decrypted_text, "is_encrypted": False}}
+        )
+
+        return decrypted_text, True
+    except Exception as e:
+        return f"Decryption failed: {str(e)}", False
 
 async def log_security_breach(unauthorized_id: str, raw_msg: str):
     if mongo_security_col is not None:
@@ -309,19 +362,21 @@ async def log_chat_interaction(user_msg: str, aria_reply: str, session_id: str):
             })
         except Exception: pass
 
-async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = ""):
+async def save_media_file(file_name: str, media_type: str, raw_bytes: bytes, caption: str = "", is_encrypted: bool = False):
     b64_payload = base64.b64encode(raw_bytes).decode('utf-8')
     if mongo_media_col is not None:
         try:
             await mongo_media_col.insert_one({
                 "file_name": file_name, "media_type": media_type,
                 "caption": caption.lower().strip(), "b64_payload": b64_payload,
+                "is_encrypted": is_encrypted,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
         except Exception: pass
 
-    await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Text Preview: {caption[:400]}")
-    return f"Document '{file_name}' fully parsed and secured in your document vault, Sir."
+    await save_memory_fact("media_vault", f"SAVED {media_type.upper()}: '{file_name}' | Status: {'ENCRYPTED_LOCKED' if is_encrypted else 'PARSED_OK'}")
+    status_msg = "is encrypted and secured under Privacy Protocol." if is_encrypted else "fully parsed and secured in your vault."
+    return f"Document '{file_name}' {status_msg}, Sir."
 
 def fetch_web_search(query: str) -> str:
     if not tavily_client: return ""
@@ -415,7 +470,7 @@ GROQ_TOOLS = [
                     "minutes": {"type": "integer", "description": "Number of minutes from now to send the reminder alert"},
                     "task_desc": {"type": "string", "description": "What the user needs to be reminded to do"}
                 },
-                "required": ["minutes", "task_desc"]
+                "required": ["task_desc"]
             }
         }
     },
@@ -447,24 +502,65 @@ GROQ_TOOLS = [
 async def process_autonomous_task(user_text: str, session_id: str, location_info: str = None) -> str:
     cmd = user_text.lower().strip()
 
-    # Simple conversational bypass
+    # Conversational Bypass
     if cmd in ["hello", "hi", "hey", "hola", "start", "/start"]:
         return "At your service, Sir. How may I assist you today?"
 
-    # Security Confirmation Dialogue
+    # 1. PERMISSION & ENCRYPTION PASSWORD GATE EVALUATION
     if session_id in PENDING_SECURITY_ACTIONS:
         pending = PENDING_SECURITY_ACTIONS[session_id]
-        if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "clear"]):
-            del PENDING_SECURITY_ACTIONS[session_id]
-            if pending["type"] == "purge_vault": return await purge_all_vault_data()
-        elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont"]):
-            del PENDING_SECURITY_ACTIONS[session_id]
-            return "Security action aborted, Sir."
+        action_type = pending.get("type")
 
+        # Handle Password Input for Encrypted PDF
+        if action_type == "unlock_pdf":
+            # Extract password from response (e.g. "yes password is 19991234" or "19991234")
+            pwd_match = re.search(r'\b([A-Za-z0-9@#$_]{4,25})\b', user_text.strip())
+            password_input = pwd_match.group(1) if pwd_match else user_text.strip()
+
+            target_doc_keyword = pending["data"]["doc_keyword"]
+            original_q = pending["data"]["original_q"]
+
+            decrypted_text, success = await unlock_encrypted_pdf(target_doc_keyword, password_input)
+            if not success:
+                return f"Security Alert: Decryption failed for '{target_doc_keyword}', Sir. Please state 'Yes' and provide the correct document password."
+
+            del PENDING_SECURITY_ACTIONS[session_id]
+
+            # Generate QA answer using newly decrypted text
+            qa_prompt = f"""User Request: '{original_q}'
+
+DECRYPTED DOCUMENT TEXT FROM VAULT:
+{decrypted_text[:5000]}
+
+MANDATORY PRIVACY DIRECTIVE:
+- Answer the user's specific request using the document content above.
+- Address the user as Sir or Master."""
+
+            qa_comp = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": qa_prompt}],
+                temperature=0.2, max_tokens=250
+            )
+            return qa_comp.choices[0].message.content.strip()
+
+        # Handle standard Security Confirmation
+        if any(k in cmd for k in ["yes", "proceed", "authorize", "do it", "confirm", "sure", "agree", "allow", "grant"]):
+            del PENDING_SECURITY_ACTIONS[session_id]
+            if action_type == "purge_vault":
+                return await purge_all_vault_data()
+            elif action_type == "send_file":
+                return await send_file_from_vault(pending["data"].get("file_query", ""), session_id)
+
+        elif any(k in cmd for k in ["no", "cancel", "stop", "abort", "don't", "dont", "deny", "refuse"]):
+            del PENDING_SECURITY_ACTIONS[session_id]
+            return "Security authorization withheld. Action canceled, Sir."
+
+    # 2. TRIGGER PERMISSION CHECK FOR SENSITIVE COMMANDS
     if any(k in cmd for k in ["delete all data", "clear database", "purge vault", "erase everything"]):
         PENDING_SECURITY_ACTIONS[session_id] = {"type": "purge_vault"}
-        return "Security Protocol Alert: This will permanently wipe all vault records, schedules, and memory. Do you authorize this action, Sir?"
+        return "Security Protocol Alert: This will permanently wipe all database records, schedules, and vault data. Do you grant authorization to proceed, Sir?"
 
+    # 3. STANDARD HYBRID LLM TOOL EXECUTION
     cached_facts, cached_schedules, cached_chats = await sync_ram_cache()
     temporal_context = get_current_temporal_context()
     weather_context = await fetch_weather_by_coords(location_info or "17.6868,83.2185") if any(k in cmd for k in ["weather", "temp", "rain"]) else ""
@@ -484,14 +580,10 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
 {search_context}
 
 CRITICAL ROUTING & PRIVACY DIRECTIVES:
-1. SENSITIVE GOVERNMENT ID REDACTION RULE (AADHAAR / RRN / MYNUMBER):
-   * NEVER print numeric digits of an Aadhaar card, RRN, or MyNumber in text output under any circumstances.
-   * If the user explicitly asks for their Aadhaar number or digits in text, call 'query_document_vault' to inspect the document, then answer:
-     "Per safety and privacy protocols, I cannot display raw government ID digits in text chat. However, I have verified your Aadhaar document is in the vault and can dispatch the PDF directly to your Telegram." (and offer or send the file via 'send_file_from_vault').
-2. ROUTING DISTINCTION:
+1. ROUTING DISTINCTION:
    * Call 'send_file_from_vault' ONLY when the user explicitly asks to receive, download, or dispatch a PDF/document file.
    * Call 'query_document_vault' when the user asks a question about information INSIDE a document.
-3. ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Keep responses concise (1-2 sentences max), articulate, and sharp."""
+2. ADDRESS & SALUTATIONS: Address the user as 'Sir' or 'Master'. Keep responses concise (1-2 sentences max), articulate, and sharp."""
 
     reply_text = ""
 
@@ -517,31 +609,44 @@ CRITICAL ROUTING & PRIVACY DIRECTIVES:
                     if fn_name == "send_file_from_vault":
                         q_term = fn_args.get("file_query", "")
                         if not q_term:
-                            for term in ["aadhar", "resume", "certificate", "cs50", "passport", "guide"]:
+                            for term in ["resume", "certificate", "cs50", "passport", "guide", "aadhar"]:
                                 if term in cmd: q_term = term; break
                         reply_text = await send_file_from_vault(q_term, session_id)
 
                     elif fn_name == "query_document_vault":
                         doc_keyword = fn_args.get("doc_keyword", user_text)
                         specific_q = fn_args.get("specific_question", user_text)
-                        retrieved_doc_text = await query_document_vault(doc_keyword, specific_q)
+                        doc_res = await query_document_vault(doc_keyword, specific_q)
 
-                        qa_prompt = f"""User Request: '{user_text}'
+                        # Check if target document is encrypted and locked
+                        if doc_res.get("status") == "encrypted":
+                            PENDING_SECURITY_ACTIONS[session_id] = {
+                                "type": "unlock_pdf",
+                                "data": {
+                                    "doc_keyword": doc_keyword,
+                                    "original_q": user_text
+                                }
+                            }
+                            return f"Privacy Protocol Alert: Document '{doc_res.get('file_name')}' is password-protected. Do you grant authorization to access it? Please state 'Yes' and provide the document password, Sir."
+
+                        if doc_res.get("status") == "error":
+                            reply_text = doc_res.get("message")
+                        else:
+                            qa_prompt = f"""User Request: '{user_text}'
 
 DOCUMENT TEXT FROM VAULT:
-{retrieved_doc_text}
+{doc_res.get('text')}
 
-MANDATORY INSTRUCTIONS:
-- Answer the user's specific request using the document text above.
-- STRICT PRIVACY RULE: Do NOT output numeric digits of sensitive government IDs (Aadhaar, RRN, MyNumber). If asked for Aadhaar digits, explain privacy redaction and offer to send the PDF file.
+MANDATORY PRIVACY DIRECTIVE:
+- Answer the user's specific request using the document content above.
 - Address the user as Sir or Master."""
 
-                        qa_comp = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
-                            temperature=0.2, max_tokens=250
-                        )
-                        reply_text = qa_comp.choices[0].message.content.strip()
+                            qa_comp = groq_client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
+                                temperature=0.2, max_tokens=250
+                            )
+                            reply_text = qa_comp.choices[0].message.content.strip()
 
                     elif fn_name == "create_time_reminder":
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
@@ -620,8 +725,8 @@ async def telegram_webhook(req: Request):
                 raw_bytes_res = await client.get(f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}")
                 raw_bytes = raw_bytes_res.content
 
-            extracted_text = extract_text_from_pdf(raw_bytes) if default_name.lower().endswith(".pdf") else "Binary File"
-            save_reply = await save_media_file(default_name, media_type, raw_bytes, caption=extracted_text)
+            extracted_text, is_encrypted = extract_text_from_pdf(raw_bytes) if default_name.lower().endswith(".pdf") else ("Binary File", False)
+            save_reply = await save_media_file(default_name, media_type, raw_bytes, caption=extracted_text, is_encrypted=is_encrypted)
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": save_reply})
             return {"status": "ok"}
@@ -640,7 +745,7 @@ async def start_scheduler():
     await sync_ram_cache()
     scheduler.add_job(autonomous_proactive_checkin, 'interval', minutes=30, id="proactive_checkin_job")
     scheduler.start()
-    print("[J.A.R.V.I.S. Precision Routing Core]: Online and Synced.")
+    print("[J.A.R.V.I.S. Encrypted Vault & Permission Engine]: Online and Synced.")
 
 # -------------------------------------------------------------
 # 7. SPEECH & FRONTEND HUD
@@ -662,21 +767,15 @@ async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-Ryan
             if chunk["type"] == "audio": audio_data.extend(chunk["data"])
         return base64.b64encode(audio_data).decode('utf-8')
 
-def extract_text_from_pdf(file_bytes: bytes) -> str:
-    try:
-        reader = PdfReader(BytesIO(file_bytes))
-        return "".join([page.extract_text() or "" for page in reader.pages]).strip()
-    except Exception: return ""
-
 @app.head("/health")
 @app.get("/health")
 def health_check():
-    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA J.A.R.V.I.S. Core Active"})
+    return JSONResponse(status_code=200, content={"status": "online", "database": "MongoDB Atlas", "system": "ARIA Encrypted Vault Engine Active"})
 
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def serve_webapp():
-    return f"<h1>ARIA Precision Routing Core Online</h1>"
+    return f"<h1>ARIA Encrypted Vault Core Online</h1>"
 
 # -------------------------------------------------------------
 # 8. WEBSOCKET STREAMING & UPLOAD ROUTE
@@ -701,6 +800,6 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...), category: str = "documents"):
     file_bytes = await file.read()
-    pdf_text = extract_text_from_pdf(file_bytes)
-    await save_media_file(file.filename, "document", file_bytes, caption=pdf_text[:5000])
+    extracted_text, is_encrypted = extract_text_from_pdf(file_bytes)
+    await save_media_file(file.filename, "document", file_bytes, caption=extracted_text[:5000], is_encrypted=is_encrypted)
     return {"status": "ok"}
