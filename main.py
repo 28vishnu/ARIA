@@ -15,7 +15,7 @@ import openpyxl
 import edge_tts
 
 # Modular Imports
-from planner import planner
+from planner import iterative_planner
 from tool_manager import ToolManager
 from reasoner import reason, evaluate_confidence
 
@@ -106,29 +106,58 @@ def get_temporal() -> str:
     now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     return f"LIVE TEMPORAL CONTEXT: {now_ist.strftime('%A, %B %d, %Y at %I:%M:%S %p IST')}"
 
-async def process_task(user_text: str, session_id: str) -> str:
-    cmd = user_text.lower().strip()
+def get_embedding(text: str) -> list[float]:
+    gem = get_gemini()
+    if not gem: return [0.0] * 768
+    try:
+        res = gem.models.embed_content(model="text-embedding-004", contents=text[:2000])
+        return res.embedding.values
+    except Exception:
+        return [0.0] * 768
 
-    # 1. AI Planner execution
+async def process_task(user_text: str, session_id: str) -> str:
     groq = get_groq()
     tavily = get_tavily()
     docs_col, mem_col = get_collections()
 
-    plan = await planner(user_text, groq)
-
-    # 2. Execute Tools via Tool Manager
     tool_mgr = ToolManager(mem_col, docs_col, tavily)
-    context = await tool_mgr.execute_plan(plan, user_text)
+    available_tools_desc = tool_mgr.describe_tools()
 
-    # 3. Reasoning Engine
-    raw_answer = await reason(user_text, context, groq, get_temporal())
+    # --- ITERATIVE AGENTIC LOOP ---
+    executed_tools = []
+    structured_context = {"memory": "", "documents": "", "web": ""}
 
-    # 4. Self-check confidence loop
+    for _ in range(3):  # Max 3 planning iterations
+        plan = await iterative_planner(user_text, available_tools_desc, executed_tools, groq)
+        tools_to_run = plan.get("tools", [])
+
+        if not tools_to_run:
+            break
+
+        for t_name in tools_to_run:
+            if t_name not in executed_tools:
+                result = await tool_mgr.execute_tool(t_name, user_text)
+                structured_context[t_name] = result
+                executed_tools.append(t_name)
+
+    # --- REASONER ---
+    raw_answer = await reason(user_text, structured_context, groq, get_temporal(), available_tools_desc)
+
+    # --- PROGRESSIVE CONFIDENCE ESCALATION LOOP ---
     confidence = await evaluate_confidence(raw_answer, groq)
-    if confidence < 70 and tavily:
-        extra_search = await tool_mgr.tools["web"].execute(user_text, tavily)
-        context += f"\n{extra_search}"
-        raw_answer = await reason(user_text, context, groq, get_temporal())
+    if confidence < 70 and "memory" not in executed_tools:
+        structured_context["memory"] = await tool_mgr.execute_tool("memory", user_text)
+        raw_answer = await reason(user_text, structured_context, groq, get_temporal(), available_tools_desc)
+        confidence = await evaluate_confidence(raw_answer, groq)
+
+    if confidence < 70 and "documents" not in executed_tools:
+        structured_context["documents"] = await tool_mgr.execute_tool("documents", user_text)
+        raw_answer = await reason(user_text, structured_context, groq, get_temporal(), available_tools_desc)
+        confidence = await evaluate_confidence(raw_answer, groq)
+
+    if confidence < 70 and "web" not in executed_tools and tavily:
+        structured_context["web"] = await tool_mgr.execute_tool("web", user_text)
+        raw_answer = await reason(user_text, structured_context, groq, get_temporal(), available_tools_desc)
 
     cleaned = clean_text(raw_answer)
 
@@ -170,4 +199,4 @@ def health():
 @app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return "<h1>ARIA Modular Agentic Core Active</h1>"
+    return "<h1>ARIA Iterative Agentic Core Active</h1>"
