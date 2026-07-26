@@ -35,9 +35,6 @@ from apscheduler.triggers.date import DateTrigger
 
 app = FastAPI()
 
-# -------------------------------------------------------------
-# LLM PROVIDER ABSTRACTION LAYER (AUTOMATIC FALLBACK)
-# -------------------------------------------------------------
 class LLMProvider:
     async def chat(self, messages: list[dict], temperature: float = 0.2, max_tokens: int = 350) -> str:
         raise NotImplementedError
@@ -92,7 +89,6 @@ class FallbackRouter(LLMProvider):
 
 llm_router = FallbackRouter()
 
-# Lazy-loaded Globals
 _tavily_client = None
 _mongo_client = None
 _chroma_client = None
@@ -124,16 +120,14 @@ def get_chroma():
 
 def get_collections():
     client = get_chroma()
-    docs_col = client.get_or_create_collection(name="documents")
-    mem_col = client.get_or_create_collection(name="memory")
-    return docs_col, mem_col
+    return client.get_or_create_collection(name="documents"), client.get_or_create_collection(name="memory")
 
 def get_mongo_collections():
     db = get_mongo()
     if db is not None:
         db_inst = db["aria_db"]
-        return db_inst["personal_memory"], db_inst["media_vault"], db_inst["chat_history"]
-    return None, None, None
+        return db_inst["personal_memory"], db_inst["media_vault"], db_inst["chat_history"], db_inst["tasks_schedule"]
+    return None, None, None, None
 
 scheduler = AsyncIOScheduler()
 
@@ -149,23 +143,21 @@ async def process_task(user_text: str, session_id: str) -> str:
     print(f"[STAGE 0] Processing task for session {session_id}: '{user_text}'")
     lower_txt = user_text.lower()
 
-    # Fast Intent Bypass for Simple Messages (Zero Token Usage)
     if lower_txt in ["/start", "hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening"]:
         return "Online and fully operational, Sir. How may I assist you today?"
 
     tavily = get_tavily()
     docs_col, mem_col = get_collections()
-    _, _, chats_col = get_mongo_collections()
+    mem_mongo, media_col, chats_col, schedule_col = get_mongo_collections()
 
     conv_mgr = ConversationManager(chats_col)
     session_context = await conv_mgr.build_session_context(session_id)
 
-    tool_mgr = ToolManager(mem_col, docs_col, tavily)
+    tool_mgr = ToolManager(mem_col, docs_col, media_col, schedule_col, tavily)
     available_tools_desc = tool_mgr.describe_tools()
 
-    # --- ITERATIVE ACTION PLANNER LOOP ---
     executed_tools = []
-    structured_results = {"memory": {}, "documents": {}, "web": {}}
+    structured_results = {"memory": {}, "documents": {}, "web": {}, "media": {}, "schedule": {}}
 
     for i in range(3):  
         print(f"[STAGE 1] Running action planner (iteration {i+1})...")
@@ -185,16 +177,14 @@ async def process_task(user_text: str, session_id: str) -> str:
         for t_name in tools_to_run:
             if t_name not in executed_tools:
                 print(f"[STAGE 2] Executing tool: {t_name}")
-                result = await tool_mgr.execute_tool(t_name, user_text)
+                result = await tool_mgr.execute_tool(t_name, user_text, chat_id=session_id)
                 structured_results[t_name] = result
                 executed_tools.append(t_name)
 
-    # --- STATEFUL REASONER ---
     print("[STAGE 3] Invoking reasoner...")
     raw_answer = await reason(user_text, structured_results, llm_router, get_temporal(), available_tools_desc, session_context)
     cleaned = clean_text(raw_answer)
 
-    # Log interaction
     if chats_col is not None:
         asyncio.create_task(chats_col.insert_one({"session_id": session_id, "user_msg": user_text, "aria_reply": cleaned, "timestamp": datetime.now(timezone.utc).isoformat()}))
 
