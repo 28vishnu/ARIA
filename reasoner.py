@@ -1,17 +1,17 @@
 from groq import Groq
-from personality import SYSTEM_PROMPT
+from personality import assemble_system_prompt
 
-async def reason(user_message: str, context: str, groq_client: Groq, temporal_ctx: str) -> str:
+async def reason(user_message: str, structured_context: dict, groq_client: Groq, temporal_ctx: str, tools_desc: dict) -> str:
     if not groq_client:
         return "Neural systems offline, Sir."
 
-    full_system = f"{SYSTEM_PROMPT}\n{temporal_ctx}\n\n[COLLECTED CONTEXT]:\n{context}"
+    system_prompt = assemble_system_prompt(temporal_ctx, structured_context, str(tools_desc))
 
     try:
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": full_system},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
@@ -22,8 +22,7 @@ async def reason(user_message: str, context: str, groq_client: Groq, temporal_ct
         return f"Reasoning engine error: {str(e)}"
 
 async def evaluate_confidence(answer: str, groq_client: Groq) -> int:
-    """Self-check confidence evaluation (0-100 score)."""
-    if not groq_client: return 100
+    if not groq_client: return 90
     prompt = f"Rate the completeness and accuracy of this response on a scale of 0 to 100. Return only the integer score: '{answer}'"
     try:
         res = groq_client.chat.completions.create(
