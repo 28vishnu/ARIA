@@ -3,8 +3,9 @@ import re
 from groq import Groq
 
 async def action_planner(user_message: str, session_context: str, tool_descriptions: dict, executed_tools: list, groq_client: Groq) -> dict:
-    """Action-based iterative planner that determines goal, action type, and required tools."""
+    print(f"[STAGE 2.1 - PLANNER] Analyzing user message: '{user_message}'")
     if not groq_client:
+        print("[STAGE 2.2 - PLANNER] Error: Groq client unconfigured in planner.")
         return {"goal": "default", "action": "retrieve", "tools": []}
 
     tools_json = json.dumps(tool_descriptions, indent=2)
@@ -50,7 +51,9 @@ If no further tools are needed, return an empty list for tools:
         )
         raw = response.choices[0].message.content.strip()
         raw = re.sub(r'```json\s*|\s*```', '', raw)
-        return json.loads(raw)
+        plan_dict = json.loads(raw)
+        print(f"[STAGE 2.3 - PLANNER] Successfully generated plan: {plan_dict}")
+        return plan_dict
     except Exception as e:
-        print(f"[Action Planner Error]: {e}")
+        print(f"[STAGE 2.4 - PLANNER EXCEPTION]: {e}")
         return {"goal": "error", "action": "retrieve", "tools": []}
