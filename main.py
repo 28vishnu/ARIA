@@ -22,7 +22,7 @@ from google.genai import types
 from tavily import TavilyClient
 import motor.motor_asyncio
 
-# ChromaDB SDK (No local sentence-transformers)
+# ChromaDB SDK
 import chromadb
 
 # Scheduler SDKs
@@ -381,7 +381,7 @@ async def process_autonomous_task(user_text: str, session_id: str, location_info
     # 4. ASSEMBLE CONTEXT
     global RAM_MEMORY_CACHE, RAM_RECENT_CHATS
     mem_text = await query_vector_memory(user_text) if plan.get("memory") else ""
-    doc_text = await query_vector_documents(user_text) if plan.get("documents") else ""
+    doc_text = await query_vector_docs(user_text) if plan.get("documents") else ""
     tavily = get_tavily()
     web_text = ""
     if plan.get("internet") and tavily:
