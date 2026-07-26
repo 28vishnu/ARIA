@@ -14,8 +14,7 @@ Respond STRICTLY in valid JSON format with no extra commentary:
 {{
     "action": "retrieve",
     "tools": ["tool_name_1"]
-}
-}
+}}
 """
     messages = [
         {"role": "system", "content": "You are a precise JSON-only decision planner."},
