@@ -12,7 +12,7 @@ class MemoryTool(BaseTool):
     CAPABILITIES = ["preferences", "past facts", "user statements", "history"]
 
     async def execute(self, query: str, memory_collection) -> dict:
-        if not memory_collection: 
+        if memory_collection is None: 
             return {"success": False, "source": "memory", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = memory_collection.query(query_texts=[query], n_results=5)
@@ -29,7 +29,7 @@ class DocumentTool(BaseTool):
     CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes"]
 
     async def execute(self, query: str, documents_collection) -> dict:
-        if not documents_collection: 
+        if documents_collection is None: 
             return {"success": False, "source": "documents", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = documents_collection.query(query_texts=[query], n_results=4)
@@ -46,7 +46,7 @@ class SearchTool(BaseTool):
     CAPABILITIES = ["news", "weather", "current events", "live facts"]
 
     async def execute(self, query: str, tavily_client) -> dict:
-        if not tavily_client: 
+        if tavily_client is None: 
             return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             res = tavily_client.search(query=query, max_results=3)
@@ -79,7 +79,7 @@ class ToolManager:
 
     async def execute_tool(self, tool_name: str, query: str) -> dict:
         tool = self.registry.get(tool_name)
-        if not tool: 
+        if tool is None: 
             return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
 
         if tool_name == "memory":
