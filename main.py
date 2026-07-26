@@ -18,6 +18,7 @@ import edge_tts
 # Provider SDKs
 from groq import Groq
 from google import genai
+from google.genai import types
 from tavily import TavilyClient
 import motor.motor_asyncio
 
@@ -75,7 +76,7 @@ mongo_db = mongo_client["aria_db"] if mongo_client else None
 mongo_memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
 mongo_tasks_col = mongo_db["tasks_schedule"] if mongo_db is not None else None
 mongo_media_col = mongo_db["media_vault"] if mongo_db is not None else None
-mongo_chats_col = mongo_db["chat_history"] if mongo_media_col is not None else None
+mongo_chats_col = mongo_db["chat_history"] if mongo_db is not None else None
 mongo_reminders_col = mongo_db["reminders"] if mongo_db is not None else None
 mongo_security_col = mongo_db["security_logs"] if mongo_db is not None else None
 
@@ -133,7 +134,7 @@ def parse_document_bytes(file_name: str, file_bytes: bytes, password: str = None
                 if password:
                     try:
                         decrypt_success = reader.decrypt(password)
-                        if not decrypt_speed := decrypt_success:
+                        if not decrypt_success:
                             return "[INVALID_PASSWORD]", True
                     except Exception:
                         return "[INVALID_PASSWORD]", True
@@ -168,7 +169,6 @@ def parse_document_bytes(file_name: str, file_bytes: bytes, password: str = None
 # 4. MULTI-AGENT PLANNER & GEMINI VISION OCR AGENT
 # -------------------------------------------------------------
 async def ai_planner(user_text: str) -> dict:
-    """AI-driven planner replacing hardcoded keywords."""
     prompt = f"""Analyze the user request and determine which agents/tools are needed.
 User Request: "{user_text}"
 
@@ -187,12 +187,10 @@ Return strict JSON format with boolean flags:
                 temperature=0.1, max_tokens=150
             )
             raw_res = comp.choices[0].message.content.strip()
-            # Clean markdown JSON block if present
             raw_res = re.sub(r'```json\s*|\s*```', '', raw_res)
             return json.loads(raw_res)
         except Exception:
             pass
-    # Fallback heuristic planner
     return {
         "memory": any(w in user_text.lower() for w in ["remember", "before", "told", "my", "preference", "favorite"]),
         "documents": any(w in user_text.lower() for w in ["pdf", "certificate", "resume", "document", "file", "sheet"]),
@@ -201,7 +199,6 @@ Return strict JSON format with boolean flags:
     }
 
 async def process_image_with_gemini_vision(image_bytes: bytes, file_name: str) -> str:
-    """Uses Gemini Flash Vision for deep multimodal image understanding & OCR."""
     if not gemini_client:
         return "Image uploaded successfully."
     try:
@@ -217,7 +214,6 @@ async def process_image_with_gemini_vision(image_bytes: bytes, file_name: str) -
                 ]
             )
             return response.text
-        # Executed via thread to keep async clean
         description = await asyncio.to_thread(_gem_vision)
         return description.strip()
     except Exception as e:
@@ -691,7 +687,22 @@ CRITICAL OPERATIONAL DIRECTIVES:
                     elif fn_name == "query_document_vault":
                         specific_q = fn_args.get("specific_question", user_text)
                         doc_text = await query_vector_documents(specific_q)
-                        reply_text = doc_text[:1500]
+
+                        qa_prompt = f"""User Request: '{user_text}'
+
+CHROMA VECTOR SEARCH RESULTS:
+{doc_text}
+
+MANDATORY DIRECTIVE:
+- Answer the user's specific request using the document text above concisely.
+- Address the user as Sir or Master."""
+
+                        qa_comp = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": qa_prompt}],
+                            temperature=0.2, max_tokens=250
+                        )
+                        reply_text = qa_comp.choices[0].message.content.strip()
 
                     elif fn_name == "create_time_reminder":
                         reply_text = await create_time_reminder(fn_args.get("minutes", 5), fn_args.get("task_desc", "Task"))
@@ -820,7 +831,7 @@ async def start_scheduler():
     print("[J.A.R.V.I.S. Multi-Agent Vector Core]: Online and Synced.")
 
 # -------------------------------------------------------------
-# 8. SPEECH & FRONTEND HUD
+# 7. SPEECH & FRONTEND HUD
 # -------------------------------------------------------------
 async def generate_speech_audio_b64(text: str, selected_voice: str = "en-GB-RyanNeural") -> str:
     is_telugu_script = bool(re.search(r'[\u0C00-\u0C7F]', text))
@@ -850,7 +861,7 @@ def serve_webapp():
     return f"<h1>ARIA Multi-Agent Vector-Indexed J.A.R.V.I.S. Core Online</h1>"
 
 # -------------------------------------------------------------
-# 9. WEBSOCKET STREAMING & UPLOAD ROUTE
+# 8. WEBSOCKET STREAMING & UPLOAD ROUTE
 # -------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
