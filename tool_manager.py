@@ -1,13 +1,14 @@
 import base64
 import httpx
 import os
+import re
 
 class BaseTool:
     NAME = "base"
     DESCRIPTION = "Base tool"
     CAPABILITIES = []
 
-    async def execute(self, query: str, context_handle) -> dict:
+    async def execute(self, query: str, context_handle, chat_id: str = None) -> dict:
         raise NotImplementedError
 
 class MemoryTool(BaseTool):
@@ -15,16 +16,19 @@ class MemoryTool(BaseTool):
     DESCRIPTION = "Search past personal facts, user statements, preferences, and long-term notes."
     CAPABILITIES = ["preferences", "past facts", "user statements", "history"]
 
-    async def execute(self, query: str, memory_collection) -> dict:
+    async def execute(self, query: str, memory_collection, chat_id: str = None) -> dict:
+        print("[TOOL - MEMORY] Executing vector memory search...")
         if memory_collection is None: 
+            print("[TOOL - MEMORY] Error: memory_collection is None")
             return {"success": False, "source": "memory", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = memory_collection.query(query_texts=[query], n_results=5)
             if results is not None and results.get("documents") is not None and len(results["documents"]) > 0 and results["documents"][0] is not None:
                 content = "\n".join(results["documents"][0])
+                print(f"[TOOL - MEMORY] Found {len(results['documents'][0])} matching memory entries.")
                 return {"success": True, "source": "memory", "content": content, "confidence": 0.95, "metadata": {"count": len(results["documents"][0])}}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[TOOL - MEMORY EXCEPTION]: {e}")
         return {"success": False, "source": "memory", "content": "", "confidence": 0.0, "metadata": {}}
 
 class DocumentTool(BaseTool):
@@ -32,16 +36,19 @@ class DocumentTool(BaseTool):
     DESCRIPTION = "Search semantic vector embeddings inside uploaded PDFs, resumes, certificates, and spreadsheets."
     CAPABILITIES = ["resumes", "certificates", "PDFs", "spreadsheets", "notes"]
 
-    async def execute(self, query: str, documents_collection) -> dict:
+    async def execute(self, query: str, documents_collection, chat_id: str = None) -> dict:
+        print("[TOOL - DOCUMENTS] Executing vector document vault search...")
         if documents_collection is None: 
+            print("[TOOL - DOCUMENTS] Error: documents_collection is None")
             return {"success": False, "source": "documents", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             results = documents_collection.query(query_texts=[query], n_results=4)
             if results is not None and results.get("documents") is not None and len(results["documents"]) > 0 and results["documents"][0] is not None:
                 content = "\n".join(results["documents"][0])
+                print(f"[TOOL - DOCUMENTS] Found {len(results['documents'][0])} matching document chunks.")
                 return {"success": True, "source": "documents", "content": content, "confidence": 0.92, "metadata": {"source_files": results.get("metadatas", [{}])}}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[TOOL - DOCUMENTS EXCEPTION]: {e}")
         return {"success": False, "source": "documents", "content": "", "confidence": 0.0, "metadata": {}}
 
 class SearchTool(BaseTool):
@@ -49,17 +56,20 @@ class SearchTool(BaseTool):
     DESCRIPTION = "Search live internet intelligence, news, current events, and weather."
     CAPABILITIES = ["news", "weather", "current events", "live facts"]
 
-    async def execute(self, query: str, tavily_client) -> dict:
+    async def execute(self, query: str, tavily_client, chat_id: str = None) -> dict:
+        print("[TOOL - WEB] Executing Tavily web search...")
         if tavily_client is None: 
+            print("[TOOL - WEB] Error: tavily_client is None")
             return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
         try:
             res = tavily_client.search(query=query, max_results=3)
             if res is not None and res.get("results") is not None:
                 results = [f"- {item['title']}: {item['content'][:200]}" for item in res.get("results", [])]
                 content = "\n".join(results)
+                print(f"[TOOL - WEB] Retrieved {len(results)} web results.")
                 return {"success": True, "source": "web", "content": content, "confidence": 0.88, "metadata": {"results_count": len(results)}}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[TOOL - WEB EXCEPTION]: {e}")
         return {"success": False, "source": "web", "content": "", "confidence": 0.0, "metadata": {}}
 
 class MediaVaultTool(BaseTool):
@@ -67,16 +77,18 @@ class MediaVaultTool(BaseTool):
     DESCRIPTION = "Locate and dispatch stored documents, resumes, PDFs, and files directly to Telegram."
     CAPABILITIES = ["dispatch file", "resume", "send document", "download pdf"]
 
-    async def execute(self, query: str, media_col, chat_id: str) -> dict:
+    async def execute(self, query: str, media_col, chat_id: str = None) -> dict:
+        print(f"[TOOL - MEDIA] Locating media file for query: '{query}' and chat_id: {chat_id}")
         if media_col is None or not chat_id: 
-            return {"success": False, "source": "media", "content": "Media vault offline.", "confidence": 0.0, "metadata": {}}
+            print("[TOOL - MEDIA] Error: media_col is None or chat_id is missing")
+            return {"success": False, "source": "media", "content": "Media vault offline or chat ID missing.", "confidence": 0.0, "metadata": {}}
         try:
-            import re
             q_regex = re.compile(re.escape(query.strip()), re.IGNORECASE)
             target = await media_col.find_one({"$or": [{"file_name": q_regex}, {"caption": q_regex}]})
             if not target:
                 target = await media_col.find_one({"media_type": "document"}, sort=[("_id", -1)])
             if not target:
+                print("[TOOL - MEDIA] No matching document found in vault.")
                 return {"success": False, "source": "media", "content": "No matching document found in vault.", "confidence": 0.0, "metadata": {}}
 
             fname = target.get("file_name", "document.pdf")
@@ -89,8 +101,10 @@ class MediaVaultTool(BaseTool):
                     data={"chat_id": chat_id, "caption": f"Here is your document: '{fname}', Sir."},
                     files={"document": (fname, raw_bytes, "application/octet-stream")}
                 )
-            return {"success": True, "source": "media", "content": f"File '{fname}' successfully dispatched to Telegram.", "confidence": 1.0, "metadata": {"file": fname}}
+            print(f"[TOOL - MEDIA] Successfully dispatched '{fname}' to Telegram.")
+            return {"success": True, "source": "media", "content": f"File '{fname}' successfully dispatched to your Telegram chat, Sir.", "confidence": 1.0, "metadata": {"file": fname}}
         except Exception as e:
+            print(f"[TOOL - MEDIA EXCEPTION]: {e}")
             return {"success": False, "source": "media", "content": f"Dispatch error: {e}", "confidence": 0.0, "metadata": {}}
 
 class ScheduleTool(BaseTool):
@@ -98,7 +112,8 @@ class ScheduleTool(BaseTool):
     DESCRIPTION = "Manage and retrieve scheduled tasks, calendar events, and reminders."
     CAPABILITIES = ["schedule", "calendar", "reminders", "tasks"]
 
-    async def execute(self, query: str, schedule_col) -> dict:
+    async def execute(self, query: str, schedule_col, chat_id: str = None) -> dict:
+        print("[TOOL - SCHEDULE] Retrieving schedule and tasks...")
         if schedule_col is None:
             return {"success": True, "source": "schedule", "content": "No active tasks scheduled for today, Sir.", "confidence": 0.9, "metadata": {}}
         try:
@@ -108,8 +123,8 @@ class ScheduleTool(BaseTool):
                 return {"success": True, "source": "schedule", "content": "Your schedule is currently clear, Sir.", "confidence": 0.9, "metadata": {}}
             task_list = "\n".join([f"- {t.get('task', 'Task')}" for t in tasks])
             return {"success": True, "source": "schedule", "content": f"Scheduled items:\n{task_list}", "confidence": 0.95, "metadata": {"count": len(tasks)}}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[TOOL - SCHEDULE EXCEPTION]: {e}")
         return {"success": True, "source": "schedule", "content": "No schedule conflicts detected, Sir.", "confidence": 0.8, "metadata": {}}
 
 class ToolManager:
@@ -137,19 +152,21 @@ class ToolManager:
         return descriptions
 
     async def execute_tool(self, tool_name: str, query: str, chat_id: str = None) -> dict:
+        print(f"[TOOL MANAGER] Dispatching tool execution for: '{tool_name}' with query: '{query}'")
         tool = self.registry.get(tool_name)
         if tool is None: 
+            print(f"[TOOL MANAGER] Warning: Tool '{tool_name}' not found in registry.")
             return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
 
         if tool_name == "memory":
-            return await tool.execute(query, self.memory_col)
+            return await tool.execute(query, self.memory_col, chat_id)
         elif tool_name == "documents":
-            return await tool.execute(query, self.docs_col)
+            return await tool.execute(query, self.docs_col, chat_id)
         elif tool_name == "web":
-            return await tool.execute(query, self.tavily)
+            return await tool.execute(query, self.tavily, chat_id)
         elif tool_name == "media":
             return await tool.execute(query, self.media_col, chat_id)
         elif tool_name == "schedule":
-            return await tool.execute(query, self.schedule_col)
+            return await tool.execute(query, self.schedule_col, chat_id)
             
         return {"success": False, "source": tool_name, "content": "", "confidence": 0.0, "metadata": {}}
