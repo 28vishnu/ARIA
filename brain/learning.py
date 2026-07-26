@@ -2,11 +2,11 @@ from datetime import datetime, timezone
 from .freshness import calculate_expiration
 
 def store_or_update_knowledge(collection, question: str, answer: str, topic: str, category: str, summary: str, source: str, confidence: float, verified: bool, knowledge_type: str, embedding_fn):
-    """Handles duplicate detection via similarity checks, updating or inserting clean knowledge."""
     try:
         emb = embedding_fn(question)
-        
-        # 1. Duplicate Detection (Similarity threshold < 0.20 indicates near-identical intent)
+        if all(v == 0.0 for v in emb):
+            return # Do not index if embedding generation failed
+
         existing = collection.query(
             query_embeddings=[emb],
             n_results=1,
@@ -30,7 +30,6 @@ def store_or_update_knowledge(collection, question: str, answer: str, topic: str
             print(f"[Learning Engine]: Duplicate detected. Updated entry ID: {doc_id}")
             return
 
-        # 2. Insert New Knowledge Entry
         doc_id = f"brain_{datetime.now().timestamp()}"
         combined_doc = f"""
 Topic: {topic}
