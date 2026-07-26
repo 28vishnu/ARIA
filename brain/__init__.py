@@ -1,2 +1,4 @@
 from .brain import AriaBrain
-__all__ = ["AriaBrain"]
+from .graph import KnowledgeGraph
+
+__all__ = ["AriaBrain", "KnowledgeGraph"]
