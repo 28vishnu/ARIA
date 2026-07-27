@@ -14,12 +14,6 @@ from personality.response import SystemResponse
 setup_logging("INFO")
 logger = logging.getLogger("aria")
 
-GREETINGS = {
-    "hi", "hello", "hey", "hii", "hi there", "hello there",
-    "good morning", "good afternoon", "good evening", "greetings",
-    "how are you", "what's up", "sup"
-}
-
 class BackgroundTaskManager:
     def __init__(self):
         self.tasks = set()
@@ -103,57 +97,19 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         "document_intelligence": registry.get("document_intelligence") if registry.has("document_intelligence") else None
     }
 
-    cleaned_text = user_text.lower().strip()
-
-    # Fast-Path: Bypass planning/execution for conversational greetings, leaving wording to PersonalityEngine
-    if cleaned_text in GREETINGS:
-        sys_res = SystemResponse(
-            success=True,
-            confidence=1.0,
-            data={"intent": "greeting", "query": user_text},
-            source="greeting_fast_path"
-        )
-        return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
-
-    # 1. Strict SkillManager Routing & Direct Execution
-    skill_response = await ctx.skill_manager.route_and_execute(user_text, base_context)
-    if skill_response.success and skill_response.confidence >= 0.85:
-        sys_res = SystemResponse(
-            success=True,
-            confidence=skill_response.confidence,
-            data=skill_response.data,
-            source=skill_response.source
-        )
-        return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
-
-    # 2. Planner + Executor Orchestration Fallback
-    plan = await ctx.planner.create_plan(user_text, base_context)
-    
-    # Graceful handling if planner returns empty task list
-    if not plan.tasks:
-        sys_res = SystemResponse(
-            success=True,
-            confidence=plan.confidence,
-            data={"intent": "conversational", "query": user_text},
-            source="planner_conversational"
-        )
-        return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
-
-    exec_result = await ctx.executor.execute_plan(plan, base_context)
-
-    final_data = exec_result.get("task_outputs", {})
-    success = exec_result.get("success", False)
-    combined_confidence = round((plan.confidence + skill_response.confidence) / 2.0, 2)
-
-    sys_res = SystemResponse(
-        success=success,
-        confidence=combined_confidence,
-        data=final_data,
-        source="planner_executor",
-        error=None if success else "Orchestration tasks encountered failures."
+    # Delegate core request processing entirely to CognitiveCore
+    sys_res = await ctx.cognitive_core.process(
+        query=user_text,
+        session_id=session_id,
+        user_id=session_id,
+        base_context=base_context
     )
 
-    return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
+    return ctx.personality_engine.apply_personality(
+        session_id,
+        user_text,
+        sys_res
+    )
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
