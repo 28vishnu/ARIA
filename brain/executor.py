@@ -14,12 +14,11 @@ class Executor:
         self.verifier = Verifier()
 
     async def execute_plan(self, plan: ExecutionPlan, base_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolves dependencies, runs planned tasks via exact skill mapping, manages state, and handles retries."""
+        """Resolves dependencies, runs planned tasks via exact skill mapping, and manages retries."""
         task_outputs: Dict[str, Any] = {}
         completed: list = []
         failed: list = []
         
-        tasks_map = {t.id: t for t in plan.tasks}
         executed = set()
 
         while len(executed) < len(plan.tasks):
@@ -37,20 +36,21 @@ class Executor:
                 success = False
                 res: SkillResponse = SkillResponse(success=False, confidence=0.0, source=task.skill, error="Uninitialized")
 
-                # Resolve dynamic input variables from prior task outputs
                 resolved_input = dict(task.input)
                 for dep_id in task.depends_on:
                     if dep_id in task_outputs:
                         resolved_input[f"context_from_{dep_id}"] = task_outputs[dep_id]
 
-                # Execute with strict retry policy (Fixed off-by-one condition: retry_count < max_retries)
-                while task.retry_count < task.max_retries and not success:
+                # Strict retry semantics: Initial attempt + up to max_retries
+                attempt = 0
+                max_attempts = task.max_retries + 1
+
+                while attempt < max_attempts and not success:
                     start_time = time.perf_counter()
                     
                     exec_context = dict(base_context)
                     exec_context["task_input"] = resolved_input
 
-                    # Direct execution using the skill chosen by the planner
                     res = await self.skill_manager.execute_skill(
                         task.skill,
                         resolved_input.get("query", plan.goal),
@@ -64,8 +64,10 @@ class Executor:
                         success = True
                         break
                     else:
-                        task.retry_count += 1
-                        logger.warning("[Executor] Retrying task %s (Attempt %d/%d)", task.id, task.retry_count, task.max_retries)
+                        attempt += 1
+                        task.retry_count = attempt
+                        if attempt < max_attempts:
+                            logger.warning("[Executor] Retrying task %s (Attempt %d/%d)", task.id, attempt + 1, max_attempts)
 
                 if success:
                     task.status = "completed"
@@ -76,7 +78,6 @@ class Executor:
                     task.status = "failed"
                     failed.append(task.id)
                     executed.add(task.id)
-                    # Skip downstream dependent tasks
                     for other_t in plan.tasks:
                         if task.id in other_t.depends_on and other_t.id not in executed:
                             other_t.status = "skipped"
