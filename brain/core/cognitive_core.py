@@ -1,15 +1,18 @@
+import logging
 from typing import Dict, Any, Optional
 from personality.response import SystemResponse
 
+logger = logging.getLogger("aria")
+
 class CognitiveCore:
-    """The central orchestrator of ARIA 2.0, accepting injected dependencies to coordinate the cognitive flow."""
+    """The central orchestrator of ARIA 2.0, coordinating skills, memory, planning, and execution."""
     def __init__(
         self,
         planner,
         executor,
         skill_manager,
-        memory_router,
-        state_manager,
+        memory_router=None,
+        state_manager=None,
         intent_analyzer=None,
         context_builder=None,
         decision_engine=None
@@ -23,38 +26,68 @@ class CognitiveCore:
         self.context_builder = context_builder
         self.decision_engine = decision_engine
 
-    def process(
+    async def process(
         self,
         query: str,
         session_id: str = "",
-        user_id: str = ""
-    ) -> Dict[str, Any]:
-        """Orchestrates the complete end-to-end cognitive loop using injected services."""
-        # 1. Perception & Pipeline processing if available
-        decision = None
-        if self.intent_analyzer and self.context_builder and self.decision_engine and self.state_manager:
-            # If a pipeline or modular components exist, evaluate through decision engine
-            intent = self.intent_analyzer.analyze(query) if hasattr(self.intent_analyzer, "analyze") else None
-            context = self.context_builder.build(intent=intent, session_id=session_id, user_id=user_id) if hasattr(self.context_builder, "build") else None
-            if context:
-                self.state_manager.context = context
-            if self.decision_engine and hasattr(self.decision_engine, "decide"):
-                decision = self.decision_engine.decide(intent, context)
+        user_id: str = "",
+        base_context: Optional[Dict[str, Any]] = None
+    ) -> SystemResponse:
+        """Orchestrates the core request-processing flow using existing skill routing, planning, and execution."""
+        try:
+            ctx = base_context or {}
 
-        # 2. Plan generation if planner is available and required
-        plan = None
-        if decision and self.planner and hasattr(self.planner, "plan"):
-            plan = self.planner.plan(decision=decision, context=self.state_manager.context)
-            if self.state_manager and hasattr(self.state_manager, "set_plan"):
-                self.state_manager.set_plan(plan)
+            # 1. Try SkillManager first (Fast Path / Direct Execution)
+            if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+                skill_res = await self.skill_manager.route_and_execute(query, ctx)
+                if skill_res and skill_res.success and skill_res.confidence >= 0.85:
+                    return SystemResponse(
+                        success=True,
+                        confidence=skill_res.confidence,
+                        data=skill_res.data,
+                        source=skill_res.source
+                    )
 
-        # 3. Execution via injected executor
-        results = []
-        if plan and self.executor and hasattr(self.executor, "execute"):
-            results = self.executor.execute(plan=plan)
+            # 2. Otherwise, fall back to Planner + Executor Orchestration
+            plan = None
+            if self.planner and hasattr(self.planner, "create_plan"):
+                plan = await self.planner.create_plan(query, ctx)
+            elif self.planner and hasattr(self.planner, "plan"):
+                # Handle sync planner if applicable
+                plan = self.planner.plan(query, ctx)
 
-        return {
-            "decision": decision,
-            "plan": plan,
-            "results": results
-        }
+            # Graceful handling if planner returns empty or no tasks
+            if not plan or not getattr(plan, "tasks", None):
+                return SystemResponse(
+                    success=True,
+                    confidence=getattr(plan, "confidence", 0.5),
+                    data={"intent": "conversational", "query": query},
+                    source="planner_conversational"
+                )
+
+            # 3. Execute the generated plan
+            exec_result = {}
+            if self.executor and hasattr(self.executor, "execute_plan"):
+                exec_result = await self.executor.execute_plan(plan, ctx)
+            elif self.executor and hasattr(self.executor, "execute"):
+                exec_result = self.executor.execute(plan, ctx)
+
+            final_data = exec_result.get("task_outputs", {}) if isinstance(exec_result, dict) else exec_result
+            success = exec_result.get("success", True) if isinstance(exec_result, dict) else True
+
+            return SystemResponse(
+                success=success,
+                confidence=getattr(plan, "confidence", 0.85),
+                data=final_data,
+                source="planner_executor",
+                error=None if success else "Orchestration tasks encountered failures."
+            )
+
+        except Exception as e:
+            logger.exception("[CognitiveCore ERROR] Processing failed: %s", e)
+            return SystemResponse(
+                success=False,
+                confidence=0.0,
+                source="cognitive_core",
+                error=str(e)
+            )
