@@ -21,7 +21,23 @@ class PersonalityEngine:
             data = response.data or {}
             source = response.source
 
-            # 2. Handle greetings or conversational intents naturally
+            # 2. Handle specific skill sources cleanly and naturally
+            if source == "time" and "time" in data:
+                return f"The current time is {data['time']}, Sir."
+
+            if source == "date" and "date" in data:
+                return f"Today is {data['date']}, Sir."
+
+            if source in ["weather", "search"] and "message" in data:
+                return str(data["message"])
+
+            if source == "chat" and "response" in data:
+                return str(data["response"])
+
+            if source == "calculator" and "result" in data:
+                return f"The answer is {data['result']}, Sir."
+
+            # 3. Handle greetings or conversational intents naturally
             if source in ["greeting_fast_path", "planner_conversational"] or data.get("intent") in ["greeting", "conversational"]:
                 query = data.get("query", user_text).lower()
                 if "how are you" in query:
@@ -32,7 +48,7 @@ class PersonalityEngine:
                     return "Good evening, Sir. Ready for your instructions."
                 return "Greetings, Sir. ARIA operational and ready."
 
-            # 3. Handle Memory / Profile Skill payloads with memories lists or dictionaries
+            # 4. Handle Memory / Profile Skill payloads with memories lists or dictionaries
             if source in ["memory", "profile"]:
                 data_dict = data if isinstance(data, dict) else {}
                 memories = data_dict.get("memories", [])
@@ -40,7 +56,6 @@ class PersonalityEngine:
                 snippets = []
                 for m in memories:
                     if isinstance(m, dict):
-                        # Support multiple schema keys across different storage backends
                         k = m.get("key") or m.get("field") or m.get("category") or "Detail"
                         v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
                         if v:
@@ -51,11 +66,11 @@ class PersonalityEngine:
                         snippets.append(f"• {str(m)}")
                 
                 if snippets:
-                    return "I found these matching records, Sir:\n\n" + "\n".join(snippets)
+                    return "Here's what I found, Sir:\n\n" + "\n".join(snippets)
                 
                 return data_dict.get("message", "No relevant records found, Sir.")
 
-            # 4. Handle Planner / Executor multi-task orchestration results
+            # 5. Handle Planner / Executor multi-task orchestration results
             if source == "planner_executor":
                 if isinstance(data, dict) and data:
                     summaries = []
@@ -67,7 +82,7 @@ class PersonalityEngine:
                             summaries.append(f"Task {task_id}: {output}")
                     return "Execution completed successfully, Sir. " + " | ".join(summaries)
 
-            # 5. General fallback formatting
+            # 6. General fallback formatting
             if isinstance(data, dict):
                 if "message" in data:
                     return str(data["message"])
