@@ -10,14 +10,14 @@ class ProfileSkill(BaseSkill):
 
     async def can_run(self, query: str, context: Dict[str, Any]) -> float:
         """Determines if the query relates to user profile or personal background."""
-        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills"]
+        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills", "aadhar", "aadhaar", "id number"]
         lower = query.lower()
         if any(k in lower for k in keywords):
             return 0.95
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data safely via MemoryEngine with clear diagnostic logging."""
+        """Retrieves user profile data safely via MemoryEngine, gracefully handling empty record sets."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -45,12 +45,15 @@ class ProfileSkill(BaseSkill):
                 list(profile_data.keys()) if isinstance(profile_data, dict) else type(profile_data).__name__
             )
 
+            # Gracefully handle missing profile records without triggering a hard system error
             if not profile_data:
                 return SkillResponse(
-                    success=False,
-                    confidence=0.0,
+                    success=True,
+                    confidence=0.6,
                     source=self.name,
-                    error="No profile information available."
+                    data={
+                        "message": "I don't have your profile information stored yet, Sir."
+                    }
                 )
 
             return SkillResponse(
