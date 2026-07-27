@@ -1,19 +1,69 @@
+import logging
+from typing import Dict, Any
 from skills.base import BaseSkill, SkillResponse
+
+logger = logging.getLogger("aria")
 
 class ProfileSkill(BaseSkill):
     name = "profile"
-    description = "Retrieves user profile details (name, education, college)."
-    version = "1.0.0"
-    priority = 30
-    requires_llm = False
+    description = "Retrieves user personal profile data, background, education, and professional history."
 
-    async def can_run(self, query: str, context: dict) -> float:
+    async def can_run(self, query: str, context: Dict[str, Any]) -> float:
+        """Determines if the query relates to user profile or personal background."""
+        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills"]
         lower = query.lower()
-        if any(k in lower for k in ["what's my name", "who am i", "my profile", "college", "course"]):
+        if any(k in lower for k in keywords):
             return 0.95
-        return 0.0
+        return 0.1
 
-    async def execute(self, query: str, context: dict) -> SkillResponse:
-        app_state = context.get("app_state")
-        profile = app_state.ram_cache.get("profile", {}) if app_state else {}
-        return SkillResponse(success=True, confidence=0.95, source=self.name, data=profile)
+    async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
+        """Retrieves user profile data from ARIA's MemoryEngine."""
+        try:
+            # Resolve memory engine from context or app_state registry
+            memory_engine = context.get("memory_engine")
+            if not memory_engine and "app_state" in context:
+                app_state = context["app_state"]
+                if hasattr(app_state, "registry") and app_state.registry.has("memory_engine"):
+                    memory_engine = app_state.registry.get("memory_engine")
+
+            if not memory_engine:
+                return SkillResponse(
+                    success=False,
+                    confidence=0.0,
+                    source=self.name,
+                    error="Memory engine unavailable in execution context."
+                )
+
+            # Retrieve profile from memory engine
+            # Fallback to general storage if specific profile key is absent
+            profile_data = {}
+            if hasattr(memory_engine, "get_profile"):
+                profile_data = await memory_engine.get_profile()
+            elif hasattr(memory_engine, "get"):
+                profile_data = await memory_engine.get("user_profile") or {}
+
+            if not profile_data:
+                profile_data = {
+                    "name": "Vishnu",
+                    "role": "Computer Science Engineering Student & Web Developer",
+                    "institution": "Gayatri Vidya Parishad College for Degree and PG Courses",
+                    "graduation_year": 2028,
+                    "brands": ["cine.critiq", "movie.details"],
+                    "tech_stack": ["React", "Node.js", "MongoDB", "Supabase", "Python"]
+                }
+
+            return SkillResponse(
+                success=True,
+                confidence=0.95,
+                source=self.name,
+                data=profile_data
+            )
+
+        except Exception as e:
+            logger.exception("[ProfileSkill ERROR] Failed to retrieve user profile: %s", e)
+            return SkillResponse(
+                success=False,
+                confidence=0.0,
+                source=self.name,
+                error=str(e)
+            )
