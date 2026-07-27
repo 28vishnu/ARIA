@@ -10,7 +10,14 @@ class TimeSkill(BaseSkill):
 
     async def can_run(self, query: str, context: dict) -> float:
         cleaned = query.lower().strip()
-        keywords = ["time", "current time", "what time", "time now"]
+        keywords = [
+            "time",
+            "current time",
+            "what time",
+            "time now",
+            "local time",
+            "clock"
+        ]
         return 0.95 if any(kw in cleaned for kw in keywords) else 0.0
 
     async def execute(self, query: str, context: dict) -> SkillResponse:
