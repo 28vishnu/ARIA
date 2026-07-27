@@ -11,10 +11,19 @@ class Planner:
     def __init__(self, llm_router):
         self.llm_router = llm_router
 
-    async def create_plan(self, goal: str, available_skills: Dict[str, str], context: Dict[str, Any]) -> ExecutionPlan:
+    async def create_plan(self, goal: str, context: Dict[str, Any]) -> ExecutionPlan:
         """Generates a structured multi-step execution plan exclusively utilizing registered skills."""
+        app_state = context.get("app_state")
+        skill_manager = app_state.registry.get("skill_manager") if app_state and app_state.registry.has("skill_manager") else None
+        
+        available_skills = {s.name: s.description for s in skill_manager.skills} if skill_manager else {
+            "document": "Document retrieval",
+            "memory": "Personal memory",
+            "calculator": "Calculations",
+            "profile": "User profile"
+        }
+
         if self.llm_router is None:
-            # Fallback single-task plan if LLM router is unavailable
             return ExecutionPlan(
                 goal=goal,
                 tasks=[Task(id="1", name="default_skill_execution", skill="document", input={"query": goal}, depends_on=[])],
