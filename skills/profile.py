@@ -10,14 +10,14 @@ class ProfileSkill(BaseSkill):
 
     async def can_run(self, query: str, context: Dict[str, Any]) -> float:
         """Determines if the query relates to user profile or personal background."""
-        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills", "aadhar", "aadhaar", "id number"]
+        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills", "college", "university", "degree"]
         lower = query.lower()
         if any(k in lower for k in keywords):
             return 0.95
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data safely via MemoryEngine, gracefully handling empty record sets."""
+        """Retrieves user profile data safely via MemoryEngine, with memory search fallback."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -25,27 +25,20 @@ class ProfileSkill(BaseSkill):
                 if hasattr(app_state, "registry") and app_state.registry.has("memory_engine"):
                     memory_engine = app_state.registry.get("memory_engine")
 
-            logger.info(
-                "[ProfileSkill] Using MemoryEngine implementation: %s",
-                type(memory_engine).__name__ if memory_engine else "None"
-            )
-
             profile_data = {}
             if memory_engine:
+                # 1. Try dedicated profile retrieval methods first
                 if hasattr(memory_engine, "get_profile"):
                     profile_data = await memory_engine.get_profile()
                 elif hasattr(memory_engine, "get"):
                     profile_data = await memory_engine.get("user_profile") or await memory_engine.get("profile") or {}
-                elif hasattr(memory_engine, "search"):
-                    res = await memory_engine.search("profile")
-                    profile_data = res if isinstance(res, dict) else {"results": res}
+                
+                # 2. Fallback to general memory search if dedicated profile storage is empty
+                if not profile_data and hasattr(memory_engine, "get_relevant_memories"):
+                    memories = await memory_engine.get_relevant_memories("profile education college background university")
+                    if memories:
+                        profile_data = {"memories": memories}
 
-            logger.info(
-                "[ProfileSkill] Retrieved profile data type/keys: %s",
-                list(profile_data.keys()) if isinstance(profile_data, dict) else type(profile_data).__name__
-            )
-
-            # Gracefully handle missing profile records without triggering a hard system error
             if not profile_data:
                 return SkillResponse(
                     success=True,
