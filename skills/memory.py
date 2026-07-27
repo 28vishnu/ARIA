@@ -60,6 +60,19 @@ class MemorySkill(BaseSkill):
                     error="Memory engine does not expose a supported retrieval API."
                 )
 
+            # Accurate signal handling for empty result sets
+            if not memories:
+                return SkillResponse(
+                    success=True,
+                    confidence=0.6,
+                    source=self.name,
+                    data={
+                        "memories": [],
+                        "query": search_query,
+                        "message": "No relevant memories found."
+                    }
+                )
+
             return SkillResponse(
                 success=True,
                 confidence=0.95,
