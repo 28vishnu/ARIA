@@ -30,7 +30,6 @@ class ProfileSkill(BaseSkill):
                     memory_engine = app_state.registry.get("memory_engine")
 
             profile_data = {}
-            source_type = "profile"
             confidence = 0.95
 
             if memory_engine:
@@ -40,7 +39,6 @@ class ProfileSkill(BaseSkill):
                 elif hasattr(memory_engine, "get"):
                     profile_data = await memory_engine.get("user_profile") or await memory_engine.get("profile") or {}
 
-                # Normalise profile_data to a dictionary if needed
                 if not isinstance(profile_data, dict):
                     profile_data = {"record": profile_data}
 
@@ -67,7 +65,6 @@ class ProfileSkill(BaseSkill):
 
                     if normalized_memories:
                         profile_data["memories"] = normalized_memories
-                        # If we relied primarily on memory search rather than a full dedicated profile record
                         if not profile_data.get("name") and not profile_data.get("role"):
                             confidence = 0.80
 
