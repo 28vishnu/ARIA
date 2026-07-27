@@ -10,6 +10,7 @@ class MemoryEngine:
     def __init__(self, mongo_db):
         self.db = mongo_db
         self.memory_col = mongo_db["personal_memory"] if mongo_db is not None else None
+        self.profile_col = mongo_db["user_profile"] if mongo_db is not None else None
 
     async def initialize_indexes(self):
         """Creates composite and unique indexes safely without conflicting with multi-item preferences."""
@@ -25,6 +26,32 @@ class MemoryEngine:
                 logger.info("[MemoryEngine] Successfully initialized composite and singular MongoDB indexes.")
             except Exception as e:
                 logger.warning("[MemoryEngine] Index creation note: %s", e)
+
+    async def get_profile(self) -> dict:
+        """Retrieve the master user profile from MongoDB."""
+        if self.profile_col is None:
+            logger.warning("[MemoryEngine] user_profile collection not configured.")
+            return {}
+
+        try:
+            profile = await self.profile_col.find_one({})
+
+            if not profile:
+                logger.info("[MemoryEngine] No profile document found.")
+                return {}
+
+            profile.pop("_id", None)
+
+            logger.info(
+                "[MemoryEngine] Loaded user profile with fields: %s",
+                list(profile.keys())
+            )
+
+            return profile
+
+        except Exception:
+            logger.exception("[MemoryEngine] Failed to load user profile.")
+            return {}
 
     def _should_extract(self, text: str) -> bool:
         """Filters out non-fact statements and strict privacy identifiers (Aadhaar, RRN, MyNumber, PAN)."""
@@ -177,7 +204,7 @@ class MemoryEngine:
 
             cursor = self.memory_col.find(filter_query).limit(10)
             memories = await cursor.to_list(length=10)
-            
+
             if not memories and filter_query:
                 cursor = self.memory_col.find({}).limit(10)
                 memories = await cursor.to_list(length=10)
@@ -187,7 +214,7 @@ class MemoryEngine:
 
             now_iso = datetime.now(timezone.utc).isoformat()
             matched_ids = [m.get("_id") for m in memories if m.get("_id")]
-            
+
             # Touch last_used specifically for matched documents
             if matched_ids:
                 await self.memory_col.update_many(
