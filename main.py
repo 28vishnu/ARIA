@@ -171,6 +171,9 @@ async def telegram_webhook(req: Request):
         return {"status": "ok"}
 
     reply_text = await process_task(text, str(chat_id), request_id, req.app.state)
+    
+    # Diagnostic log to isolate whether {} comes from process_task or the API transport
+    logger.info("[Telegram] Final reply text: %r", reply_text)
 
     http_client = req.app.state.registry.get("http_client")
     await http_client.post(
