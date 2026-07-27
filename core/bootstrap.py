@@ -12,6 +12,11 @@ from core.health import HealthChecker
 from memory_engine import MemoryEngine
 from brain.document_intelligence import DocumentIntelligence
 from skills import create_default_skill_manager
+from skills.time import TimeSkill
+from skills.date import DateSkill
+from skills.weather import WeatherSkill
+from skills.search import SearchSkill
+from skills.chat import ChatSkill
 from actions.registry import create_default_action_manager
 from brain.planner import Planner
 from brain.executor import Executor
@@ -109,6 +114,11 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("document_intelligence", doc_intelligence)
 
     skill_manager = create_default_skill_manager()
+    skill_manager.register(TimeSkill())
+    skill_manager.register(DateSkill())
+    skill_manager.register(WeatherSkill())
+    skill_manager.register(SearchSkill())
+    skill_manager.register(ChatSkill())
     registry.register("skill_manager", skill_manager)
 
     action_manager = create_default_action_manager()
