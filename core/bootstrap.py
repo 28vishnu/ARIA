@@ -23,6 +23,8 @@ from personality.engine import PersonalityEngine
 from autonomy.goal_manager import GoalManager
 from autonomy.scheduler import BackgroundScheduler
 
+from brain.core.cognitive_core import CognitiveCore
+
 logger = logging.getLogger("aria")
 
 class GroqProvider:
@@ -114,6 +116,9 @@ async def bootstrap_application() -> ServiceRegistry:
 
     planner = Planner(llm_router)
     registry.register("planner", planner)
+
+    cognitive_core = CognitiveCore()
+    registry.register("cognitive_core", cognitive_core)
 
     executor = Executor(skill_manager)
     registry.register("executor", executor)
