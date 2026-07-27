@@ -9,15 +9,16 @@ class MemorySkill(BaseSkill):
     description = "Searches, recalls, or stores long-term personal facts, past conversations, preferences, and memories."
 
     async def can_run(self, query: str, context: Dict[str, Any]) -> float:
-        """Determines if the query relates to memory recall or past facts."""
+        """Determines if the query relates to memory recall or past facts with strict thresholding."""
         keywords = ["remember", "recall", "what did", "my memory", "history", "did I", "saved", "memory"]
         lower = query.lower()
         if any(k in lower for k in keywords):
             return 0.90
-        return 0.2
+        # Prevent casual greetings or unrelated queries from biasing toward memory
+        return 0.05
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves or searches long-term memories using ARIA's MemoryEngine."""
+        """Retrieves or searches long-term memories using ARIA's MemoryEngine API."""
         try:
             # 1. Resolve memory engine from context or service registry
             memory_engine = context.get("memory_engine")
@@ -41,17 +42,23 @@ class MemorySkill(BaseSkill):
             task_input = context.get("task_input", {})
             search_query = task_input.get("query", query)
 
-            # 3. Perform memory retrieval / search via MemoryEngine API
+            # 3. Perform memory retrieval via MemoryEngine API matching exact method signatures
             memories = []
-            if hasattr(memory_engine, "search_memories"):
+            if hasattr(memory_engine, "get_relevant_memories"):
+                memories = await memory_engine.get_relevant_memories(search_query)
+            elif hasattr(memory_engine, "search_memories"):
                 memories = await memory_engine.search_memories(search_query)
             elif hasattr(memory_engine, "search"):
                 memories = await memory_engine.search(search_query)
             elif hasattr(memory_engine, "get_recent"):
                 memories = await memory_engine.get_recent()
             else:
-                # Generic fallback if custom search methods aren't exposed
-                memories = {"query": search_query, "status": "Memory engine active and operational."}
+                return SkillResponse(
+                    success=False,
+                    confidence=0.0,
+                    source=self.name,
+                    error="Memory engine does not expose a supported retrieval API."
+                )
 
             return SkillResponse(
                 success=True,
