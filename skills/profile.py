@@ -21,7 +21,7 @@ class ProfileSkill(BaseSkill):
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data combining dedicated profile stores and diagnostic-logged adaptive memory search."""
+        """Retrieves user profile data, prioritizing the master user profile and falling back to memory search only if needed."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -30,10 +30,9 @@ class ProfileSkill(BaseSkill):
                     memory_engine = app_state.registry.get("memory_engine")
 
             profile_data = {}
-            confidence = 0.95
 
             if memory_engine:
-                # 1. Try dedicated profile retrieval methods first
+                # 1. Attempt to fetch the master profile document first
                 if hasattr(memory_engine, "get_profile"):
                     profile_data = await memory_engine.get_profile() or {}
                 elif hasattr(memory_engine, "get"):
@@ -42,63 +41,49 @@ class ProfileSkill(BaseSkill):
                 if not isinstance(profile_data, dict):
                     profile_data = {"record": profile_data}
 
-                # 2. Complement with long-term memories if memory engine exposes search
+                # 2. If a valid master profile exists, return it immediately without running fallback searches
+                if profile_data:
+                    logger.info("[ProfileSkill] Returning master profile directly, skipping fallback memory search.")
+                    return SkillResponse(
+                        success=True,
+                        confidence=0.95,
+                        source=self.name,
+                        data=profile_data
+                    )
+
+                # 3. Only reach this point if no master profile document was found; fall back to adaptive memory search
                 if hasattr(memory_engine, "get_relevant_memories"):
                     search_query = query
                     generic_triggers = ("profile", "about me", "who am i", "background")
                     if any(t in query.lower() for t in generic_triggers):
                         search_query = f"profile education college university career skills background {query}"
 
-                    logger.info("[ProfileSkill] Querying MemoryEngine with adaptive search: '%s'", search_query)
+                    logger.info("[ProfileSkill] No master profile found. Querying MemoryEngine with adaptive search: '%s'", search_query)
                     raw_memories = await memory_engine.get_relevant_memories(search_query)
                     
-                    # Diagnostic Inspection of Raw Retrieved Objects
-                    if raw_memories:
-                        logger.info("[ProfileSkill] Retrieved %d raw memory items.", len(raw_memories))
-                        for idx, raw_item in enumerate(raw_memories):
-                            logger.info("[ProfileSkill] Raw memory object [%d]: %r", idx, raw_item)
-                            if not isinstance(raw_item, dict):
-                                logger.info("[ProfileSkill] Raw memory object [%d] __dict__: %r", idx, getattr(raw_item, "__dict__", None))
-
-                    # Controlled Normalization with Missing Field Warnings
                     normalized_memories: List[Dict[str, Any]] = []
                     if raw_memories:
                         for m in raw_memories:
                             if isinstance(m, dict):
                                 k = m.get("key") or m.get("field") or m.get("category") or "Memory"
-                                v = (
-                                    m.get("value")
-                                    or m.get("content")
-                                    or m.get("text")
-                                    or m.get("summary")
-                                )
+                                v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
                                 if v is None:
-                                    logger.warning("[ProfileSkill] Memory object missing display fields (value/content/text/summary): %r", m)
                                     v = repr(m)
                                 normalized_memories.append({"key": k, "value": v})
                             elif hasattr(m, "__dict__"):
                                 d = m.__dict__
                                 k = d.get("key") or d.get("field") or "Memory"
-                                v = (
-                                    d.get("value")
-                                    or d.get("content")
-                                    or d.get("text")
-                                    or d.get("summary")
-                                )
+                                v = d.get("value") or d.get("content") or d.get("text") or d.get("summary")
                                 if v is None:
-                                    logger.warning("[ProfileSkill] Memory instance missing display fields: %r", d)
                                     v = repr(d)
                                 normalized_memories.append({"key": k, "value": v})
                             else:
-                                logger.warning("[ProfileSkill] Unrecognized memory format encountered: %r", m)
                                 normalized_memories.append({"key": "Detail", "value": repr(m)})
 
                     if normalized_memories:
                         profile_data["memories"] = normalized_memories
-                        if not profile_data.get("name") and not profile_data.get("role"):
-                            confidence = 0.80
 
-            # 3. Friendly fallback if both profile store and memory search yield nothing
+            # 4. Friendly fallback if both profile store and memory search yield nothing
             if not profile_data or (not profile_data.get("memories") and len(profile_data) == 0):
                 return SkillResponse(
                     success=True,
@@ -111,7 +96,7 @@ class ProfileSkill(BaseSkill):
 
             return SkillResponse(
                 success=True,
-                confidence=confidence,
+                confidence=0.80,
                 source=self.name,
                 data=profile_data
             )
