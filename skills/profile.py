@@ -21,7 +21,7 @@ class ProfileSkill(BaseSkill):
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data combining dedicated profile stores and adaptive memory search with robust field fallback."""
+        """Retrieves user profile data combining dedicated profile stores and diagnostic-logged adaptive memory search."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -52,23 +52,46 @@ class ProfileSkill(BaseSkill):
                     logger.info("[ProfileSkill] Querying MemoryEngine with adaptive search: '%s'", search_query)
                     raw_memories = await memory_engine.get_relevant_memories(search_query)
                     
-                    # Robust Normalization: Handle arbitrary database schemas (content, text, summary, key, value)
+                    # Diagnostic Inspection of Raw Retrieved Objects
+                    if raw_memories:
+                        logger.info("[ProfileSkill] Retrieved %d raw memory items.", len(raw_memories))
+                        for idx, raw_item in enumerate(raw_memories):
+                            logger.info("[ProfileSkill] Raw memory object [%d]: %r", idx, raw_item)
+                            if not isinstance(raw_item, dict):
+                                logger.info("[ProfileSkill] Raw memory object [%d] __dict__: %r", idx, getattr(raw_item, "__dict__", None))
+
+                    # Controlled Normalization with Missing Field Warnings
                     normalized_memories: List[Dict[str, Any]] = []
                     if raw_memories:
                         for m in raw_memories:
                             if isinstance(m, dict):
                                 k = m.get("key") or m.get("field") or m.get("category") or "Memory"
-                                v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
-                                if not v:
-                                    v = str(m)
+                                v = (
+                                    m.get("value")
+                                    or m.get("content")
+                                    or m.get("text")
+                                    or m.get("summary")
+                                )
+                                if v is None:
+                                    logger.warning("[ProfileSkill] Memory object missing display fields (value/content/text/summary): %r", m)
+                                    v = repr(m)
                                 normalized_memories.append({"key": k, "value": v})
                             elif hasattr(m, "__dict__"):
                                 d = m.__dict__
                                 k = d.get("key") or d.get("field") or "Memory"
-                                v = d.get("value") or d.get("content") or d.get("text") or str(d)
+                                v = (
+                                    d.get("value")
+                                    or d.get("content")
+                                    or d.get("text")
+                                    or d.get("summary")
+                                )
+                                if v is None:
+                                    logger.warning("[ProfileSkill] Memory instance missing display fields: %r", d)
+                                    v = repr(d)
                                 normalized_memories.append({"key": k, "value": v})
                             else:
-                                normalized_memories.append({"key": "Detail", "value": str(m)})
+                                logger.warning("[ProfileSkill] Unrecognized memory format encountered: %r", m)
+                                normalized_memories.append({"key": "Detail", "value": repr(m)})
 
                     if normalized_memories:
                         profile_data["memories"] = normalized_memories
