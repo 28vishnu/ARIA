@@ -107,8 +107,16 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
 
     session = ctx.session_manager.get_or_create_session(session_id)
-    base_context = {"app_state": app_state, "session": session}
+    
+    # Properly wired execution context exposing memory_engine and application state
+    base_context = {
+        "app_state": app_state,
+        "session": session,
+        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
+        "document_intelligence": registry.get("document_intelligence") if registry.has("document_intelligence") else None
+    }
 
+    # Strict SkillManager Routing & Direct Execution
     skill_response = await ctx.skill_manager.route_and_execute(user_text, base_context)
     
     if skill_response.success and skill_response.confidence >= 0.85:
@@ -120,6 +128,7 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         )
         return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
 
+    # Planner + Executor Orchestration Fallback
     plan = await ctx.planner.create_plan(user_text, base_context)
     exec_result = await ctx.executor.execute_plan(plan, base_context)
 
