@@ -11,9 +11,11 @@ class PersonalityEngine:
     def apply_personality(self, session_id: str, user_text: str, response: SystemResponse) -> str:
         """Transforms structured SystemResponse payloads into natural, contextual language."""
         try:
-            # 1. Handle failures gracefully
+            # 1. Handle failures/missing records gracefully without implying system malfunctions
             if not response.success:
-                error_msg = response.error or "An unexpected issue occurred while processing your request, Sir."
+                error_msg = response.error or ""
+                if "no profile" in error_msg.lower() or "no relevant" in error_msg.lower():
+                    return "I couldn't find any stored records matching that request, Sir."
                 return f"I encountered a slight complication: {error_msg}"
 
             data = response.data or {}
@@ -30,7 +32,7 @@ class PersonalityEngine:
                     return "Good evening, Sir. Ready for your instructions."
                 return "Greetings, Sir. ARIA operational and ready."
 
-            # 3. Handle Profile Skill payloads (dynamic fallback)
+            # 3. Handle Profile Skill payloads
             if source == "profile":
                 if isinstance(data, dict) and data:
                     name = data.get("name", "the user")
@@ -40,7 +42,7 @@ class PersonalityEngine:
                     return f"Profile records retrieved for {name}. Current role: {role}{inst_str}."
                 return "No active profile records were located, Sir."
 
-            # 4. Handle Memory Skill payloads (aligned with MemoryEngine schema: key/value)
+            # 4. Handle Memory Skill payloads (MongoDB schema alignment: key/value)
             if source == "memory":
                 memories = data.get("memories", [])
                 if memories:
