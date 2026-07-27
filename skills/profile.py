@@ -17,7 +17,7 @@ class ProfileSkill(BaseSkill):
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data safely via MemoryEngine."""
+        """Retrieves user profile data safely via MemoryEngine with clear diagnostic logging."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -25,9 +25,13 @@ class ProfileSkill(BaseSkill):
                 if hasattr(app_state, "registry") and app_state.registry.has("memory_engine"):
                     memory_engine = app_state.registry.get("memory_engine")
 
+            logger.info(
+                "[ProfileSkill] Using MemoryEngine implementation: %s",
+                type(memory_engine).__name__ if memory_engine else "None"
+            )
+
             profile_data = {}
             if memory_engine:
-                # Safely probe available methods on MemoryEngine
                 if hasattr(memory_engine, "get_profile"):
                     profile_data = await memory_engine.get_profile()
                 elif hasattr(memory_engine, "get"):
@@ -36,15 +40,18 @@ class ProfileSkill(BaseSkill):
                     res = await memory_engine.search("profile")
                     profile_data = res if isinstance(res, dict) else {"results": res}
 
+            logger.info(
+                "[ProfileSkill] Retrieved profile data type/keys: %s",
+                list(profile_data.keys()) if isinstance(profile_data, dict) else type(profile_data).__name__
+            )
+
             if not profile_data:
-                profile_data = {
-                    "name": "Vishnu",
-                    "role": "Computer Science Engineering Student & Web Developer",
-                    "institution": "Gayatri Vidya Parishad College for Degree and PG Courses",
-                    "graduation_year": 2028,
-                    "brands": ["cine.critiq", "movie.details"],
-                    "tech_stack": ["React", "Node.js", "MongoDB", "Supabase", "Python"]
-                }
+                return SkillResponse(
+                    success=False,
+                    confidence=0.0,
+                    source=self.name,
+                    error="No profile information available."
+                )
 
             return SkillResponse(
                 success=True,
