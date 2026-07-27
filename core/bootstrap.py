@@ -10,6 +10,8 @@ from core.dependency_injection import ServiceRegistry
 from core.health import HealthChecker
 
 from memory_engine import MemoryEngine
+from brain.memory.working_memory import WorkingMemory
+from brain.memory.memory_router import MemoryRouter
 from brain.document_intelligence import DocumentIntelligence
 from skills import create_default_skill_manager
 from skills.time import TimeSkill
@@ -110,6 +112,15 @@ async def bootstrap_application() -> ServiceRegistry:
     await memory_engine.initialize_indexes()
     registry.register("memory_engine", memory_engine)
 
+    working_memory = WorkingMemory()
+    registry.register("working_memory", working_memory)
+
+    memory_router = MemoryRouter(
+        working_memory=working_memory,
+        memory_engine=memory_engine
+    )
+    registry.register("memory_router", memory_router)
+
     doc_intelligence = DocumentIntelligence(docs_col, llm_router=llm_router)
     registry.register("document_intelligence", doc_intelligence)
 
@@ -134,7 +145,7 @@ async def bootstrap_application() -> ServiceRegistry:
         planner=planner,
         executor=executor,
         skill_manager=skill_manager,
-        memory_router=None,      # temporary
+        memory_router=memory_router,
         state_manager=None,      # temporary
         intent_analyzer=None,    # temporary
         context_builder=None,    # temporary
