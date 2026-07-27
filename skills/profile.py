@@ -21,7 +21,7 @@ class ProfileSkill(BaseSkill):
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data combining dedicated profile stores and adaptive memory search."""
+        """Retrieves user profile data combining dedicated profile stores and adaptive memory search with robust field fallback."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -52,16 +52,23 @@ class ProfileSkill(BaseSkill):
                     logger.info("[ProfileSkill] Querying MemoryEngine with adaptive search: '%s'", search_query)
                     raw_memories = await memory_engine.get_relevant_memories(search_query)
                     
-                    # Normalize memories safely
+                    # Robust Normalization: Handle arbitrary database schemas (content, text, summary, key, value)
                     normalized_memories: List[Dict[str, Any]] = []
                     if raw_memories:
                         for m in raw_memories:
                             if isinstance(m, dict):
-                                normalized_memories.append(m)
+                                k = m.get("key") or m.get("field") or m.get("category") or "Memory"
+                                v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
+                                if not v:
+                                    v = str(m)
+                                normalized_memories.append({"key": k, "value": v})
                             elif hasattr(m, "__dict__"):
-                                normalized_memories.append(m.__dict__)
+                                d = m.__dict__
+                                k = d.get("key") or d.get("field") or "Memory"
+                                v = d.get("value") or d.get("content") or d.get("text") or str(d)
+                                normalized_memories.append({"key": k, "value": v})
                             else:
-                                normalized_memories.append({"value": str(m)})
+                                normalized_memories.append({"key": "Detail", "value": str(m)})
 
                     if normalized_memories:
                         profile_data["memories"] = normalized_memories
