@@ -11,7 +11,7 @@ class PersonalityEngine:
     def apply_personality(self, session_id: str, user_text: str, response: SystemResponse) -> str:
         """Transforms structured SystemResponse payloads into natural, contextual language."""
         try:
-            # 1. Handle failures/missing records gracefully without implying system malfunctions
+            # 1. Handle failures or missing records gracefully
             if not response.success:
                 error_msg = response.error or ""
                 if "no profile" in error_msg.lower() or "no relevant" in error_msg.lower():
@@ -32,37 +32,30 @@ class PersonalityEngine:
                     return "Good evening, Sir. Ready for your instructions."
                 return "Greetings, Sir. ARIA operational and ready."
 
-            # 3. Handle Profile Skill payloads
-            if source == "profile":
-                if isinstance(data, dict) and data:
-                    name = data.get("name", "the user")
-                    role = data.get("role", "Developer & Student")
-                    institution = data.get("institution", "")
-                    inst_str = f" at {institution}" if institution else ""
-                    return f"Profile records retrieved for {name}. Current role: {role}{inst_str}."
-                return "No active profile records were located, Sir."
-
-            # 4. Handle Memory Skill payloads (MongoDB schema alignment: key/value)
-            if source == "memory":
-                memories = data.get("memories", [])
-                if memories:
-                    snippets = []
-                    for m in memories:
-                        if isinstance(m, dict):
-                            key = m.get("key", "memory")
-                            value = m.get("value", "")
-                            if value:
-                                snippets.append(f"{key}: {value}")
-                            else:
-                                snippets.append(str(m))
+            # 3. Handle Memory / Profile Skill payloads with memories lists or dictionaries
+            if source in ["memory", "profile"]:
+                data_dict = data if isinstance(data, dict) else {}
+                memories = data_dict.get("memories", [])
+                
+                snippets = []
+                for m in memories:
+                    if isinstance(m, dict):
+                        # Support multiple schema keys across different storage backends
+                        k = m.get("key") or m.get("field") or m.get("category") or "Detail"
+                        v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
+                        if v:
+                            snippets.append(f"• {str(k).capitalize()}: {str(v)}")
                         else:
-                            snippets.append(str(m))
-                    if snippets:
-                        joined = "; ".join(snippets[:4])
-                        return f"Recalled data, Sir: {joined}"
-                return data.get("message", "No relevant long-term memories found matching your query, Sir.")
+                            snippets.append(f"• {str(m)}")
+                    else:
+                        snippets.append(f"• {str(m)}")
+                
+                if snippets:
+                    return "I found these matching records, Sir:\n\n" + "\n".join(snippets)
+                
+                return data_dict.get("message", "No relevant records found, Sir.")
 
-            # 5. Handle Planner / Executor multi-task orchestration results
+            # 4. Handle Planner / Executor multi-task orchestration results
             if source == "planner_executor":
                 if isinstance(data, dict) and data:
                     summaries = []
@@ -74,7 +67,7 @@ class PersonalityEngine:
                             summaries.append(f"Task {task_id}: {output}")
                     return "Execution completed successfully, Sir. " + " | ".join(summaries)
 
-            # 6. Fallback formatting for general data
+            # 5. General fallback formatting
             if isinstance(data, dict):
                 if "message" in data:
                     return str(data["message"])
