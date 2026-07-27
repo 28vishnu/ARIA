@@ -37,6 +37,21 @@ class CognitiveCore:
         try:
             ctx = base_context or {}
 
+            # 0. Memory First
+            if self.memory_router:
+                memories = await self.memory_router.get_relevant_memories(query)
+
+                if memories:
+                    return SystemResponse(
+                        success=True,
+                        confidence=0.98,
+                        data={
+                            "intent": "memory",
+                            "memories": memories
+                        },
+                        source="memory"
+                    )
+
             # 1. Try SkillManager first (Fast Path / Direct Execution)
             if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
                 skill_res = await self.skill_manager.route_and_execute(query, ctx)
