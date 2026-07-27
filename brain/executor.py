@@ -8,17 +8,22 @@ from skills.base import SkillResponse
 
 logger = logging.getLogger("aria")
 
+NON_RETRYABLE_PHRASES = [
+    "no profile information available",
+    "no relevant memories found",
+    "not found",
+    "unavailable"
+]
+
 class Executor:
     def __init__(self, skill_manager: SkillManager):
         self.skill_manager = skill_manager
         self.verifier = Verifier()
 
     async def execute_plan(self, plan: ExecutionPlan, base_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolves dependencies, runs planned tasks via exact skill mapping, and manages retries."""
         task_outputs: Dict[str, Any] = {}
         completed: list = []
         failed: list = []
-        
         executed = set()
 
         while len(executed) < len(plan.tasks):
@@ -28,7 +33,7 @@ class Executor:
             ]
 
             if not ready_tasks:
-                logger.error("[Executor ERROR] Circular dependency or unresolvable task tree detected.")
+                logger.error("[Executor ERROR] Unresolvable task dependency tree.")
                 break
 
             for task in ready_tasks:
@@ -41,7 +46,6 @@ class Executor:
                     if dep_id in task_outputs:
                         resolved_input[f"context_from_{dep_id}"] = task_outputs[dep_id]
 
-                # Strict retry semantics: Initial attempt + up to max_retries
                 attempt = 0
                 max_attempts = task.max_retries + 1
 
@@ -60,8 +64,15 @@ class Executor:
                     elapsed_ms = (time.perf_counter() - start_time) * 1000
                     logger.info("[Executor] Task: %s (Skill: %s) | Status: %s | Time: %.1f ms", task.id, task.skill, "Completed" if res.success else "Failed", elapsed_ms)
 
+                    # Check if failure is deterministic/non-retryable (e.g. missing data)
+                    err_lower = (res.error or "").lower()
+                    is_non_retryable = any(phrase in err_lower for phrase in NON_RETRYABLE_PHRASES)
+
                     if self.verifier.verify(task.id, res):
                         success = True
+                        break
+                    elif is_non_retryable:
+                        logger.warning("[Executor] Task %s encountered non-retryable result: '%s'. Aborting retries.", task.id, res.error)
                         break
                     else:
                         attempt += 1
