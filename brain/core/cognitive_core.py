@@ -8,9 +8,10 @@ from brain.memory.memory_router import MemoryRouter
 from brain.core.cognitive_pipeline import CognitivePipeline
 from brain.planning.planner import Planner
 from brain.execution.executor import Executor
+from brain.skills.skill_registry import SkillRegistry
 
 class CognitiveCore:
-    """The central orchestrator of ARIA 2.0, unifying perception, cognition, planning, and execution."""
+    """The central orchestrator of ARIA 2.0, integrating skill registry into execution."""
     def __init__(self):
         self.state_manager = CognitiveStateManager()
         self.working_memory = WorkingMemory()
@@ -28,7 +29,8 @@ class CognitiveCore:
         )
         
         self.planner = Planner(memory_router=self.memory_router)
-        self.executor = Executor()
+        self.skill_registry = SkillRegistry(memory_router=self.memory_router)
+        self.executor = Executor(skill_registry=self.skill_registry)
 
     def process(
         self,
@@ -36,18 +38,13 @@ class CognitiveCore:
         session_id: str = "",
         user_id: str = ""
     ) -> Dict[str, Any]:
-        """Orchestrates the complete end-to-end cognitive loop from raw query to execution results."""
-        # 1. Run perception and decision pipeline
+        """Orchestrates the complete end-to-end cognitive loop."""
         decision = self.pipeline.process(query=query, session_id=session_id, user_id=user_id)
-        
-        # Access the synchronized context from state manager
         context = self.state_manager.context
         
-        # 2. Generate execution plan
         plan = self.planner.plan(decision=decision, context=context)
         self.state_manager.set_plan(plan)
         
-        # 3. Execute plan tasks
         results = self.executor.execute(plan=plan)
         
         return {
