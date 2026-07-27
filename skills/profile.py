@@ -17,30 +17,24 @@ class ProfileSkill(BaseSkill):
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data from ARIA's MemoryEngine."""
+        """Retrieves user profile data safely via MemoryEngine."""
         try:
-            # Resolve memory engine from context or app_state registry
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
                 app_state = context["app_state"]
                 if hasattr(app_state, "registry") and app_state.registry.has("memory_engine"):
                     memory_engine = app_state.registry.get("memory_engine")
 
-            if not memory_engine:
-                return SkillResponse(
-                    success=False,
-                    confidence=0.0,
-                    source=self.name,
-                    error="Memory engine unavailable in execution context."
-                )
-
-            # Retrieve profile from memory engine
-            # Fallback to general storage if specific profile key is absent
             profile_data = {}
-            if hasattr(memory_engine, "get_profile"):
-                profile_data = await memory_engine.get_profile()
-            elif hasattr(memory_engine, "get"):
-                profile_data = await memory_engine.get("user_profile") or {}
+            if memory_engine:
+                # Safely probe available methods on MemoryEngine
+                if hasattr(memory_engine, "get_profile"):
+                    profile_data = await memory_engine.get_profile()
+                elif hasattr(memory_engine, "get"):
+                    profile_data = await memory_engine.get("user_profile") or await memory_engine.get("profile") or {}
+                elif hasattr(memory_engine, "search"):
+                    res = await memory_engine.search("profile")
+                    profile_data = res if isinstance(res, dict) else {"results": res}
 
             if not profile_data:
                 profile_data = {
