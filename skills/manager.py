@@ -1,6 +1,5 @@
 import logging
-import time
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, List
 from skills.base import BaseSkill, SkillResponse
 
 logger = logging.getLogger("aria")
@@ -10,49 +9,48 @@ class SkillManager:
         self.skills: List[BaseSkill] = []
 
     def register(self, skill: BaseSkill):
-        """Registers an independent skill plugin."""
         self.skills.append(skill)
-        logger.info("[SkillManager] Registered skill: %s (v%s)", skill.name, skill.version)
+        logger.info("[SkillManager] Registered skill: '%s'", skill.name)
 
     async def route_and_execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Evaluates can_run() across all skills, selects the highest-confidence match, and executes it."""
-        if not self.skills:
-            return SkillResponse(success=False, confidence=0.0, source="manager", error="No skills registered.")
+        """Evaluates all registered skills by confidence and executes the best match."""
+        best_skill = None
+        highest_confidence = 0.0
 
-        best_skill: Optional[BaseSkill] = None
-        best_confidence = -1.0
+        for skill in self.skills:
+            try:
+                confidence = await skill.can_run(query, context)
+                if confidence > highest_confidence:
+                    highest_confidence = confidence
+                    best_skill = skill
+            except Exception as e:
+                logger.exception("[SkillManager ERROR] Error evaluating skill '%s': %s", skill.name, e)
 
-        # 1. Evaluate confidence across all registered skills concurrently
-        evaluation_tasks = [skill.can_run(query, context) for skill in self.skills]
-        import asyncio
-        confidences = await asyncio.gather(*evaluation_tasks, return_exceptions=True)
+        if best_skill and highest_confidence >= 0.3:
+            logger.info("[SkillManager] Routing query to skill '%s' (Confidence: %.2f)", best_skill.name, highest_confidence)
+            return await best_skill.execute(query, context)
 
-        for skill, conf in zip(self.skills, confidences):
-            if isinstance(conf, float) and conf > best_confidence:
-                best_confidence = conf
-                best_skill = skill
-
-        # Fallback if no skill exceeds confidence threshold
-        if not best_skill or best_confidence < 0.3:
-            return SkillResponse(success=False, confidence=best_confidence, source="manager", error="No suitable skill found for query.")
-
-        # 2. Execute the winning skill with strict timing logs
-        start_time = time.perf_counter()
-        success = True
-        response: Optional[SkillResponse] = None
-
-        try:
-            response = await best_skill.execute(query, context)
-            success = response.success
-        except Exception as e:
-            logger.exception("[SkillManager ERROR] Skill execution failed: %s", best_skill.name)
-            response = SkillResponse(success=False, confidence=best_confidence, source=best_skill.name, error=str(e))
-            success = False
-
-        elapsed_ms = (time.perf_counter() - start_time) * 1000
-        logger.info(
-            "[SkillManager] Selected: %s | Confidence: %.2f | Execution Time: %.1f ms | Success: %s",
-            best_skill.name, best_confidence, elapsed_ms, success
+        logger.warning("[SkillManager] No suitable skill found for query with confidence >= 0.3")
+        return SkillResponse(
+            success=False,
+            confidence=0.0,
+            source="skill_manager",
+            error=f"No suitable skill found for query: '{query}'"
         )
 
-        return response
+    async def execute_skill(self, skill_name: str, query: str, context: Dict[str, Any]) -> SkillResponse:
+        """Directly executes a specific skill requested by the planner, avoiding redundant re-routing."""
+        normalized_target = skill_name.lower().strip()
+        
+        for skill in self.skills:
+            if skill.name.lower().strip() == normalized_target:
+                logger.info("[SkillManager] Directly executing planned skill: '%s'", skill.name)
+                return await skill.execute(query, context)
+
+        logger.error("[SkillManager ERROR] Requested skill '%s' not found in registry.", skill_name)
+        return SkillResponse(
+            success=False,
+            confidence=0.0,
+            source="skill_manager",
+            error=f"Skill '{skill_name}' not found."
+        )
