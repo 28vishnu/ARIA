@@ -81,6 +81,7 @@ def build_request_context(session_id: str, request_id: str, registry) -> Request
         skill_manager=registry.get("skill_manager"),
         action_manager=registry.get("action_manager"),
         planner=registry.get("planner"),
+        cognitive_core=registry.get("cognitive_core"),
         executor=registry.get("executor"),
         personality_engine=registry.get("personality_engine"),
         context_manager=registry.get("context_manager"),
