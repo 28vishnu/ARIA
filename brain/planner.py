@@ -21,7 +21,6 @@ class Planner:
         """Generates a structured execution plan, short-circuiting casual greetings."""
         cleaned_goal = goal.lower().strip()
         
-        # Short-circuit casual greetings so they never get mapped to search/memory tasks
         if cleaned_goal in GREETINGS or len(cleaned_goal) <= 3:
             logger.info("[Planner] Detected casual greeting or trivial input. Skipping task orchestration.")
             return ExecutionPlan(
@@ -33,12 +32,22 @@ class Planner:
         app_state = context.get("app_state")
         skill_manager = app_state.registry.get("skill_manager") if app_state and app_state.registry.has("skill_manager") else None
         
-        available_skills = {s.name: s.description for s in skill_manager.skills} if skill_manager else {
-            "document": "Document retrieval",
-            "memory": "Personal memory",
-            "calculator": "Calculations",
-            "profile": "User profile"
-        }
+        # Robust iteration handling whether skill_manager.skills is a list or a dict
+        available_skills = {}
+        if skill_manager:
+            if hasattr(skill_manager, "skills"):
+                if isinstance(skill_manager.skills, dict):
+                    available_skills = {name: skill.description for name, skill in skill_manager.skills.items()}
+                elif isinstance(skill_manager.skills, list):
+                    available_skills = {s.name: s.description for s in skill_manager.skills}
+        
+        if not available_skills:
+            available_skills = {
+                "document": "Document retrieval",
+                "memory": "Personal memory",
+                "calculator": "Calculations",
+                "profile": "User profile"
+            }
 
         if self.llm_router is None:
             return ExecutionPlan(
