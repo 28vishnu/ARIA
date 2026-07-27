@@ -10,7 +10,17 @@ class DateSkill(BaseSkill):
 
     async def can_run(self, query: str, context: dict) -> float:
         cleaned = query.lower().strip()
-        keywords = ["date", "today's date", "current date", "what day", "which month"]
+        keywords = [
+            "date",
+            "today's date",
+            "current date",
+            "what day",
+            "which month",
+            "today",
+            "day today",
+            "month",
+            "year"
+        ]
         return 0.95 if any(kw in cleaned for kw in keywords) else 0.0
 
     async def execute(self, query: str, context: dict) -> SkillResponse:
