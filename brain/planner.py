@@ -18,28 +18,22 @@ class Planner:
         self.llm_router = llm_router
 
     async def create_plan(self, goal: str, context: Dict[str, Any]) -> ExecutionPlan:
-        """Generates a structured execution plan, short-circuiting casual greetings."""
+        """Generates a structured execution plan, handling greetings and blocking sensitive identifier queries."""
         cleaned_goal = goal.lower().strip()
         
         if cleaned_goal in GREETINGS or len(cleaned_goal) <= 3:
-            logger.info("[Planner] Detected casual greeting or trivial input. Skipping task orchestration.")
-            return ExecutionPlan(
-                goal=goal,
-                tasks=[],
-                confidence=1.0
-            )
+            logger.info("[Planner] Detected casual greeting. Skipping task orchestration.")
+            return ExecutionPlan(goal=goal, tasks=[], confidence=1.0)
 
         app_state = context.get("app_state")
         skill_manager = app_state.registry.get("skill_manager") if app_state and app_state.registry.has("skill_manager") else None
         
-        # Robust iteration handling whether skill_manager.skills is a list or a dict
         available_skills = {}
         if skill_manager:
-            if hasattr(skill_manager, "skills"):
-                if isinstance(skill_manager.skills, dict):
-                    available_skills = {name: skill.description for name, skill in skill_manager.skills.items()}
-                elif isinstance(skill_manager.skills, list):
-                    available_skills = {s.name: s.description for s in skill_manager.skills}
+            if isinstance(skill_manager.skills, dict):
+                available_skills = {name: skill.description for name, skill in skill_manager.skills.items()}
+            elif isinstance(skill_manager.skills, list):
+                available_skills = {s.name: s.description for s in skill_manager.skills}
         
         if not available_skills:
             available_skills = {
@@ -50,17 +44,16 @@ class Planner:
             }
 
         if self.llm_router is None:
-            return ExecutionPlan(
-                goal=goal,
-                tasks=[Task(id="1", name="default_skill_execution", skill="document", input={"query": goal}, depends_on=[])],
-                confidence=0.5
-            )
+            return ExecutionPlan(goal=goal, tasks=[Task(id="1", name="default", skill="document", input={"query": goal}, depends_on=[])], confidence=0.5)
 
         skills_desc_str = "\n".join([f"- **{name}**: {desc}" for name, desc in available_skills.items()])
         
         prompt = f"""
 You are ARIA's autonomous task planner. Break down the user's goal into discrete execution tasks using ONLY the registered skills.
-IMPORTANT: Greetings, small talk, acknowledgements, and casual chat must NOT generate memory, profile, document, or calculator tasks. Return an empty tasks list if it is purely conversational.
+
+CRITICAL RULES:
+1. Greetings, small talk, and conversational chat must return an empty tasks list.
+2. Requests for sensitive government identifiers (such as Aadhaar, RRN, MyNumber, passports, PAN numbers, or secure identity cards) are strictly restricted and must NOT be mapped to 'profile' or 'memory' skills. Return an empty tasks list for restricted ID requests so the system handles them securely.
 
 Available Skills:
 {skills_desc_str}
@@ -105,18 +98,11 @@ Instructions:
                     depends_on=t.get("depends_on", [])
                 ))
             
-            plan = ExecutionPlan(
+            return ExecutionPlan(
                 goal=plan_data.get("goal", goal),
                 tasks=tasks,
                 confidence=float(plan_data.get("confidence", 0.9))
             )
-            logger.info("[Planner] Goal: '%s' | Tasks: %d | Confidence: %.2f", plan.goal, len(plan.tasks), plan.confidence)
-            return plan
-
         except Exception:
-            logger.exception("[Planner] Failed to parse structured execution plan, falling back.")
-            return ExecutionPlan(
-                goal=goal,
-                tasks=[Task(id="1", name="fallback_execution", skill="document", input={"query": goal}, depends_on=[])],
-                confidence=0.4
-            )
+            logger.exception("[Planner] Failed to parse plan.")
+            return ExecutionPlan(goal=goal, tasks=[], confidence=0.4)
