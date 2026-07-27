@@ -29,6 +29,7 @@ class RequestContext:
     skill_manager: Any
     action_manager: Any
     planner: Any
+    cognitive_core: Any      # <-- Added this line
     executor: Any
     personality_engine: Any
     context_manager: Any
