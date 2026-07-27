@@ -2,7 +2,6 @@ import os
 import uuid
 import asyncio
 import logging
-import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -14,6 +13,12 @@ from personality.response import SystemResponse
 
 setup_logging("INFO")
 logger = logging.getLogger("aria")
+
+GREETINGS = {
+    "hi", "hello", "hey", "hii", "hi there", "hello there",
+    "good morning", "good afternoon", "good evening", "greetings",
+    "how are you", "what's up", "sup"
+}
 
 class BackgroundTaskManager:
     def __init__(self):
@@ -39,7 +44,7 @@ async def lifespan(app: FastAPI):
     app.state.bg_manager = background_manager
     logger.info("[Lifespan] ARIA Platform successfully started.")
     yield
-    logger.info("[Lifespan] Shutting down ARIA platform resources...")
+    logger.info("[Lifespan] Shutting down resources...")
     await background_manager.shutdown()
     
     if registry.has("scheduler"):
@@ -47,27 +52,13 @@ async def lifespan(app: FastAPI):
             registry.get("scheduler").shutdown()
         except Exception:
             pass
-
     if registry.has("http_client"):
         await registry.get("http_client").aclose()
-
     if registry.has("mongo_client"):
         registry.get("mongo_client").close()
-
-    if registry.has("plugin_manager"):
-        for p in registry.get("plugin_manager").plugins.values():
-            try:
-                await p.shutdown()
-            except Exception:
-                pass
-                
     logger.info("[Lifespan] All resources successfully released.")
 
-app = FastAPI(
-    title="ARIA AI Operating Platform",
-    version="12.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="ARIA AI Operating Platform", version="12.0.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def add_request_metadata(request: Request, call_next):
@@ -78,11 +69,8 @@ async def add_request_metadata(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("[GlobalExceptionHandler] Unhandled exception occurred: %s", exc)
-    return JSONResponse(
-        status_code=500,
-        content={"success": False, "error": "An internal system error occurred, Sir.", "detail": str(exc)}
-    )
+    logger.exception("[GlobalExceptionHandler] Unhandled exception: %s", exc)
+    return JSONResponse(status_code=500, content={"success": False, "error": "An internal system error occurred, Sir.", "detail": str(exc)})
 
 def build_request_context(session_id: str, request_id: str, registry) -> RequestContext:
     return RequestContext(
@@ -107,8 +95,6 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
 
     session = ctx.session_manager.get_or_create_session(session_id)
-    
-    # Properly wired execution context exposing memory_engine and application state
     base_context = {
         "app_state": app_state,
         "session": session,
@@ -116,9 +102,20 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         "document_intelligence": registry.get("document_intelligence") if registry.has("document_intelligence") else None
     }
 
-    # Strict SkillManager Routing & Direct Execution
+    cleaned_text = user_text.lower().strip()
+
+    # Fast-Path: Bypass planning/execution entirely for casual greetings
+    if cleaned_text in GREETINGS:
+        sys_res = SystemResponse(
+            success=True,
+            confidence=1.0,
+            data={"message": "Greetings, Sir. ARIA operational and ready."},
+            source="greeting_fast_path"
+        )
+        return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
+
+    # 1. Strict SkillManager Routing & Direct Execution
     skill_response = await ctx.skill_manager.route_and_execute(user_text, base_context)
-    
     if skill_response.success and skill_response.confidence >= 0.85:
         sys_res = SystemResponse(
             success=True,
@@ -128,13 +125,23 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         )
         return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
 
-    # Planner + Executor Orchestration Fallback
+    # 2. Planner + Executor Orchestration Fallback
     plan = await ctx.planner.create_plan(user_text, base_context)
+    
+    # If planner returned 0 tasks (e.g. conversational fallback), handle gracefully
+    if not plan.tasks:
+        sys_res = SystemResponse(
+            success=True,
+            confidence=plan.confidence,
+            data={"message": "Awaiting your specific instruction, Sir."},
+            source="planner_conversational"
+        )
+        return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
+
     exec_result = await ctx.executor.execute_plan(plan, base_context)
 
     final_data = exec_result.get("task_outputs", {})
     success = exec_result.get("success", False)
-
     combined_confidence = round((plan.confidence + skill_response.confidence) / 2.0, 2)
 
     sys_res = SystemResponse(
