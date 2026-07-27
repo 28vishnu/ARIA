@@ -11,7 +11,7 @@ class PersonalityEngine:
     def apply_personality(self, session_id: str, user_text: str, response: SystemResponse) -> str:
         """Transforms structured SystemResponse payloads into natural, contextual language."""
         try:
-            # 1. Handle failures gracefully with a professional tone
+            # 1. Handle failures gracefully
             if not response.success:
                 error_msg = response.error or "An unexpected issue occurred while processing your request, Sir."
                 return f"I encountered a slight complication: {error_msg}"
@@ -30,28 +30,34 @@ class PersonalityEngine:
                     return "Good evening, Sir. Ready for your instructions."
                 return "Greetings, Sir. ARIA operational and ready."
 
-            # 3. Handle Profile Skill payloads
+            # 3. Handle Profile Skill payloads (dynamic fallback)
             if source == "profile":
                 if isinstance(data, dict) and data:
-                    name = data.get("name", "Vishnu")
+                    name = data.get("name", "the user")
                     role = data.get("role", "Developer & Student")
                     institution = data.get("institution", "")
-                    return f"Profile data retrieved for {name}. You are currently pursuing studies as a {role} at {institution}."
+                    inst_str = f" at {institution}" if institution else ""
+                    return f"Profile records retrieved for {name}. Current role: {role}{inst_str}."
                 return "No active profile records were located, Sir."
 
-            # 4. Handle Memory Skill payloads
+            # 4. Handle Memory Skill payloads (aligned with MemoryEngine schema: key/value)
             if source == "memory":
                 memories = data.get("memories", [])
                 if memories:
-                    # If memories is a list of dicts or strings
                     snippets = []
                     for m in memories:
                         if isinstance(m, dict):
-                            snippets.append(m.get("fact") or m.get("content") or str(m))
+                            key = m.get("key", "memory")
+                            value = m.get("value", "")
+                            if value:
+                                snippets.append(f"{key}: {value}")
+                            else:
+                                snippets.append(str(m))
                         else:
                             snippets.append(str(m))
-                    joined = "; ".join(snippets[:3])
-                    return f"Recalled data, Sir: {joined}"
+                    if snippets:
+                        joined = "; ".join(snippets[:4])
+                        return f"Recalled data, Sir: {joined}"
                 return data.get("message", "No relevant long-term memories found matching your query, Sir.")
 
             # 5. Handle Planner / Executor multi-task orchestration results
@@ -60,19 +66,17 @@ class PersonalityEngine:
                     summaries = []
                     for task_id, output in data.items():
                         if isinstance(output, dict):
-                            # extract sensible message or content if present
                             msg = output.get("message") or output.get("status") or str(output)
                             summaries.append(f"Task {task_id}: {msg}")
                         else:
                             summaries.append(f"Task {task_id}: {output}")
                     return "Execution completed successfully, Sir. " + " | ".join(summaries)
 
-            # 6. Fallback string representation if data is a raw dict/string
+            # 6. Fallback formatting for general data
             if isinstance(data, dict):
                 if "message" in data:
                     return str(data["message"])
                 if data:
-                    # Return formatted key-value pairs instead of raw JSON/{}
                     formatted_pairs = [f"{k}: {v}" for k, v in data.items() if v]
                     if formatted_pairs:
                         return "Here is the information retrieved, Sir:\n" + "\n".join(formatted_pairs)
