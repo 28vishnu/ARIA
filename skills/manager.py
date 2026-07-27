@@ -9,6 +9,8 @@ class SkillManager:
         self.skills: List[BaseSkill] = []
 
     def register(self, skill: BaseSkill):
+        """Normalizes and registers a skill into the ecosystem."""
+        skill.name = skill.name.strip().lower()
         self.skills.append(skill)
         logger.info("[SkillManager] Registered skill: '%s'", skill.name)
 
@@ -28,7 +30,11 @@ class SkillManager:
 
         if best_skill and highest_confidence >= 0.3:
             logger.info("[SkillManager] Routing query to skill '%s' (Confidence: %.2f)", best_skill.name, highest_confidence)
-            return await best_skill.execute(query, context)
+            try:
+                return await best_skill.execute(query, context)
+            except Exception as e:
+                logger.exception("[SkillManager ERROR] Execution failed for routed skill '%s': %s", best_skill.name, e)
+                return SkillResponse(success=False, confidence=0.0, source=best_skill.name, error=str(e))
 
         logger.warning("[SkillManager] No suitable skill found for query with confidence >= 0.3")
         return SkillResponse(
@@ -39,18 +45,28 @@ class SkillManager:
         )
 
     async def execute_skill(self, skill_name: str, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Directly executes a specific skill requested by the planner, avoiding redundant re-routing."""
-        normalized_target = skill_name.lower().strip()
+        """Directly executes a specific skill requested by the planner safely."""
+        normalized_target = skill_name.strip().lower()
         
         for skill in self.skills:
-            if skill.name.lower().strip() == normalized_target:
+            if skill.name == normalized_target:
                 logger.info("[SkillManager] Directly executing planned skill: '%s'", skill.name)
-                return await skill.execute(query, context)
+                try:
+                    return await skill.execute(query, context)
+                except Exception as e:
+                    logger.exception("[SkillManager ERROR] Execution failed for planned skill '%s': %s", skill.name, e)
+                    return SkillResponse(
+                        success=False,
+                        confidence=0.0,
+                        source=skill.name,
+                        error=str(e)
+                    )
 
-        logger.error("[SkillManager ERROR] Requested skill '%s' not found in registry.", skill_name)
+        available = [s.name for s in self.skills]
+        logger.error("[SkillManager ERROR] Planner requested unsupported skill '%s'. Available skills: %s", skill_name, available)
         return SkillResponse(
             success=False,
             confidence=0.0,
             source="skill_manager",
-            error=f"Skill '{skill_name}' not found."
+            error=f"Skill '{skill_name}' not found. Available: {available}"
         )
