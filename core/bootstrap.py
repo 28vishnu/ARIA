@@ -127,11 +127,20 @@ async def bootstrap_application() -> ServiceRegistry:
     planner = Planner(llm_router)
     registry.register("planner", planner)
 
-    cognitive_core = CognitiveCore()
-    registry.register("cognitive_core", cognitive_core)
-
     executor = Executor(skill_manager)
     registry.register("executor", executor)
+
+    cognitive_core = CognitiveCore(
+        planner=planner,
+        executor=executor,
+        skill_manager=skill_manager,
+        memory_router=None,      # temporary
+        state_manager=None,      # temporary
+        intent_analyzer=None,    # temporary
+        context_builder=None,    # temporary
+        decision_engine=None     # temporary
+    )
+    registry.register("cognitive_core", cognitive_core)
 
     event_bus = EventBus()
     registry.register("event_bus", event_bus)
