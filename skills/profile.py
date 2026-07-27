@@ -10,14 +10,14 @@ class ProfileSkill(BaseSkill):
 
     async def can_run(self, query: str, context: Dict[str, Any]) -> float:
         """Determines if the query relates to user profile or personal background."""
-        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills", "college", "university", "degree"]
+        keywords = ["profile", "who am i", "my background", "my education", "my career", "about me", "my skills", "college", "university", "degree", "phone", "work", "job"]
         lower = query.lower()
         if any(k in lower for k in keywords):
             return 0.95
         return 0.1
 
     async def execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
-        """Retrieves user profile data safely via MemoryEngine, with memory search fallback."""
+        """Retrieves user profile data safely via MemoryEngine, utilizing adaptive query matching."""
         try:
             memory_engine = context.get("memory_engine")
             if not memory_engine and "app_state" in context:
@@ -33,9 +33,15 @@ class ProfileSkill(BaseSkill):
                 elif hasattr(memory_engine, "get"):
                     profile_data = await memory_engine.get("user_profile") or await memory_engine.get("profile") or {}
                 
-                # 2. Fallback to general memory search if dedicated profile storage is empty
+                # 2. Adaptive query matching against long-term memory if dedicated profile store is empty
                 if not profile_data and hasattr(memory_engine, "get_relevant_memories"):
-                    memories = await memory_engine.get_relevant_memories("profile education college background university")
+                    search_query = query
+                    generic_triggers = ("profile", "about me", "who am i", "background")
+                    if any(t in query.lower() for t in generic_triggers):
+                        search_query = f"profile education college university career skills background {query}"
+
+                    logger.info("[ProfileSkill] Querying MemoryEngine with adaptive search: '%s'", search_query)
+                    memories = await memory_engine.get_relevant_memories(search_query)
                     if memories:
                         profile_data = {"memories": memories}
 
