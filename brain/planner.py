@@ -7,12 +7,29 @@ from brain.task import Task
 
 logger = logging.getLogger("aria")
 
+GREETINGS = {
+    "hi", "hello", "hey", "hii", "hi there", "hello there",
+    "good morning", "good afternoon", "good evening", "greetings",
+    "how are you", "what's up", "sup"
+}
+
 class Planner:
     def __init__(self, llm_router):
         self.llm_router = llm_router
 
     async def create_plan(self, goal: str, context: Dict[str, Any]) -> ExecutionPlan:
-        """Generates a structured multi-step execution plan exclusively utilizing registered skills."""
+        """Generates a structured execution plan, short-circuiting casual greetings."""
+        cleaned_goal = goal.lower().strip()
+        
+        # Short-circuit casual greetings so they never get mapped to search/memory tasks
+        if cleaned_goal in GREETINGS or len(cleaned_goal) <= 3:
+            logger.info("[Planner] Detected casual greeting or trivial input. Skipping task orchestration.")
+            return ExecutionPlan(
+                goal=goal,
+                tasks=[],
+                confidence=1.0
+            )
+
         app_state = context.get("app_state")
         skill_manager = app_state.registry.get("skill_manager") if app_state and app_state.registry.has("skill_manager") else None
         
@@ -33,7 +50,8 @@ class Planner:
         skills_desc_str = "\n".join([f"- **{name}**: {desc}" for name, desc in available_skills.items()])
         
         prompt = f"""
-You are ARIA's autonomous task planner. Your job is to break down the user's goal into discrete execution tasks using ONLY the registered skills provided below.
+You are ARIA's autonomous task planner. Break down the user's goal into discrete execution tasks using ONLY the registered skills.
+IMPORTANT: Greetings, small talk, acknowledgements, and casual chat must NOT generate memory, profile, document, or calculator tasks. Return an empty tasks list if it is purely conversational.
 
 Available Skills:
 {skills_desc_str}
@@ -41,22 +59,21 @@ Available Skills:
 User Goal: "{goal}"
 
 Instructions:
-1. Output STRICT JSON only. No markdown formatting blocks if possible, or standard JSON.
-2. The schema must match:
+1. Output STRICT JSON only.
+2. Schema:
 {{
     "goal": "{goal}",
     "confidence": 0.95,
     "tasks": [
         {{
             "id": "1",
-            "name": "Short descriptive name",
+            "name": "Short name",
             "skill": "skill_name_from_list",
-            "input": {{"query": "specific instruction for this task"}},
+            "input": {{"query": "instruction"}},
             "depends_on": []
         }}
     ]
 }}
-3. If a task depends on the output of a previous task, list the parent task id in `depends_on`.
 """
         messages = [
             {"role": "system", "content": "You are a deterministic task planner. Return JSON only."},
@@ -84,11 +101,11 @@ Instructions:
                 tasks=tasks,
                 confidence=float(plan_data.get("confidence", 0.9))
             )
-            logger.info("[Planner] Goal: '%s' | Tasks: %d | Estimated Confidence: %.2f", plan.goal, len(plan.tasks), plan.confidence)
+            logger.info("[Planner] Goal: '%s' | Tasks: %d | Confidence: %.2f", plan.goal, len(plan.tasks), plan.confidence)
             return plan
 
         except Exception:
-            logger.exception("[Planner] Failed to parse structured execution plan, falling back to direct match.")
+            logger.exception("[Planner] Failed to parse structured execution plan, falling back.")
             return ExecutionPlan(
                 goal=goal,
                 tasks=[Task(id="1", name="fallback_execution", skill="document", input={"query": goal}, depends_on=[])],
