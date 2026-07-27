@@ -1,26 +1,26 @@
 from datetime import datetime
-from skills.base import BaseSkill
-from personality.response import SystemResponse
+from skills.base import BaseSkill, SkillResponse
 
 class DateSkill(BaseSkill):
     name = "date"
     description = "Returns current local date."
-    version = "1.0"
+    version = "1.0.0"
     priority = 20
     requires_llm = False
 
-    def can_run(self, query: str, context: dict) -> float:
+    async def can_run(self, query: str, context: dict) -> float:
         cleaned = query.lower().strip()
         keywords = ["date", "today's date", "current date", "what day", "which month"]
-        if any(kw in cleaned for kw in keywords):
-            return 0.95
-        return 0.0
+        return 0.95 if any(kw in cleaned for kw in keywords) else 0.0
 
-    async def execute(self, query: str, context: dict) -> SystemResponse:
+    async def execute(self, query: str, context: dict) -> SkillResponse:
         current_date = datetime.now().strftime("%d %B %Y")
-        return SystemResponse(
+        return SkillResponse(
             success=True,
             confidence=0.95,
             source=self.name,
-            data={"date": current_date}
+            data={
+                "status": "success",
+                "date": current_date
+            }
         )
