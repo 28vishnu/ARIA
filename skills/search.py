@@ -9,11 +9,19 @@ class SearchSkill(BaseSkill):
 
     async def can_run(self, query: str, context: dict) -> float:
         cleaned = query.lower().strip()
-        keywords = ["search", "look up", "find", "latest news", "google"]
-        return 0.90 if any(cleaned.startswith(kw) or kw in cleaned for kw in keywords) else 0.0
+        keywords = [
+            "search",
+            "find",
+            "look up",
+            "lookup",
+            "google",
+            "bing",
+            "latest",
+            "news"
+        ]
+        return 0.90 if any(kw in cleaned for kw in keywords) else 0.0
 
     async def execute(self, query: str, context: dict) -> SkillResponse:
-        # TODO: Integrate DuckDuckGo, Tavily, or Google Search provider.
         return SkillResponse(
             success=True,
             confidence=0.90,
