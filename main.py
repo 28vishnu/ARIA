@@ -104,12 +104,12 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
 
     cleaned_text = user_text.lower().strip()
 
-    # Fast-Path: Bypass planning/execution entirely for casual greetings
+    # Fast-Path: Bypass planning/execution for conversational greetings, leaving wording to PersonalityEngine
     if cleaned_text in GREETINGS:
         sys_res = SystemResponse(
             success=True,
             confidence=1.0,
-            data={"message": "Greetings, Sir. ARIA operational and ready."},
+            data={"intent": "greeting", "query": user_text},
             source="greeting_fast_path"
         )
         return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
@@ -128,12 +128,12 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
     # 2. Planner + Executor Orchestration Fallback
     plan = await ctx.planner.create_plan(user_text, base_context)
     
-    # If planner returned 0 tasks (e.g. conversational fallback), handle gracefully
+    # Graceful handling if planner returns empty task list
     if not plan.tasks:
         sys_res = SystemResponse(
             success=True,
             confidence=plan.confidence,
-            data={"message": "Awaiting your specific instruction, Sir."},
+            data={"intent": "conversational", "query": user_text},
             source="planner_conversational"
         )
         return ctx.personality_engine.apply_personality(session_id, user_text, sys_res)
