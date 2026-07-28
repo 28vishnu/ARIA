@@ -110,6 +110,15 @@ class CognitiveCore:
                 elif decision.action == "planner":
                     pass
 
+                # Chat
+                elif decision.action == "chat":
+                    return SystemResponse(
+                        success=True,
+                        confidence=decision.confidence,
+                        data={"intent": "chat", "query": query},
+                        source="chat"
+                    )
+
             # 2. Otherwise, fall back to Planner + Executor Orchestration
             plan = None
             if self.planner and hasattr(self.planner, "create_plan"):
