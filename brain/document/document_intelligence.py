@@ -74,8 +74,11 @@ class DocumentIntelligence:
                     chunks=chunks,
                     metadata=document_metadata
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(
+                    "[DocumentAI] Failed to store document: %s",
+                    e
+                )
 
         return {
             "success": True,
