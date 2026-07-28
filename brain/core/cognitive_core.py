@@ -15,7 +15,8 @@ class CognitiveCore:
         state_manager=None,
         intent_analyzer=None,
         context_builder=None,
-        decision_engine=None
+        decision_engine=None,
+        memory_conversation_manager=None
     ):
         self.planner = planner
         self.executor = executor
@@ -25,6 +26,7 @@ class CognitiveCore:
         self.intent_analyzer = intent_analyzer
         self.context_builder = context_builder
         self.decision_engine = decision_engine
+        self.memory_conversation_manager = memory_conversation_manager
 
     async def process(
         self,
