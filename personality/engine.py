@@ -1,8 +1,25 @@
 import logging
+import random
 from typing import Dict, Any
 from personality.response import SystemResponse
 
 logger = logging.getLogger("aria")
+
+class ResponseSource:
+    """Constants for standardized routing of response sources."""
+    CHAT = "chat"
+    MEMORY = "memory"
+    MEMORY_CONVERSATION = "memory_conversation"
+    PROFILE = "profile"
+    WEATHER = "weather"
+    SEARCH = "search"
+    TIME = "time"
+    DATE = "date"
+    CALCULATOR = "calculator"
+    PLANNER = "planner_executor"
+    GREETING = "greeting_fast_path"
+    PLANNER_CONVERSATIONAL = "planner_conversational"
+
 
 class PersonalityEngine:
     def __init__(self, llm_router=None):
@@ -11,91 +28,117 @@ class PersonalityEngine:
     def apply_personality(self, session_id: str, user_text: str, response: SystemResponse) -> str:
         """Transforms structured SystemResponse payloads into natural, contextual language."""
         try:
-            # 1. Handle failures or missing records gracefully
             if not response.success:
-                error_msg = response.error or ""
-                if "no profile" in error_msg.lower() or "no relevant" in error_msg.lower():
-                    return "I couldn't find any stored records matching that request, Sir."
-                return f"I encountered a slight complication: {error_msg}"
+                return self._format_error(response.error)
 
             data = response.data or {}
             source = response.source
+            intent = data.get("intent")
 
-            # 2. Handle specific skill sources cleanly and naturally
-            if source == "time" and "time" in data:
-                return f"The current time is {data['time']}, Sir."
+            # Route to specific private formatters
+            if source == ResponseSource.TIME and "time" in data:
+                reply = f"The current time is {data['time']}, Sir."
+            elif source == ResponseSource.DATE and "date" in data:
+                reply = f"Today is {data['date']}, Sir."
+            elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
+                reply = str(data["message"])
+            elif source == ResponseSource.CHAT and "response" in data:
+                reply = str(data["response"])
+            elif source == ResponseSource.CALCULATOR and "result" in data:
+                reply = f"The answer is {data['result']}, Sir."
+            elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
+                reply = self._format_greeting(user_text)
+            elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
+                reply = self._format_memory(data)
+            elif source == ResponseSource.PLANNER:
+                reply = self._format_planner(data)
+            else:
+                reply = self._format_fallback(data)
 
-            if source == "date" and "date" in data:
-                return f"Today is {data['date']}, Sir."
-
-            if source in ["weather", "search"] and "message" in data:
-                return str(data["message"])
-
-            if source == "chat" and "response" in data:
-                return str(data["response"])
-
-            if source == "calculator" and "result" in data:
-                return f"The answer is {data['result']}, Sir."
-
-            # 3. Handle greetings or conversational intents naturally
-            if source in ["greeting_fast_path", "planner_conversational"] or data.get("intent") in ["greeting", "conversational"]:
-                query = data.get("query", user_text).lower()
-                if "how are you" in query:
-                    return "All systems operational and fully optimized, Sir. How may I assist you today?"
-                elif "morning" in query:
-                    return "Good morning, Sir. All operational parameters are nominal."
-                elif "evening" in query:
-                    return "Good evening, Sir. Ready for your instructions."
-                return "Greetings, Sir. ARIA operational and ready."
-
-            # 4. Handle Memory / Profile Skill payloads with memories lists or dictionaries
-            if source in ["memory", "profile"]:
-                data_dict = data if isinstance(data, dict) else {}
-                memories = data_dict.get("memories", [])
-                
-                snippets = []
-                for m in memories:
-                    if isinstance(m, dict):
-                        k = m.get("key") or m.get("field") or m.get("category") or "Detail"
-                        v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
-                        if v:
-                            snippets.append(f"• {str(k).capitalize()}: {str(v)}")
-                        else:
-                            snippets.append(f"• {str(m)}")
-                    else:
-                        snippets.append(f"• {str(m)}")
-                
-                if snippets:
-                    return "Here's what I found, Sir:\n\n" + "\n".join(snippets)
-                
-                return data_dict.get("message", "No relevant records found, Sir.")
-
-            # 5. Handle Planner / Executor multi-task orchestration results
-            if source == "planner_executor":
-                if isinstance(data, dict) and data:
-                    summaries = []
-                    for task_id, output in data.items():
-                        if isinstance(output, dict):
-                            msg = output.get("message") or output.get("status") or str(output)
-                            summaries.append(f"Task {task_id}: {msg}")
-                        else:
-                            summaries.append(f"Task {task_id}: {output}")
-                    return "Execution completed successfully, Sir. " + " | ".join(summaries)
-
-            # 6. General fallback formatting
-            if isinstance(data, dict):
-                if "message" in data:
-                    return str(data["message"])
-                if data:
-                    formatted_pairs = [f"{k}: {v}" for k, v in data.items() if v]
-                    if formatted_pairs:
-                        return "Here is the information retrieved, Sir:\n" + "\n".join(formatted_pairs)
-
-            if isinstance(data, str) and data.strip():
-                return data
-
-            return "Task executed successfully, Sir."
+            return self._post_process(reply)
 
         except Exception as e:
             logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
             return "Operation completed, though a formatting error occurred, Sir."
+
+    def _format_error(self, error_msg: str) -> str:
+        error_msg = error_msg or ""
+        if "no profile" in error_msg.lower() or "no relevant" in error_msg.lower():
+            return "I couldn't find any stored records matching that request, Sir."
+        return f"I encountered a slight complication: {error_msg}"
+
+    def _format_greeting(self, user_text: str) -> str:
+        query = user_text.lower()
+        if "how are you" in query:
+            return "All systems operational and fully optimized, Sir. How may I assist you today?"
+        elif "morning" in query:
+            return "Good morning, Sir. All operational parameters are nominal."
+        elif "evening" in query:
+            return "Good evening, Sir. Ready for your instructions."
+        
+        responses = [
+            "Greetings, Sir. ARIA operational and ready.",
+            "Good to see you again, Sir.",
+            "At your service, Sir.",
+            "Systems online. How may I assist?",
+            "Ready whenever you are, Sir."
+        ]
+        return random.choice(responses)
+
+    def _format_memory(self, data: Any) -> str:
+        data_dict = data if isinstance(data, dict) else {}
+        
+        # If the MemoryConversationManager already provided a natural response
+        if "message" in data_dict:
+            return str(data_dict["message"])
+            
+        memories = data_dict.get("memories", [])
+        snippets = []
+        for m in memories:
+            if isinstance(m, dict):
+                k = m.get("key") or m.get("field") or m.get("category") or "Detail"
+                v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
+                if v:
+                    snippets.append(f"• {str(k).capitalize()}: {str(v)}")
+                else:
+                    snippets.append(f"• {str(m)}")
+            else:
+                snippets.append(f"• {str(m)}")
+
+        if snippets:
+            return "Here's what I found, Sir:\n\n" + "\n".join(snippets)
+
+        return "No relevant records found, Sir."
+
+    def _format_planner(self, data: Any) -> str:
+        if isinstance(data, dict) and data:
+            summaries = []
+            for task_id, output in data.items():
+                if isinstance(output, dict):
+                    msg = output.get("message") or output.get("status") or str(output)
+                    summaries.append(f"Task {task_id}: {msg}")
+                else:
+                    summaries.append(f"Task {task_id}: {output}")
+            return "Execution completed successfully, Sir. " + " | ".join(summaries)
+        return "Task executed successfully, Sir."
+
+    def _format_fallback(self, data: Any) -> str:
+        if isinstance(data, dict):
+            if "message" in data:
+                return str(data["message"])
+            if data:
+                formatted_pairs = [f"{k}: {v}" for k, v in data.items() if v]
+                if formatted_pairs:
+                    return "Here is the information retrieved, Sir:\n" + "\n".join(formatted_pairs)
+
+        if isinstance(data, str) and data.strip():
+            return data
+
+        return "Task executed successfully, Sir."
+
+    def _post_process(self, reply: str) -> str:
+        """Ensures consistent formatting and punctuation."""
+        reply = reply.strip()
+        if reply and reply[-1] not in ".!?":
+            reply += "."
+        return reply
