@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import Dict, Any, Optional
 from brain.memory.memory_engine import MemoryEngine
 
@@ -35,7 +34,7 @@ class MemoryConversationManager:
                 key = result.get("key", "").replace("favorite_", "").replace("_", " ")
                 value = result.get("value", "")
                 action_type = result.get("action", "stored")
-                
+
                 if action_type == "update":
                     return f"I've updated that, Sir. I'll remember that your {key} is {value}."
                 return f"Understood, Sir. I'll remember that your {key} is {value}."
@@ -55,42 +54,24 @@ class MemoryConversationManager:
         key_guess = self._guess_key_from_query(lower_q)
         if key_guess:
             return f"I don't remember your {key_guess} yet, Sir."
-        
+
         return "I couldn't find a matching record in my memory banks, Sir."
 
     async def _handle_forget(self, query: str) -> str:
-        """Handles deletion or clearing of specific memories using robust target normalization."""
-        if self.memory_engine.memory_col is None:
-            return "Memory database is currently offline, Sir."
-
+        """Handles deletion or clearing of specific memories by delegating parsing to MemoryEngine."""
         try:
-            target = query
-            target = re.sub(r"^(forget|delete|clear|remove)\s+", "", target, flags=re.IGNORECASE)
-            target = re.sub(r"\bmy\b", "", target, flags=re.IGNORECASE).strip()
-            target = target.replace("favourite", "favorite").strip()
-            target = re.sub(r"^favorite\s+", "", target, flags=re.IGNORECASE).strip()
-            
-            target_key = f"favorite_{target.replace(' ', '_')}" if target else ""
+            success = await self.memory_engine.delete_memory(query)
+            if success:
+                return "Done, Sir. I've removed that from my records."
 
-            if target_key:
-                success = await self.memory_engine.delete_memory(target_key)
-                if success:
-                    display_target = target.replace("favorite", "").replace("_", " ").strip()
-                    return f"Done, Sir. I've forgotten your {display_target}."
-
-            # Fallback to broader match if exact key match fails
-            fallback_target = query.replace("forget", "").replace("delete", "").replace("my", "").strip()
-            success_broad = await self.memory_engine.delete_memory(fallback_target)
-            if success_broad:
-                return f"Done, Sir. I've removed that from my records."
-
-            return f"I couldn't find any recorded memory matching that description, Sir."
+            return "I couldn't find any recorded memory matching that description, Sir."
         except Exception:
             logger.exception("[MemoryConversationManager] Failed to delete memory.")
             return "I encountered an error while trying to update my memory, Sir."
 
     def _guess_key_from_query(self, query: str) -> Optional[str]:
         """Guesses the subject from a failed recall query."""
+        import re
         match = re.search(r'(?:what\'s|what is|recall|remember)\s+(?:my\s+)?([a-zA-Z0-9\s]+)', query)
         if match:
             cleaned = match.group(1).replace("favorite", "").replace("favourite", "").strip()
