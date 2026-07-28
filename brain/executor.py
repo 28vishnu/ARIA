@@ -22,8 +22,12 @@ class Executor:
 
     async def execute_plan(self, plan: ExecutionPlan, base_context: Dict[str, Any]) -> Dict[str, Any]:
         task_outputs: Dict[str, Any] = {}
-        completed: list = []
-        failed: list = []
+
+        completed: list[str] = []
+        failed: list[str] = []
+
+        workflow_results: Dict[str, Any] = {}
+
         executed = set()
 
         while len(executed) < len(plan.tasks):
@@ -51,7 +55,7 @@ class Executor:
 
                 while attempt < max_attempts and not success:
                     start_time = time.perf_counter()
-                    
+
                     exec_context = dict(base_context)
                     exec_context["task_input"] = resolved_input
 
@@ -60,7 +64,7 @@ class Executor:
                         resolved_input.get("query", plan.goal),
                         exec_context
                     )
-                    
+
                     elapsed_ms = (time.perf_counter() - start_time) * 1000
                     logger.info("[Executor] Task: %s (Skill: %s) | Status: %s | Time: %.1f ms", task.id, task.skill, "Completed" if res.success else "Failed", elapsed_ms)
 
@@ -82,11 +86,30 @@ class Executor:
 
                 if success:
                     task.status = "completed"
+
+                    task.output = res.data
+
                     task_outputs[task.id] = res.data
+
+                    workflow_results[task.id] = {
+                        "skill": task.skill,
+                        "status": "completed",
+                        "output": res.data
+                    }
+
                     completed.append(task.id)
                     executed.add(task.id)
                 else:
                     task.status = "failed"
+
+                    task.error = res.error
+
+                    workflow_results[task.id] = {
+                        "skill": task.skill,
+                        "status": "failed",
+                        "error": res.error
+                    }
+
                     failed.append(task.id)
                     executed.add(task.id)
                     for other_t in plan.tasks:
@@ -97,6 +120,7 @@ class Executor:
 
         return {
             "task_outputs": task_outputs,
+            "workflow_results": workflow_results,
             "completed": completed,
             "failed": failed,
             "success": len(failed) == 0
