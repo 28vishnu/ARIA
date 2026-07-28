@@ -10,6 +10,7 @@ from core.dependency_injection import ServiceRegistry
 from core.health import HealthChecker
 
 from memory_engine import MemoryEngine
+from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.memory.working_memory import WorkingMemory
 from brain.memory.memory_router import MemoryRouter
 from brain.document_intelligence import DocumentIntelligence
@@ -116,6 +117,12 @@ async def bootstrap_application() -> ServiceRegistry:
     await memory_engine.initialize_indexes()
     registry.register("memory_engine", memory_engine)
 
+    memory_conversation_manager = MemoryConversationManager(memory_engine)
+    registry.register(
+        "memory_conversation_manager",
+        memory_conversation_manager
+    )
+
     working_memory = WorkingMemory()
     registry.register("working_memory", working_memory)
 
@@ -165,7 +172,8 @@ async def bootstrap_application() -> ServiceRegistry:
         state_manager=state_manager,
         intent_analyzer=intent_analyzer,
         context_builder=context_builder,
-        decision_engine=decision_engine
+        decision_engine=decision_engine,
+        memory_conversation_manager=memory_conversation_manager
     )
     registry.register("cognitive_core", cognitive_core)
 
