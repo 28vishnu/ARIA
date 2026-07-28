@@ -94,6 +94,11 @@ class CognitiveCore:
 
             if decision:
 
+                secondary_actions = []
+
+                if hasattr(decision, "secondary_actions") and decision.secondary_actions:
+                    secondary_actions = decision.secondary_actions
+
                 # Memory Conversation
                 if decision.action == "memory_conversation":
                     reply = ""
