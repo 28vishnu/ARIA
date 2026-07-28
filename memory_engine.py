@@ -63,7 +63,7 @@ class MemoryEngine:
         lower = text.lower().strip()
         skip_phrases = ["hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening", "bye"]
         if lower in skip_phrases or any(lower.startswith(p) for p in ["what's", "what is", "how ", "where ", "who "]):
-            if not any(k in lower for k in ["my favorite", "i prefer", "i like"]):
+            if not any(k in lower for k in ["my favorite", "my favourite", "i prefer", "i like"]):
                 return False
 
         if bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', text)):
@@ -102,8 +102,8 @@ class MemoryEngine:
         is_list_accumulate = False
         extracted_items = []
 
-        fav_match = re.search(r'(?:my )?favorite\s+([a-zA-Z0-9\s]+?)\s+is\s+([a-zA-Z0-9\s]+)', lower)
-        rev_fav_match = re.search(r'([a-zA-Z0-9\s]+?)\s+is\s+my\s+favorite\s+([a-zA-Z0-9\s]+)', lower)
+        fav_match = re.search(r'(?:my )?favou?rite\s+([a-zA-Z0-9\s]+?)\s+is\s+([a-zA-Z0-9\s]+)', lower)
+        rev_fav_match = re.search(r'([a-zA-Z0-9\s]+?)\s+is\s+my\s+favou?rite\s+([a-zA-Z0-9\s]+)', lower)
         pref_match = re.search(r'i\s+(?:prefer|like|love)\s+([a-zA-Z0-9\s,and]+)', lower)
 
         if fav_match:
@@ -197,7 +197,14 @@ class MemoryEngine:
             lower_q = query.lower()
             filter_query = None
 
-            if any(k in lower_q for k in ["like", "preference", "favorite", "love", "prefer"]):
+            if any(k in lower_q for k in [
+                "like",
+                "preference",
+                "favorite",
+                "favourite",
+                "love",
+                "prefer"
+            ]):
                 filter_query = {"category": "preference"}
             elif any(k in lower_q for k in ["birthday", "born", "dob", "date of birth"]):
                 filter_query = {"key": "birthday"}
