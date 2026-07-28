@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("[Lifespan] Shutting down resources...")
     await background_manager.shutdown()
-    
+
     if registry.has("scheduler"):
         try:
             registry.get("scheduler").shutdown()
@@ -123,12 +123,13 @@ async def telegram_webhook(req: Request):
     msg = data.get("message", {})
     chat_id = msg.get("chat", {}).get("id")
     text = msg.get("text", "").strip()
+    document = msg.get("document")
 
-    if chat_id is None or not text:
+    if chat_id is None:
         return {"status": "ok"}
 
     reply_text = await process_task(text, str(chat_id), request_id, req.app.state)
-    
+
     # Diagnostic log to isolate whether {} comes from process_task or the API transport
     logger.info("[Telegram] Final reply text: %r", reply_text)
 
@@ -158,7 +159,7 @@ async def health(req: Request):
         "plugins_loaded": list(registry.get("plugin_manager").plugins.keys()) if registry.has("plugin_manager") else [],
         "version": "12.0.0"
     }
-    
+
     status_code = 200 if base_health["status"] == "healthy" else 503
     return JSONResponse(status_code=status_code, content=extended_status)
 
