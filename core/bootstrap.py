@@ -13,7 +13,7 @@ from brain.memory.memory_engine import MemoryEngine
 from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.memory.working_memory import WorkingMemory
 from brain.memory.memory_router import MemoryRouter
-from brain.document_intelligence import DocumentIntelligence
+from brain.document.document_intelligence import DocumentIntelligence
 from skills import create_default_skill_manager
 from skills.time import TimeSkill
 from skills.date import DateSkill
@@ -146,7 +146,10 @@ async def bootstrap_application() -> ServiceRegistry:
     )
     registry.register("memory_router", memory_router)
 
-    doc_intelligence = DocumentIntelligence(docs_col, llm_router=llm_router)
+    doc_intelligence = DocumentIntelligence(
+        memory_engine=memory_engine,
+        llm_router=llm_router
+    )
     registry.register("document_intelligence", doc_intelligence)
 
     skill_manager = create_default_skill_manager()
