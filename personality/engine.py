@@ -64,6 +64,7 @@ class PersonalityEngine:
                 reply = self._format_fallback(data)
 
             reply = ConversationStyle.apply(reply)
+            reply = ConversationStyle.follow_up(reply, user_text)
             return self._post_process(reply)
 
         except Exception as e:
