@@ -8,8 +8,13 @@ class DocumentIntelligence:
     Handles document ingestion, extraction, summarisation and storage.
     """
 
-    def __init__(self, memory_engine=None):
+    def __init__(
+        self,
+        memory_engine=None,
+        llm_router=None
+    ):
         self.memory_engine = memory_engine
+        self.llm_router = llm_router
 
     async def process_document(
         self,
@@ -65,10 +70,30 @@ class DocumentIntelligence:
         text: str
     ) -> str:
         """
-        Produce a concise summary.
+        Generate an AI summary of a document.
         """
 
-        raise NotImplementedError
+        if not self.llm_router:
+            return text[:1000]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are ARIA's document analyst. "
+                    "Summarise the document clearly using headings, "
+                    "bullet points, and key takeaways."
+                )
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ]
+
+        summary = await self.llm_router.chat(messages)
+
+        return summary
 
     async def store(
         self,
