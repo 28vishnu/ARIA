@@ -123,21 +123,20 @@ async def telegram_webhook(req: Request):
     msg = data.get("message", {})
     chat_id = msg.get("chat", {}).get("id")
     text = msg.get("text", "").strip()
-    document = msg.get("document")
 
     if chat_id is None:
         return {"status": "ok"}
 
-    if document:
-
+    # Handle document upload
+    if "document" in msg:
+        document = msg["document"]
         file_id = document["file_id"]
 
         http_client = req.app.state.registry.get("http_client")
-        config = req.app.state.registry.get("config")
 
         # Get Telegram file information
         file_info = await http_client.get(
-            f"https://api.telegram.org/bot{config.telegram_token}/getFile",
+            f"https://api.telegram.org/bot{token}/getFile",
             params={"file_id": file_id}
         )
 
@@ -145,7 +144,7 @@ async def telegram_webhook(req: Request):
 
         download_url = (
             f"https://api.telegram.org/file/bot"
-            f"{config.telegram_token}/{file_path}"
+            f"{token}/{file_path}"
         )
 
         os.makedirs("uploads", exist_ok=True)
@@ -168,12 +167,13 @@ async def telegram_webhook(req: Request):
         )
 
         summary = result["summary"]
+        formatted_response = f"✅ Document processed successfully.\n\nSummary:\n\n{summary}"
 
         await http_client.post(
-            f"https://api.telegram.org/bot{config.telegram_token}/sendMessage",
+            f"https://api.telegram.org/bot{token}/sendMessage",
             json={
                 "chat_id": chat_id,
-                "text": summary
+                "text": formatted_response
             }
         )
 
