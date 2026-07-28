@@ -1,5 +1,8 @@
+import logging
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
+
+logger = logging.getLogger("aria")
 
 
 @dataclass
@@ -29,6 +32,11 @@ class ReasoningEngine:
         """
 
         intent = context.get("intent")
+        logger.info(
+            "[Reasoning] Intent=%s Query=%s",
+            intent.name if intent else None,
+            context.get("query")
+        )
         query = context.get("query", "").lower().strip()
 
         # Greeting
