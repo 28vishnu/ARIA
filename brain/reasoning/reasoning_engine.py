@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-from brain.agents.base_agent import BaseAgent
+from brain.agents.agent_workflow import AgentWorkflow
 
 logger = logging.getLogger("aria")
 
@@ -18,7 +18,7 @@ class ReasoningResult:
     confidence: float = 1.0
     reasoning: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
-    selected_agent: Optional[BaseAgent] = None
+    workflow: Optional[AgentWorkflow] = None
 
 
 class ReasoningEngine:
@@ -53,6 +53,8 @@ class ReasoningEngine:
         selected_agent = None
         score = 0.0
 
+        workflow = AgentWorkflow()
+
         if self.agent_manager:
             selected_agent, score = await self.agent_manager.select_agent(
                 query,
@@ -68,6 +70,7 @@ class ReasoningEngine:
                 selected_agent.name,
                 score
             )
+            workflow.add(selected_agent)
 
         # Greeting
         if intent and intent.name == "greeting":
@@ -113,7 +116,7 @@ class ReasoningEngine:
                         "chat"
                     ]
                 },
-                selected_agent=selected_agent
+                workflow=workflow
             )
 
         # Default
@@ -128,5 +131,5 @@ class ReasoningEngine:
                     "chat"
                 ]
             },
-            selected_agent=selected_agent
+            workflow=workflow
         )
