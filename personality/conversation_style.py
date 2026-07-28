@@ -38,4 +38,19 @@ class ConversationStyle:
 
         # Medium replies
         if len(reply) < 250:
-            return
+            return random.choice([
+                "{}",
+                "Certainly.\n\n{}",
+                "Of course.\n\n{}",
+                "Here's what I found.\n\n{}"
+            ]).format(reply)
+
+        # Long replies
+        return random.choice([
+            "{}",
+            "Here's a detailed explanation.\n\n{}",
+            "I've broken it down below.\n\n{}"
+        ]).format(reply)
+
+    @staticmethod
+    def follow_up(reply: str, query:
