@@ -116,7 +116,20 @@ class DocumentIntelligence:
         metadata: Optional[dict] = None
     ):
         """
-        Store the processed document.
+        Store the document summary in ARIA's long-term memory.
         """
 
-        raise NotImplementedError
+        if not self.memory_engine:
+            return
+
+        document_memory = {
+            "type": "document",
+            "summary": summary,
+            "metadata": metadata or {}
+        }
+
+        # Store using your memory engine
+        await self.memory_engine.store(
+            session_id=session_id,
+            memory=document_memory
+        )
