@@ -5,14 +5,16 @@ from brain.agents.base_agent import BaseAgent, AgentResponse
 
 class ResearchAgent(BaseAgent):
     """
-    Handles research and knowledge-based questions.
+    Handles research, deep explanations, and information retrieval requests.
     """
 
     name = "research"
 
-    description = "Research and factual knowledge agent."
+    description = "Research and knowledge extraction agent."
 
     version = "1.0.0"
+
+    priority = 60
 
     async def can_handle(
         self,
@@ -23,20 +25,18 @@ class ResearchAgent(BaseAgent):
         q = query.lower()
 
         keywords = [
-            "what",
-            "why",
-            "how",
-            "explain",
             "research",
-            "history",
+            "explain",
+            "history of",
+            "overview of",
+            "what is",
+            "how does",
             "compare",
-            "difference",
-            "meaning",
-            "define",
-            "information"
+            "difference between",
+            "summarize"
         ]
 
-        if any(word in q for word in keywords):
+        if any(phrase in q for phrase in keywords):
             return 0.90
 
         return 0.0
@@ -47,21 +47,18 @@ class ResearchAgent(BaseAgent):
         context: Dict[str, Any]
     ) -> AgentResponse:
 
-        llm_router = context["app_state"].registry.get("llm_router")
-
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are ARIA's research expert. "
-                    "Give accurate, detailed and well-structured answers."
-                )
+                "content": "You are ARIA's senior research analyst. Provide deep, accurate, and well-structured insights."
             },
             {
                 "role": "user",
                 "content": query
             }
         ]
+
+        llm_router = context["app_state"].registry.get("llm_router")
 
         answer = await llm_router.chat(messages)
 
@@ -72,4 +69,4 @@ class ResearchAgent(BaseAgent):
             data={
                 "response": answer
             }
-        ) 
+        )
