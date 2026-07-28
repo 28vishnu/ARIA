@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 logger = logging.getLogger("aria")
 
@@ -12,6 +12,7 @@ class Decision:
     """
     action: str
     confidence: float = 1.0
+    secondary_actions: Optional[List[str]] = None
     data: Optional[Dict[str, Any]] = None
 
 
@@ -44,7 +45,8 @@ class DecisionEngine:
 
             return Decision(
                 action=reasoning.primary_action,
-                confidence=reasoning.confidence
+                confidence=reasoning.confidence,
+                secondary_actions=reasoning.secondary_actions
             )
 
         # Fallback (only if reasoning is unavailable)
