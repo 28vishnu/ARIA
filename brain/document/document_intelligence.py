@@ -284,3 +284,48 @@ class DocumentIntelligence:
             for score, text in scored[:limit]
             if score > 0
         ]
+
+    async def answer_question(
+        self,
+        session_id: str,
+        question: str
+    ):
+        """
+        Answer a question using previously uploaded documents.
+        """
+
+        chunks = await self.retrieve_chunks(
+            session_id=session_id,
+            query=question
+        )
+
+        if not chunks:
+            return None
+
+        context = "\n\n".join(chunks)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are ARIA's document assistant.\n"
+                    "Answer ONLY using the document context.\n"
+                    "If the answer is not contained in the document, say:\n"
+                    "'I couldn't find that information in your uploaded documents.'"
+                )
+            },
+            {
+                "role": "user",
+                "content": f"""
+Document Context:
+
+{context}
+
+Question:
+
+{question}
+"""
+            }
+        ]
+
+        return await self.llm_router.chat(messages)
