@@ -102,6 +102,13 @@ class CognitiveCore:
                 reasoning = await self.reasoning_engine.reason(ctx)
                 ctx["reasoning"] = reasoning
 
+            state = ctx.get("state", {})
+
+            logger.info(
+                "[Document] Current state: %s",
+                state
+            )
+
             if reasoning:
 
                 results = []
@@ -193,6 +200,11 @@ class CognitiveCore:
                     skill_manager=self.skill_manager,
                     planner=self.planner
                 )
+
+            logger.info(
+                "[Decision] Selected action: %s",
+                decision.action if decision else None
+            )
 
             if decision:
 
