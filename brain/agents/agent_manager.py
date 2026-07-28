@@ -1,119 +1,47 @@
 import logging
-from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import Dict, Any, List, Optional, Tuple
+
+from brain.agents.base_agent import BaseAgent
 
 logger = logging.getLogger("aria")
 
 
-@dataclass
-class ReasoningResult:
+class AgentManager:
     """
-    Represents the reasoning outcome before execution.
-    """
-
-    primary_action: str
-    secondary_actions: List[str] = field(default_factory=list)
-    confidence: float = 1.0
-    reasoning: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-class ReasoningEngine:
-    """
-    ARIA's reasoning layer.
-
-    It analyses the user's request and decides what should happen next.
-    It DOES NOT execute skills, memory, or planning.
+    Registers agents and selects the most suitable one.
     """
 
-    def __init__(self, agent_manager=None):
-        self.agent_manager = agent_manager
+    def __init__(self):
+        self.agents: List[BaseAgent] = []
 
-    async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
-        """
-        Analyse the context and determine the primary action.
-        """
+    def register(self, agent: BaseAgent):
+        self.agents.append(agent)
 
-        intent = context.get("intent")
         logger.info(
-            "[Reasoning] Intent=%s Query=%s",
-            intent.name if intent else None,
-            context.get("query")
+            "[AgentManager] Registered agent: %s",
+            agent.name
         )
-        query = context.get("query", "").lower().strip()
 
-        selected_agent = None
-        score = 0.0
+    async def select_agent(
+        self,
+        query: str,
+        context: Dict[str, Any]
+    ) -> Tuple[Optional[BaseAgent], float]:
 
-        if self.agent_manager:
-            selected_agent, score = await self.agent_manager.select_agent(
-                query,
-                context
-            )
+        best_agent = None
+        best_score = 0.0
 
-        if selected_agent:
+        for agent in self.agents:
+            score = await agent.can_handle(query, context)
+
             logger.info(
-                "[Reasoning] Selected agent: %s (%.2f)",
-                selected_agent.name,
+                "[AgentManager] %s score=%.2f",
+                agent.name,
                 score
             )
 
-        # Greeting
-        if intent and intent.name == "greeting":
-            return ReasoningResult(
-                primary_action="chat",
-                secondary_actions=[],
-                confidence=0.99,
-                reasoning="Greeting detected.",
-                metadata={
-                    "goal": "conversation",
-                    "execution_plan": [
-                        "chat"
-                    ]
-                }
-            )
+            if score > best_score:
+                best_score = score
+                best_agent = agent
 
-        # Memory
-        if intent and intent.name.startswith("memory"):
-            return ReasoningResult(
-                primary_action="memory_conversation",
-                secondary_actions=[],
-                confidence=intent.confidence,
-                reasoning="Memory operation detected.",
-                metadata={
-                    "goal": "memory_operation",
-                    "execution_plan": [
-                        "memory_conversation"
-                    ]
-                }
-            )
-
-        # Planning
-        if intent and intent.name == "planner":
-            return ReasoningResult(
-                primary_action="planner",
-                secondary_actions=["chat"],
-                confidence=intent.confidence,
-                reasoning="Planning request detected.",
-                metadata={
-                    "goal": "planning",
-                    "execution_plan": [
-                        "planner",
-                        "chat"
-                    ]
-                }
-            )
-
-        # Default
-        return ReasoningResult(
-            primary_action="chat",
-            secondary_actions=[],
-            confidence=0.80,
-            reasoning="General conversation.",
-            metadata={
-                "goal": "conversation",
-                "execution_plan": [
-                    "chat"
-                ]
-            }
-        )
+        return best_agent, best_score
