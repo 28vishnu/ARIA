@@ -53,11 +53,26 @@ class CodeAgent(BaseAgent):
         context: Dict[str, Any]
     ) -> AgentResponse:
 
+        messages = [
+            {
+                "role": "system",
+                "content": "You are ARIA's software engineering expert."
+            },
+            {
+                "role": "user",
+                "content": query
+            }
+        ]
+
+        llm_router = context["app_state"].registry.get("llm_router")
+
+        answer = await llm_router.chat(messages)
+
         return AgentResponse(
             success=True,
             confidence=1.0,
             agent=self.name,
             data={
-                "query": query
+                "response": answer
             }
         )
