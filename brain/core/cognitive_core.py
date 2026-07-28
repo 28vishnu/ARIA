@@ -83,23 +83,25 @@ class CognitiveCore:
                 reasoning = await self.reasoning_engine.reason(ctx)
                 ctx["reasoning"] = reasoning
 
-            selected_agent = None
+            if reasoning and reasoning.workflow:
 
-            if reasoning:
-                selected_agent = reasoning.selected_agent
+                last_result = None
 
-            if selected_agent:
-                logger.info(
-                    "[CognitiveCore] Executing agent: %s",
-                    selected_agent.name
-                )
+                for agent in reasoning.workflow:
 
-                agent_result = await selected_agent.execute(
-                    query,
-                    ctx
-                )
+                    logger.info(
+                        "[CognitiveCore] Executing agent: %s",
+                        agent.name
+                    )
 
-                ctx["agent_result"] = agent_result
+                    last_result = await agent.execute(
+                        query,
+                        ctx
+                    )
+
+                    ctx["agent_result"] = last_result
+
+                agent_result = last_result
 
             # 4. Decision Engine
             decision = None
@@ -220,6 +222,7 @@ class CognitiveCore:
             if (
                 success
                 and reasoning
+                and hasattr(reasoning, "selected_agent")
                 and reasoning.selected_agent
                 and "1" in final_data
             ):
