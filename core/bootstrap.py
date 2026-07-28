@@ -31,6 +31,7 @@ from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.tools.tool_manager import ToolManager
 from brain.tools.calculator_tool import CalculatorTool
+from brain.tools.python_tool import PythonTool
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
 from brain.agents.research_agent import ResearchAgent
@@ -180,6 +181,10 @@ async def bootstrap_application() -> ServiceRegistry:
 
     tool_manager.register(
         CalculatorTool()
+    )
+
+    tool_manager.register(
+        PythonTool()
     )
 
     registry.register(
