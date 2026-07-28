@@ -93,15 +93,23 @@ class ReasoningEngine:
             elif intent_name == "chat":
 
                 selected_query = query
+                best_agent = None
+                score = 0.0
 
                 if task_plan and len(task_plan) > 0:
-                    selected_query = task_plan.tasks[0].description
 
-                # Let AgentManager choose the best agent
-                best_agent, score = await self.agent_manager.select_agent(
-                    selected_query,
-                    context
-                )
+                    first_task = task_plan.tasks[0]
+                    selected_query = first_task.description
+
+                    if first_task.agent != "auto":
+                        best_agent = self.agent_manager.get(first_task.agent)
+                        score = 1.0
+
+                if best_agent is None:
+                    best_agent, score = await self.agent_manager.select_agent(
+                        selected_query,
+                        context
+                    )
 
                 if best_agent:
                     logger.info(
@@ -119,14 +127,24 @@ class ReasoningEngine:
 
             else:
                 selected_query = query
+                best_agent = None
+                score = 0.0
 
                 if task_plan and len(task_plan) > 0:
-                    selected_query = task_plan.tasks[0].description
 
-                best_agent, score = await self.agent_manager.select_agent(
-                    selected_query,
-                    context
-                )
+                    first_task = task_plan.tasks[0]
+                    selected_query = first_task.description
+
+                    if first_task.agent != "auto":
+                        best_agent = self.agent_manager.get(first_task.agent)
+                        score = 1.0
+
+                if best_agent is None:
+                    best_agent, score = await self.agent_manager.select_agent(
+                        selected_query,
+                        context
+                    )
+
                 if best_agent:
                     logger.info(
                         "[Reasoning] Fallback selected agent: %s (%.2f)",
