@@ -56,6 +56,25 @@ class DecisionEngine:
                 confidence=0.95
             )
 
+        # Check for document-related queries
+        document_keywords = [
+            "document",
+            "pdf",
+            "file",
+            "chapter",
+            "notes",
+            "page",
+            "according to",
+            "from the document",
+            "uploaded"
+        ]
+
+        if any(keyword in query.lower() for keyword in document_keywords):
+            return Decision(
+                action="document",
+                confidence=0.90
+            )
+
         # 4. Default
         return Decision(
             action="chat",
