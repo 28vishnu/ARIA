@@ -222,8 +222,8 @@ class CognitiveCore:
             if (
                 success
                 and reasoning
-                and hasattr(reasoning, "selected_agent")
-                and reasoning.selected_agent
+                and reasoning.workflow
+                and len(reasoning.workflow) > 0
                 and "1" in final_data
             ):
                 return SystemResponse(
