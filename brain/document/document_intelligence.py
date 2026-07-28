@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger("aria")
 
 
 class DocumentIntelligence:
@@ -54,6 +57,13 @@ class DocumentIntelligence:
                     }
                 )
                 await self.store_chunks(
+                    session_id=session_id,
+                    chunks=chunks,
+                    metadata={
+                        "file_path": file_path
+                    }
+                )
+                await self.store_vectors(
                     session_id=session_id,
                     chunks=chunks,
                     metadata={
@@ -233,6 +243,49 @@ class DocumentIntelligence:
                 },
                 upsert=True
             )
+
+    async def store_vectors(
+        self,
+        session_id: str,
+        chunks: list[str],
+        metadata: Optional[dict] = None
+    ):
+        """
+        Store semantic embeddings in ChromaDB.
+        """
+
+        if self.vector_db is None:
+            return
+
+        embeddings = self.embedding_model.encode(
+            chunks,
+            convert_to_numpy=True
+        ).tolist()
+
+        ids = [
+            f"{session_id}_{i}"
+            for i in range(len(chunks))
+        ]
+
+        metadatas = []
+
+        for i in range(len(chunks)):
+            data = dict(metadata or {})
+            data["session_id"] = session_id
+            data["chunk_index"] = i
+            metadatas.append(data)
+
+        self.vector_db.add(
+            ids=ids,
+            documents=chunks,
+            embeddings=embeddings,
+            metadatas=metadatas
+        )
+
+        logger.info(
+            "[DocumentAI] Stored %d semantic vectors.",
+            len(chunks)
+        )
 
     async def retrieve_chunks(
         self,
