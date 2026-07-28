@@ -71,6 +71,20 @@ class CognitiveCore:
                 ctx["state"] = state
                 ctx["memory"] = memories
 
+            document_ai = None
+
+            if base_context:
+
+                app_state = base_context.get("app_state")
+
+                if app_state:
+
+                    document_ai = app_state.registry.get(
+                        "document_intelligence"
+                    )
+
+            ctx["document_intelligence"] = document_ai
+
             # Store the current request in the session state
             if self.state_manager:
                 self.state_manager.update_state(
