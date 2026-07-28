@@ -1,222 +1,81 @@
-import logging
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
-
-from brain.agents.agent_workflow import AgentWorkflow
-
-logger = logging.getLogger("aria")
+from brain.agents.task import AgentTask
+from brain.agents.task_plan import TaskPlan
 
 
-@dataclass
-class ReasoningResult:
+class TaskPlanner:
     """
-    Represents the reasoning outcome before execution.
+    Converts a user's request into one or more tasks.
     """
 
-    primary_action: str
-    secondary_actions: List[str] = field(default_factory=list)
-    confidence: float = 1.0
-    reasoning: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    workflow: Optional[AgentWorkflow] = None
+    def create_plan(self, query: str) -> TaskPlan:
 
+        plan = TaskPlan()
 
-class ReasoningEngine:
-    """
-    ARIA's reasoning layer.
+        separators = [
+            " and ",
+            ",",
+            " then "
+        ]
 
-    It analyses the user's request and decides what should happen next.
-    It DOES NOT execute skills, memory, or planning.
-    """
+        parts = [query]
 
-    def __init__(
-        self,
-        agent_manager=None,
-        task_planner=None
-    ):
-        self.agent_manager = agent_manager
-        self.task_planner = task_planner
+        for sep in separators:
+            if sep in query.lower():
+                parts = [
+                    p.strip()
+                    for p in query.split(sep)
+                    if p.strip()
+                ]
+                break
 
-    async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
-        """
-        Analyse the context and determine the primary action and agent workflow.
-        """
+        for index, part in enumerate(parts, start=1):
 
-        intent = context.get("intent")
-        intent_name = intent.name if intent else None
-
-        logger.info(
-            "[Reasoning] Intent=%s Query=%s",
-            intent_name,
-            context.get("query")
-        )
-        query = context.get("query", "").lower().strip()
-
-        logger.info(
-            "[Reasoning] AgentManager exists: %s",
-            self.agent_manager is not None
-        )
-
-        workflow = AgentWorkflow()
-        task_plan = None
-
-        if self.task_planner:
-            task_plan = self.task_planner.create_plan(query)
-
-        # Multi-agent workflow construction based on intent
-        if self.agent_manager:
-            if intent_name == "planner":
-                planning_agent = self.agent_manager.get("planning")
-                writing_agent = self.agent_manager.get("writing")
-                if planning_agent:
-                    workflow.add(planning_agent)
-                if writing_agent:
-                    workflow.add(writing_agent)
-
-            elif intent_name == "python":
-                python_agent = self.agent_manager.get("python")
-
-                if python_agent:
-                    workflow.add(python_agent)
-
-            elif intent_name == "coding":
-                code_agent = self.agent_manager.get("code")
-
-                if code_agent:
-                    workflow.add(code_agent)
-
-            elif intent_name == "writing":
-                writing_agent = self.agent_manager.get("writing")
-                if writing_agent:
-                    workflow.add(writing_agent)
-
-            elif intent_name == "chat":
-
-                selected_query = query
-                best_agent = None
-                score = 0.0
-
-                if task_plan and len(task_plan) > 0:
-
-                    first_task = task_plan.tasks[0]
-                    selected_query = first_task.description
-
-                    if first_task.agent != "auto":
-                        best_agent = self.agent_manager.get(first_task.agent)
-                        score = 1.0
-
-                if best_agent is None:
-                    best_agent, score = await self.agent_manager.select_agent(
-                        selected_query,
-                        context
-                    )
-
-                if best_agent:
-                    logger.info(
-                        "[Reasoning] Selected agent: %s (%.2f)",
-                        best_agent.name,
-                        score
-                    )
-
-                    workflow.add(best_agent)
-
-            elif intent_name and intent_name.startswith("memory"):
-                memory_agent = self.agent_manager.get("memory")
-                if memory_agent:
-                    workflow.add(memory_agent)
-
-            else:
-                selected_query = query
-                best_agent = None
-                score = 0.0
-
-                if task_plan and len(task_plan) > 0:
-
-                    first_task = task_plan.tasks[0]
-                    selected_query = first_task.description
-
-                    if first_task.agent != "auto":
-                        best_agent = self.agent_manager.get(first_task.agent)
-                        score = 1.0
-
-                if best_agent is None:
-                    best_agent, score = await self.agent_manager.select_agent(
-                        selected_query,
-                        context
-                    )
-
-                if best_agent:
-                    logger.info(
-                        "[Reasoning] Fallback selected agent: %s (%.2f)",
-                        best_agent.name,
-                        score
-                    )
-                    workflow.add(best_agent)
-
-        # Greeting
-        if intent_name == "greeting":
-            return ReasoningResult(
-                primary_action="chat",
-                secondary_actions=[],
-                confidence=0.99,
-                reasoning="Greeting detected.",
-                metadata={
-                    "goal": "conversation",
-                    "execution_plan": [
-                        "chat"
-                    ],
-                    "task_plan": task_plan
-                },
-                workflow=workflow
+            task = AgentTask(
+                id=index,
+                description=part,
+                agent="research"
             )
 
-        # Memory
-        if intent_name and intent_name.startswith("memory"):
-            return ReasoningResult(
-                primary_action="memory_conversation",
-                secondary_actions=[],
-                confidence=intent.confidence if intent else 0.9,
-                reasoning="Memory operation detected.",
-                metadata={
-                    "goal": "memory_operation",
-                    "execution_plan": [
-                        "memory_conversation"
-                    ],
-                    "task_plan": task_plan
-                },
-                workflow=workflow
-            )
+            text = part.lower()
 
-        # Planning
-        if intent_name == "planner":
-            return ReasoningResult(
-                primary_action="planner",
-                secondary_actions=["chat"],
-                confidence=intent.confidence if intent else 0.9,
-                reasoning="Planning request detected.",
-                metadata={
-                    "goal": "planning",
-                    "execution_plan": [
-                        "planner",
-                        "chat"
-                    ],
-                    "task_plan": task_plan
-                },
-                workflow=workflow
-            )
+            if any(x in text for x in [
+                "calculate",
+                "solve",
+                "+",
+                "-",
+                "*",
+                "/",
+                "=",
+                "equation",
+                "math"
+            ]):
+                task.agent = "math"
 
-        # Default
-        return ReasoningResult(
-            primary_action="chat",
-            secondary_actions=[],
-            confidence=0.80,
-            reasoning="General conversation.",
-            metadata={
-                "goal": "conversation",
-                "execution_plan": [
-                    "chat"
-                ],
-                "task_plan": task_plan
-            },
-            workflow=workflow
-        )
+            elif any(x in text for x in [
+                "python",
+                "code",
+                "program",
+                "script",
+                "function"
+            ]):
+                task.agent = "python"
+
+            elif any(x in text for x in [
+                "write",
+                "email",
+                "essay",
+                "article",
+                "letter"
+            ]):
+                task.agent = "writing"
+
+            elif any(x in text for x in [
+                "plan",
+                "schedule",
+                "roadmap"
+            ]):
+                task.agent = "planning"
+
+            plan.add(task)
+
+        return plan
