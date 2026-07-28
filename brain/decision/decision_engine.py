@@ -38,6 +38,37 @@ class DecisionEngine:
             context.get("state")
         )
 
+        state = context.get("state", {})
+        query_lower = query.lower()
+
+        document_keywords = [
+            "document",
+            "pdf",
+            "file",
+            "chapter",
+            "page",
+            "summary",
+            "summarize",
+            "fees",
+            "tuition",
+            "according to",
+            "this document",
+            "uploaded",
+            "scholarship",
+            "course"
+        ]
+
+        if (
+            state.get("active_document")
+            and any(word in query_lower for word in document_keywords)
+        ):
+            logger.info("[Decision] Routing to DOCUMENT intelligence.")
+
+            return Decision(
+                action="document",
+                confidence=1.0
+            )
+
         intent = context.get("intent")
         reasoning = context.get("reasoning")
 
@@ -63,8 +94,6 @@ class DecisionEngine:
             )
 
         # Active document takes highest priority
-        state = context.get("state", {})
-
         if state.get("active_document"):
 
             return Decision(
@@ -73,19 +102,7 @@ class DecisionEngine:
             )
 
         # Otherwise use keyword detection
-        document_keywords = [
-            "document",
-            "pdf",
-            "file",
-            "chapter",
-            "notes",
-            "page",
-            "according to",
-            "from the document",
-            "uploaded"
-        ]
-
-        if any(keyword in query.lower() for keyword in document_keywords):
+        if any(keyword in query_lower for keyword in document_keywords):
 
             return Decision(
                 action="document",
