@@ -75,7 +75,7 @@ class PersonalityEngine:
             return "Good morning, Sir. All operational parameters are nominal."
         elif "evening" in query:
             return "Good evening, Sir. Ready for your instructions."
-        
+
         responses = [
             "Greetings, Sir. ARIA operational and ready.",
             "Good to see you again, Sir.",
@@ -87,11 +87,11 @@ class PersonalityEngine:
 
     def _format_memory(self, data: Any) -> str:
         data_dict = data if isinstance(data, dict) else {}
-        
+
         # If the MemoryConversationManager already provided a natural response
         if "message" in data_dict:
             return str(data_dict["message"])
-            
+
         memories = data_dict.get("memories", [])
         snippets = []
         for m in memories:
@@ -111,16 +111,43 @@ class PersonalityEngine:
         return "No relevant records found, Sir."
 
     def _format_planner(self, data: Any) -> str:
-        if isinstance(data, dict) and data:
-            summaries = []
-            for task_id, output in data.items():
-                if isinstance(output, dict):
-                    msg = output.get("message") or output.get("status") or str(output)
-                    summaries.append(f"Task {task_id}: {msg}")
-                else:
-                    summaries.append(f"Task {task_id}: {output}")
-            return "Execution completed successfully, Sir. " + " | ".join(summaries)
-        return "Task executed successfully, Sir."
+        if not isinstance(data, dict):
+            return "Task executed successfully, Sir."
+
+        # NEW: if a Chat skill already generated a natural reply,
+        # use it instead of exposing internal workflow details.
+        chat = data.get("chat")
+
+        if isinstance(chat, dict):
+            if "response" in chat:
+                return str(chat["response"])
+
+            if "message" in chat:
+                return str(chat["message"])
+
+        # Otherwise look through every task
+        for output in data.values():
+
+            if not isinstance(output, dict):
+                continue
+
+            if "response" in output:
+                return str(output["response"])
+
+            if "message" in output:
+                return str(output["message"])
+
+        summaries = []
+
+        for task_id, output in data.items():
+
+            if isinstance(output, dict):
+                status = output.get("status", "completed")
+                summaries.append(f"{task_id}: {status}")
+            else:
+                summaries.append(f"{task_id}: {output}")
+
+        return "Execution completed successfully, Sir. " + " | ".join(summaries)
 
     def _format_fallback(self, data: Any) -> str:
         if isinstance(data, dict):
