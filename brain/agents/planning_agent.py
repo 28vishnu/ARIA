@@ -26,13 +26,19 @@ class PlanningAgent(BaseAgent):
 
         keywords = [
             "plan",
+            "planning",
             "schedule",
             "roadmap",
+            "timeline",
+            "strategy",
+            "learning path",
+            "30-day",
+            "60-day",
+            "90-day",
             "step by step",
             "workflow",
             "strategy for",
             "organize",
-            "timeline",
             "itinerary"
         ]
 
