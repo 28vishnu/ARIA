@@ -109,6 +109,11 @@ class CognitiveCore:
                 state
             )
 
+            state = ctx.get("state", {})
+
+            if state.get("active_document"):
+                logger.info("[Document] Active document detected.")
+
             if reasoning:
 
                 results = []
