@@ -39,6 +39,54 @@ class ReasoningEngine:
         )
         query = context.get("query", "").lower().strip()
 
+        # Direct reasoning from query (before intent routing)
+        memory_words = (
+            "remember",
+            "forget",
+            "delete",
+            "remove",
+            "my ",
+            "i am",
+            "i'm"
+        )
+
+        planner_words = (
+            "build",
+            "create",
+            "design",
+            "generate",
+            "develop",
+            "make"
+        )
+
+        if any(word in query for word in memory_words):
+            return ReasoningResult(
+                primary_action="memory_conversation",
+                secondary_actions=[],
+                confidence=0.95,
+                reasoning="Reasoned that this is a memory operation.",
+                metadata={
+                    "goal": "memory_operation",
+                    "execution_plan": [
+                        "memory_conversation"
+                    ]
+                }
+            )
+
+        if any(word in query for word in planner_words):
+            return ReasoningResult(
+                primary_action="planner",
+                secondary_actions=[],
+                confidence=0.92,
+                reasoning="Reasoned that this is a planning request.",
+                metadata={
+                    "goal": "planning",
+                    "execution_plan": [
+                        "planner"
+                    ]
+                }
+            )
+
         # Greeting
         if intent and intent.name == "greeting":
             return ReasoningResult(
