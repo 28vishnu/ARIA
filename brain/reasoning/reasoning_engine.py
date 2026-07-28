@@ -69,6 +69,11 @@ class ReasoningEngine:
                 if code_agent:
                     workflow.add(code_agent)
 
+            elif intent_name == "writing":
+                writing_agent = self.agent_manager.get("writing")
+                if writing_agent:
+                    workflow.add(writing_agent)
+
             elif intent_name == "chat":
                 research_agent = self.agent_manager.get("research")
                 if research_agent:
