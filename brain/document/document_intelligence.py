@@ -331,6 +331,11 @@ class DocumentIntelligence:
             data["document_name"] = metadata.get("document_name")
             metadatas.append(data)
 
+        try:
+            self.vector_db.delete(ids=ids)
+        except Exception:
+            pass
+
         self.vector_db.add(
             ids=ids,
             documents=[c["text"] for c in chunks],
@@ -339,8 +344,9 @@ class DocumentIntelligence:
         )
 
         logger.info(
-            "[DocumentAI] Stored %d semantic vectors.",
-            len(chunks)
+            "[DocumentAI] Stored %d vectors for %s.",
+            len(chunks),
+            document_id
         )
 
     async def semantic_search(
