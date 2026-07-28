@@ -20,21 +20,21 @@ class Planner:
     async def create_plan(self, goal: str, context: Dict[str, Any]) -> ExecutionPlan:
         """Generates a structured execution plan, handling greetings and blocking sensitive identifier queries."""
         cleaned_goal = goal.lower().strip()
-        
+
         if cleaned_goal in GREETINGS or len(cleaned_goal) <= 3:
             logger.info("[Planner] Detected casual greeting. Skipping task orchestration.")
             return ExecutionPlan(goal=goal, tasks=[], confidence=1.0)
 
         app_state = context.get("app_state")
         skill_manager = app_state.registry.get("skill_manager") if app_state and app_state.registry.has("skill_manager") else None
-        
+
         available_skills = {}
         if skill_manager:
             if isinstance(skill_manager.skills, dict):
                 available_skills = {name: skill.description for name, skill in skill_manager.skills.items()}
             elif isinstance(skill_manager.skills, list):
                 available_skills = {s.name: s.description for s in skill_manager.skills}
-        
+
         if not available_skills:
             available_skills = {
                 "document": "Document retrieval",
@@ -43,11 +43,23 @@ class Planner:
                 "profile": "User profile"
             }
 
+        agent_result = context.get("agent_result")
+
+        if agent_result:
+            available_skills["agent"] = (
+                f"Specialized {agent_result.agent} agent is available for this request."
+            )
+
+            logger.info(
+                "[Planner] Agent available: %s",
+                agent_result.agent
+            )
+
         if self.llm_router is None:
             return ExecutionPlan(goal=goal, tasks=[Task(id="1", name="default", skill="document", input={"query": goal}, depends_on=[])], confidence=0.5)
 
         skills_desc_str = "\n".join([f"- **{name}**: {desc}" for name, desc in available_skills.items()])
-        
+
         prompt = f"""
 You are ARIA's autonomous task planner. Break down the user's goal into discrete execution tasks using ONLY the registered skills.
 
@@ -86,7 +98,7 @@ Instructions:
             raw_response = await self.llm_router.chat(messages, temperature=0.0, max_tokens=600)
             cleaned = re.sub(r'```(?:json)?\s*', '', raw_response)
             cleaned = re.sub(r'\s*```', '', cleaned).strip()
-            
+
             plan_data = json.loads(cleaned)
             tasks = []
             for t in plan_data.get("tasks", []):
@@ -97,7 +109,7 @@ Instructions:
                     input=t.get("input", {}),
                     depends_on=t.get("depends_on", [])
                 ))
-            
+
             return ExecutionPlan(
                 goal=plan_data.get("goal", goal),
                 tasks=tasks,
