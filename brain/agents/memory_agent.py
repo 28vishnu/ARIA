@@ -5,14 +5,16 @@ from brain.agents.base_agent import BaseAgent, AgentResponse
 
 class MemoryAgent(BaseAgent):
     """
-    Handles memory-related requests.
+    Handles operations requiring retrieval, updating, or querying stored personal context and long-term memory.
     """
 
     name = "memory"
 
-    description = "Memory retrieval and storage agent."
+    description = "Personal context and long-term memory operations agent."
 
     version = "1.0.0"
+
+    priority = 100
 
     async def can_handle(
         self,
@@ -24,17 +26,18 @@ class MemoryAgent(BaseAgent):
 
         keywords = [
             "remember",
-            "recall",
-            "memory",
-            "forget",
-            "saved",
-            "store",
-            "what did i tell you",
-            "do you remember"
+            "what is my",
+            "do you recall",
+            "my preferences",
+            "save this",
+            "store this",
+            "my background",
+            "my name",
+            "forget"
         ]
 
-        if any(word in q for word in keywords):
-            return 0.95
+        if any(phrase in q for phrase in keywords):
+            return 0.98
 
         return 0.0
 
@@ -44,14 +47,26 @@ class MemoryAgent(BaseAgent):
         context: Dict[str, Any]
     ) -> AgentResponse:
 
-        # Memory operations are already handled elsewhere.
-        # This agent simply passes control to the memory system.
+        messages = [
+            {
+                "role": "system",
+                "content": "You are ARIA's memory specialist. Help manage, retrieve, and summarize stored user context accurately."
+            },
+            {
+                "role": "user",
+                "content": query
+            }
+        ]
+
+        llm_router = context["app_state"].registry.get("llm_router")
+
+        answer = await llm_router.chat(messages)
 
         return AgentResponse(
             success=True,
             confidence=1.0,
             agent=self.name,
             data={
-                "response": "Memory request has been routed to the memory system."
+                "response": answer
             }
-        ) 
+        )
