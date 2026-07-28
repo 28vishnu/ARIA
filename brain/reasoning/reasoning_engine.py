@@ -43,29 +43,57 @@ class ReasoningEngine:
         if intent and intent.name == "greeting":
             return ReasoningResult(
                 primary_action="chat",
+                secondary_actions=[],
                 confidence=0.99,
-                reasoning="Greeting detected."
+                reasoning="Greeting detected.",
+                metadata={
+                    "goal": "conversation",
+                    "execution_plan": [
+                        "chat"
+                    ]
+                }
             )
 
         # Memory
         if intent and intent.name.startswith("memory"):
             return ReasoningResult(
                 primary_action="memory_conversation",
+                secondary_actions=[],
                 confidence=intent.confidence,
-                reasoning="Memory operation detected."
+                reasoning="Memory operation detected.",
+                metadata={
+                    "goal": "memory_operation",
+                    "execution_plan": [
+                        "memory_conversation"
+                    ]
+                }
             )
 
         # Planning
         if intent and intent.name == "planner":
             return ReasoningResult(
                 primary_action="planner",
+                secondary_actions=[],
                 confidence=intent.confidence,
-                reasoning="Planning request detected."
+                reasoning="Planning request detected.",
+                metadata={
+                    "goal": "planning",
+                    "execution_plan": [
+                        "planner"
+                    ]
+                }
             )
 
         # Default
         return ReasoningResult(
             primary_action="chat",
+            secondary_actions=[],
             confidence=0.80,
-            reasoning="General conversation."
+            reasoning="General conversation.",
+            metadata={
+                "goal": "conversation",
+                "execution_plan": [
+                    "chat"
+                ]
+            }
         )
