@@ -82,5 +82,19 @@ class IntentAnalyzer:
         ):
             return Intent("continue", 0.90)
 
+        # Writing
+        if any(word in q for word in [
+            "write",
+            "email",
+            "letter",
+            "essay",
+            "article",
+            "blog",
+            "story",
+            "poem",
+            "professional"
+        ]):
+            return Intent("writing", 0.93)
+
         # Default chat
         return Intent("chat", 0.80)
