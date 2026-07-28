@@ -300,7 +300,10 @@ class DocumentIntelligence:
         )
 
         if not chunks:
-            return None
+            return (
+                "I couldn't find that information in your uploaded document. "
+                "Please try asking about another topic from the document."
+            )
 
         context = "\n\n".join(chunks)
 
@@ -328,4 +331,11 @@ Question:
             }
         ]
 
-        return await self.llm_router.chat(messages)
+        answer = await self.llm_router.chat(messages)
+
+        if not answer or not answer.strip():
+            return (
+                "I couldn't find that information in your uploaded document."
+            )
+
+        return answer
