@@ -73,21 +73,6 @@ class ReasoningEngine:
         if intent and intent.name == "planner":
             return ReasoningResult(
                 primary_action="planner",
-                secondary_actions=[],
-                confidence=intent.confidence,
-                reasoning="Planning request detected.",
-                metadata={
-                    "goal": "planning",
-                    "execution_plan": [
-                        "planner"
-                    ]
-                }
-            )
-
-        # Multi-action planning placeholder
-        if intent and intent.name == "planner":
-            return ReasoningResult(
-                primary_action="planner",
                 secondary_actions=["chat"],
                 confidence=intent.confidence,
                 reasoning="Planning request detected.",
