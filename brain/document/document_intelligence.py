@@ -46,6 +46,13 @@ class DocumentIntelligence:
                         "file_path": file_path
                     }
                 )
+                await self.store_chunks(
+                    session_id=session_id,
+                    chunks=chunks,
+                    metadata={
+                        "file_path": file_path
+                    }
+                )
             except Exception:
                 pass
 
@@ -178,3 +185,44 @@ class DocumentIntelligence:
             },
             upsert=True
         )
+
+    async def store_chunks(
+        self,
+        session_id: str,
+        chunks: list[str],
+        metadata: Optional[dict] = None
+    ):
+        """
+        Store every document chunk separately.
+        """
+
+        if self.memory_engine is None:
+            return
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        for index, chunk in enumerate(chunks):
+
+            await self.memory_engine.memory_col.update_one(
+                {
+                    "key": f"document_chunk_{session_id}_{index}"
+                },
+                {
+                    "$set": {
+                        "key": f"document_chunk_{session_id}_{index}",
+                        "value": chunk,
+                        "category": "document_chunk",
+                        "memory_type": "document_chunk",
+                        "chunk_index": index,
+                        "importance": "medium",
+                        "confidence": 1.0,
+                        "metadata": metadata or {},
+                        "updated_at": now
+                    },
+                    "$setOnInsert": {
+                        "first_seen": now,
+                        "last_used": now
+                    }
+                },
+                upsert=True
+            )
