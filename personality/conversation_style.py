@@ -26,13 +26,16 @@ class ConversationStyle:
     @staticmethod
     def apply(reply: str) -> str:
 
-        length = len(reply)
+        reply = reply.strip()
 
-        if length < 80:
-            return random.choice(ConversationStyle.SHORT).format(reply)
+        # Don't decorate code blocks
+        if "```" in reply:
+            return reply
 
-        elif length < 500:
-            return random.choice(ConversationStyle.MEDIUM).format(reply)
+        # Very short replies (math, yes/no, quick facts)
+        if len(reply) < 40:
+            return reply
 
-        else:
-            return random.choice(ConversationStyle.LONG).format(reply)
+        # Medium replies
+        if len(reply) < 250:
+            return
