@@ -502,7 +502,7 @@ class DocumentIntelligence:
             )
 
         context = "\n\n".join(
-            chunk["text"] if isinstance(chunk, dict) else chunk
+            f"[Page {chunk['page']}]\n{chunk['text']}"
             for chunk in chunks
         )
 
@@ -511,8 +511,11 @@ class DocumentIntelligence:
                 "role": "system",
                 "content": (
                     "You are ARIA's document assistant.\n"
-                    "Answer ONLY using the document context.\n"
-                    "If the answer is not contained in the document, say:\n"
+                    "Answer ONLY using the provided document context.\n"
+                    "Whenever possible, mention the page number.\n"
+                    "Example:\n"
+                    "'According to Page 7...'\n"
+                    "If the answer isn't in the document, say:\n"
                     "'I couldn't find that information in your uploaded documents.'"
                 )
             },
