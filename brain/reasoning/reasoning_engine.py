@@ -42,6 +42,11 @@ class ReasoningEngine:
         )
         query = context.get("query", "").lower().strip()
 
+        logger.info(
+            "[Reasoning] AgentManager exists: %s",
+            self.agent_manager is not None
+        )
+
         selected_agent = None
         score = 0.0
 
@@ -49,6 +54,9 @@ class ReasoningEngine:
             selected_agent, score = await self.agent_manager.select_agent(
                 query,
                 context
+            )
+            logger.info(
+                "[Reasoning] Agent selection finished."
             )
 
         if selected_agent:
