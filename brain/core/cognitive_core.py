@@ -68,6 +68,11 @@ class CognitiveCore:
                     last_query=query
                 )
 
+            intent = None
+            if self.intent_analyzer:
+                intent = await self.intent_analyzer.analyze(query)
+                ctx["intent"] = intent
+
             # 4. Decision Engine
             decision = None
             if self.decision_engine:
