@@ -44,6 +44,13 @@ class PersonalityEngine:
                 reply = str(data["message"])
             elif source == ResponseSource.CHAT and "response" in data:
                 reply = str(data["response"])
+            elif source == "agent":
+                if "response" in data:
+                    reply = str(data["response"])
+                elif "message" in data:
+                    reply = str(data["message"])
+                else:
+                    reply = self._format_fallback(data)
             elif source == ResponseSource.CALCULATOR and "result" in data:
                 reply = f"The answer is {data['result']}, Sir."
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
