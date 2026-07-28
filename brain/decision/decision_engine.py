@@ -38,12 +38,11 @@ class DecisionEngine:
                 confidence=0.99
             )
 
-        # 1. Memory Intent
-        if intent and intent.name == "memory":
+        # 1. Memory Conversation
+        if intent and intent.name.startswith("memory"):
             return Decision(
-                action="memory",
-                confidence=0.97,
-                data={"memories": memory}
+                action="memory_conversation",
+                confidence=0.97
             )
 
         # 2. Direct Skill
