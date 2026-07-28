@@ -11,15 +11,31 @@ class TaskPlanner:
 
         plan = TaskPlan()
 
-        # For now every request is a single task.
-        # Later we'll split complex requests automatically.
+        separators = [
+            " and ",
+            ",",
+            " then "
+        ]
 
-        plan.add(
-            AgentTask(
-                id=1,
-                description=query,
-                agent="auto"
+        parts = [query]
+
+        for sep in separators:
+            if sep in query.lower():
+                parts = [
+                    p.strip()
+                    for p in query.split(sep)
+                    if p.strip()
+                ]
+                break
+
+        for index, part in enumerate(parts, start=1):
+
+            plan.add(
+                AgentTask(
+                    id=index,
+                    description=part,
+                    agent="auto"
+                )
             )
-        )
 
         return plan
