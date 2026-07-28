@@ -28,6 +28,8 @@ from brain.context.context_builder import ContextBuilder
 from brain.state.state_manager import StateManager
 from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
+from brain.agents.agent_manager import AgentManager
+from brain.agents.code_agent import CodeAgent
 from brain.event import EventBus
 from brain.context_manager import ContextManager
 from brain.session import SessionManager
@@ -164,6 +166,15 @@ async def bootstrap_application() -> ServiceRegistry:
 
     intent_analyzer = IntentAnalyzer()
     registry.register("intent_analyzer", intent_analyzer)
+
+    agent_manager = AgentManager()
+
+    agent_manager.register(CodeAgent())
+
+    registry.register(
+        "agent_manager",
+        agent_manager
+    )
 
     reasoning_engine = ReasoningEngine()
     registry.register("reasoning_engine", reasoning_engine)
