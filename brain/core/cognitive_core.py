@@ -83,6 +83,24 @@ class CognitiveCore:
                 reasoning = await self.reasoning_engine.reason(ctx)
                 ctx["reasoning"] = reasoning
 
+            selected_agent = None
+
+            if reasoning:
+                selected_agent = reasoning.selected_agent
+
+            if selected_agent:
+                logger.info(
+                    "[CognitiveCore] Executing agent: %s",
+                    selected_agent.name
+                )
+
+                agent_result = await selected_agent.execute(
+                    query,
+                    ctx
+                )
+
+                ctx["agent_result"] = agent_result
+
             # 4. Decision Engine
             decision = None
             if self.decision_engine:
