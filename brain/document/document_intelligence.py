@@ -226,3 +226,61 @@ class DocumentIntelligence:
                 },
                 upsert=True
             )
+
+    async def retrieve_chunks(
+        self,
+        session_id: str,
+        query: str,
+        limit: int = 5
+    ):
+        """
+        Retrieve document chunks related to a query.
+        """
+
+        if self.memory_engine is None:
+            return []
+
+        cursor = self.memory_engine.memory_col.find(
+            {
+                "category": "document_chunk",
+                "key": {
+                    "$regex": f"document_chunk_{session_id}_"
+                }
+            }
+        )
+
+        chunks = await cursor.to_list(length=100)
+
+        if not chunks:
+            return []
+
+        query_words = {
+            word.lower()
+            for word in query.split()
+            if len(word) > 2
+        }
+
+        scored = []
+
+        for chunk in chunks:
+
+            text = chunk.get("value", "")
+
+            score = sum(
+                1
+                for word in query_words
+                if word in text.lower()
+            )
+
+            scored.append((score, text))
+
+        scored.sort(
+            reverse=True,
+            key=lambda x: x[0]
+        )
+
+        return [
+            text
+            for score, text in scored[:limit]
+            if score > 0
+        ]
