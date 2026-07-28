@@ -29,8 +29,13 @@ class ReasoningEngine:
     It DOES NOT execute skills, memory, or planning.
     """
 
-    def __init__(self, agent_manager=None):
+    def __init__(
+        self,
+        agent_manager=None,
+        task_planner=None
+    ):
         self.agent_manager = agent_manager
+        self.task_planner = task_planner
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
@@ -53,6 +58,10 @@ class ReasoningEngine:
         )
 
         workflow = AgentWorkflow()
+        task_plan = None
+
+        if self.task_planner:
+            task_plan = self.task_planner.create_plan(query)
 
         # Multi-agent workflow construction based on intent
         if self.agent_manager:
@@ -127,7 +136,8 @@ class ReasoningEngine:
                     "goal": "conversation",
                     "execution_plan": [
                         "chat"
-                    ]
+                    ],
+                    "task_plan": task_plan
                 },
                 workflow=workflow
             )
@@ -143,7 +153,8 @@ class ReasoningEngine:
                     "goal": "memory_operation",
                     "execution_plan": [
                         "memory_conversation"
-                    ]
+                    ],
+                    "task_plan": task_plan
                 },
                 workflow=workflow
             )
@@ -160,7 +171,8 @@ class ReasoningEngine:
                     "execution_plan": [
                         "planner",
                         "chat"
-                    ]
+                    ],
+                    "task_plan": task_plan
                 },
                 workflow=workflow
             )
@@ -175,7 +187,8 @@ class ReasoningEngine:
                 "goal": "conversation",
                 "execution_plan": [
                     "chat"
-                ]
+                ],
+                "task_plan": task_plan
             },
             workflow=workflow
         )
