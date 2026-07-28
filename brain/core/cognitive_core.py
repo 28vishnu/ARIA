@@ -206,6 +206,11 @@ class CognitiveCore:
                     planner=self.planner
                 )
 
+                logger.info(
+                    "[Decision] Selected action: %s",
+                    decision.action
+                )
+
             logger.info(
                 "[Decision] Selected action: %s",
                 decision.action if decision else None
