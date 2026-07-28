@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from pypdf import PdfReader
@@ -37,6 +38,7 @@ class DocumentIntelligence:
                 await self.store(
                     session_id=session_id,
                     summary=summary,
+                    document_text=text,
                     metadata={
                         "file_path": file_path
                     }
@@ -113,23 +115,38 @@ class DocumentIntelligence:
         self,
         session_id: str,
         summary: str,
+        document_text: str,
         metadata: Optional[dict] = None
     ):
         """
-        Store the document summary in ARIA's long-term memory.
+        Store a processed document summary as long-term memory.
         """
 
-        if not self.memory_engine:
+        if self.memory_engine is None:
             return
 
-        document_memory = {
-            "type": "document",
-            "summary": summary,
-            "metadata": metadata or {}
-        }
+        now = datetime.now(timezone.utc).isoformat()
 
-        # Store using your memory engine
-        await self.memory_engine.store(
-            session_id=session_id,
-            memory=document_memory
+        await self.memory_engine.memory_col.update_one(
+            {
+                "key": f"document_{session_id}"
+            },
+            {
+                "$set": {
+                    "key": f"document_{session_id}",
+                    "value": summary,
+                    "document_text": document_text,
+                    "category": "document",
+                    "memory_type": "document_summary",
+                    "importance": "high",
+                    "confidence": 1.0,
+                    "metadata": metadata or {},
+                    "updated_at": now
+                },
+                "$setOnInsert": {
+                    "first_seen": now,
+                    "last_used": now
+                }
+            },
+            upsert=True
         )
