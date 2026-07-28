@@ -161,10 +161,26 @@ async def telegram_webhook(req: Request):
 
         document_ai = req.app.state.registry.get("document_intelligence")
 
+        session_id = str(chat_id)
+
         result = await document_ai.process_document(
             file_path=local_path,
-            session_id=str(chat_id)
+            session_id=session_id
         )
+
+        state_manager = req.app.state.registry.get("state_manager")
+
+        if state_manager:
+
+            state_manager.update_state(
+                session_id,
+                active_document=True
+            )
+
+            state_manager.update_state(
+                session_id,
+                document_uploaded=True
+            )
 
         summary = result["summary"]
         formatted_response = f"✅ Document processed successfully.\n\nSummary:\n\n{summary}"
