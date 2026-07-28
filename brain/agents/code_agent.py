@@ -24,6 +24,24 @@ class CodeAgent(BaseAgent):
 
         q = query.lower()
 
+        # Exclude planning/roadmap keywords so PlanningAgent isn't preempted
+        exclude_keywords = [
+            "roadmap",
+            "plan",
+            "planning",
+            "schedule",
+            "strategy",
+            "timeline",
+            "learning path",
+            "30-day",
+            "60-day",
+            "90-day",
+            "itinerary"
+        ]
+
+        if any(ex in q for ex in exclude_keywords):
+            return 0.0
+
         keywords = [
             "python",
             "java",
