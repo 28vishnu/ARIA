@@ -42,7 +42,7 @@ class DecisionEngine:
         if intent and intent.name.startswith("memory"):
             return Decision(
                 action="memory_conversation",
-                confidence=0.97
+                confidence=intent.confidence
             )
 
         # 2. Direct Skill
@@ -53,10 +53,10 @@ class DecisionEngine:
             )
 
         # 3. Planning
-        if planner:
+        if intent and intent.name == "planner":
             return Decision(
                 action="planner",
-                confidence=0.85
+                confidence=intent.confidence
             )
 
         # 4. Default
