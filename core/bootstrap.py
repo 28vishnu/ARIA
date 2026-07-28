@@ -20,6 +20,7 @@ from skills.date import DateSkill
 from skills.weather import WeatherSkill
 from skills.search import SearchSkill
 from skills.chat import ChatSkill
+from skills.agent import AgentSkill
 from actions.registry import create_default_action_manager
 from brain.planner import Planner
 from brain.executor import Executor
@@ -144,6 +145,7 @@ async def bootstrap_application() -> ServiceRegistry:
     skill_manager.register(WeatherSkill())
     skill_manager.register(SearchSkill())
     skill_manager.register(ChatSkill())
+    skill_manager.register(AgentSkill())
     registry.register("skill_manager", skill_manager)
 
     action_manager = create_default_action_manager()
