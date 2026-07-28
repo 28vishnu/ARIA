@@ -1,5 +1,8 @@
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger("aria")
 
 
 @dataclass
@@ -33,6 +36,12 @@ class DecisionEngine:
 
         # Let the Reasoning Engine decide first
         if reasoning:
+            logger.info(
+                "[Decision] Goal=%s Plan=%s",
+                reasoning.metadata.get("goal"),
+                reasoning.metadata.get("execution_plan")
+            )
+
             return Decision(
                 action=reasoning.primary_action,
                 confidence=reasoning.confidence
