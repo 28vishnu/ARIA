@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from pypdf import PdfReader
+from sentence_transformers import SentenceTransformer
 
 
 class DocumentIntelligence:
@@ -12,10 +13,16 @@ class DocumentIntelligence:
     def __init__(
         self,
         memory_engine=None,
-        llm_router=None
+        llm_router=None,
+        vector_db=None
     ):
         self.memory_engine = memory_engine
         self.llm_router = llm_router
+        self.vector_db = vector_db
+
+        self.embedding_model = SentenceTransformer(
+            "all-MiniLM-L6-v2"
+        )
 
     async def process_document(
         self,
