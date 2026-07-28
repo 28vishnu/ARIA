@@ -5,14 +5,16 @@ from brain.agents.base_agent import BaseAgent, AgentResponse
 
 class PlanningAgent(BaseAgent):
     """
-    Handles planning, scheduling and task organisation.
+    Handles multi-step goal decomposition, scheduling, and project planning requests.
     """
 
     name = "planning"
 
-    description = "Planning and task management agent."
+    description = "Task planning, scheduling, and goal decomposition agent."
 
     version = "1.0.0"
+
+    priority = 95
 
     async def can_handle(
         self,
@@ -26,14 +28,12 @@ class PlanningAgent(BaseAgent):
             "plan",
             "schedule",
             "roadmap",
+            "step by step",
+            "workflow",
+            "strategy for",
             "organize",
-            "organise",
-            "steps",
-            "strategy",
             "timeline",
-            "project",
-            "todo",
-            "to-do"
+            "itinerary"
         ]
 
         if any(word in q for word in keywords):
@@ -47,21 +47,18 @@ class PlanningAgent(BaseAgent):
         context: Dict[str, Any]
     ) -> AgentResponse:
 
-        llm_router = context["app_state"].registry.get("llm_router")
-
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are ARIA's planning expert. "
-                    "Create structured plans, timelines and actionable steps."
-                )
+                "content": "You are ARIA's strategic planner. Break down complex goals into logical, actionable steps with clear priorities."
             },
             {
                 "role": "user",
                 "content": query
             }
         ]
+
+        llm_router = context["app_state"].registry.get("llm_router")
 
         answer = await llm_router.chat(messages)
 
@@ -72,4 +69,4 @@ class PlanningAgent(BaseAgent):
             data={
                 "response": answer
             }
-        ) 
+        )
