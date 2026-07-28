@@ -1,6 +1,8 @@
 import logging
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from brain.agents.base_agent import BaseAgent
 
 logger = logging.getLogger("aria")
 
@@ -16,6 +18,7 @@ class ReasoningResult:
     confidence: float = 1.0
     reasoning: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    selected_agent: Optional[BaseAgent] = None
 
 
 class ReasoningEngine:
@@ -109,7 +112,8 @@ class ReasoningEngine:
                         "planner",
                         "chat"
                     ]
-                }
+                },
+                selected_agent=selected_agent
             )
 
         # Default
@@ -123,5 +127,6 @@ class ReasoningEngine:
                 "execution_plan": [
                     "chat"
                 ]
-            }
+            },
+            selected_agent=selected_agent
         )
