@@ -92,9 +92,14 @@ class ReasoningEngine:
 
             elif intent_name == "chat":
 
+                selected_query = query
+
+                if task_plan and len(task_plan) > 0:
+                    selected_query = task_plan.tasks[0].description
+
                 # Let AgentManager choose the best agent
                 best_agent, score = await self.agent_manager.select_agent(
-                    query,
+                    selected_query,
                     context
                 )
 
@@ -113,8 +118,13 @@ class ReasoningEngine:
                     workflow.add(memory_agent)
 
             else:
+                selected_query = query
+
+                if task_plan and len(task_plan) > 0:
+                    selected_query = task_plan.tasks[0].description
+
                 best_agent, score = await self.agent_manager.select_agent(
-                    query,
+                    selected_query,
                     context
                 )
                 if best_agent:
