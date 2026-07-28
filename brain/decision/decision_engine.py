@@ -30,6 +30,13 @@ class DecisionEngine:
         query = context.get("query", "")
         memory = context.get("memory", [])
         state = context.get("state", {})
+        intent = context.get("intent")
+
+        if intent and intent.name == "greeting":
+            return Decision(
+                action="chat",
+                confidence=0.99
+            )
 
         # 1. Memory
         if memory:
