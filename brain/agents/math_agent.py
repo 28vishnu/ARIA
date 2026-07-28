@@ -69,23 +69,21 @@ class MathAgent(BaseAgent):
 
             if tool:
                 try:
-                    result = await tool.execute(
-                        query,
-                        context
-                    )
+                    result = await tool.execute(query, context)
 
-                    response_value = (
-                        result.get("result") if isinstance(result, dict) else result
-                    )
-
-                    return AgentResponse(
-                        success=True,
-                        confidence=1.0,
-                        agent=self.name,
-                        data={
-                            "response": str(response_value)
-                        }
-                    )
+                    if (
+                        isinstance(result, dict)
+                        and result.get("success")
+                        and result.get("result") is not None
+                    ):
+                        return AgentResponse(
+                            success=True,
+                            confidence=1.0,
+                            agent=self.name,
+                            data={
+                                "response": str(result["result"])
+                            }
+                        )
 
                 except Exception:
                     pass
