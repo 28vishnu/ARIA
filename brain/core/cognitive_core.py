@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 from personality.response import SystemResponse
 from brain.reasoning.reasoning_engine import ReasoningEngine
+from brain.response.response_formatter import ResponseFormatter
 
 logger = logging.getLogger("aria")
 
@@ -30,6 +31,7 @@ class CognitiveCore:
         self.decision_engine = decision_engine
         self.memory_conversation_manager = memory_conversation_manager
         self.reasoning_engine = reasoning_engine
+        self.response_formatter = ResponseFormatter()
 
     async def process(
         self,
