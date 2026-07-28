@@ -184,9 +184,21 @@ class PersonalityEngine:
         return "Done."
 
     def _post_process(self, reply: str) -> str:
-        """Ensures consistent formatting and punctuation."""
+        """Final cleanup before sending the response."""
+
         reply = reply.strip()
-        if "\n" not in reply:
-            if reply and reply[-1] not in ".!?":
-                reply += "."
+
+        # Remove excessive blank lines
+        while "\n\n\n" in reply:
+            reply = reply.replace("\n\n\n", "\n\n")
+
+        # Remove accidental repeated punctuation
+        reply = reply.replace("..", ".")
+        reply = reply.replace("!!", "!")
+        reply = reply.replace("??", "?")
+
+        # Add punctuation only for single-line replies
+        if "\n" not in reply and reply and reply[-1] not in ".!?":
+            reply += "."
+
         return reply
