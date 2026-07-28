@@ -195,19 +195,19 @@ class MemoryEngine:
             return []
         try:
             lower_q = query.lower()
-            filter_query = {}
+            filter_query = None
 
             if any(k in lower_q for k in ["like", "preference", "favorite", "love", "prefer"]):
                 filter_query = {"category": "preference"}
             elif any(k in lower_q for k in ["birthday", "born", "dob", "date of birth"]):
                 filter_query = {"key": "birthday"}
 
+            # No memory-related intent
+            if filter_query is None:
+                return []
+
             cursor = self.memory_col.find(filter_query).limit(10)
             memories = await cursor.to_list(length=10)
-
-            if not memories and filter_query:
-                cursor = self.memory_col.find({}).limit(10)
-                memories = await cursor.to_list(length=10)
 
             if not memories:
                 return []
@@ -224,11 +224,17 @@ class MemoryEngine:
 
             structured_results = []
             for m in memories:
+                key = m.get("key")
+                value = m.get("value")
+
+                if not key or not value:
+                    continue
+
                 # Dynamic evidence-based retrieval score
                 score = 0.98 if filter_query and m.get("category") == filter_query.get("category") else 0.85
                 structured_results.append({
-                    "key": m.get("key"),
-                    "value": m.get("value"),
+                    "key": key,
+                    "value": value,
                     "category": m.get("category", "general"),
                     "memory_type": m.get("memory_type", "fact"),
                     "importance": m.get("importance", "medium"),
