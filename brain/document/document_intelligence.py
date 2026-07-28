@@ -36,17 +36,16 @@ class DocumentIntelligence:
         Complete document pipeline.
         """
 
-        # Step 1: Extract text with page numbers
-        pages_data = await self.extract_text(file_path)
+        # Step 1: Extract pages
+        pages = await self.extract_text(file_path)
 
-        # Combine text for full document operations like summarization
-        full_text = "\n\n".join([f"[Page {p['page']}]\n{p['text']}" for p in pages_data])
+        full_text = "\n".join(
+            page["text"]
+            for page in pages
+        )
 
-        # Step 2: Chunk text across pages preserving page info
-        chunks = self.chunk_pages(pages_data)
-
-        # Extract raw text strings for embeddings/storage
-        chunk_texts = [c["text"] for c in chunks]
+        # Step 2: Chunk text with page tracking
+        chunks = self.chunk_text_with_pages(pages)
 
         # Step 3: Summarise
         summary = await self.summarize(full_text)
@@ -64,14 +63,14 @@ class DocumentIntelligence:
                 )
                 await self.store_chunks(
                     session_id=session_id,
-                    chunks=chunk_texts,
+                    chunks=chunks,
                     metadata={
                         "file_path": file_path
                     }
                 )
                 await self.store_vectors(
                     session_id=session_id,
-                    chunks=chunk_texts,
+                    chunks=chunks,
                     metadata={
                         "file_path": file_path
                     }
@@ -83,8 +82,8 @@ class DocumentIntelligence:
             "success": True,
             "text": full_text,
             "summary": summary,
-            "chunks": chunk_texts,
-            "pages": pages_data
+            "chunks": chunks,
+            "pages": pages
         }
 
     async def extract_text(
@@ -123,35 +122,6 @@ class DocumentIntelligence:
             return pages
 
         raise ValueError(f"Unsupported file type: {suffix}")
-
-    def chunk_pages(
-        self,
-        pages: List[Dict[str, Union[int, str]]],
-        chunk_size: int = 1000,
-        overlap: int = 200
-    ) -> List[Dict[str, Any]]:
-        """
-        Split text across pages into overlapping chunks while preserving page metadata.
-        """
-        chunks = []
-
-        for page_data in pages:
-            page_num = page_data["page"]
-            text = str(page_data["text"])
-
-            start = 0
-            while start < len(text):
-                end = start + chunk_size
-                chunk_str = f"[Page {page_num}] {text[start:end]}"
-
-                chunks.append({
-                    "page": page_num,
-                    "text": chunk_str
-                })
-
-                start += chunk_size - overlap
-
-        return chunks
 
     def chunk_text(
         self,
