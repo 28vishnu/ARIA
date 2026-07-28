@@ -30,6 +30,18 @@ class IntentAnalyzer:
         if q.startswith(("forget", "delete", "remove", "clear")):
             return Intent("memory_delete", 0.99)
 
+        # Memory Store / Update
+        if (
+            q.startswith(("my ", "i am", "i'm"))
+            and any(x in q for x in (
+                " is ",
+                " like ",
+                " love ",
+                " prefer "
+            ))
+        ):
+            return Intent("memory_store", 0.96)
+
         # Memory Recall
         if (
             q.startswith((
@@ -48,18 +60,6 @@ class IntentAnalyzer:
             or "dob" in q
         ):
             return Intent("memory_recall", 0.97)
-
-        # Memory Store / Update
-        if (
-            q.startswith(("my ", "i am", "i'm"))
-            and any(x in q for x in (
-                " is ",
-                " like ",
-                " love ",
-                " prefer "
-            ))
-        ):
-            return Intent("memory_store", 0.96)
 
         # Planner
         if any(word in q for word in (
