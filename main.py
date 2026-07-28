@@ -128,7 +128,48 @@ async def telegram_webhook(req: Request):
     if chat_id is None:
         return {"status": "ok"}
 
-    reply_text = await process_task(text, str(chat_id), request_id, req.app.state)
+    if document:
+
+        file_id = document["file_id"]
+
+        http_client = req.app.state.registry.get("http_client")
+        config = req.app.state.registry.get("config")
+
+        # Get Telegram file information
+        file_info = await http_client.get(
+            f"https://api.telegram.org/bot{config.telegram_token}/getFile",
+            params={"file_id": file_id}
+        )
+
+        file_path = file_info.json()["result"]["file_path"]
+
+        download_url = (
+            f"https://api.telegram.org/file/bot"
+            f"{config.telegram_token}/{file_path}"
+        )
+
+        os.makedirs("uploads", exist_ok=True)
+
+        local_path = os.path.join(
+            "uploads",
+            os.path.basename(file_path)
+        )
+
+        response = await http_client.get(download_url)
+
+        with open(local_path, "wb") as f:
+            f.write(response.content)
+
+        return {
+            "status": "document downloaded"
+        }
+
+    reply_text = await process_task(
+        text,
+        str(chat_id),
+        request_id,
+        req.app.state
+    )
 
     # Diagnostic log to isolate whether {} comes from process_task or the API transport
     logger.info("[Telegram] Final reply text: %r", reply_text)
