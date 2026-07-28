@@ -40,6 +40,7 @@ from brain.agents.math_agent import MathAgent
 from brain.agents.writing_agent import WritingAgent
 from brain.agents.memory_agent import MemoryAgent
 from brain.agents.planning_agent import PlanningAgent
+from brain.agents.task_planner import TaskPlanner
 from brain.event import EventBus
 from brain.context_manager import ContextManager
 from brain.session import SessionManager
@@ -211,6 +212,13 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "agent_manager",
         agent_manager
+    )
+
+    task_planner = TaskPlanner()
+
+    registry.register(
+        "task_planner",
+        task_planner
     )
 
     reasoning_engine = ReasoningEngine(
