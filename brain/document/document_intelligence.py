@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Union, Any
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
@@ -36,14 +36,20 @@ class DocumentIntelligence:
         Complete document pipeline.
         """
 
-        # Step 1: Extract text
-        text = await self.extract_text(file_path)
+        # Step 1: Extract text with page numbers
+        pages_data = await self.extract_text(file_path)
 
-        # Step 2: Chunk text
-        chunks = self.chunk_text(text)
+        # Combine text for full document operations like summarization
+        full_text = "\n\n".join([f"[Page {p['page']}]\n{p['text']}" for p in pages_data])
+
+        # Step 2: Chunk text across pages preserving page info
+        chunks = self.chunk_pages(pages_data)
+
+        # Extract raw text strings for embeddings/storage
+        chunk_texts = [c["text"] for c in chunks]
 
         # Step 3: Summarise
-        summary = await self.summarize(text)
+        summary = await self.summarize(full_text)
 
         # Step 4: Store (if memory is available)
         if self.memory_engine:
@@ -51,21 +57,21 @@ class DocumentIntelligence:
                 await self.store(
                     session_id=session_id,
                     summary=summary,
-                    document_text=text,
+                    document_text=full_text,
                     metadata={
                         "file_path": file_path
                     }
                 )
                 await self.store_chunks(
                     session_id=session_id,
-                    chunks=chunks,
+                    chunks=chunk_texts,
                     metadata={
                         "file_path": file_path
                     }
                 )
                 await self.store_vectors(
                     session_id=session_id,
-                    chunks=chunks,
+                    chunks=chunk_texts,
                     metadata={
                         "file_path": file_path
                     }
@@ -75,46 +81,84 @@ class DocumentIntelligence:
 
         return {
             "success": True,
-            "text": text,
+            "text": full_text,
             "summary": summary,
-            "chunks": chunks
+            "chunks": chunk_texts,
+            "pages": pages_data
         }
 
     async def extract_text(
         self,
         file_path: str
-    ) -> str:
+    ) -> List[Dict[str, Union[int, str]]]:
         """
-        Extract text from TXT and PDF files.
+        Extract text with page numbers from TXT and PDF files.
+        Returns a list of dicts: [{"page": 1, "text": "..."}, ...]
         """
 
         suffix = Path(file_path).suffix.lower()
 
         if suffix == ".txt":
             with open(file_path, "r", encoding="utf-8") as f:
-                return f.read()
+                content = f.read()
+                return [{
+                    "page": 1,
+                    "text": content
+                }]
 
         if suffix == ".pdf":
             reader = PdfReader(file_path)
 
             pages = []
 
-            for page in reader.pages:
+            for page_number, page in enumerate(reader.pages, start=1):
                 text = page.extract_text()
 
                 if text:
-                    pages.append(text)
+                    pages.append({
+                        "page": page_number,
+                        "text": text
+                    })
 
-            return "\n".join(pages)
+            return pages
 
         raise ValueError(f"Unsupported file type: {suffix}")
+
+    def chunk_pages(
+        self,
+        pages: List[Dict[str, Union[int, str]]],
+        chunk_size: int = 1000,
+        overlap: int = 200
+    ) -> List[Dict[str, Any]]:
+        """
+        Split text across pages into overlapping chunks while preserving page metadata.
+        """
+        chunks = []
+
+        for page_data in pages:
+            page_num = page_data["page"]
+            text = str(page_data["text"])
+
+            start = 0
+            while start < len(text):
+                end = start + chunk_size
+                chunk_str = f"[Page {page_num}] {text[start:end]}"
+
+                chunks.append({
+                    "page": page_num,
+                    "text": chunk_str
+                })
+
+                start += chunk_size - overlap
+
+        return chunks
 
     def chunk_text(
         self,
         text: str,
         chunk_size: int = 1000,
         overlap: int = 200
-    ):
+    ) -> List[str]:
         """
         Split text into overlapping chunks.
         """
