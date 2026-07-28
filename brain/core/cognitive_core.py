@@ -61,6 +61,13 @@ class CognitiveCore:
                 ctx["state"] = state
                 ctx["memory"] = memories
 
+            # Store the current request in the session state
+            if self.state_manager:
+                self.state_manager.update_state(
+                    session_id,
+                    last_query=query
+                )
+
             # 4. Decision Engine
             decision = None
             if self.decision_engine:
@@ -124,6 +131,13 @@ class CognitiveCore:
 
             final_data = exec_result.get("task_outputs", {}) if isinstance(exec_result, dict) else exec_result
             success = exec_result.get("success", True) if isinstance(exec_result, dict) else True
+
+            if self.state_manager:
+                self.state_manager.update_state(
+                    session_id,
+                    last_action="planner_executor",
+                    last_success=success
+                )
 
             return SystemResponse(
                 success=success,
