@@ -74,13 +74,16 @@ class MathAgent(BaseAgent):
                         context
                     )
 
+                    response_value = (
+                        result.get("result") if isinstance(result, dict) else result
+                    )
+
                     return AgentResponse(
                         success=True,
                         confidence=1.0,
                         agent=self.name,
                         data={
-                            "response": str(result),
-                            "tool_used": "calculator"
+                            "response": str(response_value)
                         }
                     )
 
