@@ -160,8 +160,25 @@ async def telegram_webhook(req: Request):
         with open(local_path, "wb") as f:
             f.write(response.content)
 
+        document_ai = req.app.state.registry.get("document_intelligence")
+
+        result = await document_ai.process_document(
+            file_path=local_path,
+            session_id=str(chat_id)
+        )
+
+        summary = result["summary"]
+
+        await http_client.post(
+            f"https://api.telegram.org/bot{config.telegram_token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": summary
+            }
+        )
+
         return {
-            "status": "document downloaded"
+            "status": "processed"
         }
 
     reply_text = await process_task(
