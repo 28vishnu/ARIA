@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 from personality.response import SystemResponse
 from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.response.response_formatter import ResponseFormatter
+from brain.agents.response_fusion import ResponseFusion
 
 logger = logging.getLogger("aria")
 
@@ -32,6 +33,7 @@ class CognitiveCore:
         self.memory_conversation_manager = memory_conversation_manager
         self.reasoning_engine = reasoning_engine
         self.response_formatter = ResponseFormatter()
+        self.response_fusion = ResponseFusion()
 
     async def process(
         self,
@@ -236,15 +238,31 @@ class CognitiveCore:
                 success
                 and reasoning
                 and reasoning.workflow
-                and len(reasoning.workflow) > 0
-                and "1" in final_data
             ):
-                return SystemResponse(
-                    success=True,
-                    confidence=1.0,
-                    source="agent",
-                    data=final_data["1"]
-                )
+
+                if "agent_results" in ctx:
+
+                    combined = self.response_fusion.combine(
+                        ctx["agent_results"]
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="agent",
+                        data={
+                            "response": combined
+                        }
+                    )
+
+                elif "1" in final_data:
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="agent",
+                        data=final_data["1"]
+                    )
 
             return SystemResponse(
                 success=success,
