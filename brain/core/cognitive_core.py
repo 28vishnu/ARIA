@@ -70,24 +70,33 @@ class CognitiveCore:
                     planner=self.planner
                 )
 
-            if decision and decision.action == "memory":
-                return SystemResponse(
-                    success=True,
-                    confidence=decision.confidence,
-                    data=decision.data,
-                    source="memory"
-                )
+            if decision:
 
-            # 1. Try SkillManager first (Fast Path / Direct Execution)
-            if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
-                skill_res = await self.skill_manager.route_and_execute(query, ctx)
-                if skill_res and skill_res.success and skill_res.confidence >= 0.85:
+                # Memory response
+                if decision.action == "memory":
                     return SystemResponse(
                         success=True,
-                        confidence=skill_res.confidence,
-                        data=skill_res.data,
-                        source=skill_res.source
+                        confidence=decision.confidence,
+                        data=decision.data,
+                        source="memory"
                     )
+
+                # Direct skill
+                elif decision.action == "skill":
+                    if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+                        skill_res = await self.skill_manager.route_and_execute(query, ctx)
+
+                        if skill_res:
+                            return SystemResponse(
+                                success=skill_res.success,
+                                confidence=skill_res.confidence,
+                                data=skill_res.data,
+                                source=skill_res.source
+                            )
+
+                # Planner
+                elif decision.action == "planner":
+                    pass
 
             # 2. Otherwise, fall back to Planner + Executor Orchestration
             plan = None
