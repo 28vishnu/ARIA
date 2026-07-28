@@ -34,6 +34,7 @@ from brain.tools.calculator_tool import CalculatorTool
 from brain.tools.python_tool import PythonTool
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
+from brain.agents.python_agent import PythonAgent
 from brain.agents.research_agent import ResearchAgent
 from brain.agents.math_agent import MathAgent
 from brain.agents.writing_agent import WritingAgent
@@ -200,6 +201,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     agent_manager.register(CodeAgent())
+    agent_manager.register(PythonAgent())
     agent_manager.register(ResearchAgent())
     agent_manager.register(MathAgent())
     agent_manager.register(WritingAgent())
