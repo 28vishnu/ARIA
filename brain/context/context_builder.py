@@ -21,14 +21,12 @@ class ContextBuilder:
 
         ctx = dict(base_context or {})
 
-        ctx["query"] = query
-        ctx["session_id"] = session_id
-        ctx["user_id"] = user_id
-
-        if memory:
-            ctx["memory"] = memory
-
-        if state:
-            ctx["state"] = state
+        ctx.update({
+            "query": query,
+            "session_id": session_id,
+            "user_id": user_id,
+            "memory": memory or [],
+            "state": state or {},
+        })
 
         return ctx
