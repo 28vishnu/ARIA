@@ -14,6 +14,21 @@ class SkillManager:
         self.skills.append(skill)
         logger.info("[SkillManager] Registered skill: '%s'", skill.name)
 
+    async def can_handle(self, query: str, context: Dict[str, Any]) -> bool:
+        """
+        Returns True if any registered skill can handle the query.
+        Does not execute the skill.
+        """
+        for skill in self.skills:
+            try:
+                confidence = await skill.can_run(query, context)
+                if confidence >= 0.3:
+                    return True
+            except Exception:
+                continue
+
+        return False
+
     async def route_and_execute(self, query: str, context: Dict[str, Any]) -> SkillResponse:
         """Evaluates all registered skills by confidence and executes the best match."""
         best_skill = None
@@ -47,7 +62,7 @@ class SkillManager:
     async def execute_skill(self, skill_name: str, query: str, context: Dict[str, Any]) -> SkillResponse:
         """Directly executes a specific skill requested by the planner safely."""
         normalized_target = skill_name.strip().lower()
-        
+
         for skill in self.skills:
             if skill.name == normalized_target:
                 logger.info("[SkillManager] Directly executing planned skill: '%s'", skill.name)
