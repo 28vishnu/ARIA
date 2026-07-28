@@ -148,7 +148,8 @@ async def bootstrap_application() -> ServiceRegistry:
 
     doc_intelligence = DocumentIntelligence(
         memory_engine=memory_engine,
-        llm_router=llm_router
+        llm_router=llm_router,
+        vector_db=docs_col
     )
     registry.register("document_intelligence", doc_intelligence)
 
