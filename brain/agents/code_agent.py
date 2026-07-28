@@ -14,6 +14,8 @@ class CodeAgent(BaseAgent):
 
     version = "1.0.0"
 
+    priority = 80
+
     async def can_handle(
         self,
         query: str,
