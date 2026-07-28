@@ -2,6 +2,7 @@ import logging
 import random
 from typing import Dict, Any
 from personality.response import SystemResponse
+from personality.conversation_style import ConversationStyle
 
 logger = logging.getLogger("aria")
 
@@ -62,6 +63,7 @@ class PersonalityEngine:
             else:
                 reply = self._format_fallback(data)
 
+            reply = ConversationStyle.apply(reply)
             return self._post_process(reply)
 
         except Exception as e:
