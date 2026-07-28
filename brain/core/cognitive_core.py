@@ -38,20 +38,12 @@ class CognitiveCore:
             ctx = {}
 
             if self.context_builder:
-                if hasattr(self.context_builder, "build") and asyncio.iscoroutinefunction(self.context_builder.build):
-                    ctx = await self.context_builder.build(
-                        query=query,
-                        session_id=session_id,
-                        user_id=user_id,
-                        base_context=base_context
-                    )
-                else:
-                    ctx = self.context_builder.build(
-                        query=query,
-                        session_id=session_id,
-                        user_id=user_id,
-                        base_context=base_context
-                    )
+                ctx = await self.context_builder.build(
+                    query=query,
+                    session_id=session_id,
+                    user_id=user_id,
+                    base_context=base_context
+                )
             else:
                 ctx = base_context or {}
 
