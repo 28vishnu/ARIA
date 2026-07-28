@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Optional
 
 
@@ -34,10 +35,17 @@ class DocumentIntelligence:
         file_path: str
     ) -> str:
         """
-        Extract text from the document.
+        Extract text from TXT files.
+        PDF and DOCX support will be added next.
         """
 
-        raise NotImplementedError
+        suffix = Path(file_path).suffix.lower()
+
+        if suffix == ".txt":
+            with open(file_path, "r", encoding="utf-8") as f:
+                return f.read()
+
+        raise ValueError(f"Unsupported file type: {suffix}")
 
     async def summarize(
         self,
