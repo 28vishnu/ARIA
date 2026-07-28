@@ -147,6 +147,38 @@ class DocumentIntelligence:
 
         return chunks
 
+    def chunk_text_with_pages(
+        self,
+        pages,
+        chunk_size=1000,
+        overlap=200
+    ):
+        """
+        Split text into chunks while preserving page numbers.
+        """
+
+        chunks = []
+
+        for page in pages:
+
+            text = page["text"]
+            page_number = page["page"]
+
+            start = 0
+
+            while start < len(text):
+
+                end = start + chunk_size
+
+                chunks.append({
+                    "text": text[start:end],
+                    "page": page_number
+                })
+
+                start += chunk_size - overlap
+
+        return chunks
+
     async def summarize(
         self,
         text: str
@@ -220,7 +252,7 @@ class DocumentIntelligence:
     async def store_chunks(
         self,
         session_id: str,
-        chunks: list[str],
+        chunks: list[dict],
         metadata: Optional[dict] = None
     ):
         """
@@ -241,7 +273,8 @@ class DocumentIntelligence:
                 {
                     "$set": {
                         "key": f"document_chunk_{session_id}_{index}",
-                        "value": chunk,
+                        "value": chunk["text"],
+                        "page": chunk["page"],
                         "category": "document_chunk",
                         "memory_type": "document_chunk",
                         "chunk_index": index,
@@ -261,7 +294,7 @@ class DocumentIntelligence:
     async def store_vectors(
         self,
         session_id: str,
-        chunks: list[str],
+        chunks: list[dict],
         metadata: Optional[dict] = None
     ):
         """
@@ -272,7 +305,7 @@ class DocumentIntelligence:
             return
 
         embeddings = self.embedding_model.encode(
-            chunks,
+            [c["text"] for c in chunks],
             convert_to_numpy=True
         ).tolist()
 
@@ -287,11 +320,12 @@ class DocumentIntelligence:
             data = dict(metadata or {})
             data["session_id"] = session_id
             data["chunk_index"] = i
+            data["page"] = chunks[i]["page"]
             metadatas.append(data)
 
         self.vector_db.add(
             ids=ids,
-            documents=chunks,
+            documents=[c["text"] for c in chunks],
             embeddings=embeddings,
             metadatas=metadatas
         )
