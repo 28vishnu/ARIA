@@ -75,9 +75,21 @@ class ReasoningEngine:
                     workflow.add(writing_agent)
 
             elif intent_name == "chat":
-                research_agent = self.agent_manager.get("research")
-                if research_agent:
-                    workflow.add(research_agent)
+
+                # Let AgentManager choose the best agent
+                best_agent, score = await self.agent_manager.select_agent(
+                    query,
+                    context
+                )
+
+                if best_agent:
+                    logger.info(
+                        "[Reasoning] Selected agent: %s (%.2f)",
+                        best_agent.name,
+                        score
+                    )
+
+                    workflow.add(best_agent)
 
             elif intent_name and intent_name.startswith("memory"):
                 memory_agent = self.agent_manager.get("memory")
