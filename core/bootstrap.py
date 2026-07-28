@@ -29,6 +29,8 @@ from brain.context.context_builder import ContextBuilder
 from brain.state.state_manager import StateManager
 from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
+from brain.tools.tool_manager import ToolManager
+from brain.tools.calculator_tool import CalculatorTool
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
 from brain.agents.research_agent import ResearchAgent
@@ -173,6 +175,17 @@ async def bootstrap_application() -> ServiceRegistry:
 
     intent_analyzer = IntentAnalyzer()
     registry.register("intent_analyzer", intent_analyzer)
+
+    tool_manager = ToolManager()
+
+    tool_manager.register(
+        CalculatorTool()
+    )
+
+    registry.register(
+        "tool_manager",
+        tool_manager
+    )
 
     agent_manager = AgentManager()
 
