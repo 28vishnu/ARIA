@@ -315,6 +315,42 @@ class DocumentIntelligence:
 
         return results.get("documents", [[]])[0]
 
+    async def hybrid_search(
+        self,
+        session_id: str,
+        query: str,
+        limit: int = 5
+    ):
+        """
+        Combine semantic and keyword retrieval.
+        """
+
+        semantic = await self.semantic_search(
+            session_id=session_id,
+            query=query,
+            limit=limit
+        )
+
+        keyword = await self.retrieve_chunks(
+            session_id=session_id,
+            query=query,
+            limit=limit
+        )
+
+        merged = []
+
+        seen = set()
+
+        for chunk in semantic + keyword:
+
+            if chunk not in seen:
+
+                merged.append(chunk)
+
+                seen.add(chunk)
+
+        return merged[:limit]
+
     async def retrieve_chunks(
         self,
         session_id: str,
@@ -382,13 +418,13 @@ class DocumentIntelligence:
         Answer a question using previously uploaded documents.
         """
 
-        chunks = await self.semantic_search(
+        chunks = await self.hybrid_search(
             session_id=session_id,
             query=question
         )
 
         logger.info(
-            "[DocumentAI] Semantic search returned %d chunks.",
+            "[DocumentAI] Hybrid search returned %d chunks.",
             len(chunks)
         )
 
