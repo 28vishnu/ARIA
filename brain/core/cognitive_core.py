@@ -133,14 +133,16 @@ class CognitiveCore:
 
                 # Chat
                 elif decision.action == "chat":
-                    return SystemResponse(
-                        success=True,
-                        confidence=decision.confidence,
-                        data={
-                            "message": "Hello, Sir! \nHow can I help you today?"
-                        },
-                        source="chat"
-                    )
+                    if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+                        skill_res = await self.skill_manager.route_and_execute(query, ctx)
+
+                        if skill_res:
+                            return SystemResponse(
+                                success=skill_res.success,
+                                confidence=skill_res.confidence,
+                                data=skill_res.data,
+                                source=skill_res.source
+                            )
 
             # 2. Otherwise, fall back to Planner + Executor Orchestration
             plan = None
