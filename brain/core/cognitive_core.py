@@ -86,12 +86,23 @@ class CognitiveCore:
 
             if decision:
 
-                # Memory response
-                if decision.action == "memory":
+                # Memory Conversation
+                if decision.action == "memory_conversation":
+                    reply = ""
+                    if self.memory_conversation_manager:
+                        reply = await self.memory_conversation_manager.handle(
+                            query=query,
+                            context=ctx
+                        )
+                    else:
+                        reply = "Memory conversation manager is unconfigured, Sir."
+
                     return SystemResponse(
                         success=True,
                         confidence=decision.confidence,
-                        data=decision.data,
+                        data={
+                            "message": reply
+                        },
                         source="memory"
                     )
 
