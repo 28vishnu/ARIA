@@ -115,7 +115,9 @@ class CognitiveCore:
                     return SystemResponse(
                         success=True,
                         confidence=decision.confidence,
-                        data={"intent": "chat", "query": query},
+                        data={
+                            "message": "Hello, Sir! \nHow can I help you today?"
+                        },
                         source="chat"
                     )
 
