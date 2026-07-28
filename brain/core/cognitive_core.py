@@ -35,32 +35,34 @@ class CognitiveCore:
     ) -> SystemResponse:
         """Orchestrates the core request-processing flow using existing skill routing, planning, and execution."""
         try:
-            ctx = {}
-
+            # 1. Get State
             state = {}
             if self.state_manager:
                 state = self.state_manager.get_state(session_id)
 
+            # 2. Get Memory
+            memories = []
+            if self.memory_router:
+                memories = await self.memory_router.get_relevant_memories(query)
+
+            # 3. Build Context (including state and memories)
+            ctx = {}
             if self.context_builder:
                 ctx = await self.context_builder.build(
                     query=query,
                     session_id=session_id,
                     user_id=user_id,
                     base_context=base_context,
+                    memory=memories,
                     state=state
                 )
             else:
                 ctx = base_context or {}
                 ctx["state"] = state
+                ctx["memory"] = memories
 
-            # 0. Ask DecisionEngine what to do
-            memories = []
-
-            if self.memory_router:
-                memories = await self.memory_router.get_relevant_memories(query)
-
+            # 4. Decision Engine
             decision = None
-
             if self.decision_engine:
                 decision = await self.decision_engine.decide(
                     query=query,
