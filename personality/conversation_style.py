@@ -72,6 +72,17 @@ class ConversationStyle:
     @staticmethod
     def follow_up(reply: str, query: str) -> str:
 
+        reply = reply.strip()
+
+        # Never add follow-ups to empty or invalid replies
+        if (
+            not reply
+            or reply.lower() == "none"
+            or reply.lower() == "done."
+            or reply.lower() == "task executed successfully."
+        ):
+            return reply
+
         q = query.lower()
 
         if any(x in q for x in ["email", "letter", "application"]):
@@ -85,5 +96,9 @@ class ConversationStyle:
 
         if any(x in q for x in ["plan", "schedule"]):
             return reply + "\n\nI can expand this into a complete plan."
+
+        # Avoid adding suggestions after very long replies
+        if len(reply) > 1200:
+            return reply
 
         return reply
