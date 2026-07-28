@@ -63,6 +63,30 @@ class ReasoningEngine:
         if self.task_planner:
             task_plan = self.task_planner.create_plan(query)
 
+        task_workflows = []
+
+        if task_plan:
+
+            for task in task_plan:
+
+                workflow_item = AgentWorkflow()
+
+                if (
+                    task.agent != "auto"
+                    and self.agent_manager
+                ):
+                    agent = self.agent_manager.get(task.agent)
+
+                    if agent:
+                        workflow_item.add(agent)
+
+                task_workflows.append(
+                    (
+                        task,
+                        workflow_item
+                    )
+                )
+
         # Multi-agent workflow construction based on intent
         if self.agent_manager:
             if intent_name == "planner":
@@ -165,7 +189,8 @@ class ReasoningEngine:
                     "execution_plan": [
                         "chat"
                     ],
-                    "task_plan": task_plan
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows
                 },
                 workflow=workflow
             )
@@ -182,7 +207,8 @@ class ReasoningEngine:
                     "execution_plan": [
                         "memory_conversation"
                     ],
-                    "task_plan": task_plan
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows
                 },
                 workflow=workflow
             )
@@ -200,7 +226,8 @@ class ReasoningEngine:
                         "planner",
                         "chat"
                     ],
-                    "task_plan": task_plan
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows
                 },
                 workflow=workflow
             )
@@ -216,7 +243,8 @@ class ReasoningEngine:
                 "execution_plan": [
                     "chat"
                 ],
-                "task_plan": task_plan
+                "task_plan": task_plan,
+                "task_workflows": task_workflows
             },
             workflow=workflow
         )
