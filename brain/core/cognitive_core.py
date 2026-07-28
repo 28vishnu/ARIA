@@ -224,6 +224,29 @@ class CognitiveCore:
                 elif decision.action == "planner":
                     pass
 
+                # Document
+                elif decision.action == "document":
+
+                    document_ai = ctx.get("document_intelligence")
+
+                    if document_ai:
+
+                        answer = await document_ai.answer_question(
+                            session_id=session_id,
+                            question=query
+                        )
+
+                        if answer:
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=decision.confidence,
+                                source="document",
+                                data={
+                                    "response": answer
+                                }
+                            )
+
                 # Chat
                 elif decision.action == "chat":
                     if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
