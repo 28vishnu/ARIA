@@ -101,6 +101,13 @@ class CognitiveCore:
                         ctx
                     )
 
+                    # Format the agent response
+                    if last_result and getattr(last_result, "data", None):
+                        formatted = self.response_formatter.format(last_result.data)
+                        last_result.data = {
+                            "response": formatted
+                        }
+
                     ctx["agent_result"] = last_result
 
                 agent_result = last_result
