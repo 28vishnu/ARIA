@@ -28,28 +28,45 @@ class ConversationStyle:
 
         reply = reply.strip()
 
-        # Don't decorate code blocks
+        if not reply:
+            return ""
+
+        # Never decorate code
         if "```" in reply:
             return reply
 
-        # Very short replies (math, yes/no, quick facts)
-        if len(reply) < 40:
+        # Never decorate greetings
+        greetings = [
+            "hello",
+            "hi",
+            "good morning",
+            "good evening",
+            "good afternoon",
+            "greetings",
+            "at your service"
+        ]
+
+        lower = reply.lower()
+
+        if any(lower.startswith(x) for x in greetings):
+            return reply
+
+        # Short replies stay untouched
+        if len(reply) < 80:
             return reply
 
         # Medium replies
-        if len(reply) < 250:
+        if len(reply) < 300:
             return random.choice([
                 "{}",
                 "Certainly.\n\n{}",
-                "Of course.\n\n{}",
                 "Here's what I found.\n\n{}"
             ]).format(reply)
 
         # Long replies
         return random.choice([
             "{}",
-            "Here's a detailed explanation.\n\n{}",
-            "I've broken it down below.\n\n{}"
+            "Here's a detailed explanation.\n\n{}"
         ]).format(reply)
 
     @staticmethod
