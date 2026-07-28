@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 from personality.response import SystemResponse
 from brain.reasoning.reasoning_engine import ReasoningEngine
@@ -98,13 +99,15 @@ class CognitiveCore:
 
                 if task_workflows:
 
-                    for task, workflow in task_workflows:
+                    async def run_task(task, workflow):
 
                         logger.info(
                             "[Task] %s -> %s",
                             task.description,
                             task.agent
                         )
+
+                        local_result = None
 
                         for agent in workflow:
 
@@ -113,17 +116,27 @@ class CognitiveCore:
                                 agent.name
                             )
 
-                            result = await agent.execute(
+                            local_result = await agent.execute(
                                 task.description,
                                 ctx
                             )
 
-                            task.completed = True
-                            task.result = result
+                        task.completed = True
+                        task.result = local_result
 
-                            results.append(result)
+                        return local_result
 
-                            ctx["agent_result"] = result
+                    parallel_jobs = [
+                        run_task(task, workflow)
+                        for task, workflow in task_workflows
+                    ]
+
+                    completed = await asyncio.gather(*parallel_jobs)
+
+                    results.extend(completed)
+
+                    if completed:
+                        ctx["agent_result"] = completed[-1]
 
                 elif reasoning.workflow:
 
