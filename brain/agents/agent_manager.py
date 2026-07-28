@@ -22,6 +22,15 @@ class AgentManager:
             agent.name
         )
 
+    def get(self, name: str) -> Optional[BaseAgent]:
+        """
+        Retrieves a registered agent by its name.
+        """
+        for agent in self.agents:
+            if agent.name == name:
+                return agent
+        return None
+
     async def select_agent(
         self,
         query: str,
