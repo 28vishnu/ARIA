@@ -32,6 +32,12 @@ class DecisionEngine:
     ) -> Decision:
 
         query = context.get("query", "")
+
+        logger.info(
+            "[Decision] Context state = %s",
+            context.get("state")
+        )
+
         intent = context.get("intent")
         reasoning = context.get("reasoning")
 
