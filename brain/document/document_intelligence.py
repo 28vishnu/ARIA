@@ -287,6 +287,34 @@ class DocumentIntelligence:
             len(chunks)
         )
 
+    async def semantic_search(
+        self,
+        session_id: str,
+        query: str,
+        limit: int = 5
+    ):
+        """
+        Retrieve the most relevant chunks using semantic similarity.
+        """
+
+        if self.vector_db is None:
+            return []
+
+        query_embedding = self.embedding_model.encode(
+            query,
+            convert_to_numpy=True
+        ).tolist()
+
+        results = self.vector_db.query(
+            query_embeddings=[query_embedding],
+            n_results=limit,
+            where={
+                "session_id": session_id
+            }
+        )
+
+        return results.get("documents", [[]])[0]
+
     async def retrieve_chunks(
         self,
         session_id: str,
@@ -354,9 +382,14 @@ class DocumentIntelligence:
         Answer a question using previously uploaded documents.
         """
 
-        chunks = await self.retrieve_chunks(
+        chunks = await self.semantic_search(
             session_id=session_id,
             query=question
+        )
+
+        logger.info(
+            "[DocumentAI] Semantic search returned %d chunks.",
+            len(chunks)
         )
 
         if not chunks:
