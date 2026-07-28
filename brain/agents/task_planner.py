@@ -30,12 +30,52 @@ class TaskPlanner:
 
         for index, part in enumerate(parts, start=1):
 
-            plan.add(
-                AgentTask(
-                    id=index,
-                    description=part,
-                    agent="auto"
-                )
+            task = AgentTask(
+                id=index,
+                description=part,
+                agent="research"
             )
+
+            text = part.lower()
+
+            if any(x in text for x in [
+                "calculate",
+                "solve",
+                "+",
+                "-",
+                "*",
+                "/",
+                "=",
+                "equation",
+                "math"
+            ]):
+                task.agent = "math"
+
+            elif any(x in text for x in [
+                "python",
+                "code",
+                "program",
+                "script",
+                "function"
+            ]):
+                task.agent = "python"
+
+            elif any(x in text for x in [
+                "write",
+                "email",
+                "essay",
+                "article",
+                "letter"
+            ]):
+                task.agent = "writing"
+
+            elif any(x in text for x in [
+                "plan",
+                "schedule",
+                "roadmap"
+            ]):
+                task.agent = "planning"
+
+            plan.add(task)
 
         return plan
