@@ -217,6 +217,19 @@ class CognitiveCore:
                             if chat_res and chat_res.success:
                                 final_data["chat"] = chat_res.data
 
+            if (
+                success
+                and reasoning
+                and reasoning.selected_agent
+                and "1" in final_data
+            ):
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="agent",
+                    data=final_data["1"]
+                )
+
             return SystemResponse(
                 success=success,
                 confidence=getattr(plan, "confidence", 0.85),
