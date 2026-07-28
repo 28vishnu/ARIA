@@ -78,6 +78,11 @@ class CognitiveCore:
                 intent = await self.intent_analyzer.analyze(query)
                 ctx["intent"] = intent
 
+            reasoning = None
+            if self.reasoning_engine:
+                reasoning = await self.reasoning_engine.reason(ctx)
+                ctx["reasoning"] = reasoning
+
             # 4. Decision Engine
             decision = None
             if self.decision_engine:
