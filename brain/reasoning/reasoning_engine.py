@@ -25,11 +25,39 @@ class ReasoningEngine:
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
-        Analyse the current context and return a reasoning result.
+        Analyse the context and determine the primary action.
         """
 
+        intent = context.get("intent")
+        query = context.get("query", "").lower().strip()
+
+        # Greeting
+        if intent and intent.name == "greeting":
+            return ReasoningResult(
+                primary_action="chat",
+                confidence=0.99,
+                reasoning="Greeting detected."
+            )
+
+        # Memory
+        if intent and intent.name.startswith("memory"):
+            return ReasoningResult(
+                primary_action="memory_conversation",
+                confidence=intent.confidence,
+                reasoning="Memory operation detected."
+            )
+
+        # Planning
+        if intent and intent.name == "planner":
+            return ReasoningResult(
+                primary_action="planner",
+                confidence=intent.confidence,
+                reasoning="Planning request detected."
+            )
+
+        # Default
         return ReasoningResult(
             primary_action="chat",
-            confidence=0.50,
-            reasoning="Reasoning engine placeholder."
+            confidence=0.80,
+            reasoning="General conversation."
         )
