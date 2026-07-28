@@ -26,6 +26,9 @@ class ReasoningEngine:
     It DOES NOT execute skills, memory, or planning.
     """
 
+    def __init__(self, agent_manager=None):
+        self.agent_manager = agent_manager
+
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
         Analyse the context and determine the primary action.
@@ -38,6 +41,17 @@ class ReasoningEngine:
             context.get("query")
         )
         query = context.get("query", "").lower().strip()
+
+        selected_agent = None
+
+        if self.agent_manager:
+            selected_agent = await self.agent_manager.select_agent(query)
+
+        if selected_agent:
+            logger.info(
+                "[Reasoning] Selected agent: %s",
+                selected_agent.name
+            )
 
         # Greeting
         if intent and intent.name == "greeting":
