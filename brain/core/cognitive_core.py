@@ -37,15 +37,21 @@ class CognitiveCore:
         try:
             ctx = {}
 
+            state = {}
+            if self.state_manager:
+                state = self.state_manager.get_state(session_id)
+
             if self.context_builder:
                 ctx = await self.context_builder.build(
                     query=query,
                     session_id=session_id,
                     user_id=user_id,
-                    base_context=base_context
+                    base_context=base_context,
+                    state=state
                 )
             else:
                 ctx = base_context or {}
+                ctx["state"] = state
 
             # 0. Ask DecisionEngine what to do
             memories = []
