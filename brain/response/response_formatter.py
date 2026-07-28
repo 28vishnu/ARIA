@@ -29,18 +29,30 @@ class ResponseFormatter:
 
             data = result.data if hasattr(result, "data") else result
 
+            if not data:
+                continue
+
             if isinstance(data, dict):
 
-                if "response" in data:
-                    outputs.append(str(data["response"]))
+                value = (
+                    data.get("response")
+                    or data.get("message")
+                    or data.get("result")
+                )
 
-                elif "message" in data:
-                    outputs.append(str(data["message"]))
+                if value is None:
+                    continue
 
-                elif "result" in data:
-                    outputs.append(str(data["result"]))
+                text = str(value).strip()
+
+                if text and text.lower() != "none":
+                    outputs.append(text)
 
             else:
-                outputs.append(str(data))
+
+                text = str(data).strip()
+
+                if text and text.lower() != "none":
+                    outputs.append(text)
 
         return "\n\n".join(outputs)
