@@ -40,7 +40,7 @@ class DecisionEngine:
             )
 
         # 2. Direct Skill
-        if skill_manager:
+        if skill_manager and await skill_manager.can_handle(query, context):
             return Decision(
                 action="skill",
                 confidence=0.95
