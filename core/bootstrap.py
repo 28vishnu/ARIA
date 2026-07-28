@@ -27,6 +27,7 @@ from brain.decision.decision_engine import DecisionEngine
 from brain.context.context_builder import ContextBuilder
 from brain.state.state_manager import StateManager
 from brain.intent.intent_analyzer import IntentAnalyzer
+from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.event import EventBus
 from brain.context_manager import ContextManager
 from brain.session import SessionManager
@@ -164,6 +165,9 @@ async def bootstrap_application() -> ServiceRegistry:
     intent_analyzer = IntentAnalyzer()
     registry.register("intent_analyzer", intent_analyzer)
 
+    reasoning_engine = ReasoningEngine()
+    registry.register("reasoning_engine", reasoning_engine)
+
     cognitive_core = CognitiveCore(
         planner=planner,
         executor=executor,
@@ -173,7 +177,8 @@ async def bootstrap_application() -> ServiceRegistry:
         intent_analyzer=intent_analyzer,
         context_builder=context_builder,
         decision_engine=decision_engine,
-        memory_conversation_manager=memory_conversation_manager
+        memory_conversation_manager=memory_conversation_manager,
+        reasoning_engine=reasoning_engine
     )
     registry.register("cognitive_core", cognitive_core)
 
