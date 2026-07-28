@@ -35,12 +35,20 @@ class AgentManager:
             score = await agent.can_handle(query, context)
 
             logger.info(
-                "[AgentManager] %s score=%.2f",
+                "[AgentManager] %s score=%.2f (priority=%d)",
                 agent.name,
-                score
+                score,
+                getattr(agent, "priority", 0)
             )
 
-            if score > best_score:
+            if (
+                score > best_score or
+                (
+                    score == best_score and
+                    best_agent is not None and
+                    getattr(agent, "priority", 0) > getattr(best_agent, "priority", 0)
+                )
+            ):
                 best_score = score
                 best_agent = agent
 
