@@ -87,32 +87,56 @@ class CognitiveCore:
                 reasoning = await self.reasoning_engine.reason(ctx)
                 ctx["reasoning"] = reasoning
 
-            if reasoning and reasoning.workflow:
+            if reasoning:
 
                 results = []
 
-                for agent in reasoning.workflow:
+                task_workflows = reasoning.metadata.get(
+                    "task_workflows",
+                    []
+                )
 
-                    logger.info(
-                        "[CognitiveCore] Executing agent: %s",
-                        agent.name
-                    )
+                if task_workflows:
 
-                    result = await agent.execute(
-                        query,
-                        ctx
-                    )
+                    for task, workflow in task_workflows:
 
-                    # Format the agent response
-                    if result and getattr(result, "data", None):
-                        formatted = self.response_formatter.format(result.data)
-                        result.data = {
-                            "response": formatted
-                        }
+                        logger.info(
+                            "[Task] %s -> %s",
+                            task.description,
+                            task.agent
+                        )
 
-                    results.append(result)
+                        for agent in workflow:
 
-                    ctx["agent_result"] = result
+                            logger.info(
+                                "[CognitiveCore] Executing agent: %s",
+                                agent.name
+                            )
+
+                            result = await agent.execute(
+                                task.description,
+                                ctx
+                            )
+
+                            task.completed = True
+                            task.result = result
+
+                            results.append(result)
+
+                            ctx["agent_result"] = result
+
+                elif reasoning.workflow:
+
+                    for agent in reasoning.workflow:
+
+                        result = await agent.execute(
+                            query,
+                            ctx
+                        )
+
+                        results.append(result)
+
+                        ctx["agent_result"] = result
 
                 agent_result = results[-1] if results else None
 
