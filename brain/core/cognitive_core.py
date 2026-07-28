@@ -140,7 +140,14 @@ class CognitiveCore:
 
                 elif reasoning.workflow:
 
+                    results = []
+
                     for agent in reasoning.workflow:
+
+                        logger.info(
+                            "[CognitiveCore] Executing agent: %s",
+                            agent.name
+                        )
 
                         result = await agent.execute(
                             query,
@@ -150,6 +157,15 @@ class CognitiveCore:
                         results.append(result)
 
                         ctx["agent_result"] = result
+
+                    agent_result = results[-1] if results else None
+
+                    if results:
+                        merged = self.response_formatter.merge(results)
+
+                        agent_result.data = {
+                            "response": merged
+                        }
 
                 agent_result = results[-1] if results else None
 
