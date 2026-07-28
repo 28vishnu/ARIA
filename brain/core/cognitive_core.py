@@ -87,7 +87,7 @@ class CognitiveCore:
 
             if reasoning and reasoning.workflow:
 
-                last_result = None
+                results = []
 
                 for agent in reasoning.workflow:
 
@@ -96,21 +96,25 @@ class CognitiveCore:
                         agent.name
                     )
 
-                    last_result = await agent.execute(
+                    result = await agent.execute(
                         query,
                         ctx
                     )
 
                     # Format the agent response
-                    if last_result and getattr(last_result, "data", None):
-                        formatted = self.response_formatter.format(last_result.data)
-                        last_result.data = {
+                    if result and getattr(result, "data", None):
+                        formatted = self.response_formatter.format(result.data)
+                        result.data = {
                             "response": formatted
                         }
 
-                    ctx["agent_result"] = last_result
+                    results.append(result)
 
-                agent_result = last_result
+                    ctx["agent_result"] = result
+
+                agent_result = results[-1] if results else None
+
+                ctx["agent_results"] = results
 
             # 4. Decision Engine
             decision = None
