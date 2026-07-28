@@ -65,6 +65,11 @@ class PersonalityEngine:
 
             reply = ConversationStyle.apply(reply)
             reply = ConversationStyle.follow_up(reply, user_text)
+
+            logger.info(
+                "[Personality] Reply before post_process: %r",
+                reply
+            )
             return self._post_process(reply)
 
         except Exception as e:
@@ -185,21 +190,17 @@ class PersonalityEngine:
         return "Done."
 
     def _post_process(self, reply: str) -> str:
-        """Final cleanup before sending the response."""
 
-        reply = reply.strip()
+        if reply is None:
+            return "I couldn't generate a response, Sir."
 
-        # Remove excessive blank lines
-        while "\n\n\n" in reply:
-            reply = reply.replace("\n\n\n", "\n\n")
+        reply = str(reply).strip()
 
-        # Remove accidental repeated punctuation
-        reply = reply.replace("..", ".")
-        reply = reply.replace("!!", "!")
-        reply = reply.replace("??", "?")
+        if not reply:
+            return "I couldn't generate a response, Sir."
 
-        # Add punctuation only for single-line replies
-        if "\n" not in reply and reply and reply[-1] not in ".!?":
-            reply += "."
+        if "\n" not in reply:
+            if reply[-1] not in ".!?":
+                reply += "."
 
         return reply
