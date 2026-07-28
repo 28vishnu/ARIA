@@ -29,10 +29,13 @@ class DocumentIntelligence:
         # Step 1: Extract text
         text = await self.extract_text(file_path)
 
-        # Step 2: Summarise
+        # Step 2: Chunk text
+        chunks = self.chunk_text(text)
+
+        # Step 3: Summarise
         summary = await self.summarize(text)
 
-        # Step 3: Store (if memory is available)
+        # Step 4: Store (if memory is available)
         if self.memory_engine:
             try:
                 await self.store(
@@ -49,7 +52,8 @@ class DocumentIntelligence:
         return {
             "success": True,
             "text": text,
-            "summary": summary
+            "summary": summary,
+            "chunks": chunks
         }
 
     async def extract_text(
@@ -80,6 +84,30 @@ class DocumentIntelligence:
             return "\n".join(pages)
 
         raise ValueError(f"Unsupported file type: {suffix}")
+
+    def chunk_text(
+        self,
+        text: str,
+        chunk_size: int = 1000,
+        overlap: int = 200
+    ):
+        """
+        Split text into overlapping chunks.
+        """
+
+        chunks = []
+
+        start = 0
+
+        while start < len(text):
+
+            end = start + chunk_size
+
+            chunks.append(text[start:end])
+
+            start += chunk_size - overlap
+
+        return chunks
 
     async def summarize(
         self,
