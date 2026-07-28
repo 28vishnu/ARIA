@@ -53,4 +53,20 @@ class ConversationStyle:
         ]).format(reply)
 
     @staticmethod
-    def follow_up(reply: str, query:
+    def follow_up(reply: str, query: str) -> str:
+
+        q = query.lower()
+
+        if any(x in q for x in ["email", "letter", "application"]):
+            return reply + "\n\nWould you like me to tailor it for a specific person?"
+
+        if any(x in q for x in ["python", "code", "program"]):
+            return reply + "\n\nNeed me to explain or improve the code?"
+
+        if any(x in q for x in ["math", "solve", "equation", "calculate"]):
+            return reply + "\n\nI can also show the working if you'd like."
+
+        if any(x in q for x in ["plan", "schedule"]):
+            return reply + "\n\nI can expand this into a complete plan."
+
+        return reply
