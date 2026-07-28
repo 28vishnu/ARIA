@@ -62,6 +62,28 @@ class MathAgent(BaseAgent):
             }
         ]
 
+        tool_manager = context["app_state"].registry.get("tool_manager")
+
+        if tool_manager:
+            tool = tool_manager.get("calculator")
+
+            if tool:
+                try:
+                    result = await tool.execute(query)
+
+                    return AgentResponse(
+                        success=True,
+                        confidence=1.0,
+                        agent=self.name,
+                        data={
+                            "response": str(result),
+                            "tool_used": "calculator"
+                        }
+                    )
+
+                except Exception:
+                    pass
+
         llm_router = context["app_state"].registry.get("llm_router")
 
         answer = await llm_router.chat(messages)
