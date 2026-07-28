@@ -361,7 +361,16 @@ class DocumentIntelligence:
             }
         )
 
-        return results.get("documents", [[]])[0]
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+
+        return [
+            {
+                "text": doc,
+                "page": meta.get("page", "?")
+            }
+            for doc, meta in zip(documents, metadatas)
+        ]
 
     async def hybrid_search(
         self,
@@ -391,11 +400,13 @@ class DocumentIntelligence:
 
         for chunk in semantic + keyword:
 
-            if chunk not in seen:
+            text = chunk["text"] if isinstance(chunk, dict) else chunk
+
+            if text not in seen:
 
                 merged.append(chunk)
 
-                seen.add(chunk)
+                seen.add(text)
 
         return merged[:limit]
 
@@ -444,7 +455,15 @@ class DocumentIntelligence:
                 if word in text.lower()
             )
 
-            scored.append((score, text))
+            scored.append(
+                (
+                    score,
+                    {
+                        "text": text,
+                        "page": chunk.get("page", "?")
+                    }
+                )
+            )
 
         scored.sort(
             reverse=True,
@@ -452,8 +471,8 @@ class DocumentIntelligence:
         )
 
         return [
-            text
-            for score, text in scored[:limit]
+            chunk
+            for score, chunk in scored[:limit]
             if score > 0
         ]
 
@@ -482,7 +501,10 @@ class DocumentIntelligence:
                 "Please try asking about another topic from the document."
             )
 
-        context = "\n\n".join(chunks)
+        context = "\n\n".join(
+            chunk["text"] if isinstance(chunk, dict) else chunk
+            for chunk in chunks
+        )
 
         messages = [
             {
