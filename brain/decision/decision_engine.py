@@ -14,7 +14,7 @@ class Decision:
 
 class DecisionEngine:
     """
-    Chooses how ARIA should respond to a user request.
+    Chooses how ARIA should respond to a user request based on unified context.
 
     It DOES NOT execute anything.
     It only decides what should happen next.
@@ -22,12 +22,14 @@ class DecisionEngine:
 
     async def decide(
         self,
-        query: str,
         context: Dict[str, Any],
-        memory=None,
         skill_manager=None,
         planner=None
     ) -> Decision:
+
+        query = context.get("query", "")
+        memory = context.get("memory", [])
+        state = context.get("state", {})
 
         # 1. Memory
         if memory:
