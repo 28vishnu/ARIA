@@ -69,7 +69,10 @@ class MathAgent(BaseAgent):
 
             if tool:
                 try:
-                    result = await tool.execute(query)
+                    result = await tool.execute(
+                        query,
+                        context
+                    )
 
                     return AgentResponse(
                         success=True,
