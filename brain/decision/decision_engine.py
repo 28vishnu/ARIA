@@ -56,7 +56,17 @@ class DecisionEngine:
                 confidence=0.95
             )
 
-        # Check for document-related queries
+        # Active document takes highest priority
+        state = context.get("state", {})
+
+        if state.get("active_document"):
+
+            return Decision(
+                action="document",
+                confidence=0.98
+            )
+
+        # Otherwise use keyword detection
         document_keywords = [
             "document",
             "pdf",
@@ -70,6 +80,7 @@ class DecisionEngine:
         ]
 
         if any(keyword in query.lower() for keyword in document_keywords):
+
             return Decision(
                 action="document",
                 confidence=0.90
