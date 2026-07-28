@@ -34,13 +34,15 @@ class ReasoningEngine:
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
-        Analyse the context and determine the primary action.
+        Analyse the context and determine the primary action and agent workflow.
         """
 
         intent = context.get("intent")
+        intent_name = intent.name if intent else None
+
         logger.info(
             "[Reasoning] Intent=%s Query=%s",
-            intent.name if intent else None,
+            intent_name,
             context.get("query")
         )
         query = context.get("query", "").lower().strip()
@@ -50,30 +52,48 @@ class ReasoningEngine:
             self.agent_manager is not None
         )
 
-        selected_agent = None
-        score = 0.0
-
         workflow = AgentWorkflow()
 
+        # Multi-agent workflow construction based on intent
         if self.agent_manager:
-            selected_agent, score = await self.agent_manager.select_agent(
-                query,
-                context
-            )
-            logger.info(
-                "[Reasoning] Agent selection finished."
-            )
+            if intent_name == "planner":
+                planning_agent = self.agent_manager.get("planning")
+                writing_agent = self.agent_manager.get("writing")
+                if planning_agent:
+                    workflow.add(planning_agent)
+                if writing_agent:
+                    workflow.add(writing_agent)
 
-        if selected_agent:
-            logger.info(
-                "[Reasoning] Selected agent: %s (%.2f)",
-                selected_agent.name,
-                score
-            )
-            workflow.add(selected_agent)
+            elif intent_name == "coding":
+                code_agent = self.agent_manager.get("code")
+                if code_agent:
+                    workflow.add(code_agent)
+
+            elif intent_name == "chat":
+                research_agent = self.agent_manager.get("research")
+                if research_agent:
+                    workflow.add(research_agent)
+
+            elif intent_name and intent_name.startswith("memory"):
+                memory_agent = self.agent_manager.get("memory")
+                if memory_agent:
+                    workflow.add(memory_agent)
+
+            else:
+                best_agent, score = await self.agent_manager.select_agent(
+                    query,
+                    context
+                )
+                if best_agent:
+                    logger.info(
+                        "[Reasoning] Fallback selected agent: %s (%.2f)",
+                        best_agent.name,
+                        score
+                    )
+                    workflow.add(best_agent)
 
         # Greeting
-        if intent and intent.name == "greeting":
+        if intent_name == "greeting":
             return ReasoningResult(
                 primary_action="chat",
                 secondary_actions=[],
@@ -84,30 +104,32 @@ class ReasoningEngine:
                     "execution_plan": [
                         "chat"
                     ]
-                }
+                },
+                workflow=workflow
             )
 
         # Memory
-        if intent and intent.name.startswith("memory"):
+        if intent_name and intent_name.startswith("memory"):
             return ReasoningResult(
                 primary_action="memory_conversation",
                 secondary_actions=[],
-                confidence=intent.confidence,
+                confidence=intent.confidence if intent else 0.9,
                 reasoning="Memory operation detected.",
                 metadata={
                     "goal": "memory_operation",
                     "execution_plan": [
                         "memory_conversation"
                     ]
-                }
+                },
+                workflow=workflow
             )
 
         # Planning
-        if intent and intent.name == "planner":
+        if intent_name == "planner":
             return ReasoningResult(
                 primary_action="planner",
                 secondary_actions=["chat"],
-                confidence=intent.confidence,
+                confidence=intent.confidence if intent else 0.9,
                 reasoning="Planning request detected.",
                 metadata={
                     "goal": "planning",
