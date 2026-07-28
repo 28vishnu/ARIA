@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+from pypdf import PdfReader
 
 
 class DocumentIntelligence:
@@ -35,8 +36,7 @@ class DocumentIntelligence:
         file_path: str
     ) -> str:
         """
-        Extract text from TXT files.
-        PDF and DOCX support will be added next.
+        Extract text from TXT and PDF files.
         """
 
         suffix = Path(file_path).suffix.lower()
@@ -44,6 +44,19 @@ class DocumentIntelligence:
         if suffix == ".txt":
             with open(file_path, "r", encoding="utf-8") as f:
                 return f.read()
+
+        if suffix == ".pdf":
+            reader = PdfReader(file_path)
+
+            pages = []
+
+            for page in reader.pages:
+                text = page.extract_text()
+
+                if text:
+                    pages.append(text)
+
+            return "\n".join(pages)
 
         raise ValueError(f"Unsupported file type: {suffix}")
 
