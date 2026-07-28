@@ -35,7 +35,25 @@ class CognitiveCore:
     ) -> SystemResponse:
         """Orchestrates the core request-processing flow using existing skill routing, planning, and execution."""
         try:
-            ctx = base_context or {}
+            ctx = {}
+
+            if self.context_builder:
+                if hasattr(self.context_builder, "build") and asyncio.iscoroutinefunction(self.context_builder.build):
+                    ctx = await self.context_builder.build(
+                        query=query,
+                        session_id=session_id,
+                        user_id=user_id,
+                        base_context=base_context
+                    )
+                else:
+                    ctx = self.context_builder.build(
+                        query=query,
+                        session_id=session_id,
+                        user_id=user_id,
+                        base_context=base_context
+                    )
+            else:
+                ctx = base_context or {}
 
             # 0. Ask DecisionEngine what to do
             memories = []
