@@ -176,6 +176,11 @@ async def bootstrap_application() -> ServiceRegistry:
 
     agent_manager = AgentManager()
 
+    logger.info(
+        "[DEBUG] AgentManager has get(): %s",
+        hasattr(agent_manager, "get")
+    )
+
     agent_manager.register(CodeAgent())
     agent_manager.register(ResearchAgent())
     agent_manager.register(MathAgent())
