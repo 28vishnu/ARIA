@@ -33,6 +33,8 @@ class BaseAgent(ABC):
 
     version = "1.0.0"
 
+    priority = 0
+
     @abstractmethod
     async def can_handle(
         self,
