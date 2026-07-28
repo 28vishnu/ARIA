@@ -5,9 +5,10 @@ from typing import Any, Dict, Optional
 @dataclass
 class Decision:
     """
-    Represents the action the CognitiveCore should take.
+    Represents the decision made by the DecisionEngine.
     """
     action: str
+    confidence: float = 1.0
     data: Optional[Dict[str, Any]] = None
 
 
@@ -32,22 +33,26 @@ class DecisionEngine:
         if memory:
             return Decision(
                 action="memory",
+                confidence=0.97,
                 data={"memories": memory}
             )
 
         # 2. Direct Skill
         if skill_manager:
             return Decision(
-                action="skill"
+                action="skill",
+                confidence=0.95
             )
 
         # 3. Planning
         if planner:
             return Decision(
-                action="planner"
+                action="planner",
+                confidence=0.85
             )
 
         # 4. Default
         return Decision(
-            action="chat"
+            action="chat",
+            confidence=0.80
         )
