@@ -22,18 +22,32 @@ class DocumentIntelligence:
         session_id: str
     ):
         """
-        Full document processing pipeline.
-
-        Phase 10:
-        - Read document
-        - Extract text
-        - Summarise
-        - Store summary
+        Complete document pipeline.
         """
 
+        # Step 1: Extract text
+        text = await self.extract_text(file_path)
+
+        # Step 2: Summarise
+        summary = await self.summarize(text)
+
+        # Step 3: Store (if memory is available)
+        if self.memory_engine:
+            try:
+                await self.store(
+                    session_id=session_id,
+                    summary=summary,
+                    metadata={
+                        "file_path": file_path
+                    }
+                )
+            except Exception:
+                pass
+
         return {
-            "success": False,
-            "message": "Document pipeline not implemented yet."
+            "success": True,
+            "text": text,
+            "summary": summary
         }
 
     async def extract_text(
