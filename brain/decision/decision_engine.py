@@ -29,32 +29,20 @@ class DecisionEngine:
 
         query = context.get("query", "")
         intent = context.get("intent")
+        reasoning = context.get("reasoning")
 
-        if intent and intent.name == "greeting":
+        # Let the Reasoning Engine decide first
+        if reasoning:
             return Decision(
-                action="chat",
-                confidence=0.99
+                action=reasoning.primary_action,
+                confidence=reasoning.confidence
             )
 
-        # 1. Memory Conversation
-        if intent and intent.name.startswith("memory"):
-            return Decision(
-                action="memory_conversation",
-                confidence=intent.confidence
-            )
-
-        # 2. Direct Skill
+        # Fallback (only if reasoning is unavailable)
         if skill_manager and await skill_manager.can_handle(query, context):
             return Decision(
                 action="skill",
                 confidence=0.95
-            )
-
-        # 3. Planning
-        if intent and intent.name == "planner":
-            return Decision(
-                action="planner",
-                confidence=intent.confidence
             )
 
         # 4. Default
