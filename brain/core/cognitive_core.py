@@ -37,11 +37,30 @@ class CognitiveCore:
         try:
             ctx = base_context or {}
 
-            # 0. Retrieve Memories and add to context (non-blocking short-circuit for future decision engine)
+            # 0. Ask DecisionEngine what to do
+            memories = []
+
             if self.memory_router:
                 memories = await self.memory_router.get_relevant_memories(query)
-                if memories:
-                    ctx["retrieved_memories"] = memories
+
+            decision = None
+
+            if self.decision_engine:
+                decision = await self.decision_engine.decide(
+                    query=query,
+                    context=ctx,
+                    memory=memories,
+                    skill_manager=self.skill_manager,
+                    planner=self.planner
+                )
+
+            if decision and decision.action == "memory":
+                return SystemResponse(
+                    success=True,
+                    confidence=decision.confidence,
+                    data=decision.data,
+                    source="memory"
+                )
 
             # 1. Try SkillManager first (Fast Path / Direct Execution)
             if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
