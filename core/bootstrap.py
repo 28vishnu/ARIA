@@ -9,7 +9,7 @@ from core.configuration import load_config, AppConfig
 from core.dependency_injection import ServiceRegistry
 from core.health import HealthChecker
 
-from memory_engine import MemoryEngine
+from brain.memory.memory_engine import MemoryEngine
 from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.memory.working_memory import WorkingMemory
 from brain.memory.memory_router import MemoryRouter
