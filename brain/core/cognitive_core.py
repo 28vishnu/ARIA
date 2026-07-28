@@ -109,12 +109,10 @@ class CognitiveCore:
                 state
             )
 
-            state = ctx.get("state", {})
-
             if state.get("active_document"):
                 logger.info("[Document] Active document detected.")
 
-            if reasoning:
+            if reasoning and not ctx.get("state", {}).get("active_document"):
 
                 results = []
 
@@ -196,6 +194,10 @@ class CognitiveCore:
                 agent_result = results[-1] if results else None
 
                 ctx["agent_results"] = results
+            elif reasoning and ctx.get("state", {}).get("active_document"):
+                logger.info(
+                    "[CognitiveCore] Skipping agent workflow because document is active."
+                )
 
             # 4. Decision Engine
             decision = None
