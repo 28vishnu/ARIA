@@ -50,6 +50,11 @@ class DocumentIntelligence:
         # Step 3: Summarise
         summary = await self.summarize(full_text)
 
+        document_metadata = {
+            "file_path": file_path,
+            "document_name": Path(file_path).name
+        }
+
         # Step 4: Store (if memory is available)
         if self.memory_engine:
             try:
@@ -57,23 +62,17 @@ class DocumentIntelligence:
                     session_id=session_id,
                     summary=summary,
                     document_text=full_text,
-                    metadata={
-                        "file_path": file_path
-                    }
+                    metadata=document_metadata
                 )
                 await self.store_chunks(
                     session_id=session_id,
                     chunks=chunks,
-                    metadata={
-                        "file_path": file_path
-                    }
+                    metadata=document_metadata
                 )
                 await self.store_vectors(
                     session_id=session_id,
                     chunks=chunks,
-                    metadata={
-                        "file_path": file_path
-                    }
+                    metadata=document_metadata
                 )
             except Exception:
                 pass
@@ -224,21 +223,23 @@ class DocumentIntelligence:
             return
 
         now = datetime.now(timezone.utc).isoformat()
+        metadata = metadata or {}
 
         await self.memory_engine.memory_col.update_one(
             {
-                "key": f"document_{session_id}"
+                "key": f"document_{session_id}_{metadata.get('document_name', 'default')}"
             },
             {
                 "$set": {
-                    "key": f"document_{session_id}",
+                    "key": f"document_{session_id}_{metadata.get('document_name', 'default')}",
                     "value": summary,
                     "document_text": document_text,
+                    "document_name": metadata.get("document_name"),
                     "category": "document",
                     "memory_type": "document_summary",
                     "importance": "high",
                     "confidence": 1.0,
-                    "metadata": metadata or {},
+                    "metadata": metadata,
                     "updated_at": now
                 },
                 "$setOnInsert": {
@@ -263,24 +264,27 @@ class DocumentIntelligence:
             return
 
         now = datetime.now(timezone.utc).isoformat()
+        metadata = metadata or {}
+        doc_name = metadata.get("document_name", "default")
 
         for index, chunk in enumerate(chunks):
 
             await self.memory_engine.memory_col.update_one(
                 {
-                    "key": f"document_chunk_{session_id}_{index}"
+                    "key": f"document_chunk_{session_id}_{doc_name}_{index}"
                 },
                 {
                     "$set": {
-                        "key": f"document_chunk_{session_id}_{index}",
+                        "key": f"document_chunk_{session_id}_{doc_name}_{index}",
                         "value": chunk["text"],
                         "page": chunk["page"],
+                        "document_name": metadata.get("document_name"),
                         "category": "document_chunk",
                         "memory_type": "document_chunk",
                         "chunk_index": index,
                         "importance": "medium",
                         "confidence": 1.0,
-                        "metadata": metadata or {},
+                        "metadata": metadata,
                         "updated_at": now
                     },
                     "$setOnInsert": {
@@ -309,18 +313,22 @@ class DocumentIntelligence:
             convert_to_numpy=True
         ).tolist()
 
+        metadata = metadata or {}
+        document_id = metadata.get("document_name", "default")
+
         ids = [
-            f"{session_id}_{i}"
+            f"{session_id}_{document_id}_{i}"
             for i in range(len(chunks))
         ]
 
         metadatas = []
 
         for i in range(len(chunks)):
-            data = dict(metadata or {})
+            data = dict(metadata)
             data["session_id"] = session_id
             data["chunk_index"] = i
             data["page"] = chunks[i]["page"]
+            data["document_name"] = metadata.get("document_name")
             metadatas.append(data)
 
         self.vector_db.add(
@@ -367,7 +375,8 @@ class DocumentIntelligence:
         return [
             {
                 "text": doc,
-                "page": meta.get("page", "?")
+                "page": meta.get("page", "?"),
+                "document": meta.get("document_name", "Unknown")
             }
             for doc, meta in zip(documents, metadatas)
         ]
@@ -460,7 +469,8 @@ class DocumentIntelligence:
                     score,
                     {
                         "text": text,
-                        "page": chunk.get("page", "?")
+                        "page": chunk.get("page", "?"),
+                        "document": chunk.get("document_name", "Unknown")
                     }
                 )
             )
@@ -502,7 +512,7 @@ class DocumentIntelligence:
             )
 
         context = "\n\n".join(
-            f"[Page {chunk['page']}]\n{chunk['text']}"
+            f"[Document: {chunk['document']} | Page {chunk['page']}]\n{chunk['text']}"
             for chunk in chunks
         )
 
@@ -511,11 +521,11 @@ class DocumentIntelligence:
                 "role": "system",
                 "content": (
                     "You are ARIA's document assistant.\n"
-                    "Answer ONLY using the provided document context.\n"
-                    "Whenever possible, mention the page number.\n"
+                    "Answer ONLY using the supplied document context.\n"
+                    "If multiple documents are referenced, clearly mention which document and page the information came from.\n"
                     "Example:\n"
-                    "'According to Page 7...'\n"
-                    "If the answer isn't in the document, say:\n"
+                    "'According to Italy_Guide.pdf, Page 4...'\n"
+                    "If the answer is absent, reply:\n"
                     "'I couldn't find that information in your uploaded documents.'"
                 )
             },
@@ -537,7 +547,7 @@ Question:
 
         if not answer or not answer.strip():
             return (
-                "I couldn't find that information in your uploaded document."
+                "I couldn't find that information in your uploaded documents."
             )
 
         return answer
