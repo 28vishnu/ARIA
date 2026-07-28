@@ -24,6 +24,7 @@ from brain.planner import Planner
 from brain.executor import Executor
 from brain.decision.decision_engine import DecisionEngine
 from brain.context.context_builder import ContextBuilder
+from brain.state.state_manager import StateManager
 from brain.event import EventBus
 from brain.context_manager import ContextManager
 from brain.session import SessionManager
@@ -149,12 +150,15 @@ async def bootstrap_application() -> ServiceRegistry:
     context_builder = ContextBuilder()
     registry.register("context_builder", context_builder)
 
+    state_manager = StateManager()
+    registry.register("state_manager", state_manager)
+
     cognitive_core = CognitiveCore(
         planner=planner,
         executor=executor,
         skill_manager=skill_manager,
         memory_router=memory_router,
-        state_manager=None,      # temporary
+        state_manager=state_manager,
         intent_analyzer=None,    # temporary
         context_builder=context_builder,
         decision_engine=decision_engine
