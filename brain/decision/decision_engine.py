@@ -48,26 +48,48 @@ class DecisionEngine:
             "chapter",
             "page",
             "summary",
-            "summarize",
-            "fees",
-            "tuition",
-            "according to",
-            "this document",
             "uploaded",
+            "tuition",
+            "fees",
             "scholarship",
             "course"
         ]
 
-        if (
-            state.get("active_document")
-            and any(word in query_lower for word in document_keywords)
-        ):
-            logger.info("[Decision] Routing to DOCUMENT intelligence.")
+        follow_up_words = [
+            "it",
+            "this",
+            "that",
+            "them",
+            "these",
+            "those",
+            "inr",
+            "rupees",
+            "convert",
+            "compare",
+            "why",
+            "how",
+            "which",
+            "more",
+            "explain",
+            "cheapest",
+            "cost",
+            "living",
+            "monthly",
+            "yearly"
+        ]
 
-            return Decision(
-                action="document",
-                confidence=1.0
-            )
+        if state.get("active_document"):
+
+            if (
+                any(k in query_lower for k in document_keywords)
+                or any(k in query_lower for k in follow_up_words)
+            ):
+                logger.info("[Decision] Routing to DOCUMENT intelligence.")
+
+                return Decision(
+                    action="document",
+                    confidence=1.0
+                )
 
         intent = context.get("intent")
         reasoning = context.get("reasoning")
