@@ -291,31 +291,14 @@ class CognitiveCore:
                 success
                 and reasoning
                 and reasoning.workflow
+                and agent_result is not None
             ):
-
-                if "agent_results" in ctx:
-
-                    combined = self.response_fusion.combine(
-                        ctx["agent_results"]
-                    )
-
-                    return SystemResponse(
-                        success=True,
-                        confidence=1.0,
-                        source="agent",
-                        data={
-                            "response": combined
-                        }
-                    )
-
-                elif "1" in final_data:
-
-                    return SystemResponse(
-                        success=True,
-                        confidence=1.0,
-                        source="agent",
-                        data=final_data["1"]
-                    )
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="agent",
+                    data=agent_result.data
+                )
 
             return SystemResponse(
                 success=success,
