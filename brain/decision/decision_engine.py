@@ -28,8 +28,6 @@ class DecisionEngine:
     ) -> Decision:
 
         query = context.get("query", "")
-        memory = context.get("memory", [])
-        state = context.get("state", {})
         intent = context.get("intent")
 
         if intent and intent.name == "greeting":
