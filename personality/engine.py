@@ -157,22 +157,34 @@ class PersonalityEngine:
         return "Execution completed successfully, Sir. " + " | ".join(summaries)
 
     def _format_fallback(self, data: Any) -> str:
+
         if isinstance(data, dict):
+
+            # Highest priority
+            if "response" in data:
+                return str(data["response"])
+
             if "message" in data:
                 return str(data["message"])
-            if data:
-                formatted_pairs = [f"{k}: {v}" for k, v in data.items() if v]
-                if formatted_pairs:
-                    return "Here is the information retrieved, Sir:\n" + "\n".join(formatted_pairs)
 
-        if isinstance(data, str) and data.strip():
+            if "result" in data:
+                return str(data["result"])
+
+            if "output" in data:
+                return f"Python Output\n\n{data['output']}"
+
+            # Last resort
+            return "\n".join(str(v) for v in data.values() if v)
+
+        if isinstance(data, str):
             return data
 
-        return "Task executed successfully, Sir."
+        return "Done."
 
     def _post_process(self, reply: str) -> str:
         """Ensures consistent formatting and punctuation."""
         reply = reply.strip()
-        if reply and reply[-1] not in ".!?":
-            reply += "."
+        if "\n" not in reply:
+            if reply and reply[-1] not in ".!?":
+                reply += "."
         return reply
