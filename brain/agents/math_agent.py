@@ -1,6 +1,7 @@
 from typing import Dict, Any
 
 from brain.agents.base_agent import BaseAgent, AgentResponse
+from brain.tools.tool_manager import ToolManager
 
 
 class MathAgent(BaseAgent):
