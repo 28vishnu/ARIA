@@ -183,6 +183,22 @@ class CognitiveCore:
                     last_success=success
                 )
 
+            # Execute any secondary actions
+            if success and secondary_actions:
+                logger.info(
+                    "[Workflow] Executing secondary actions: %s",
+                    secondary_actions
+                )
+
+                for action in secondary_actions:
+
+                    if action == "chat":
+                        if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+                            chat_res = await self.skill_manager.route_and_execute(query, ctx)
+
+                            if chat_res and chat_res.success:
+                                final_data["chat"] = chat_res.data
+
             return SystemResponse(
                 success=success,
                 confidence=getattr(plan, "confidence", 0.85),
