@@ -43,14 +43,19 @@ class ReasoningEngine:
         query = context.get("query", "").lower().strip()
 
         selected_agent = None
+        score = 0.0
 
         if self.agent_manager:
-            selected_agent = await self.agent_manager.select_agent(query)
+            selected_agent, score = await self.agent_manager.select_agent(
+                query,
+                context
+            )
 
         if selected_agent:
             logger.info(
-                "[Reasoning] Selected agent: %s",
-                selected_agent.name
+                "[Reasoning] Selected agent: %s (%.2f)",
+                selected_agent.name,
+                score
             )
 
         # Greeting
