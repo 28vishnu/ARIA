@@ -65,9 +65,7 @@ class CognitiveCore:
             decision = None
             if self.decision_engine:
                 decision = await self.decision_engine.decide(
-                    query=query,
                     context=ctx,
-                    memory=memories,
                     skill_manager=self.skill_manager,
                     planner=self.planner
                 )
