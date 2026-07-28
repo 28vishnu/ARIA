@@ -176,7 +176,9 @@ async def bootstrap_application() -> ServiceRegistry:
         agent_manager
     )
 
-    reasoning_engine = ReasoningEngine()
+    reasoning_engine = ReasoningEngine(
+        agent_manager=agent_manager
+    )
     registry.register("reasoning_engine", reasoning_engine)
 
     cognitive_core = CognitiveCore(
