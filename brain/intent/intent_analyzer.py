@@ -61,6 +61,18 @@ class IntentAnalyzer:
         ):
             return Intent("memory_recall", 0.97)
 
+        # Python Execution
+        if any(word in q for word in (
+            "run python",
+            "execute python",
+            "python code",
+            "run code",
+            "execute code",
+            "python script",
+            "print("
+        )):
+            return Intent("python", 0.96)
+
         # Planner
         if any(word in q for word in (
             "create",
