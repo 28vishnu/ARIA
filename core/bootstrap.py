@@ -8,6 +8,7 @@ from core.configuration import load_config
 from core.dependency_injection import ServiceRegistry
 
 from brain.memory.memory_engine import MemoryEngine
+from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.document.document_intelligence import DocumentIntelligence
 from brain.agents.agent_manager import AgentManager
 from brain.session import SessionManager
@@ -92,6 +93,30 @@ async def bootstrap_application() -> ServiceRegistry:
 
         logger.warning(
             "[BOOT TEST] MongoDB disabled because MONGODB_URI is empty"
+        )
+
+    # ---------------------------------------------------------
+    # Memory Conversation Manager
+    # ---------------------------------------------------------
+
+    memory_conversation_manager = None
+
+    if memory_engine is not None:
+        memory_conversation_manager = MemoryConversationManager(
+            memory_engine=memory_engine
+        )
+
+        registry.register(
+            "memory_conversation_manager",
+            memory_conversation_manager
+        )
+
+        logger.info(
+            "[BOOT TEST] MemoryConversationManager configured"
+        )
+    else:
+        logger.warning(
+            "[BOOT TEST] MemoryConversationManager disabled because MemoryEngine is unavailable"
         )
 
     # ---------------------------------------------------------
@@ -290,6 +315,7 @@ async def bootstrap_application() -> ServiceRegistry:
         intent_analyzer=intent_analyzer,
         context_builder=context_builder,
         decision_engine=decision_engine,
+        memory_conversation_manager=memory_conversation_manager,
         reasoning_engine=reasoning_engine
     )
 
