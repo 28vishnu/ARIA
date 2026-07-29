@@ -41,6 +41,17 @@ class DecisionEngine:
         state = context.get("state", {})
         query_lower = query.lower()
 
+        if (
+            state.get("active_document")
+            and state.get("last_document_question")
+        ):
+            logger.info("[Decision] Routing active follow-up to DOCUMENT intelligence.")
+
+            return Decision(
+                action="document",
+                confidence=0.99
+            )
+
         document_keywords = [
             "document",
             "pdf",
@@ -52,7 +63,21 @@ class DecisionEngine:
             "tuition",
             "fees",
             "scholarship",
-            "course"
+            "course",
+            "this",
+            "that",
+            "those",
+            "it",
+            "them",
+            "more",
+            "continue",
+            "next",
+            "explain",
+            "why",
+            "how",
+            "compare",
+            "in inr",
+            "convert"
         ]
 
         follow_up_words = [
