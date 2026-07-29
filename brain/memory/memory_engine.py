@@ -739,47 +739,50 @@ class MemoryEngine:
 
     async def get_relevant_memories(
         self,
-        query: str
+        query: str,
+        limit: int = 10
     ) -> list[dict]:
+        """
+        Retrieve memories relevant to natural-language queries.
+
+        Retrieval strategy:
+        1. Exact high-confidence memory patterns.
+        2. Keyword scoring across stored personal memories.
+        3. LLM-assisted semantic ranking when available.
+        """
 
         if self.memory_col is None:
             return []
 
         try:
-
             lower = query.lower().strip()
+
+            # =====================================================
+            # LEVEL 1 — EXACT / HIGH-CONFIDENCE LOOKUPS
+            # =====================================================
 
             filter_query = None
 
-            # Identity
             if re.search(
                 r"\b(?:what(?:'s| is) my name|who am i)\b",
                 lower
             ):
-                filter_query = {
-                    "key": "name"
-                }
+                filter_query = {"key": "name"}
 
             elif "preferred name" in lower:
-                filter_query = {
-                    "key": "preferred_name"
-                }
+                filter_query = {"key": "preferred_name"}
 
-            # Birthday
             elif any(
                 token in lower
                 for token in (
                     "birthday",
                     "date of birth",
                     "dob",
-                    "born"
+                    "when was i born"
                 )
             ):
-                filter_query = {
-                    "key": "birthday"
-                }
+                filter_query = {"key": "birthday"}
 
-            # Study
             elif any(
                 token in lower
                 for token in (
@@ -788,11 +791,8 @@ class MemoryEngine:
                     "field of study"
                 )
             ):
-                filter_query = {
-                    "key": "field_of_study"
-                }
+                filter_query = {"key": "field_of_study"}
 
-            # Likes
             elif any(
                 token in lower
                 for token in (
@@ -801,81 +801,557 @@ class MemoryEngine:
                     "my likes"
                 )
             ):
-                filter_query = {
-                    "key": "user_likes"
-                }
+                filter_query = {"key": "user_likes"}
 
-            # Favorites
-            else:
+            # =====================================================
+            # EXACT FAVORITE LOOKUP
+            # =====================================================
 
-                match = re.search(
-                    r"(?:what(?:'s| is)|remember|recall)\s+(?:my\s+)?([a-zA-Z0-9\s]+)",
+            if filter_query is None:
+
+                favorite_match = re.search(
+                    r"(?:what(?:'s| is)|remember|recall)\s+"
+                    r"(?:my\s+)?(?:favorite|favourite)\s+"
+                    r"([a-zA-Z0-9\s]+)",
                     lower
                 )
 
-                if match:
-                    subject = match.group(1).strip()
-                    target_key = self._normalize_key(subject)
-                    filter_query = {"key": target_key}
+                if favorite_match:
+                    subject = favorite_match.group(1).strip()
 
-                elif any(
-                    k in lower
-                    for k in (
-                        "like",
-                        "preference",
-                        "favorite",
-                        "favourite",
-                        "love",
-                        "prefer"
-                    )
-                ):
-                    filter_query = {"category": "preference"}
+                    filter_query = {
+                        "key": self._normalize_key(subject)
+                    }
 
-            if filter_query is None:
-                return []
+            # =====================================================
+            # RETURN EXACT RESULTS IMMEDIATELY
+            # =====================================================
 
-            cursor = self.memory_col.find(filter_query).limit(10)
-            memories = await cursor.to_list(length=10)
+            if filter_query is not None:
 
-            if not memories:
-                return []
+                cursor = self.memory_col.find(
+                    filter_query
+                ).limit(limit)
 
-            now_iso = datetime.now(timezone.utc).isoformat()
-            matched_ids = [m.get("_id") for m in memories if m.get("_id")]
-
-            if matched_ids:
-                await self.memory_col.update_many(
-                    {"_id": {"$in": matched_ids}},
-                    {"$set": {"last_used": now_iso}}
+                memories = await cursor.to_list(
+                    length=limit
                 )
 
-            structured_results = []
+                if memories:
 
-            for m in memories:
+                    now_iso = datetime.now(
+                        timezone.utc
+                    ).isoformat()
 
-                key = m.get("key")
-                value = m.get("value")
+                    matched_ids = [
+                        m["_id"]
+                        for m in memories
+                        if m.get("_id")
+                    ]
+
+                    if matched_ids:
+                        await self.memory_col.update_many(
+                            {
+                                "_id": {
+                                    "$in": matched_ids
+                                }
+                            },
+                            {
+                                "$set": {
+                                    "last_used": now_iso
+                                }
+                            }
+                        )
+
+                    return [
+                        {
+                            "key": m.get("key"),
+                            "value": m.get("value"),
+                            "category": m.get(
+                                "category",
+                                "general"
+                            ),
+                            "memory_type": m.get(
+                                "memory_type",
+                                "fact"
+                            ),
+                            "importance": m.get(
+                                "importance",
+                                "medium"
+                            ),
+                            "confidence": m.get(
+                                "confidence",
+                                1.0
+                            ),
+                            "retrieval_score": 1.0,
+                            "updated_at": m.get(
+                                "updated_at"
+                            )
+                        }
+                        for m in memories
+                        if m.get("key") and m.get("value")
+                    ]
+
+            # =====================================================
+            # LEVEL 2 — LOAD PERSONAL MEMORIES
+            # =====================================================
+
+            cursor = self.memory_col.find({
+                "category": {
+                    "$nin": [
+                        "document",
+                        "document_chunk"
+                    ]
+                }
+            })
+
+            all_memories = await cursor.to_list(
+                length=200
+            )
+
+            if not all_memories:
+                return []
+
+            # =====================================================
+            # QUERY NORMALISATION
+            # =====================================================
+
+            stop_words = {
+                "what",
+                "whats",
+                "what's",
+                "where",
+                "when",
+                "why",
+                "how",
+                "who",
+                "which",
+                "did",
+                "does",
+                "do",
+                "am",
+                "is",
+                "are",
+                "was",
+                "were",
+                "the",
+                "a",
+                "an",
+                "my",
+                "me",
+                "i",
+                "you",
+                "your",
+                "about",
+                "know",
+                "remember",
+                "recall",
+                "tell",
+                "please"
+            }
+
+            query_words = {
+                word
+                for word in re.findall(
+                    r"[a-zA-Z0-9]+",
+                    lower
+                )
+                if len(word) > 1
+                and word not in stop_words
+            }
+
+            # =====================================================
+            # SEMANTIC ALIASES
+            # =====================================================
+
+            aliases = {
+                "plan": {
+                    "plan",
+                    "planned",
+                    "planning",
+                    "goal",
+                    "future",
+                    "postgraduate",
+                    "masters",
+                    "master",
+                    "education",
+                    "study"
+                },
+
+                "future": {
+                    "future",
+                    "plan",
+                    "planned",
+                    "planning",
+                    "goal",
+                    "career",
+                    "postgraduate"
+                },
+
+                "btech": {
+                    "btech",
+                    "degree",
+                    "undergraduate",
+                    "postgraduate",
+                    "masters",
+                    "education"
+                },
+
+                "master": {
+                    "master",
+                    "masters",
+                    "postgraduate",
+                    "degree",
+                    "study"
+                },
+
+                "masters": {
+                    "master",
+                    "masters",
+                    "postgraduate",
+                    "degree",
+                    "study"
+                },
+
+                "study": {
+                    "study",
+                    "education",
+                    "degree",
+                    "university",
+                    "college",
+                    "postgraduate"
+                },
+
+                "italy": {
+                    "italy",
+                    "europe",
+                    "european"
+                },
+
+                "education": {
+                    "education",
+                    "study",
+                    "degree",
+                    "university",
+                    "college"
+                },
+
+                "career": {
+                    "career",
+                    "job",
+                    "work",
+                    "future",
+                    "goal",
+                    "plan"
+                },
+
+                "preference": {
+                    "preference",
+                    "prefer",
+                    "favorite",
+                    "favourite",
+                    "love",
+                    "prefer"
+                }
+            }
+
+            expanded_query_words = set(
+                query_words
+            )
+
+            for word in list(query_words):
+
+                if word in aliases:
+                    expanded_query_words.update(
+                        aliases[word]
+                    )
+
+            # =====================================================
+            # SCORE STORED MEMORIES
+            # =====================================================
+
+            scored = []
+
+            for memory in all_memories:
+
+                key = str(
+                    memory.get(
+                        "key",
+                        ""
+                    )
+                ).lower()
+
+                value = str(
+                    memory.get(
+                        "value",
+                        ""
+                    )
+                ).lower()
+
+                category = str(
+                    memory.get(
+                        "category",
+                        ""
+                    )
+                ).lower()
+
+                memory_type = str(
+                    memory.get(
+                        "memory_type",
+                        ""
+                    )
+                ).lower()
+
+                searchable = (
+                    key.replace("_", " ")
+                    + " "
+                    + value
+                    + " "
+                    + category
+                    + " "
+                    + memory_type
+                )
+
+                memory_words = set(
+                    re.findall(
+                        r"[a-zA-Z0-9]+",
+                        searchable
+                    )
+                )
+
+                score = 0.0
+
+                # Direct word overlap
+                direct_matches = (
+                    query_words
+                    & memory_words
+                )
+
+                score += len(
+                    direct_matches
+                ) * 3.0
+
+                # Expanded semantic overlap
+                semantic_matches = (
+                    expanded_query_words
+                    & memory_words
+                )
+
+                score += len(
+                    semantic_matches
+                ) * 1.5
+
+                # Key matches are especially important
+                key_words = set(
+                    re.findall(
+                        r"[a-zA-Z0-9]+",
+                        key.replace("_", " ")
+                    )
+                )
+
+                key_matches = (
+                    expanded_query_words
+                    & key_words
+                )
+
+                score += len(
+                    key_matches
+                ) * 2.5
+
+                # Importance bonus
+                importance = memory.get(
+                    "importance",
+                    "medium"
+                )
+
+                if importance == "high":
+                    score += 0.5
+                elif importance == "medium":
+                    score += 0.25
+
+                if score > 0:
+
+                    scored.append(
+                        (
+                            score,
+                            memory
+                        )
+                    )
+
+            scored.sort(
+                key=lambda item: item[0],
+                reverse=True
+            )
+
+            # =====================================================
+            # LEVEL 3 — LLM SEMANTIC MEMORY SELECTION
+            # =====================================================
+
+            if (
+                self.llm_router is not None
+                and hasattr(
+                    self.llm_router,
+                    "select_relevant_memories"
+                )
+            ):
+
+                try:
+
+                    candidates = [
+                        {
+                            "key": m.get("key"),
+                            "value": m.get("value"),
+                            "category": m.get(
+                                "category",
+                                "general"
+                            )
+                        }
+                        for m in all_memories
+                        if m.get("key")
+                        and m.get("value")
+                    ]
+
+                    selected_keys = (
+                        await self.llm_router.select_relevant_memories(
+                            query,
+                            candidates
+                        )
+                    )
+
+                    if selected_keys:
+
+                        selected_key_set = set(
+                            selected_keys
+                        )
+
+                        llm_selected = [
+                            m
+                            for m in all_memories
+                            if m.get("key")
+                            in selected_key_set
+                        ]
+
+                        # Merge LLM results with keyword results.
+                        existing_keys = {
+                            m.get("key")
+                            for _, m in scored
+                        }
+
+                        for memory in llm_selected:
+
+                            if (
+                                memory.get("key")
+                                not in existing_keys
+                            ):
+                                scored.append(
+                                    (
+                                        2.0,
+                                        memory
+                                    )
+                                )
+
+                except Exception:
+
+                    logger.exception(
+                        "[MemoryEngine] Semantic memory selection failed."
+                    )
+
+            # =====================================================
+            # FINAL RESULTS
+            # =====================================================
+
+            if not scored:
+                return []
+
+            scored.sort(
+                key=lambda item: item[0],
+                reverse=True
+            )
+
+            final_memories = []
+            seen_keys = set()
+
+            for score, memory in scored:
+
+                key = memory.get("key")
+                value = memory.get("value")
 
                 if not key or not value:
                     continue
 
-                score = 0.98 if filter_query and m.get("key") == filter_query.get("key") else 0.85
+                if key in seen_keys:
+                    continue
 
-                structured_results.append({
+                seen_keys.add(key)
+
+                final_memories.append({
                     "key": key,
                     "value": value,
-                    "category": m.get("category", "general"),
-                    "memory_type": m.get("memory_type", "fact"),
-                    "importance": m.get("importance", "medium"),
-                    "confidence": m.get("confidence", 1.0),
-                    "retrieval_score": score,
-                    "updated_at": m.get("updated_at")
+                    "category": memory.get(
+                        "category",
+                        "general"
+                    ),
+                    "memory_type": memory.get(
+                        "memory_type",
+                        "fact"
+                    ),
+                    "importance": memory.get(
+                        "importance",
+                        "medium"
+                    ),
+                    "confidence": memory.get(
+                        "confidence",
+                        1.0
+                    ),
+                    "retrieval_score": round(
+                        float(score),
+                        3
+                    ),
+                    "updated_at": memory.get(
+                        "updated_at"
+                    )
                 })
 
-            return structured_results
+                if len(final_memories) >= limit:
+                    break
+
+            # Update last_used
+            returned_keys = [
+                m["key"]
+                for m in final_memories
+            ]
+
+            if returned_keys:
+
+                await self.memory_col.update_many(
+                    {
+                        "key": {
+                            "$in": returned_keys
+                        }
+                    },
+                    {
+                        "$set": {
+                            "last_used": datetime.now(
+                                timezone.utc
+                            ).isoformat()
+                        }
+                    }
+                )
+
+            logger.info(
+                "[MemoryEngine] Retrieved %d relevant memories for query: %s",
+                len(final_memories),
+                query
+            )
+
+            return final_memories
 
         except Exception:
-            logger.exception("[Memory Retrieval Error]")
+
+            logger.exception(
+                "[Memory Retrieval Error]"
+            )
+
             return []
 
     async def retrieve(self, query: str) -> list[dict]:
