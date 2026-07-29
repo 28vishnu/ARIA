@@ -12,7 +12,6 @@ from brain.agents.agent_manager import AgentManager
 from brain.session import SessionManager
 from brain.state.state_manager import StateManager
 from skills.manager import SkillManager
-from brain.actions.action_manager import ActionManager
 from brain.planner import Planner
 from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
@@ -171,9 +170,9 @@ async def bootstrap_application() -> ServiceRegistry:
     session_manager = SessionManager(state_manager)
 
     skill_manager = SkillManager()
-    action_manager = ActionManager()
-    planner = Planner()
-    executor = Executor()
+
+    planner = Planner(llm_router)
+    executor = Executor(skill_manager)
 
     personality_engine = PersonalityEngine()
     decision_engine = DecisionEngine()
@@ -193,11 +192,6 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "skill_manager",
         skill_manager
-    )
-
-    registry.register(
-        "action_manager",
-        action_manager
     )
 
     registry.register(
