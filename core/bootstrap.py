@@ -174,6 +174,14 @@ async def bootstrap_application() -> ServiceRegistry:
         llm_router
     )
 
+    # Connect LLM intelligence to long-term memory
+    if memory_engine is not None:
+        memory_engine.llm_router = llm_router
+
+        logger.info(
+            "[BOOT TEST] LLM Router connected to MemoryEngine"
+        )
+
     # ---------------------------------------------------------
     # Document Intelligence
     # ---------------------------------------------------------
