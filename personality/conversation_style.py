@@ -1,104 +1,214 @@
-import random
+import re
 
 
 class ConversationStyle:
+    """
+    Final presentation layer for ARIA.
 
-    SHORT = [
-        "{}",
-        "Certainly.\n\n{}",
-        "Done.\n\n{}",
-        "Of course.\n\n{}"
-    ]
-
-    MEDIUM = [
-        "{}",
-        "Here's what I found:\n\n{}",
-        "Certainly.\n\n{}",
-        "Absolutely.\n\n{}"
-    ]
-
-    LONG = [
-        "{}",
-        "Here's a detailed explanation.\n\n{}",
-        "I've broken it down below.\n\n{}"
-    ]
+    This layer should make responses feel controlled, intelligent and
+    assistant-like without changing the factual meaning produced by
+    the underlying LLM, memory system, document system or tools.
+    """
 
     @staticmethod
     def apply(reply: str) -> str:
 
-        reply = reply.strip()
+        if not reply:
+            return ""
+
+        reply = str(reply).strip()
 
         if not reply:
             return ""
 
-        # Never decorate code
+        # -----------------------------------------------------
+        # Protect code-heavy responses
+        # -----------------------------------------------------
+
         if "```" in reply:
-            return reply
+            return ConversationStyle._clean_code_response(reply)
 
-        # Never decorate greetings
-        greetings = [
-            "hello",
-            "hi",
-            "good morning",
-            "good evening",
-            "good afternoon",
-            "greetings",
-            "at your service"
-        ]
+        # -----------------------------------------------------
+        # Remove common generic chatbot openings
+        # -----------------------------------------------------
 
-        lower = reply.lower()
+        reply = ConversationStyle._remove_generic_openings(reply)
 
-        if any(lower.startswith(x) for x in greetings):
-            return reply
+        # -----------------------------------------------------
+        # Clean excessive Markdown / visual noise
+        # -----------------------------------------------------
 
-        # Short replies stay untouched
-        if len(reply) < 80:
-            return reply
+        reply = ConversationStyle._clean_markdown(reply)
 
-        # Medium replies
-        if len(reply) < 300:
-            return random.choice([
-                "{}",
-                "Certainly.\n\n{}",
-                "Here's what I found.\n\n{}"
-            ]).format(reply)
+        # -----------------------------------------------------
+        # Remove generic chatbot endings
+        # -----------------------------------------------------
 
-        # Long replies
-        return random.choice([
-            "{}",
-            "Here's a detailed explanation.\n\n{}"
-        ]).format(reply)
+        reply = ConversationStyle._remove_generic_endings(reply)
+
+        # -----------------------------------------------------
+        # Clean spacing
+        # -----------------------------------------------------
+
+        reply = ConversationStyle._clean_spacing(reply)
+
+        return reply.strip()
 
     @staticmethod
     def follow_up(reply: str, query: str) -> str:
+        """
+        ARIA should not automatically attach generic offers after every
+        response. A follow-up should only exist when the actual answer
+        naturally requires one.
 
-        reply = reply.strip()
+        Therefore the personality layer does not manufacture follow-ups.
+        """
 
-        # Never add follow-ups to empty or invalid replies
-        if (
-            not reply
-            or reply.lower() == "none"
-            or reply.lower() == "done."
-            or reply.lower() == "task executed successfully."
-        ):
-            return reply
+        return reply.strip()
 
-        q = query.lower()
+    # =========================================================
+    # CLEANING
+    # =========================================================
 
-        if any(x in q for x in ["email", "letter", "application"]):
-            return reply + "\n\nWould you like me to tailor it for a specific person?"
+    @staticmethod
+    def _remove_generic_openings(reply: str) -> str:
 
-        if any(x in q for x in ["python", "code", "program"]):
-            return reply + "\n\nNeed me to explain or improve the code?"
+        patterns = [
+            r"^\s*certainly[.!,:-]*\s*",
+            r"^\s*absolutely[.!,:-]*\s*",
+            r"^\s*of course[.!,:-]*\s*",
+            r"^\s*sure[.!,:-]*\s*",
+            r"^\s*here'?s what i found[.!:]*\s*",
+            r"^\s*here'?s a detailed explanation[.!:]*\s*",
+            r"^\s*i'?ve broken it down below[.!:]*\s*",
+            r"^\s*i'?d be happy to help[.!,:-]*\s*",
+            r"^\s*i'?d be glad to help[.!,:-]*\s*",
+        ]
 
-        if any(x in q for x in ["math", "solve", "equation", "calculate"]):
-            return reply + "\n\nI can also show the working if you'd like."
+        for pattern in patterns:
+            reply = re.sub(
+                pattern,
+                "",
+                reply,
+                count=1,
+                flags=re.IGNORECASE
+            )
 
-        if any(x in q for x in ["plan", "schedule"]):
-            return reply + "\n\nI can expand this into a complete plan."
+        return reply.strip()
 
-        # Avoid adding suggestions after very long replies
-        if len(reply) > 1200:
-            return reply
+    @staticmethod
+    def _remove_generic_endings(reply: str) -> str:
+
+        patterns = [
+            r"\s*Would you like me to .*?\?\s*$",
+            r"\s*Do you want me to .*?\?\s*$",
+            r"\s*Need me to .*?\?\s*$",
+            r"\s*I can also .*? if you'd like\.?\s*$",
+            r"\s*I can expand this into a complete plan\.?\s*$",
+            r"\s*Let me know if you'd like .*?\.?\s*$",
+            r"\s*Let me know if you want .*?\.?\s*$",
+            r"\s*Feel free to ask .*?\.?\s*$",
+            r"\s*Feel free to let me know .*?\.?\s*$",
+            r"\s*Hope this helps[.!]*\s*$",
+            r"\s*I hope this helps[.!]*\s*$",
+        ]
+
+        changed = True
+
+        while changed:
+            old = reply
+
+            for pattern in patterns:
+                reply = re.sub(
+                    pattern,
+                    "",
+                    reply,
+                    flags=re.IGNORECASE | re.DOTALL
+                )
+
+            changed = reply != old
+
+        return reply.strip()
+
+    @staticmethod
+    def _clean_markdown(reply: str) -> str:
+
+        # Remove Markdown heading markers while preserving heading text.
+        reply = re.sub(
+            r"(?m)^\s*#{1,6}\s+",
+            "",
+            reply
+        )
+
+        # Remove decorative underline headings:
+        #
+        # Python Overview
+        # ===============
+        #
+        reply = re.sub(
+            r"(?m)^\s*[=-]{4,}\s*$",
+            "",
+            reply
+        )
+
+        # Convert bold text to normal text.
+        reply = re.sub(
+            r"\*\*(.*?)\*\*",
+            r"\1",
+            reply,
+            flags=re.DOTALL
+        )
+
+        # Remove stray emphasis markers.
+        reply = re.sub(
+            r"(?<!\*)\*(?!\*)",
+            "",
+            reply
+        )
+
+        # Convert Markdown bullets to a cleaner bullet.
+        reply = re.sub(
+            r"(?m)^\s*[-*]\s+",
+            "• ",
+            reply
+        )
 
         return reply
+
+    @staticmethod
+    def _clean_spacing(reply: str) -> str:
+
+        # Remove trailing spaces from lines.
+        reply = "\n".join(
+            line.rstrip()
+            for line in reply.splitlines()
+        )
+
+        # Never allow huge empty areas.
+        reply = re.sub(
+            r"\n{3,}",
+            "\n\n",
+            reply
+        )
+
+        # Remove spaces before punctuation.
+        reply = re.sub(
+            r"\s+([,.!?;:])",
+            r"\1",
+            reply
+        )
+
+        return reply.strip()
+
+    @staticmethod
+    def _clean_code_response(reply: str) -> str:
+        """
+        Avoid modifying code blocks because Markdown characters may be
+        syntactically meaningful.
+
+        We only remove known generic text appended after the response.
+        """
+
+        reply = ConversationStyle._remove_generic_endings(reply)
+
+        return reply.strip()
