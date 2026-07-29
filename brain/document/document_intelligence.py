@@ -27,46 +27,22 @@ class DocumentIntelligence:
         self.llm_router = llm_router
         self.vector_db = vector_db
 
-        self.embedding_model = None
         self._embedding_cache: Dict[str, List[float]] = {}
-
-    def get_embedding_model(self):
-        """
-        Lazy-load the SentenceTransformer library and model
-        only when document embeddings are actually required.
-        """
-        if self.embedding_model is None:
-            logger.info("[DocumentAI] Loading embedding model...")
-
-            from sentence_transformers import SentenceTransformer
-
-            self.embedding_model = SentenceTransformer(
-                "all-MiniLM-L6-v2"
-            )
-
-        return self.embedding_model
 
     def unload_embedding_model(self):
         """
-        Release the local embedding model after document operations
-        to reduce RAM usage on memory-constrained deployments.
+        Release any unused memory resources after document operations
+        to keep RAM usage minimal on constrained deployments.
         """
-        if self.embedding_model is not None:
-            logger.info("[DocumentAI] Unloading embedding model to free RAM...")
+        gc.collect()
 
-            self.embedding_model = None
+        try:
+            import torch
 
-            gc.collect()
-
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-
-            logger.info("[DocumentAI] Embedding model unloaded.")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     async def process_document(
         self,
@@ -374,7 +350,8 @@ class DocumentIntelligence:
         batch_size: int = 8
     ):
         """
-        Store semantic embeddings in ChromaDB using caching and batching.
+        Store semantic embeddings in ChromaDB using caching, batching,
+        and remote Gemini API embedding generation.
         """
         if self.vector_db is None:
             return
@@ -402,10 +379,10 @@ class DocumentIntelligence:
                     embeddings.append(None)  # Placeholder
 
             if batch_to_encode:
-                encoded_batch = self.get_embedding_model().encode(
+                encoded_batch = await self.llm_router.embed(
                     batch_to_encode,
-                    convert_to_numpy=True
-                ).tolist()
+                    task_type="RETRIEVAL_DOCUMENT"
+                )
 
                 for sub_idx, emb in enumerate(encoded_batch):
                     target_pos = batch_indices_to_encode[sub_idx]
@@ -451,8 +428,6 @@ class DocumentIntelligence:
         if len(self._embedding_cache) > 100:
             self._embedding_cache.clear()
 
-        # The vectors are already persisted in ChromaDB.
-        # We no longer need the heavyweight model resident in RAM.
         self.unload_embedding_model()
 
     def _parse_query_filters(self, query: str) -> tuple[str, dict]:
@@ -487,8 +462,7 @@ class DocumentIntelligence:
         filters: Optional[dict] = None
     ):
         """
-        Retrieve the most relevant chunks using semantic similarity
-        while releasing the embedding model after use to reduce RAM.
+        Retrieve the most relevant chunks using semantic similarity via remote Gemini API embeddings.
         """
         if self.vector_db is None:
             return []
@@ -504,12 +478,12 @@ class DocumentIntelligence:
                 where_clause[k] = v
 
         try:
-            model = self.get_embedding_model()
+            query_embeddings = await self.llm_router.embed(
+                [query],
+                task_type="RETRIEVAL_QUERY"
+            )
 
-            query_embedding = model.encode(
-                query,
-                convert_to_numpy=True
-            ).tolist()
+            query_embedding = query_embeddings[0]
 
             results = self.vector_db.query(
                 query_embeddings=[query_embedding],
