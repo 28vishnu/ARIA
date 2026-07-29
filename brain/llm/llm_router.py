@@ -367,6 +367,122 @@ class LLMRouter:
         return result
 
     # =========================================================
+    # OPENROUTER
+    # =========================================================
+
+    async def _openrouter_chat(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int
+    ) -> str:
+
+        url = "https://openrouter.ai/api/v1/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self.openrouter_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": self.openrouter_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout
+        ) as client:
+
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+        choices = data.get("choices", [])
+
+        if not choices:
+            raise RuntimeError(
+                "OpenRouter returned no completion choices."
+            )
+
+        content = (
+            choices[0]
+            .get("message", {})
+            .get("content")
+        )
+
+        if not content:
+            raise RuntimeError(
+                "OpenRouter returned an empty response."
+            )
+
+        return str(content).strip()
+
+    # =========================================================
+    # MISTRAL
+    # =========================================================
+
+    async def _mistral_chat(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int
+    ) -> str:
+
+        url = "https://api.mistral.ai/v1/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self.mistral_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": self.mistral_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout
+        ) as client:
+
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+        choices = data.get("choices", [])
+
+        if not choices:
+            raise RuntimeError(
+                "Mistral returned no completion choices."
+            )
+
+        content = (
+            choices[0]
+            .get("message", {})
+            .get("content")
+        )
+
+        if not content:
+            raise RuntimeError(
+                "Mistral returned an empty response."
+            )
+
+        return str(content).strip()
+
+    # =========================================================
     # GEMINI EMBEDDINGS
     # =========================================================
 
