@@ -22,9 +22,13 @@ class LLMRouter:
 
         self.groq_api_key = config.groq_api_key
         self.gemini_api_key = config.gemini_api_key
+        self.openrouter_api_key = config.openrouter_api_key
+        self.mistral_api_key = config.mistral_api_key
 
         self.groq_model = config.groq_model
         self.gemini_model = config.gemini_model
+        self.openrouter_model = config.openrouter_model
+        self.mistral_model = config.mistral_model
 
         self.timeout = config.timeout_seconds
 
