@@ -235,6 +235,83 @@ class CognitiveCore:
                 if hasattr(decision, "secondary_actions") and decision.secondary_actions:
                     secondary_actions = decision.secondary_actions
 
+                # -----------------------------------------------------
+                # Execute the agent workflow selected during reasoning.
+                #
+                # Reasoning chooses the appropriate specialised agents.
+                # DecisionEngine confirms the execution route.
+                # Only now are those agents allowed to execute.
+                # -----------------------------------------------------
+
+                if (
+                    reasoning
+                    and reasoning.workflow
+                    and len(reasoning.workflow) > 0
+                    and decision.action not in (
+                        "memory_conversation",
+                        "document",
+                        "delete_document",
+                        "delete_all_documents",
+                        "reindex_documents",
+                    )
+                ):
+
+                    agent_results = []
+
+                    for agent in reasoning.workflow:
+
+                        try:
+                            logger.info(
+                                "[CognitiveCore] Executing agent: %s",
+                                agent.name
+                            )
+
+                            result = await agent.execute(
+                                query,
+                                ctx
+                            )
+
+                            if result and result.success:
+                                agent_results.append(result)
+
+                            elif result:
+                                logger.warning(
+                                    "[CognitiveCore] Agent %s failed: %s",
+                                    agent.name,
+                                    result.error
+                                )
+
+                        except Exception:
+                            logger.exception(
+                                "[CognitiveCore] Agent execution failed: %s",
+                                getattr(agent, "name", "unknown")
+                            )
+
+                    if agent_results:
+
+                        fused_response = self.response_fusion.combine(
+                            agent_results
+                        )
+
+                        if fused_response:
+
+                            logger.info(
+                                "[CognitiveCore] Agent workflow produced "
+                                "a usable response."
+                            )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=max(
+                                    result.confidence
+                                    for result in agent_results
+                                ),
+                                source="agent",
+                                data={
+                                    "response": fused_response
+                                }
+                            )
+
                 # Memory Conversation
                 if decision.action == "memory_conversation":
                     reply = ""
