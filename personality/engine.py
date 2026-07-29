@@ -77,10 +77,36 @@ class PersonalityEngine:
             return "Operation completed, though a formatting error occurred, Sir."
 
     def _format_error(self, error_msg: str) -> str:
-        error_msg = error_msg or ""
-        if "no profile" in error_msg.lower() or "no relevant" in error_msg.lower():
-            return "I couldn't find any stored records matching that request, Sir."
-        return f"I encountered a slight complication: {error_msg}"
+        error_msg = str(error_msg or "").strip()
+        lowered = error_msg.lower()
+
+        if "no profile" in lowered or "no relevant" in lowered:
+            return "I couldn't find anything matching that request, Sir."
+
+        if (
+            "429" in lowered
+            or "too many requests" in lowered
+            or "rate limit" in lowered
+            or "quota" in lowered
+            or "all configured llm providers failed" in lowered
+        ):
+            return (
+                "My AI services are temporarily rate-limited, Sir. "
+                "Try again shortly."
+            )
+
+        if not error_msg:
+            return (
+                "I couldn't complete that request just now, Sir. "
+                "Try again shortly."
+            )
+
+        logger.error(
+            "[Personality] Internal operation error: %s",
+            error_msg
+        )
+
+        return "I couldn't complete that operation, Sir."
 
     def _format_greeting(self, user_text: str) -> str:
         query = user_text.lower()
