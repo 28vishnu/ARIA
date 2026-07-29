@@ -171,9 +171,17 @@ async def telegram_webhook(req: Request):
 
         os.makedirs("uploads", exist_ok=True)
 
+        # Preserve the original Telegram filename/extension.
+        original_filename = document.get("file_name")
+
+        if original_filename:
+            safe_filename = os.path.basename(original_filename)
+        else:
+            safe_filename = os.path.basename(file_path)
+
         local_path = os.path.join(
             "uploads",
-            os.path.basename(file_path)
+            safe_filename
         )
 
         response = await http_client.get(download_url)
