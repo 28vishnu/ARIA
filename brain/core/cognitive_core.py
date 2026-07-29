@@ -172,6 +172,7 @@ class CognitiveCore:
                         )
 
             reasoning = None
+
             if self.reasoning_engine:
                 reasoning = await self.reasoning_engine.reason(ctx)
                 ctx["reasoning"] = reasoning
@@ -186,95 +187,33 @@ class CognitiveCore:
             if state.get("active_document"):
                 logger.info("[Document] Active document detected.")
 
-            if reasoning and not ctx.get("state", {}).get("active_document"):
+            # ---------------------------------------------------------
+            # Reasoning is complete.
+            #
+            # IMPORTANT:
+            # Do NOT execute agents here.
+            #
+            # ReasoningEngine only recommends what ARIA should do.
+            # DecisionEngine must make the final routing decision first.
+            # The selected capability will be executed afterwards.
+            # ---------------------------------------------------------
 
-                results = []
+            agent_result = None
+            results = []
 
-                task_workflows = reasoning.metadata.get(
-                    "task_workflows",
-                    []
-                )
-
-                if task_workflows:
-
-                    async def run_task(task, workflow):
-
-                        logger.info(
-                            "[Task] %s -> %s",
-                            task.description,
-                            task.agent
-                        )
-
-                        local_result = None
-
-                        for agent in workflow:
-
-                            logger.info(
-                                "[CognitiveCore] Executing agent: %s",
-                                agent.name
-                            )
-
-                            local_result = await agent.execute(
-                                task.description,
-                                ctx
-                            )
-
-                        task.completed = True
-                        task.result = local_result
-
-                        return local_result
-
-                    parallel_jobs = [
-                        run_task(task, workflow)
-                        for task, workflow in task_workflows
-                    ]
-
-                    completed = await asyncio.gather(*parallel_jobs)
-
-                    results.extend(completed)
-
-                    if completed:
-                        ctx["agent_result"] = completed[-1]
-
-                elif reasoning.workflow:
-
-                    results = []
-
-                    for agent in reasoning.workflow:
-
-                        logger.info(
-                            "[CognitiveCore] Executing agent: %s",
-                            agent.name
-                        )
-
-                        result = await agent.execute(
-                            query,
-                            ctx
-                        )
-
-                        results.append(result)
-
-                        ctx["agent_result"] = result
-
-                    agent_result = results[-1] if results else None
-
-                    if results:
-                        merged = self.response_formatter.merge(results)
-
-                        agent_result.data = {
-                            "response": merged
-                        }
-
-                agent_result = results[-1] if results else None
-
-                ctx["agent_results"] = results
-            elif reasoning and ctx.get("state", {}).get("active_document"):
+            if reasoning:
                 logger.info(
-                    "[CognitiveCore] Skipping agent workflow because document is active."
+                    "[CognitiveCore] Reasoning complete: "
+                    "primary_action=%s confidence=%.2f",
+                    reasoning.primary_action,
+                    reasoning.confidence
                 )
+
+                ctx["reasoning"] = reasoning
 
             # 4. Decision Engine
             decision = None
+
             if self.decision_engine:
                 decision = await self.decision_engine.decide(
                     context=ctx,
