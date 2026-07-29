@@ -30,184 +30,176 @@ class DecisionEngine:
         skill_manager=None,
         planner=None
     ) -> Decision:
+        """
+        Convert ARIA's reasoning result into the final execution route.
 
-        query = context.get("query", "")
+        The DecisionEngine does not try to understand the user's
+        language again. ContextBuilder and ReasoningEngine have already
+        done that work.
+
+        Its responsibility is to choose the safest and most appropriate
+        execution path from the available reasoning and context.
+        """
+
+        query = str(
+            context.get("query", "")
+        ).strip()
+
+        reasoning = context.get("reasoning")
+        state = context.get("state", {}) or {}
+        document = context.get("document", {}) or {}
+        conversation = context.get("conversation", {}) or {}
 
         logger.info(
-            "[Decision] Context state = %s",
-            context.get("state")
+            "[Decision] Query=%s State=%s",
+            query,
+            state
         )
 
-        state = context.get("state", {})
-        query_lower = query.lower().strip()
+        # -----------------------------------------------------
+        # 1. REASONING ENGINE IS THE PRIMARY AUTHORITY
+        # -----------------------------------------------------
 
-        # Document Cleanup Intent Triggers
-        delete_all_triggers = [
-            "delete all documents",
-            "remove all documents",
-            "clear documents",
-            "purge documents",
-            "delete all pdfs",
-            "clear all documents"
-        ]
+        if reasoning:
 
-        delete_doc_triggers = [
-            "delete document",
-            "remove document",
-            "forget document",
-            "delete pdf",
-            "remove pdf",
-            "close document"
-        ]
-
-        reindex_triggers = [
-            "reindex documents",
-            "rebuild index",
-            "refresh vectors",
-            "re-index documents",
-            "reindex pdfs"
-        ]
-
-        if any(trigger in query_lower for trigger in delete_all_triggers):
-            logger.info("[Decision] Detected delete_all_documents command.")
-            return Decision(
-                action="delete_all_documents",
-                confidence=1.0
+            action = getattr(
+                reasoning,
+                "primary_action",
+                None
             )
 
-        if any(trigger in query_lower for trigger in delete_doc_triggers):
-            logger.info("[Decision] Detected delete_document command.")
-            doc_name = state.get("current_document")
-            return Decision(
-                action="delete_document",
-                confidence=1.0,
-                data={"document_name": doc_name} if doc_name else None
+            confidence = getattr(
+                reasoning,
+                "confidence",
+                0.80
             )
 
-        if any(trigger in query_lower for trigger in reindex_triggers):
-            logger.info("[Decision] Detected reindex_documents command.")
-            return Decision(
-                action="reindex_documents",
-                confidence=1.0
+            secondary_actions = getattr(
+                reasoning,
+                "secondary_actions",
+                []
             )
 
-        # Active follow-up routing
-        if (
-            state.get("active_document")
-            and state.get("last_document_question")
-        ):
-            logger.info("[Decision] Routing active follow-up to DOCUMENT intelligence.")
+            metadata = getattr(
+                reasoning,
+                "metadata",
+                {}
+            ) or {}
 
-            return Decision(
-                action="document",
-                confidence=0.99
-            )
+            if action:
 
-        document_keywords = [
-            "document",
-            "pdf",
-            "file",
-            "chapter",
-            "page",
-            "summary",
-            "uploaded",
-            "tuition",
-            "fees",
-            "scholarship",
-            "course",
-            "this",
-            "that",
-            "those",
-            "it",
-            "them",
-            "more",
-            "continue",
-            "next",
-            "explain",
-            "why",
-            "how",
-            "compare",
-            "in inr",
-            "convert"
-        ]
-
-        follow_up_words = [
-            "it",
-            "this",
-            "that",
-            "them",
-            "these",
-            "those",
-            "inr",
-            "rupees",
-            "convert",
-            "compare",
-            "why",
-            "how",
-            "which",
-            "more",
-            "explain",
-            "cheapest",
-            "cost",
-            "living",
-            "monthly",
-            "yearly"
-        ]
-
-        if state.get("active_document"):
-
-            if (
-                any(k in query_lower for k in document_keywords)
-                or any(k in query_lower for k in follow_up_words)
-            ):
-                logger.info("[Decision] Routing to DOCUMENT intelligence.")
-
-                return Decision(
-                    action="document",
-                    confidence=1.0
+                logger.info(
+                    "[Decision] Reasoning selected action=%s "
+                    "confidence=%.2f goal=%s",
+                    action,
+                    confidence,
+                    metadata.get("goal")
                 )
 
-        intent = context.get("intent")
-        reasoning = context.get("reasoning")
+                return Decision(
+                    action=action,
+                    confidence=confidence,
+                    secondary_actions=secondary_actions,
+                    data=metadata
+                )
 
-        # Let the Reasoning Engine decide first
-        if reasoning:
+        # -----------------------------------------------------
+        # 2. SKILL CAPABILITY FALLBACK
+        # -----------------------------------------------------
+        #
+        # This is used only when reasoning was unavailable.
+        # It allows a registered skill to claim a request without
+        # requiring DecisionEngine to understand that request itself.
+        # -----------------------------------------------------
+
+        if skill_manager:
+
+            try:
+
+                if await skill_manager.can_handle(
+                    query,
+                    context
+                ):
+
+                    logger.info(
+                        "[Decision] SkillManager accepted request."
+                    )
+
+                    return Decision(
+                        action="skill",
+                        confidence=0.90
+                    )
+
+            except Exception:
+
+                logger.exception(
+                    "[Decision] Skill capability check failed."
+                )
+
+        # -----------------------------------------------------
+        # 3. DOCUMENT CONTEXT FALLBACK
+        # -----------------------------------------------------
+        #
+        # Do not inspect document keywords here.
+        # If a document is genuinely active and reasoning was somehow
+        # unavailable, preserve that context.
+        # -----------------------------------------------------
+
+        document_active = bool(
+            document.get("active")
+            or state.get("active_document")
+            or state.get("current_document")
+        )
+
+        if document_active:
+
             logger.info(
-                "[Decision] Goal=%s Plan=%s",
-                reasoning.metadata.get("goal"),
-                reasoning.metadata.get("execution_plan")
+                "[Decision] Falling back to active document context."
             )
-
-            return Decision(
-                action=reasoning.primary_action,
-                confidence=reasoning.confidence,
-                secondary_actions=reasoning.secondary_actions
-            )
-
-        # Fallback (only if reasoning is unavailable)
-        if skill_manager and await skill_manager.can_handle(query, context):
-            return Decision(
-                action="skill",
-                confidence=0.95
-            )
-
-        # Active document takes highest priority
-        if state.get("active_document"):
 
             return Decision(
                 action="document",
-                confidence=0.98
+                confidence=0.85,
+                data={
+                    "document_name": (
+                        document.get("name")
+                        or state.get("active_document")
+                        or state.get("current_document")
+                    )
+                }
             )
 
-        # Otherwise use keyword detection
-        if any(keyword in query_lower for keyword in document_keywords):
+        # -----------------------------------------------------
+        # 4. CONVERSATIONAL CONTINUITY FALLBACK
+        # -----------------------------------------------------
+
+        if conversation.get("looks_like_follow_up"):
+
+            logger.info(
+                "[Decision] Falling back to conversational continuity."
+            )
 
             return Decision(
-                action="document",
-                confidence=0.90
+                action="chat",
+                confidence=0.85,
+                data={
+                    "preserve_context": True
+                }
             )
 
-        # 4. Default
+        # -----------------------------------------------------
+        # 5. UNIVERSAL SAFE DEFAULT
+        # -----------------------------------------------------
+        #
+        # Unknown language should remain conversational instead of
+        # failing merely because no keyword matched.
+        # -----------------------------------------------------
+
+        logger.info(
+            "[Decision] No specialized route required. "
+            "Using general conversation."
+        )
+
         return Decision(
             action="chat",
             confidence=0.80
