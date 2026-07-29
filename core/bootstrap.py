@@ -1,7 +1,7 @@
 import os
 import logging
 import asyncio
-from core.configuration import AppConfig
+from core.configuration import load_config
 from core.dependency_injection import ServiceRegistry
 from memory.mongo_client import MongoClient
 from memory.memory_engine import MemoryEngine
@@ -28,7 +28,7 @@ logger = logging.getLogger("aria")
 async def bootstrap_application() -> ServiceRegistry:
     logger.info("[BOOT TEST] 1 - Bootstrap started")
 
-    config = AppConfig()
+    config = load_config()
     registry = ServiceRegistry()
     registry.register("config", config)
 
@@ -36,13 +36,13 @@ async def bootstrap_application() -> ServiceRegistry:
     logger.info("[BOOT TEST] 2 - Starting ChromaDB")
     vector_store = VectorStore(
         collection_name="aria_memory",
-        persist_directory=getattr(config, "chroma_db_dir", "./chroma_db")
+        persist_directory=config.vector_persist_path
     )
     registry.register("vector_db", vector_store)
     logger.info("[BOOT TEST] 3 - ChromaDB finished")
 
     logger.info("[BOOT TEST] 4 - Starting MemoryEngine")
-    mongo_client = MongoClient(config.mongo_uri, config.mongo_db_name)
+    mongo_client = MongoClient(config.mongodb_uri, getattr(config, "mongo_db_name", "aria_db"))
     db_inst = mongo_client.get_database()
     memory_engine = MemoryEngine(db_inst)
     registry.register("mongo_client", mongo_client)
