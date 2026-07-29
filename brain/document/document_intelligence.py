@@ -2,6 +2,7 @@ import hashlib
 import logging
 import re
 import time
+import gc
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any
@@ -44,6 +45,28 @@ class DocumentIntelligence:
             )
 
         return self.embedding_model
+
+    def unload_embedding_model(self):
+        """
+        Release the local embedding model after document operations
+        to reduce RAM usage on memory-constrained deployments.
+        """
+        if self.embedding_model is not None:
+            logger.info("[DocumentAI] Unloading embedding model to free RAM...")
+
+            self.embedding_model = None
+
+            gc.collect()
+
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            logger.info("[DocumentAI] Embedding model unloaded.")
 
     async def process_document(
         self,
@@ -348,7 +371,7 @@ class DocumentIntelligence:
         session_id: str,
         chunks: list[dict],
         metadata: Optional[dict] = None,
-        batch_size: int = 32
+        batch_size: int = 8
     ):
         """
         Store semantic embeddings in ChromaDB using caching and batching.
@@ -424,6 +447,14 @@ class DocumentIntelligence:
             t_store
         )
 
+        # Prevent embedding cache from growing indefinitely.
+        if len(self._embedding_cache) > 100:
+            self._embedding_cache.clear()
+
+        # The vectors are already persisted in ChromaDB.
+        # We no longer need the heavyweight model resident in RAM.
+        self.unload_embedding_model()
+
     def _parse_query_filters(self, query: str) -> tuple[str, dict]:
         """
         Extracts specific document name and page number filters from the query string.
@@ -456,47 +487,71 @@ class DocumentIntelligence:
         filters: Optional[dict] = None
     ):
         """
-        Retrieve the most relevant chunks using semantic similarity and metadata filtering.
+        Retrieve the most relevant chunks using semantic similarity
+        while releasing the embedding model after use to reduce RAM.
         """
         if self.vector_db is None:
             return []
 
         t0 = time.perf_counter()
 
-        where_clause = {"session_id": session_id}
+        where_clause = {
+            "session_id": session_id
+        }
+
         if filters:
             for k, v in filters.items():
                 where_clause[k] = v
 
-        query_embedding = self.get_embedding_model().encode(
-            query,
-            convert_to_numpy=True
-        ).tolist()
+        try:
+            model = self.get_embedding_model()
 
-        results = self.vector_db.query(
-            query_embeddings=[query_embedding],
-            n_results=limit,
-            where=where_clause
-        )
+            query_embedding = model.encode(
+                query,
+                convert_to_numpy=True
+            ).tolist()
 
-        documents = results.get("documents", [[]])[0]
-        metadatas = results.get("metadatas", [[]])[0]
+            results = self.vector_db.query(
+                query_embeddings=[query_embedding],
+                n_results=limit,
+                where=where_clause
+            )
 
-        output = [
-            {
-                "text": doc,
-                "page": meta.get("page", "?"),
-                "document": meta.get("document_name", "Unknown")
-            }
-            for doc, meta in zip(documents, metadatas)
-        ]
+            documents = results.get(
+                "documents",
+                [[]]
+            )[0]
 
-        logger.info(
-            "[DocumentAI] Semantic search returned %d items in %.3fs.",
-            len(output),
-            time.perf_counter() - t0
-        )
-        return output
+            metadatas = results.get(
+                "metadatas",
+                [[]]
+            )[0]
+
+            output = [
+                {
+                    "text": doc,
+                    "page": meta.get("page", "?"),
+                    "document": meta.get(
+                        "document_name",
+                        "Unknown"
+                    )
+                }
+                for doc, meta in zip(
+                    documents,
+                    metadatas
+                )
+            ]
+
+            logger.info(
+                "[DocumentAI] Semantic search returned %d items in %.3fs.",
+                len(output),
+                time.perf_counter() - t0
+            )
+
+            return output
+
+        finally:
+            self.unload_embedding_model()
 
     async def retrieve_chunks(
         self,
