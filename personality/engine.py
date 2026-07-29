@@ -1,5 +1,6 @@
 import logging
 import random
+import re
 from typing import Dict, Any
 from personality.response import SystemResponse
 from personality.conversation_style import ConversationStyle
@@ -216,6 +217,12 @@ class PersonalityEngine:
         return "Done."
 
     def _post_process(self, reply: str) -> str:
+        """
+        Final presentation cleanup for all ARIA responses.
+
+        Keeps useful structure and code intact while removing
+        unnecessary Markdown noise commonly produced by LLMs.
+        """
 
         if reply is None:
             return "I couldn't generate a response, Sir."
@@ -225,7 +232,131 @@ class PersonalityEngine:
         if not reply:
             return "I couldn't generate a response, Sir."
 
-        if "\n" not in reply:
+        # -----------------------------------------------------
+        # Protect fenced code blocks
+        # -----------------------------------------------------
+
+        code_blocks = []
+
+        def protect_code(match):
+            code_blocks.append(match.group(0))
+            return f"__ARIA_CODE_BLOCK_{len(code_blocks) - 1}__"
+
+        reply = re.sub(
+            r"```[\s\S]*?```",
+            protect_code,
+            reply
+        )
+
+        # -----------------------------------------------------
+        # Clean Markdown headings
+        #
+        # ## Python Basics -> Python Basics
+        # ### Variables    -> Variables
+        # -----------------------------------------------------
+
+        reply = re.sub(
+            r"(?m)^\s{0,3}#{1,6}\s+",
+            "",
+            reply
+        )
+
+        # -----------------------------------------------------
+        # Remove Markdown bold/italic markers
+        #
+        # **Python** -> Python
+        # __Python__ -> Python
+        # -----------------------------------------------------
+
+        reply = re.sub(
+            r"\*\*(.*?)\*\*",
+            r"\1",
+            reply
+        )
+
+        reply = re.sub(
+            r"__(.*?)__",
+            r"\1",
+            reply
+        )
+
+        # Simple italic Markdown
+        reply = re.sub(
+            r"(?<!\*)\*([^*\n]+)\*(?!\*)",
+            r"\1",
+            reply
+        )
+
+        # -----------------------------------------------------
+        # Remove horizontal Markdown separators
+        # -----------------------------------------------------
+
+        reply = re.sub(
+            r"(?m)^\s*(?:---+|\*\*\*+|___+)\s*$",
+            "",
+            reply
+        )
+
+        # -----------------------------------------------------
+        # Normalize bullets
+        #
+        # - item
+        # * item
+        # + item
+        #
+        # becomes:
+        #
+        # • item
+        # -----------------------------------------------------
+
+        reply = re.sub(
+            r"(?m)^\s*[-*+]\s+",
+            "• ",
+            reply
+        )
+
+        # -----------------------------------------------------
+        # Clean excessive blank lines
+        # -----------------------------------------------------
+
+        reply = re.sub(
+            r"\n[ \t]+\n",
+            "\n\n",
+            reply
+        )
+
+        reply = re.sub(
+            r"\n{3,}",
+            "\n\n",
+            reply
+        )
+
+        # -----------------------------------------------------
+        # Remove trailing spaces from each line
+        # -----------------------------------------------------
+
+        reply = "\n".join(
+            line.rstrip()
+            for line in reply.splitlines()
+        )
+
+        # -----------------------------------------------------
+        # Restore protected code blocks
+        # -----------------------------------------------------
+
+        for index, block in enumerate(code_blocks):
+            reply = reply.replace(
+                f"__ARIA_CODE_BLOCK_{index}__",
+                block
+            )
+
+        reply = reply.strip()
+
+        # -----------------------------------------------------
+        # Add punctuation only to simple one-line responses
+        # -----------------------------------------------------
+
+        if reply and "\n" not in reply:
             if reply[-1] not in ".!?":
                 reply += "."
 
