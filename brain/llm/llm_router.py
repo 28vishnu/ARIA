@@ -282,4 +282,115 @@ class LLMRouter:
                 "Gemini returned an empty response."
             )
 
-        return result 
+        return result
+
+    # =========================================================
+    # GEMINI EMBEDDINGS
+    # =========================================================
+
+    async def embed(
+        self,
+        texts: List[str],
+        task_type: str = "RETRIEVAL_DOCUMENT"
+    ) -> List[List[float]]:
+        """
+        Generate embeddings remotely using Gemini.
+
+        This replaces the local SentenceTransformer model,
+        avoiding PyTorch/Transformers RAM usage on Render.
+
+        task_type:
+            RETRIEVAL_DOCUMENT -> when indexing document chunks
+            RETRIEVAL_QUERY    -> when embedding a user's search/question
+        """
+
+        if not self.gemini_api_key:
+            raise RuntimeError(
+                "Gemini API key is required for embeddings."
+            )
+
+        if not texts:
+            return []
+
+        model = "gemini-embedding-001"
+
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{model}:batchEmbedContents"
+        )
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.gemini_api_key
+        }
+
+        requests = []
+
+        for text in texts:
+            cleaned_text = str(text).strip()
+
+            if not cleaned_text:
+                cleaned_text = " "
+
+            requests.append({
+                "model": f"models/{model}",
+                "content": {
+                    "parts": [
+                        {
+                            "text": cleaned_text
+                        }
+                    ]
+                },
+                "taskType": task_type
+            })
+
+        payload = {
+            "requests": requests
+        }
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout
+        ) as client:
+
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+        embedding_objects = data.get(
+            "embeddings",
+            []
+        )
+
+        if len(embedding_objects) != len(texts):
+            raise RuntimeError(
+                "Gemini returned an unexpected number of embeddings."
+            )
+
+        embeddings = []
+
+        for embedding in embedding_objects:
+
+            values = embedding.get(
+                "values",
+                []
+            )
+
+            if not values:
+                raise RuntimeError(
+                    "Gemini returned an empty embedding."
+                )
+
+            embeddings.append(values)
+
+        logger.info(
+            "[LLMRouter] Gemini generated %d embeddings.",
+            len(embeddings)
+        )
+
+        return embeddings
