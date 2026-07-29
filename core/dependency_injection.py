@@ -4,6 +4,7 @@ from typing import Any
 
 logger = logging.getLogger("aria")
 
+
 class ServiceRegistry:
     def __init__(self):
         self._services: dict[str, Any] = {}
@@ -20,6 +21,7 @@ class ServiceRegistry:
     def has(self, name: str) -> bool:
         return name in self._services
 
+
 @dataclass
 class RequestContext:
     session_id: str
@@ -29,8 +31,6 @@ class RequestContext:
     skill_manager: Any
     action_manager: Any
     planner: Any
-    cognitive_core: Any      # <-- Added this line
+    cognitive_core: Any
     executor: Any
     personality_engine: Any
-    context_manager: Any
-    event_bus: Any
