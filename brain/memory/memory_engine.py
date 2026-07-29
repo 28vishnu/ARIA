@@ -10,8 +10,10 @@ SCHEMA_VERSION = 2
 
 class MemoryEngine:
 
-    def __init__(self, mongo_db):
+    def __init__(self, mongo_db, llm_router=None):
         self.db = mongo_db
+        self.llm_router = llm_router
+
         self.memory_col = (
             mongo_db["personal_memory"]
             if mongo_db is not None else None
