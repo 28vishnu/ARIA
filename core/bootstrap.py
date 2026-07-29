@@ -18,6 +18,8 @@ from skills.document import DocumentSkill
 from skills.memory import MemorySkill
 from skills.profile import ProfileSkill
 
+from actions.manager import ActionManager
+
 from brain.planner import Planner
 from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
@@ -183,6 +185,11 @@ async def bootstrap_application() -> ServiceRegistry:
     skill_manager.register(MemorySkill())
     skill_manager.register(ProfileSkill())
 
+    # Action Manager
+    action_manager = ActionManager(
+        permission_mode=config.permission_mode
+    )
+
     planner = Planner(llm_router)
     executor = Executor(skill_manager)
 
@@ -210,6 +217,11 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "skill_manager",
         skill_manager
+    )
+
+    registry.register(
+        "action_manager",
+        action_manager
     )
 
     registry.register(
