@@ -37,61 +37,140 @@ class LLMRouter:
         """
         Generate a chat response.
 
-        Groq is attempted first.
-        Gemini is used as a fallback.
+        Provider order:
+        1. Groq
+        2. Gemini fallback
+
+        A single short retry is allowed when a provider is temporarily
+        rate-limited or unavailable.
         """
 
         errors = []
+
+        # -----------------------------------------------------
+        # Helper: determine whether an error is temporary
+        # -----------------------------------------------------
+
+        def is_temporary_error(exc: Exception) -> bool:
+
+            if isinstance(exc, httpx.HTTPStatusError):
+                status = exc.response.status_code
+
+                return status in {
+                    429,  # rate limit
+                    500,
+                    502,
+                    503,
+                    504
+                }
+
+            return isinstance(
+                exc,
+                (
+                    httpx.TimeoutException,
+                    httpx.NetworkError
+                )
+            )
 
         # -----------------------------------------------------
         # Groq
         # -----------------------------------------------------
 
         if self.groq_api_key:
-            try:
-                return await self._groq_chat(
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
 
-            except Exception as e:
-                logger.exception(
-                    "[LLMRouter] Groq request failed: %s",
-                    e
-                )
+            for attempt in range(2):
 
-                errors.append(f"Groq: {e}")
+                try:
+                    return await self._groq_chat(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+
+                except Exception as exc:
+
+                    logger.warning(
+                        "[LLMRouter] Groq attempt %d failed: %s",
+                        attempt + 1,
+                        exc
+                    )
+
+                    # Retry only temporary failures.
+                    if attempt == 0 and is_temporary_error(exc):
+
+                        logger.info(
+                            "[LLMRouter] Retrying Groq after temporary failure."
+                        )
+
+                        await asyncio.sleep(1.5)
+                        continue
+
+                    errors.append(
+                        f"Groq: {type(exc).__name__}"
+                    )
+
+                    break
 
         # -----------------------------------------------------
         # Gemini fallback
         # -----------------------------------------------------
 
         if self.gemini_api_key:
-            try:
-                return await self._gemini_chat(
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
 
-            except Exception as e:
-                logger.exception(
-                    "[LLMRouter] Gemini request failed: %s",
-                    e
-                )
+            for attempt in range(2):
 
-                errors.append(f"Gemini: {e}")
+                try:
+                    return await self._gemini_chat(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+
+                except Exception as exc:
+
+                    logger.warning(
+                        "[LLMRouter] Gemini attempt %d failed: %s",
+                        attempt + 1,
+                        exc
+                    )
+
+                    # Retry only temporary failures.
+                    if attempt == 0 and is_temporary_error(exc):
+
+                        logger.info(
+                            "[LLMRouter] Retrying Gemini after temporary failure."
+                        )
+
+                        await asyncio.sleep(1.5)
+                        continue
+
+                    errors.append(
+                        f"Gemini: {type(exc).__name__}"
+                    )
+
+                    break
+
+        # -----------------------------------------------------
+        # No providers configured
+        # -----------------------------------------------------
 
         if not self.groq_api_key and not self.gemini_api_key:
             raise RuntimeError(
-                "No LLM provider configured. "
-                "Set GROQ_API_KEY or GEMINI_API_KEY."
+                "No LLM provider configured."
             )
 
+        # -----------------------------------------------------
+        # All providers unavailable
+        # -----------------------------------------------------
+
+        logger.error(
+            "[LLMRouter] All configured LLM providers failed: %s",
+            " | ".join(errors)
+        )
+
         raise RuntimeError(
-            "All configured LLM providers failed. "
-            + " | ".join(errors)
+            "All configured LLM providers failed due to a temporary "
+            "provider or rate-limit issue."
         )
 
     # =========================================================
