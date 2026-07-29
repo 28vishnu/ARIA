@@ -11,10 +11,10 @@ from brain.document.document_intelligence import DocumentIntelligence
 from brain.agents.agent_manager import AgentManager
 from brain.session import SessionManager
 from brain.state.state_manager import StateManager
-from brain.skills.skill_manager import SkillManager
+from skills.manager import SkillManager
 from brain.actions.action_manager import ActionManager
-from brain.planner.planner import Planner
-from brain.executor.executor import Executor
+from brain.planner import Planner
+from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
 from personality.personality_engine import PersonalityEngine
 from brain.context.context_manager import ContextBuilder
