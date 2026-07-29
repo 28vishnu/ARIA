@@ -3,9 +3,7 @@ import logging
 import asyncio
 from core.configuration import load_config
 from core.dependency_injection import ServiceRegistry
-from memory.mongo_client import MongoClient
-from memory.memory_engine import MemoryEngine
-from memory.vector_store import VectorStore
+from brain.memory.memory_engine import MemoryEngine
 from brain.document.document_intelligence import DocumentIntelligence
 from brain.agents.agent_manager import AgentManager
 from brain.session.session_manager import SessionManager
