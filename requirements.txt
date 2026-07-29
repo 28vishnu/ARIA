@@ -15,4 +15,3 @@ groq
 google-genai
 certifi
 aiofiles
-sentence-transformers
