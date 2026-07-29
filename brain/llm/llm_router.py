@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from typing import Any, Dict, List
 
@@ -394,3 +395,193 @@ class LLMRouter:
         )
 
         return embeddings
+
+    # =========================================================
+    # LLM MEMORY EXTRACTION
+    # =========================================================
+
+    async def extract_memories(
+        self,
+        user_text: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Understand natural-language user statements and extract
+        zero or more long-term memories.
+
+        This uses the existing LLM provider instead of requiring
+        hundreds of hard-coded regex patterns.
+        """
+
+        if not user_text or not user_text.strip():
+            return []
+
+        system_prompt = """
+You are ARIA's memory understanding engine.
+
+Your job is to identify useful long-term information that the
+user explicitly tells ARIA about themselves, their preferences,
+goals, education, projects, plans, relationships with things,
+or interaction preferences.
+
+Extract MULTIPLE memories when one message contains multiple facts.
+
+Do NOT store:
+- ordinary questions
+- greetings
+- temporary conversation
+- general knowledge
+- passwords
+- API keys
+- authentication tokens
+- Aadhaar numbers
+- PAN numbers
+- banking information
+- OTPs
+- highly sensitive private credentials
+
+Return ONLY valid JSON.
+
+Required format:
+
+{
+  "memories": [
+    {
+      "key": "short_stable_key",
+      "value": "memory value",
+      "category": "category",
+      "memory_type": "fact_or_preference",
+      "importance": "low_medium_or_high"
+    }
+  ]
+}
+
+Examples:
+
+User:
+My name is John and I study computer science.
+
+Output:
+{
+  "memories": [
+    {
+      "key": "name",
+      "value": "John",
+      "category": "identity",
+      "memory_type": "fact",
+      "importance": "high"
+    },
+    {
+      "key": "field_of_study",
+      "value": "computer science",
+      "category": "education",
+      "memory_type": "fact",
+      "importance": "medium"
+    }
+  ]
+}
+
+User:
+My favourite car is Porsche but I prefer dark mode.
+
+Output:
+{
+  "memories": [
+    {
+      "key": "favorite_car",
+      "value": "Porsche",
+      "category": "preference",
+      "memory_type": "preference",
+      "importance": "medium"
+    },
+    {
+      "key": "interface_preference",
+      "value": "dark mode",
+      "category": "interaction_preference",
+      "memory_type": "preference",
+      "importance": "medium"
+    }
+  ]
+}
+
+If there is nothing worth remembering return:
+
+{
+  "memories": []
+}
+"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_text
+            }
+        ]
+
+        try:
+            response = await self.chat(
+                messages=messages,
+                temperature=0.1,
+                max_tokens=700
+            )
+
+            # Remove accidental Markdown code fences.
+            cleaned = response.strip()
+
+            if cleaned.startswith("```"):
+                cleaned = cleaned.replace("```json", "", 1)
+                cleaned = cleaned.replace("```", "")
+                cleaned = cleaned.strip()
+
+            data = json.loads(cleaned)
+
+            memories = data.get("memories", [])
+
+            if not isinstance(memories, list):
+                return []
+
+            valid_memories = []
+
+            for memory in memories:
+
+                if not isinstance(memory, dict):
+                    continue
+
+                key = str(memory.get("key", "")).strip()
+                value = str(memory.get("value", "")).strip()
+
+                if not key or not value:
+                    continue
+
+                valid_memories.append({
+                    "key": key.lower().replace(" ", "_"),
+                    "value": value,
+                    "category": str(
+                        memory.get("category", "general")
+                    ),
+                    "memory_type": str(
+                        memory.get("memory_type", "fact")
+                    ),
+                    "importance": str(
+                        memory.get("importance", "medium")
+                    )
+                })
+
+            logger.info(
+                "[LLMRouter] Memory interpreter extracted %d memories.",
+                len(valid_memories)
+            )
+
+            return valid_memories
+
+        except Exception as exc:
+
+            logger.warning(
+                "[LLMRouter] Memory extraction failed: %s",
+                exc
+            )
+
+            return []
