@@ -115,16 +115,39 @@ async def telegram_webhook(req: Request):
     request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
     config = req.app.state.registry.get("config")
     token = config.telegram_token
+
     if not token:
         return {"status": "telegram token unconfigured"}
 
     data = await req.json()
     msg = data.get("message", {})
+
     chat_id = msg.get("chat", {}).get("id")
+    user_id = msg.get("from", {}).get("id")
     text = msg.get("text", "").strip()
 
-    if chat_id is None:
+    if chat_id is None or user_id is None:
         return {"status": "ok"}
+
+    # ---------------------------------------------------------
+    # PRIVATE OWNER-ONLY ACCESS
+    # ---------------------------------------------------------
+
+    allowed_user_id = os.getenv("ALLOWED_TELEGRAM_USER_ID", "").strip()
+
+    if not allowed_user_id:
+        logger.error(
+            "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
+        )
+        return {"status": "unauthorized"}
+
+    if str(user_id) != allowed_user_id:
+        logger.warning(
+            "[Security] Unauthorized Telegram access attempt."
+        )
+        return {"status": "unauthorized"}
+
+    logger.info("[Security] Authorized Telegram user.")
 
     # Handle document upload
     if "document" in msg:
