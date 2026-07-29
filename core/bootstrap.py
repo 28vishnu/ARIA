@@ -1,7 +1,7 @@
 import os
 import logging
 import asyncio
-from core.config import Config
+from core.configuration import AppConfig
 from core.dependency_injection import ServiceRegistry
 from memory.mongo_client import MongoClient
 from memory.memory_engine import MemoryEngine
@@ -28,7 +28,7 @@ logger = logging.getLogger("aria")
 async def bootstrap_application() -> ServiceRegistry:
     logger.info("[BOOT TEST] 1 - Bootstrap started")
 
-    config = Config()
+    config = AppConfig()
     registry = ServiceRegistry()
     registry.register("config", config)
 
