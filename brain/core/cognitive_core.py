@@ -198,9 +198,6 @@ class CognitiveCore:
             # The selected capability will be executed afterwards.
             # ---------------------------------------------------------
 
-            agent_result = None
-            results = []
-
             if reasoning:
                 logger.info(
                     "[CognitiveCore] Reasoning complete: "
