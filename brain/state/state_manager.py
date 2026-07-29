@@ -16,9 +16,12 @@ class StateManager:
         state = self.get_state(session_id)
         state.update(kwargs)
 
-    def clear_document_context(self, session_id: str):
+    def clear_document_context(
+        self,
+        session_id: str
+    ):
         """
-        Clears all active document state tracking for a session.
+        Resets document mode after deleting or closing documents.
         """
         self.update_state(
             session_id,
