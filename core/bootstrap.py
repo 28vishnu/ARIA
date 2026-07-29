@@ -9,7 +9,7 @@ from core.dependency_injection import ServiceRegistry
 from brain.memory.memory_engine import MemoryEngine
 from brain.document.document_intelligence import DocumentIntelligence
 from brain.agents.agent_manager import AgentManager
-from brain.session.session_manager import SessionManager
+from brain.session import SessionManager
 from brain.state.state_manager import StateManager
 from brain.skills.skill_manager import SkillManager
 from brain.actions.action_manager import ActionManager
