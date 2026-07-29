@@ -13,6 +13,10 @@ from brain.session import SessionManager
 from brain.state.state_manager import StateManager
 
 from skills.manager import SkillManager
+from skills.chat import ChatSkill
+from skills.document import DocumentSkill
+from skills.memory import MemorySkill
+from skills.profile import ProfileSkill
 
 from brain.planner import Planner
 from brain.executor import Executor
@@ -173,6 +177,11 @@ async def bootstrap_application() -> ServiceRegistry:
     session_manager = SessionManager(state_manager)
 
     skill_manager = SkillManager()
+
+    skill_manager.register(ChatSkill())
+    skill_manager.register(DocumentSkill())
+    skill_manager.register(MemorySkill())
+    skill_manager.register(ProfileSkill())
 
     planner = Planner(llm_router)
     executor = Executor(skill_manager)
