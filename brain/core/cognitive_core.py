@@ -444,19 +444,6 @@ class CognitiveCore:
 
                         break
 
-            if (
-                success
-                and reasoning
-                and reasoning.workflow
-                and agent_result is not None
-            ):
-                return SystemResponse(
-                    success=True,
-                    confidence=1.0,
-                    source="agent",
-                    data=agent_result.data
-                )
-
             return SystemResponse(
                 success=success,
                 confidence=getattr(plan, "confidence", 0.85),
