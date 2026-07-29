@@ -50,10 +50,33 @@ class CognitiveCore:
             if self.state_manager:
                 state = self.state_manager.get_state(session_id)
 
-            # 2. Get Memory
+            # 2. Get relevant existing memories
             memories = []
             if self.memory_router:
-                memories = await self.memory_router.get_relevant_memories(query)
+                try:
+                    memories = await self.memory_router.get_relevant_memories(query)
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] Memory retrieval failed."
+                    )
+
+            # 2.1 Learn useful long-term information from normal conversation
+            if self.memory_router:
+                try:
+                    memory_result = await self.memory_router.process_and_store(query)
+
+                    if memory_result and memory_result.get("success"):
+                        logger.info(
+                            "[CognitiveCore] Learned memory: key=%s action=%s",
+                            memory_result.get("key"),
+                            memory_result.get("action")
+                        )
+
+                except Exception:
+                    # Memory learning must NEVER break normal conversation.
+                    logger.exception(
+                        "[CognitiveCore] Automatic memory learning failed."
+                    )
 
             # 3. Build Context (including state and memories)
             ctx = {}
