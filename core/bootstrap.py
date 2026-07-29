@@ -166,9 +166,10 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     context_builder = ContextBuilder()
-
-    session_manager = SessionManager(context_builder)
     state_manager = StateManager()
+
+    session_manager = SessionManager(state_manager)
+
     skill_manager = SkillManager()
     action_manager = ActionManager()
     planner = Planner()
