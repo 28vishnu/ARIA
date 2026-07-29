@@ -498,11 +498,26 @@ class DocumentIntelligence:
     async def answer_question(
         self,
         session_id: str,
-        question: str
+        question: str,
+        state: Optional[dict] = None
     ):
         """
         Answer a question using previously uploaded documents.
         """
+
+        if state:
+
+            previous = state.get(
+                "last_document_question"
+            )
+
+            if previous:
+
+                question = (
+                    previous
+                    + "\nFollow-up: "
+                    + question
+                )
 
         chunks = await self.hybrid_search(
             session_id=session_id,
