@@ -1,5 +1,6 @@
 import logging
 
+import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
 import chromadb
 
@@ -116,6 +117,23 @@ async def bootstrap_application() -> ServiceRegistry:
 
     logger.info(
         "[BOOT TEST] 5 - ChromaDB configured"
+    )
+
+    # ---------------------------------------------------------
+    # HTTP Client
+    # ---------------------------------------------------------
+
+    http_client = httpx.AsyncClient(
+        timeout=config.timeout_seconds
+    )
+
+    registry.register(
+        "http_client",
+        http_client
+    )
+
+    logger.info(
+        "[BOOT TEST] HTTP client configured"
     )
 
     # ---------------------------------------------------------
