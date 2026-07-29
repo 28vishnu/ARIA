@@ -23,7 +23,7 @@ from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
 
 from personality.engine import PersonalityEngine
-from brain.context.context_manager import ContextBuilder
+from brain.context.context_builder import ContextBuilder
 from brain.decision.decision_engine import DecisionEngine
 from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
