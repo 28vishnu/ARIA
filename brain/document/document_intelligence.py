@@ -31,18 +31,11 @@ class DocumentIntelligence:
 
     def unload_embedding_model(self):
         """
-        Release any unused memory resources after document operations
-        to keep RAM usage minimal on constrained deployments.
+        Run garbage collection after document operations.
+        Embeddings are generated remotely, so no local ML model
+        needs to be unloaded.
         """
         gc.collect()
-
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
 
     async def process_document(
         self,
