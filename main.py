@@ -78,9 +78,7 @@ def build_request_context(session_id: str, request_id: str, registry) -> Request
         planner=registry.get("planner"),
         cognitive_core=registry.get("cognitive_core"),
         executor=registry.get("executor"),
-        personality_engine=registry.get("personality_engine"),
-        context_manager=registry.get("context_manager"),
-        event_bus=registry.get("event_bus")
+        personality_engine=registry.get("personality_engine")
     )
 
 async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> str:
