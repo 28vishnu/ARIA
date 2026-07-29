@@ -294,6 +294,73 @@ class CognitiveCore:
                                 }
                             )
 
+                # Document Management Actions
+                elif decision.action == "delete_document":
+
+                    document_ai = ctx.get("document_intelligence")
+                    doc_name = (decision.data or {}).get("document_name") if hasattr(decision, "data") else None
+
+                    if document_ai and doc_name:
+                        await document_ai.delete_document(
+                            session_id,
+                            doc_name
+                        )
+
+                    if self.state_manager:
+                        self.state_manager.clear_document_context(
+                            session_id
+                        )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=decision.confidence,
+                        source="document_management",
+                        data={
+                            "response": "Document deleted."
+                        }
+                    )
+
+                elif decision.action == "delete_all_documents":
+
+                    document_ai = ctx.get("document_intelligence")
+
+                    if document_ai:
+                        await document_ai.delete_all_documents(
+                            session_id
+                        )
+
+                    if self.state_manager:
+                        self.state_manager.clear_document_context(
+                            session_id
+                        )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=decision.confidence,
+                        source="document_management",
+                        data={
+                            "response": "All uploaded documents deleted."
+                        }
+                    )
+
+                elif decision.action == "reindex_documents":
+
+                    document_ai = ctx.get("document_intelligence")
+
+                    if document_ai:
+                        await document_ai.reindex_documents(
+                            session_id
+                        )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=decision.confidence,
+                        source="document_management",
+                        data={
+                            "response": "Document index rebuilt."
+                        }
+                    )
+
                 # Chat
                 elif decision.action == "chat":
                     if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
