@@ -11,6 +11,11 @@ from brain.memory.memory_engine import MemoryEngine
 from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.document.document_intelligence import DocumentIntelligence
 from brain.agents.agent_manager import AgentManager
+from brain.agents.code_agent import CodeAgent
+from brain.agents.math_agent import MathAgent
+from brain.agents.planning_agent import PlanningAgent
+from brain.agents.research_agent import ResearchAgent
+from brain.agents.writing_agent import WritingAgent
 from brain.session import SessionManager
 from brain.state.state_manager import StateManager
 
@@ -215,9 +220,23 @@ async def bootstrap_application() -> ServiceRegistry:
 
     agent_manager = AgentManager()
 
+    # Register ARIA's specialist reasoning agents.
+    # These agents allow the reasoning layer to dynamically select
+    # expertise instead of relying entirely on hard-coded routing.
+    agent_manager.register(CodeAgent())
+    agent_manager.register(MathAgent())
+    agent_manager.register(PlanningAgent())
+    agent_manager.register(ResearchAgent())
+    agent_manager.register(WritingAgent())
+
     registry.register(
         "agent_manager",
         agent_manager
+    )
+
+    logger.info(
+        "[BOOT TEST] Registered %d specialist agents",
+        len(agent_manager.agents)
     )
 
     # ---------------------------------------------------------
