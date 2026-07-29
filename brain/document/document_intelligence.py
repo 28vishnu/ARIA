@@ -1,4 +1,7 @@
+import hashlib
 import logging
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any
@@ -10,7 +13,8 @@ logger = logging.getLogger("aria")
 
 class DocumentIntelligence:
     """
-    Handles document ingestion, extraction, summarisation and storage.
+    Handles document ingestion, extraction, summarisation, semantic vector indexing,
+    hybrid search retrieval, and question answering.
     """
 
     def __init__(
@@ -26,6 +30,7 @@ class DocumentIntelligence:
         self.embedding_model = SentenceTransformer(
             "all-MiniLM-L6-v2"
         )
+        self._embedding_cache: Dict[str, List[float]] = {}
 
     async def process_document(
         self,
@@ -33,19 +38,24 @@ class DocumentIntelligence:
         session_id: str
     ):
         """
-        Complete document pipeline.
+        Complete document pipeline with performance timing.
         """
+        t_start = time.perf_counter()
 
         # Step 1: Extract pages
+        t0 = time.perf_counter()
         pages = await self.extract_text(file_path)
+        t_extract = time.perf_counter() - t0
 
         full_text = "\n".join(
             page["text"]
             for page in pages
         )
 
-        # Step 2: Chunk text with page tracking (paragraph-aware)
+        # Step 2: Chunk text with page tracking
+        t0 = time.perf_counter()
         chunks = self.chunk_text_with_pages(pages)
+        t_chunk = time.perf_counter() - t0
 
         # Step 3: Summarise
         summary = await self.summarize(full_text)
@@ -80,6 +90,15 @@ class DocumentIntelligence:
                     e
                 )
 
+        t_total = time.perf_counter() - t_start
+        logger.info(
+            "[DocumentAI] Processed %s in %.2fs (Extract: %.2fs, Chunk: %.2fs)",
+            Path(file_path).name,
+            t_total,
+            t_extract,
+            t_chunk
+        )
+
         return {
             "success": True,
             "text": full_text,
@@ -94,9 +113,8 @@ class DocumentIntelligence:
     ) -> List[Dict[str, Union[int, str]]]:
         """
         Extract text with page numbers from TXT and PDF files.
-        Returns a list of dicts: [{"page": 1, "text": "..."}, ...]
+        Falls back to OCR for scanned PDFs if pypdf returns empty pages.
         """
-
         suffix = Path(file_path).suffix.lower()
 
         if suffix == ".txt":
@@ -109,16 +127,41 @@ class DocumentIntelligence:
 
         if suffix == ".pdf":
             reader = PdfReader(file_path)
-
             pages = []
 
             for page_number, page in enumerate(reader.pages, start=1):
-                text = page.extract_text()
+                text = page.extract_text() or ""
+                
+                # OCR Fallback if page text is empty
+                if not text.strip():
+                    try:
+                        import pytesseract
+                        from pdf2image import convert_from_path
 
-                if text:
+                        images = convert_from_path(
+                            file_path,
+                            first_page=page_number,
+                            last_page=page_number
+                        )
+                        if images:
+                            ocr_text = pytesseract.image_to_string(images[0])
+                            if ocr_text.strip():
+                                text = ocr_text.strip()
+                                logger.info(
+                                    "[DocumentAI OCR] Successfully extracted page %d via OCR",
+                                    page_number
+                                )
+                    except Exception as ocr_err:
+                        logger.warning(
+                            "[DocumentAI OCR] OCR failed on page %d: %s",
+                            page_number,
+                            ocr_err
+                        )
+
+                if text.strip():
                     pages.append({
                         "page": page_number,
-                        "text": text
+                        "text": text.strip()
                     })
 
             return pages
@@ -133,18 +176,14 @@ class DocumentIntelligence:
     ):
         """
         Split text into chunks by paragraphs while preserving page numbers.
-        Avoids splitting sentences/paragraphs mid-way whenever possible.
         """
-
         chunks = []
 
         for page in pages:
             text = page["text"]
             page_number = page["page"]
 
-            # Split text by double newlines or single newlines to identify paragraphs
             paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-
             current_chunk = ""
 
             for paragraph in paragraphs:
@@ -156,8 +195,7 @@ class DocumentIntelligence:
                             "text": current_chunk,
                             "page": page_number
                         })
-                    
-                    # If paragraph itself exceeds target, break by sentence or force split
+
                     if len(paragraph) > max_chunk_size:
                         start = 0
                         while start < len(paragraph):
@@ -186,7 +224,6 @@ class DocumentIntelligence:
         """
         Generate an AI summary of a document.
         """
-
         if not self.llm_router:
             return text[:1000]
 
@@ -219,7 +256,6 @@ class DocumentIntelligence:
         """
         Store a processed document summary as long-term memory.
         """
-
         if self.memory_engine is None:
             return
 
@@ -260,7 +296,6 @@ class DocumentIntelligence:
         """
         Store every document chunk separately.
         """
-
         if self.memory_engine is None:
             return
 
@@ -269,7 +304,6 @@ class DocumentIntelligence:
         doc_name = metadata.get("document_name", "default")
 
         for index, chunk in enumerate(chunks):
-
             await self.memory_engine.memory_col.update_one(
                 {
                     "key": f"document_chunk_{session_id}_{doc_name}_{index}"
@@ -300,22 +334,48 @@ class DocumentIntelligence:
         self,
         session_id: str,
         chunks: list[dict],
-        metadata: Optional[dict] = None
+        metadata: Optional[dict] = None,
+        batch_size: int = 32
     ):
         """
-        Store semantic embeddings in ChromaDB.
+        Store semantic embeddings in ChromaDB using caching and batching.
         """
-
         if self.vector_db is None:
             return
 
-        embeddings = self.embedding_model.encode(
-            [c["text"] for c in chunks],
-            convert_to_numpy=True
-        ).tolist()
-
+        t0 = time.perf_counter()
         metadata = metadata or {}
         document_id = metadata.get("document_name", "default")
+
+        texts = [c["text"] for c in chunks]
+        embeddings = []
+
+        # Batch & Cache Encoding
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            batch_to_encode = []
+            batch_indices_to_encode = []
+
+            for idx, txt in enumerate(batch_texts):
+                txt_hash = hashlib.md5(txt.encode("utf-8")).hexdigest()
+                if txt_hash in self._embedding_cache:
+                    embeddings.append(self._embedding_cache[txt_hash])
+                else:
+                    batch_to_encode.append(txt)
+                    batch_indices_to_encode.append(len(embeddings))
+                    embeddings.append(None)  # Placeholder
+
+            if batch_to_encode:
+                encoded_batch = self.embedding_model.encode(
+                    batch_to_encode,
+                    convert_to_numpy=True
+                ).tolist()
+
+                for sub_idx, emb in enumerate(encoded_batch):
+                    target_pos = batch_indices_to_encode[sub_idx]
+                    embeddings[target_pos] = emb
+                    txt_hash = hashlib.md5(batch_to_encode[sub_idx].encode("utf-8")).hexdigest()
+                    self._embedding_cache[txt_hash] = emb
 
         ids = [
             f"{session_id}_{document_id}_{i}"
@@ -323,7 +383,6 @@ class DocumentIntelligence:
         ]
 
         metadatas = []
-
         for i in range(len(chunks)):
             data = dict(metadata)
             data["session_id"] = session_id
@@ -339,29 +398,62 @@ class DocumentIntelligence:
 
         self.vector_db.add(
             ids=ids,
-            documents=[c["text"] for c in chunks],
+            documents=texts,
             embeddings=embeddings,
             metadatas=metadatas
         )
 
+        t_store = time.perf_counter() - t0
         logger.info(
-            "[DocumentAI] Stored %d vectors for %s.",
+            "[DocumentAI] Stored %d vectors for %s in %.2fs.",
             len(chunks),
-            document_id
+            document_id,
+            t_store
         )
+
+    def _parse_query_filters(self, query: str) -> tuple[str, dict]:
+        """
+        Extracts specific document name and page number filters from the query string.
+        Returns cleaned_query, filter_dict
+        """
+        where_filter = {}
+        cleaned_query = query
+
+        # Parse document filter (e.g. "Only in Italy.pdf" or "document:Italy.pdf")
+        doc_match = re.search(r"(?:only\s+in|document:)\s*([a-zA-Z0-9_\-\.\s]+\.(?:pdf|txt))", cleaned_query, re.IGNORECASE)
+        if doc_match:
+            doc_name = doc_match.group(1).strip()
+            where_filter["document_name"] = doc_name
+            cleaned_query = re.sub(re.escape(doc_match.group(0)), "", cleaned_query, flags=re.IGNORECASE)
+
+        # Parse page filter (e.g. "Only page 5" or "page:5")
+        page_match = re.search(r"(?:only\s+page|page:)\s*(\d+)", cleaned_query, re.IGNORECASE)
+        if page_match:
+            page_num = int(page_match.group(1))
+            where_filter["page"] = page_num
+            cleaned_query = re.sub(re.escape(page_match.group(0)), "", cleaned_query, flags=re.IGNORECASE)
+
+        return cleaned_query.strip(), where_filter
 
     async def semantic_search(
         self,
         session_id: str,
         query: str,
-        limit: int = 5
+        limit: int = 5,
+        filters: Optional[dict] = None
     ):
         """
-        Retrieve the most relevant chunks using semantic similarity.
+        Retrieve the most relevant chunks using semantic similarity and metadata filtering.
         """
-
         if self.vector_db is None:
             return []
+
+        t0 = time.perf_counter()
+
+        where_clause = {"session_id": session_id}
+        if filters:
+            for k, v in filters.items():
+                where_clause[k] = v
 
         query_embedding = self.embedding_model.encode(
             query,
@@ -371,15 +463,13 @@ class DocumentIntelligence:
         results = self.vector_db.query(
             query_embeddings=[query_embedding],
             n_results=limit,
-            where={
-                "session_id": session_id
-            }
+            where=where_clause
         )
 
         documents = results.get("documents", [[]])[0]
         metadatas = results.get("metadatas", [[]])[0]
 
-        return [
+        output = [
             {
                 "text": doc,
                 "page": meta.get("page", "?"),
@@ -388,54 +478,23 @@ class DocumentIntelligence:
             for doc, meta in zip(documents, metadatas)
         ]
 
-    async def hybrid_search(
-        self,
-        session_id: str,
-        query: str,
-        limit: int = 5
-    ):
-        """
-        Combine semantic and keyword retrieval.
-        """
-
-        semantic = await self.semantic_search(
-            session_id=session_id,
-            query=query,
-            limit=limit
+        logger.info(
+            "[DocumentAI] Semantic search returned %d items in %.3fs.",
+            len(output),
+            time.perf_counter() - t0
         )
-
-        keyword = await self.retrieve_chunks(
-            session_id=session_id,
-            query=query,
-            limit=limit
-        )
-
-        merged = []
-
-        seen = set()
-
-        for chunk in semantic + keyword:
-
-            text = chunk["text"] if isinstance(chunk, dict) else chunk
-
-            if text not in seen:
-
-                merged.append(chunk)
-
-                seen.add(text)
-
-        return merged[:limit]
+        return output
 
     async def retrieve_chunks(
         self,
         session_id: str,
         query: str,
-        limit: int = 5
+        limit: int = 5,
+        filters: Optional[dict] = None
     ):
         """
-        Retrieve document chunks related to a query.
+        Retrieve document chunks related to a query via keyword matching and filtering.
         """
-
         if self.memory_engine is None:
             return []
 
@@ -449,9 +508,15 @@ class DocumentIntelligence:
         )
 
         chunks = await cursor.to_list(length=100)
-
         if not chunks:
             return []
+
+        # Apply metadata filters if present
+        if filters:
+            if "document_name" in filters:
+                chunks = [c for c in chunks if c.get("document_name") == filters["document_name"]]
+            if "page" in filters:
+                chunks = [c for c in chunks if c.get("page") == filters["page"]]
 
         query_words = {
             word.lower()
@@ -460,17 +525,13 @@ class DocumentIntelligence:
         }
 
         scored = []
-
         for chunk in chunks:
-
             text = chunk.get("value", "")
-
             score = sum(
                 1
                 for word in query_words
                 if word in text.lower()
             )
-
             scored.append(
                 (
                     score,
@@ -493,29 +554,70 @@ class DocumentIntelligence:
             if score > 0
         ]
 
+    async def hybrid_search(
+        self,
+        session_id: str,
+        query: str,
+        limit: int = 5
+    ):
+        """
+        Combine semantic and keyword retrieval using Reciprocal Rank Fusion (RRF).
+        """
+        clean_query, filters = self._parse_query_filters(query)
+
+        semantic = await self.semantic_search(
+            session_id=session_id,
+            query=clean_query,
+            limit=limit * 2,
+            filters=filters
+        )
+
+        keyword = await self.retrieve_chunks(
+            session_id=session_id,
+            query=clean_query,
+            limit=limit * 2,
+            filters=filters
+        )
+
+        # Reciprocal Rank Fusion (RRF)
+        rrf_scores: Dict[str, float] = {}
+        chunk_map: Dict[str, dict] = {}
+        k = 60
+
+        for rank, item in enumerate(semantic):
+            txt = item["text"]
+            chunk_map[txt] = item
+            rrf_scores[txt] = rrf_scores.get(txt, 0.0) + (1.0 / (k + rank + 1))
+
+        for rank, item in enumerate(keyword):
+            txt = item["text"]
+            chunk_map[txt] = item
+            rrf_scores[txt] = rrf_scores.get(txt, 0.0) + (1.0 / (k + rank + 1))
+
+        sorted_chunks = sorted(
+            rrf_scores.keys(),
+            key=lambda t: rrf_scores[t],
+            reverse=True
+        )
+
+        return [chunk_map[txt] for txt in sorted_chunks[:limit]]
+
     async def answer_question(
         self,
         session_id: str,
         question: str,
-        state: Optional[dict] = None
+        state: Optional[dict] = None,
+        max_context_chars: int = 6000
     ):
         """
-        Answer a question using previously uploaded documents.
+        Answer a question using previously uploaded documents with context window management.
         """
+        t_start = time.perf_counter()
 
         if state:
-
-            previous = state.get(
-                "last_document_question"
-            )
-
+            previous = state.get("last_document_question")
             if previous:
-
-                question = (
-                    previous
-                    + "\nFollow-up: "
-                    + question
-                )
+                question = f"{previous}\nFollow-up: {question}"
 
         chunks = await self.hybrid_search(
             session_id=session_id,
@@ -533,10 +635,18 @@ class DocumentIntelligence:
                 "Please try asking about another topic from the document."
             )
 
-        context = "\n\n".join(
-            f"[Document: {chunk['document']} | Page {chunk['page']}]\n{chunk['text']}"
-            for chunk in chunks
-        )
+        # Context Window Management (Trimming)
+        context_parts = []
+        current_len = 0
+
+        for chunk in chunks:
+            part = f"[Document: {chunk['document']} | Page {chunk['page']}]\n{chunk['text']}"
+            if current_len + len(part) > max_context_chars:
+                break
+            context_parts.append(part)
+            current_len += len(part)
+
+        context = "\n\n".join(context_parts)
 
         messages = [
             {
@@ -565,7 +675,15 @@ Question:
             }
         ]
 
+        t_llm_start = time.perf_counter()
         answer = await self.llm_router.chat(messages)
+        t_llm = time.perf_counter() - t_llm_start
+
+        logger.info(
+            "[DocumentAI] Q&A completed in %.2fs (LLM: %.2fs).",
+            time.perf_counter() - t_start,
+            t_llm
+        )
 
         if not answer or not answer.strip():
             return (
@@ -573,3 +691,67 @@ Question:
             )
 
         return answer
+
+    async def delete_document(
+        self,
+        session_id: str,
+        document_name: str
+    ):
+        """
+        Deletes a specific document's memory entries and Chroma vectors.
+        """
+        if self.memory_engine:
+            await self.memory_engine.memory_col.delete_many({
+                "category": {"$in": ["document", "document_chunk"]},
+                "metadata.document_name": document_name,
+                "key": {"$regex": f"_{session_id}_"}
+            })
+
+        if self.vector_db:
+            try:
+                self.vector_db.delete(
+                    where={
+                        "session_id": session_id,
+                        "document_name": document_name
+                    }
+                )
+            except Exception as e:
+                logger.warning("[DocumentAI] ChromaDB deletion warning: %s", e)
+
+        logger.info("[DocumentAI] Deleted document %s for session %s", document_name, session_id)
+
+    async def delete_all_documents(
+        self,
+        session_id: str
+    ):
+        """
+        Deletes all documents and vectors associated with a session.
+        """
+        if self.memory_engine:
+            await self.memory_engine.memory_col.delete_many({
+                "category": {"$in": ["document", "document_chunk"]},
+                "key": {"$regex": f"_{session_id}_"}
+            })
+
+        if self.vector_db:
+            try:
+                self.vector_db.delete(
+                    where={"session_id": session_id}
+                )
+            except Exception as e:
+                logger.warning("[DocumentAI] ChromaDB purge warning: %s", e)
+
+        logger.info("[DocumentAI] Purged all documents for session %s", session_id)
+
+    async def reindex_documents(
+        self,
+        session_id: str,
+        file_paths: List[str]
+    ):
+        """
+        Purges session documents and re-indexes the provided file paths from scratch.
+        """
+        await self.delete_all_documents(session_id)
+        for path in file_paths:
+            await self.process_document(path, session_id)
+        logger.info("[DocumentAI] Reindexed %d documents for session %s", len(file_paths), session_id)
