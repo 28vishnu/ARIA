@@ -39,8 +39,59 @@ class DecisionEngine:
         )
 
         state = context.get("state", {})
-        query_lower = query.lower()
+        query_lower = query.lower().strip()
 
+        # Document Cleanup Intent Triggers
+        delete_all_triggers = [
+            "delete all documents",
+            "remove all documents",
+            "clear documents",
+            "purge documents",
+            "delete all pdfs",
+            "clear all documents"
+        ]
+
+        delete_doc_triggers = [
+            "delete document",
+            "remove document",
+            "forget document",
+            "delete pdf",
+            "remove pdf",
+            "close document"
+        ]
+
+        reindex_triggers = [
+            "reindex documents",
+            "rebuild index",
+            "refresh vectors",
+            "re-index documents",
+            "reindex pdfs"
+        ]
+
+        if any(trigger in query_lower for trigger in delete_all_triggers):
+            logger.info("[Decision] Detected delete_all_documents command.")
+            return Decision(
+                action="delete_all_documents",
+                confidence=1.0
+            )
+
+        if any(trigger in query_lower for trigger in delete_doc_triggers):
+            logger.info("[Decision] Detected delete_document command.")
+            doc_name = state.get("current_document")
+            return Decision(
+                action="delete_document",
+                confidence=1.0,
+                data={"document_name": doc_name} if doc_name else None
+            )
+
+        if any(trigger in query_lower for trigger in reindex_triggers):
+            logger.info("[Decision] Detected reindex_documents command.")
+            return Decision(
+                action="reindex_documents",
+                confidence=1.0
+            )
+
+        # Active follow-up routing
         if (
             state.get("active_document")
             and state.get("last_document_question")
