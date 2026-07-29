@@ -27,10 +27,19 @@ class DocumentIntelligence:
         self.llm_router = llm_router
         self.vector_db = vector_db
 
-        self.embedding_model = SentenceTransformer(
-            "all-MiniLM-L6-v2"
-        )
+        self.embedding_model = None
         self._embedding_cache: Dict[str, List[float]] = {}
+
+    def get_embedding_model(self):
+        """
+        Lazy-loads the SentenceTransformer model on first demand.
+        """
+        if self.embedding_model is None:
+            logger.info("[DocumentAI] Loading embedding model...")
+            self.embedding_model = SentenceTransformer(
+                "all-MiniLM-L6-v2"
+            )
+        return self.embedding_model
 
     async def process_document(
         self,
@@ -366,7 +375,7 @@ class DocumentIntelligence:
                     embeddings.append(None)  # Placeholder
 
             if batch_to_encode:
-                encoded_batch = self.embedding_model.encode(
+                encoded_batch = self.get_embedding_model().encode(
                     batch_to_encode,
                     convert_to_numpy=True
                 ).tolist()
@@ -455,7 +464,7 @@ class DocumentIntelligence:
             for k, v in filters.items():
                 where_clause[k] = v
 
-        query_embedding = self.embedding_model.encode(
+        query_embedding = self.get_embedding_model().encode(
             query,
             convert_to_numpy=True
         ).tolist()
