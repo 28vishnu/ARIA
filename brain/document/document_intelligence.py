@@ -44,7 +44,7 @@ class DocumentIntelligence:
             for page in pages
         )
 
-        # Step 2: Chunk text with page tracking
+        # Step 2: Chunk text with page tracking (paragraph-aware)
         chunks = self.chunk_text_with_pages(pages)
 
         # Step 3: Summarise
@@ -125,59 +125,57 @@ class DocumentIntelligence:
 
         raise ValueError(f"Unsupported file type: {suffix}")
 
-    def chunk_text(
-        self,
-        text: str,
-        chunk_size: int = 1000,
-        overlap: int = 200
-    ) -> List[str]:
-        """
-        Split text into overlapping chunks.
-        """
-
-        chunks = []
-
-        start = 0
-
-        while start < len(text):
-
-            end = start + chunk_size
-
-            chunks.append(text[start:end])
-
-            start += chunk_size - overlap
-
-        return chunks
-
     def chunk_text_with_pages(
         self,
         pages,
-        chunk_size=1000,
-        overlap=200
+        target_chunk_size=1000,
+        max_chunk_size=1200
     ):
         """
-        Split text into chunks while preserving page numbers.
+        Split text into chunks by paragraphs while preserving page numbers.
+        Avoids splitting sentences/paragraphs mid-way whenever possible.
         """
 
         chunks = []
 
         for page in pages:
-
             text = page["text"]
             page_number = page["page"]
 
-            start = 0
+            # Split text by double newlines or single newlines to identify paragraphs
+            paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
 
-            while start < len(text):
+            current_chunk = ""
 
-                end = start + chunk_size
+            for paragraph in paragraphs:
+                if len(current_chunk) + len(paragraph) + 1 <= target_chunk_size:
+                    current_chunk = f"{current_chunk}\n{paragraph}".strip()
+                else:
+                    if current_chunk:
+                        chunks.append({
+                            "text": current_chunk,
+                            "page": page_number
+                        })
+                    
+                    # If paragraph itself exceeds target, break by sentence or force split
+                    if len(paragraph) > max_chunk_size:
+                        start = 0
+                        while start < len(paragraph):
+                            end = start + target_chunk_size
+                            chunks.append({
+                                "text": paragraph[start:end],
+                                "page": page_number
+                            })
+                            start += target_chunk_size
+                        current_chunk = ""
+                    else:
+                        current_chunk = paragraph
 
+            if current_chunk:
                 chunks.append({
-                    "text": text[start:end],
+                    "text": current_chunk,
                     "page": page_number
                 })
-
-                start += chunk_size - overlap
 
         return chunks
 
