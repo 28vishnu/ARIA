@@ -120,6 +120,57 @@ class CognitiveCore:
                 intent = await self.intent_analyzer.analyze(query)
                 ctx["intent"] = intent
 
+            # ---------------------------------------------------------
+            # Fast paths
+            # ---------------------------------------------------------
+            # Deterministic conversational intents should not require
+            # an external LLM call.
+            if intent:
+
+                # Greeting can be handled entirely by PersonalityEngine.
+                if intent.name == "greeting":
+                    logger.info(
+                        "[CognitiveCore] Greeting fast-path activated."
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=intent.confidence,
+                        data={
+                            "intent": "greeting",
+                            "query": query
+                        },
+                        source="greeting_fast_path"
+                    )
+
+                # Explicit memory operations should go directly to the
+                # memory conversation layer instead of requiring an LLM
+                # response merely to verbalize stored information.
+                if intent.name in (
+                    "memory_recall",
+                    "memory_delete",
+                ):
+                    logger.info(
+                        "[CognitiveCore] Memory fast-path activated: %s",
+                        intent.name
+                    )
+
+                    if self.memory_conversation_manager:
+
+                        reply = await self.memory_conversation_manager.handle(
+                            query=query,
+                            context=ctx
+                        )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            data={
+                                "message": reply
+                            },
+                            source="memory_conversation"
+                        )
+
             reasoning = None
             if self.reasoning_engine:
                 reasoning = await self.reasoning_engine.reason(ctx)
