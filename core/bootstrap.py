@@ -11,10 +11,13 @@ from brain.document.document_intelligence import DocumentIntelligence
 from brain.agents.agent_manager import AgentManager
 from brain.session import SessionManager
 from brain.state.state_manager import StateManager
+
 from skills.manager import SkillManager
+
 from brain.planner import Planner
 from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
+
 from personality.personality_engine import PersonalityEngine
 from brain.context.context_manager import ContextBuilder
 from brain.decision.decision_engine import DecisionEngine
@@ -177,7 +180,10 @@ async def bootstrap_application() -> ServiceRegistry:
     personality_engine = PersonalityEngine()
     decision_engine = DecisionEngine()
     intent_analyzer = IntentAnalyzer()
-    reasoning_engine = ReasoningEngine()
+
+    reasoning_engine = ReasoningEngine(
+        agent_manager=agent_manager
+    )
 
     registry.register(
         "session_manager",
