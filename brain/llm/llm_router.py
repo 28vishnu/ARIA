@@ -14,7 +14,9 @@ class LLMRouter:
 
     Provider priority:
     1. Groq
-    2. Gemini fallback
+    2. Gemini
+    3. OpenRouter
+    4. Mistral
     """
 
     def __init__(self, config):
@@ -39,29 +41,28 @@ class LLMRouter:
         max_tokens: int = 1024
     ) -> str:
         """
-        Generate a chat response.
+        Generate a response using ARIA's provider failover chain.
 
         Provider order:
         1. Groq
-        2. Gemini fallback
+        2. Gemini
+        3. OpenRouter
+        4. Mistral
 
-        A single short retry is allowed when a provider is temporarily
-        rate-limited or unavailable.
+        Temporary failures receive one short retry before ARIA
+        moves automatically to the next available provider.
         """
 
         errors = []
 
-        # -----------------------------------------------------
-        # Helper: determine whether an error is temporary
-        # -----------------------------------------------------
-
         def is_temporary_error(exc: Exception) -> bool:
 
             if isinstance(exc, httpx.HTTPStatusError):
-                status = exc.response.status_code
-
-                return status in {
-                    429,  # rate limit
+                return exc.response.status_code in {
+                    408,
+                    409,
+                    425,
+                    429,
                     500,
                     502,
                     503,
@@ -76,96 +77,94 @@ class LLMRouter:
                 )
             )
 
-        # -----------------------------------------------------
-        # Groq
-        # -----------------------------------------------------
+        providers = [
+            (
+                "Groq",
+                self.groq_api_key,
+                self._groq_chat
+            ),
+            (
+                "Gemini",
+                self.gemini_api_key,
+                self._gemini_chat
+            ),
+            (
+                "OpenRouter",
+                self.openrouter_api_key,
+                self._openrouter_chat
+            ),
+            (
+                "Mistral",
+                self.mistral_api_key,
+                self._mistral_chat
+            ),
+        ]
 
-        if self.groq_api_key:
+        configured_providers = 0
+
+        for provider_name, api_key, provider_method in providers:
+
+            if not api_key:
+                continue
+
+            configured_providers += 1
 
             for attempt in range(2):
 
                 try:
-                    return await self._groq_chat(
+
+                    result = await provider_method(
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens
                     )
 
+                    logger.info(
+                        "[LLMRouter] Response generated successfully "
+                        "using %s.",
+                        provider_name
+                    )
+
+                    return result
+
                 except Exception as exc:
 
+                    temporary = is_temporary_error(exc)
+
                     logger.warning(
-                        "[LLMRouter] Groq attempt %d failed: %s",
+                        "[LLMRouter] %s attempt %d failed: %s",
+                        provider_name,
                         attempt + 1,
                         exc
                     )
 
-                    # Retry only temporary failures.
-                    if attempt == 0 and is_temporary_error(exc):
+                    if (
+                        attempt == 0
+                        and temporary
+                    ):
 
                         logger.info(
-                            "[LLMRouter] Retrying Groq after temporary failure."
+                            "[LLMRouter] Retrying %s after "
+                            "temporary failure.",
+                            provider_name
                         )
 
                         await asyncio.sleep(1.5)
+
                         continue
 
                     errors.append(
-                        f"Groq: {type(exc).__name__}"
+                        f"{provider_name}: "
+                        f"{type(exc).__name__}"
                     )
 
                     break
 
-        # -----------------------------------------------------
-        # Gemini fallback
-        # -----------------------------------------------------
+        if configured_providers == 0:
 
-        if self.gemini_api_key:
-
-            for attempt in range(2):
-
-                try:
-                    return await self._gemini_chat(
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-
-                except Exception as exc:
-
-                    logger.warning(
-                        "[LLMRouter] Gemini attempt %d failed: %s",
-                        attempt + 1,
-                        exc
-                    )
-
-                    # Retry only temporary failures.
-                    if attempt == 0 and is_temporary_error(exc):
-
-                        logger.info(
-                            "[LLMRouter] Retrying Gemini after temporary failure."
-                        )
-
-                        await asyncio.sleep(1.5)
-                        continue
-
-                    errors.append(
-                        f"Gemini: {type(exc).__name__}"
-                    )
-
-                    break
-
-        # -----------------------------------------------------
-        # No providers configured
-        # -----------------------------------------------------
-
-        if not self.groq_api_key and not self.gemini_api_key:
             raise RuntimeError(
                 "No LLM provider configured."
             )
-
-        # -----------------------------------------------------
-        # All providers unavailable
-        # -----------------------------------------------------
 
         logger.error(
             "[LLMRouter] All configured LLM providers failed: %s",
@@ -173,8 +172,7 @@ class LLMRouter:
         )
 
         raise RuntimeError(
-            "All configured LLM providers failed due to a temporary "
-            "provider or rate-limit issue."
+            "All configured LLM providers failed."
         )
 
     # =========================================================
