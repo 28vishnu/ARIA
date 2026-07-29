@@ -18,7 +18,7 @@ from brain.planner import Planner
 from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
 
-from personality.personality_engine import PersonalityEngine
+from personality.engine import PersonalityEngine
 from brain.context.context_manager import ContextBuilder
 from brain.decision.decision_engine import DecisionEngine
 from brain.intent.intent_analyzer import IntentAnalyzer
@@ -177,7 +177,10 @@ async def bootstrap_application() -> ServiceRegistry:
     planner = Planner(llm_router)
     executor = Executor(skill_manager)
 
-    personality_engine = PersonalityEngine()
+    personality_engine = PersonalityEngine(
+        llm_router=llm_router
+    )
+
     decision_engine = DecisionEngine()
     intent_analyzer = IntentAnalyzer()
 
