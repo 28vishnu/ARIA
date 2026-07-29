@@ -52,33 +52,116 @@ class MemoryConversationManager:
 
             result = await self.memory_engine.process_and_store(query)
 
-            if result and result.get("success"):
-
-                key = (
-                    str(result.get("key", ""))
-                    .replace("favorite_", "")
-                    .replace("_", " ")
+            if not result or not result.get("success"):
+                return (
+                    "I couldn't save that to memory just now, Sir."
                 )
 
-                value = str(result.get("value", ""))
+            action_type = str(
+                result.get("action", "stored")
+            ).lower()
 
-                action_type = result.get(
-                    "action",
-                    "stored"
+            # -------------------------------------------------
+            # Single-memory result
+            # -------------------------------------------------
+
+            key = str(
+                result.get("key") or ""
+            ).strip()
+
+            value = str(
+                result.get("value") or ""
+            ).strip()
+
+            if key and value:
+
+                readable_key = (
+                    key
+                    .replace("favorite_", "")
+                    .replace("favourite_", "")
+                    .replace("_", " ")
+                    .strip()
                 )
 
                 if action_type == "update":
                     return (
                         f"Updated, Sir. "
-                        f"Your {key} is {value}."
+                        f"I'll remember that your "
+                        f"{readable_key} is {value}."
                     )
 
                 return (
                     f"Understood, Sir. "
-                    f"I'll remember that your {key} is {value}."
+                    f"I'll remember that your "
+                    f"{readable_key} is {value}."
                 )
 
-            return "Understood, Sir. I've updated my memory."
+            # -------------------------------------------------
+            # Multiple-memory result
+            # -------------------------------------------------
+
+            memories = result.get("memories")
+
+            if isinstance(memories, list):
+
+                stored = []
+
+                for memory in memories:
+
+                    if not isinstance(memory, dict):
+                        continue
+
+                    memory_key = str(
+                        memory.get("key") or ""
+                    ).strip()
+
+                    memory_value = str(
+                        memory.get("value") or ""
+                    ).strip()
+
+                    if not memory_key or not memory_value:
+                        continue
+
+                    readable_key = (
+                        memory_key
+                        .replace("favorite_", "")
+                        .replace("favourite_", "")
+                        .replace("_", " ")
+                        .strip()
+                    )
+
+                    stored.append(
+                        f"{readable_key}: {memory_value}"
+                    )
+
+                if len(stored) == 1:
+                    return (
+                        f"Understood, Sir. "
+                        f"I'll remember {stored[0]}."
+                    )
+
+                if stored:
+                    return (
+                        "Understood, Sir. I've remembered "
+                        "those details."
+                    )
+
+            # -------------------------------------------------
+            # Storage succeeded, but MemoryEngine did not
+            # expose the stored fields in its result.
+            # Never generate an empty acknowledgement.
+            # -------------------------------------------------
+
+            if action_type == "update":
+                return (
+                    "Updated, Sir. I've revised that "
+                    "in my memory."
+                )
+
+            return (
+                "Understood, Sir. I've saved that "
+                "to memory."
+            )
 
         # -----------------------------------------------------
         # 3. MEMORY RECALL
