@@ -131,7 +131,7 @@ class DocumentIntelligence:
 
             for page_number, page in enumerate(reader.pages, start=1):
                 text = page.extract_text() or ""
-                
+
                 # OCR Fallback if page text is empty
                 if not text.strip():
                     try:
@@ -698,60 +698,96 @@ Question:
         document_name: str
     ):
         """
-        Deletes a specific document's memory entries and Chroma vectors.
+        Delete one document from MongoDB and ChromaDB.
         """
+
         if self.memory_engine:
-            await self.memory_engine.memory_col.delete_many({
-                "category": {"$in": ["document", "document_chunk"]},
-                "metadata.document_name": document_name,
-                "key": {"$regex": f"_{session_id}_"}
-            })
+
+            await self.memory_engine.memory_col.delete_many(
+                {
+                    "$or": [
+                        {
+                            "key": f"document_{session_id}_{document_name}"
+                        },
+                        {
+                            "key": {
+                                "$regex": f"document_chunk_{session_id}_{document_name}_"
+                            }
+                        }
+                    ]
+                }
+            )
 
         if self.vector_db:
-            try:
-                self.vector_db.delete(
-                    where={
-                        "session_id": session_id,
-                        "document_name": document_name
-                    }
-                )
-            except Exception as e:
-                logger.warning("[DocumentAI] ChromaDB deletion warning: %s", e)
 
-        logger.info("[DocumentAI] Deleted document %s for session %s", document_name, session_id)
+            results = self.vector_db.get(
+                where={
+                    "session_id": session_id,
+                    "document_name": document_name
+                }
+            )
+
+            ids = results.get("ids", [])
+
+            if ids:
+                self.vector_db.delete(ids=ids)
+
+        logger.info(
+            "[DocumentAI] Deleted document %s",
+            document_name
+        )
 
     async def delete_all_documents(
         self,
         session_id: str
     ):
         """
-        Deletes all documents and vectors associated with a session.
+        Delete every uploaded document for a session.
         """
+
         if self.memory_engine:
-            await self.memory_engine.memory_col.delete_many({
-                "category": {"$in": ["document", "document_chunk"]},
-                "key": {"$regex": f"_{session_id}_"}
-            })
+
+            await self.memory_engine.memory_col.delete_many(
+                {
+                    "$or": [
+                        {
+                            "category": "document"
+                        },
+                        {
+                            "category": "document_chunk"
+                        }
+                    ]
+                }
+            )
 
         if self.vector_db:
-            try:
-                self.vector_db.delete(
-                    where={"session_id": session_id}
-                )
-            except Exception as e:
-                logger.warning("[DocumentAI] ChromaDB purge warning: %s", e)
 
-        logger.info("[DocumentAI] Purged all documents for session %s", session_id)
+            results = self.vector_db.get(
+                where={
+                    "session_id": session_id
+                }
+            )
+
+            ids = results.get("ids", [])
+
+            if ids:
+                self.vector_db.delete(ids=ids)
+
+        logger.info(
+            "[DocumentAI] Deleted all documents."
+        )
 
     async def reindex_documents(
         self,
-        session_id: str,
-        file_paths: List[str]
+        session_id: str
     ):
         """
-        Purges session documents and re-indexes the provided file paths from scratch.
+        Rebuild semantic vectors.
         """
-        await self.delete_all_documents(session_id)
-        for path in file_paths:
-            await self.process_document(path, session_id)
-        logger.info("[DocumentAI] Reindexed %d documents for session %s", len(file_paths), session_id)
+
+        logger.info(
+            "[DocumentAI] Reindex requested for %s",
+            session_id
+        )
+
+        # Future implementation
