@@ -649,16 +649,89 @@ class MemoryEngine:
         ):
             return {"success": False}
 
+        # ---------------------------------------------------------
+        # LEVEL 1 — FAST DETERMINISTIC MEMORY
+        # ---------------------------------------------------------
+
         memory = self._extract_memory(
             user_text
         )
 
-        if not memory:
-            return {"success": False}
+        if memory:
+            return await self._store_extracted_memory(
+                memory
+            )
 
-        return await self._store_extracted_memory(
-            memory
-        )
+        # ---------------------------------------------------------
+        # LEVEL 2 — INTELLIGENT LLM MEMORY UNDERSTANDING
+        # ---------------------------------------------------------
+
+        if (
+            self.llm_router is not None
+            and hasattr(self.llm_router, "extract_memories")
+        ):
+            try:
+
+                memories = await self.llm_router.extract_memories(
+                    user_text
+                )
+
+                if memories:
+
+                    stored_results = []
+
+                    for extracted in memories:
+
+                        memory_data = {
+                            "key": extracted.get("key"),
+                            "value": extracted.get("value"),
+                            "category": extracted.get(
+                                "category",
+                                "general"
+                            ),
+                            "memory_type": extracted.get(
+                                "memory_type",
+                                "fact"
+                            ),
+                            "importance": extracted.get(
+                                "importance",
+                                "medium"
+                            ),
+                            "is_list": False
+                        }
+
+                        if (
+                            not memory_data["key"]
+                            or not memory_data["value"]
+                        ):
+                            continue
+
+                        result = await self._store_extracted_memory(
+                            memory_data
+                        )
+
+                        if result.get("success"):
+                            stored_results.append(result)
+
+                    if stored_results:
+
+                        logger.info(
+                            "[MemoryEngine] Intelligent memory stored %d memories.",
+                            len(stored_results)
+                        )
+
+                        return {
+                            "success": True,
+                            "action": "intelligent_store",
+                            "memories": stored_results
+                        }
+
+            except Exception:
+                logger.exception(
+                    "[MemoryEngine] Intelligent memory extraction failed."
+                )
+
+        return {"success": False}
 
     # =========================================================
     # MEMORY RETRIEVAL
