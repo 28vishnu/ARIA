@@ -8,9 +8,44 @@ class DocumentSkill(BaseSkill):
     requires_llm = True
 
     async def can_run(self, query: str, context: dict) -> float:
-        lower = query.lower()
-        if any(k in lower for k in ["pdf", "document", "file", "plan", "resume", "cv", "summarize"]):
-            return 0.92
+        lower = query.lower().strip()
+
+        # Strong explicit document references
+        document_terms = [
+            "pdf",
+            "document",
+            "file",
+            "resume",
+            "cv"
+        ]
+
+        if any(term in lower for term in document_terms):
+            return 0.95
+
+        # Document operations should only count when a document is active/uploaded
+        app_state = context.get("app_state")
+        has_active_document = False
+
+        if app_state:
+            has_active_document = bool(
+                getattr(app_state, "active_document", False)
+                or getattr(app_state, "document_uploaded", False)
+                or getattr(app_state, "current_document", None)
+            )
+
+        if has_active_document:
+            document_actions = [
+                "summarize",
+                "summarise",
+                "explain this",
+                "what does it say",
+                "according to this",
+                "in this"
+            ]
+
+            if any(term in lower for term in document_actions):
+                return 0.90
+
         return 0.0
 
     async def execute(self, query: str, context: dict) -> SkillResponse:
