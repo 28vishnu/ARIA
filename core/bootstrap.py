@@ -17,7 +17,7 @@ from brain.planner.planner import Planner
 from brain.executor.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
 from personality.personality_engine import PersonalityEngine
-from brain.context.context_manager import ContextManager
+from brain.context.context_manager import ContextBuilder
 from brain.decision.decision_engine import DecisionEngine
 from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
@@ -165,7 +165,9 @@ async def bootstrap_application() -> ServiceRegistry:
     # Core Services
     # ---------------------------------------------------------
 
-    session_manager = SessionManager()
+    context_builder = ContextBuilder()
+
+    session_manager = SessionManager(context_builder)
     state_manager = StateManager()
     skill_manager = SkillManager()
     action_manager = ActionManager()
@@ -173,7 +175,6 @@ async def bootstrap_application() -> ServiceRegistry:
     executor = Executor()
 
     personality_engine = PersonalityEngine()
-    context_manager = ContextManager()
     decision_engine = DecisionEngine()
     intent_analyzer = IntentAnalyzer()
     reasoning_engine = ReasoningEngine()
@@ -214,8 +215,8 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     registry.register(
-        "context_manager",
-        context_manager
+        "context_builder",
+        context_builder
     )
 
     registry.register(
@@ -244,7 +245,7 @@ async def bootstrap_application() -> ServiceRegistry:
         memory_router=memory_engine,
         state_manager=state_manager,
         intent_analyzer=intent_analyzer,
-        context_builder=context_manager,
+        context_builder=context_builder,
         decision_engine=decision_engine,
         reasoning_engine=reasoning_engine
     )
