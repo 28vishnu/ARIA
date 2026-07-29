@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -171,15 +172,16 @@ async def telegram_webhook(req: Request):
         state_manager = req.app.state.registry.get("state_manager")
 
         if state_manager:
+            doc_name = document.get("file_name") or Path(local_path).name
 
             state_manager.update_state(
                 session_id,
-                active_document=True
-            )
-
-            state_manager.update_state(
-                session_id,
-                document_uploaded=True
+                active_document=True,
+                document_uploaded=True,
+                current_document=doc_name,
+                current_document_summary=result["summary"],
+                last_document_question=None,
+                last_document_answer=None
             )
 
         summary = result["summary"]
