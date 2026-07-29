@@ -274,6 +274,14 @@ class CognitiveCore:
                             question=query
                         )
 
+                        if self.state_manager:
+
+                            self.state_manager.update_state(
+                                session_id,
+                                last_document_question=query,
+                                last_document_answer=answer
+                            )
+
                         if answer:
 
                             return SystemResponse(
