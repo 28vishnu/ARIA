@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger("aria")
 
@@ -32,13 +31,18 @@ class DocumentIntelligence:
 
     def get_embedding_model(self):
         """
-        Lazy-loads the SentenceTransformer model on first demand.
+        Lazy-load the SentenceTransformer library and model
+        only when document embeddings are actually required.
         """
         if self.embedding_model is None:
             logger.info("[DocumentAI] Loading embedding model...")
+
+            from sentence_transformers import SentenceTransformer
+
             self.embedding_model = SentenceTransformer(
                 "all-MiniLM-L6-v2"
             )
+
         return self.embedding_model
 
     async def process_document(
