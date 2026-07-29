@@ -271,7 +271,8 @@ class CognitiveCore:
 
                         answer = await document_ai.answer_question(
                             session_id=session_id,
-                            question=query
+                            question=query,
+                            state=ctx.get("state")
                         )
 
                         if self.state_manager:
