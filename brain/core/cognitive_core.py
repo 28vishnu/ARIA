@@ -2086,4 +2086,16 @@ class CognitiveCore:
         # GLOBAL ERROR HANDLER
         # =====================================================
 
-        except Exception as exc
+        except Exception as exc:
+
+            logger.exception(
+                "[CognitiveCore ERROR] Processing failed: %s",
+                exc,
+            )
+
+            return SystemResponse(
+                success=False,
+                confidence=0.0,
+                source="cognitive_core",
+                error=str(exc),
+            )
