@@ -15,6 +15,7 @@ class CognitiveCore:
         planner,
         executor,
         skill_manager,
+        action_manager=None,
         memory_router=None,
         state_manager=None,
         intent_analyzer=None,
@@ -26,6 +27,7 @@ class CognitiveCore:
         self.planner = planner
         self.executor = executor
         self.skill_manager = skill_manager
+        self.action_manager = action_manager
         self.memory_router = memory_router
         self.state_manager = state_manager
         self.intent_analyzer = intent_analyzer
