@@ -24,6 +24,14 @@ class Decision:
         default_factory=dict
     )
 
+    # Executable action selected by the reasoning/decision layer.
+    action_name: Optional[str] = None
+
+    # Validated candidate parameters for that action.
+    action_params: Dict[str, Any] = field(
+        default_factory=dict
+    )
+
     # Planning / execution metadata
     requires_planning: bool = False
     requires_execution: bool = False
