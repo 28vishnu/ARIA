@@ -277,22 +277,274 @@ async def telegram_webhook(req: Request):
             "status": "processed"
         }
 
-    reply_text = await process_task(
+    result = await process_task(
         text,
         str(chat_id),
         request_id,
         req.app.state
     )
 
-    # Diagnostic log to isolate whether {} comes from process_task or the API transport
-    logger.info("[Telegram] Final reply text: %r", reply_text)
-
     http_client = req.app.state.registry.get("http_client")
+
+    # ---------------------------------------------------------
+    # STRUCTURED DOCUMENT ACTION
+    # ---------------------------------------------------------
+
+    if isinstance(result, SystemResponse):
+
+        response_data = (
+            result.data
+            if isinstance(result.data, dict)
+            else {}
+        )
+
+        document_action = response_data.get(
+            "document_action"
+        )
+
+        # -----------------------------------------------------
+        # SEND STORED DOCUMENT
+        # -----------------------------------------------------
+
+        if document_action == "send_document":
+
+            documents = response_data.get(
+                "documents",
+                []
+            )
+
+            query = str(
+                response_data.get("query", text)
+            ).lower()
+
+            if not documents:
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I couldn't find that document, Sir."
+                        )
+                    }
+                )
+
+                return {
+                    "status": "document_not_found"
+                }
+
+            # -------------------------------------------------
+            # Choose the best matching document.
+            #
+            # Prefer filenames whose meaningful words occur
+            # in the user's request.
+            # -------------------------------------------------
+
+            best_document = None
+            best_score = -1
+
+            ignored_words = {
+                "pdf",
+                "document",
+                "file",
+                "give",
+                "send",
+                "get",
+                "return",
+                "download",
+                "share",
+                "show",
+                "me",
+                "my",
+                "the",
+                "a",
+                "an",
+                "please",
+                "now",
+            }
+
+            for document in documents:
+
+                filename = str(
+                    document.get("filename", "")
+                )
+
+                normalized_filename = (
+                    filename
+                    .lower()
+                    .replace(".pdf", "")
+                    .replace("_", " ")
+                    .replace("-", " ")
+                )
+
+                filename_words = {
+                    word
+                    for word in normalized_filename.split()
+                    if word not in ignored_words
+                }
+
+                score = sum(
+                    1
+                    for word in filename_words
+                    if word in query
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_document = document
+
+            # If there are several documents and nothing matched,
+            # do not silently send an arbitrary file.
+            if (
+                len(documents) > 1
+                and best_score <= 0
+            ):
+
+                filenames = [
+                    document.get(
+                        "filename",
+                        "Unnamed document"
+                    )
+                    for document in documents
+                ]
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I found multiple documents, Sir. "
+                            "Which one would you like?\n\n"
+                            + "\n".join(
+                                f"• {name}"
+                                for name in filenames
+                            )
+                        )
+                    }
+                )
+
+                return {
+                    "status": "document_selection_required"
+                }
+
+            if not best_document:
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I couldn't identify the requested "
+                            "document, Sir."
+                        )
+                    }
+                )
+
+                return {
+                    "status": "document_not_found"
+                }
+
+            telegram_file_id = best_document.get(
+                "telegram_file_id"
+            )
+
+            filename = best_document.get(
+                "filename",
+                "document.pdf"
+            )
+
+            if not telegram_file_id:
+
+                logger.warning(
+                    "[Telegram] Stored document '%s' has no "
+                    "telegram_file_id.",
+                    filename
+                )
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I found the document record, Sir, "
+                            "but its original Telegram file reference "
+                            "is unavailable."
+                        )
+                    }
+                )
+
+                return {
+                    "status": "document_file_unavailable"
+                }
+
+            # -------------------------------------------------
+            # Telegram can resend an existing uploaded file
+            # directly using its stored file_id.
+            # -------------------------------------------------
+
+            telegram_response = await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendDocument",
+                json={
+                    "chat_id": chat_id,
+                    "document": telegram_file_id,
+                    "caption": filename
+                }
+            )
+
+            if telegram_response.is_success:
+
+                logger.info(
+                    "[Telegram] Sent stored document '%s'.",
+                    filename
+                )
+
+                return {
+                    "status": "document_sent"
+                }
+
+            logger.error(
+                "[Telegram] Failed to send stored document '%s': %s",
+                filename,
+                telegram_response.text
+            )
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": (
+                        "I found the document, Sir, but Telegram "
+                        "couldn't send it."
+                    )
+                }
+            )
+
+            return {
+                "status": "document_send_failed"
+            }
+
+    # ---------------------------------------------------------
+    # NORMAL TEXT RESPONSE
+    # ---------------------------------------------------------
+
+    reply_text = str(result)
+
+    logger.info(
+        "[Telegram] Final reply text: %r",
+        reply_text
+    )
+
     await http_client.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": reply_text}
+        json={
+            "chat_id": chat_id,
+            "text": reply_text
+        }
     )
-    return {"status": "ok"}
+
+    return {
+        "status": "ok"
+    }
 
 @app.get("/health")
 async def health(req: Request):
