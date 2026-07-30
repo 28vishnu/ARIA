@@ -1,19 +1,7 @@
 import logging
-from dataclasses import dataclass
 from typing import Any, Dict, Optional, List
 
 logger = logging.getLogger("aria")
-
-
-@dataclass
-class Decision:
-    """
-    Represents the decision made by the DecisionEngine.
-    """
-    action: str
-    confidence: float = 1.0
-    secondary_actions: Optional[List[str]] = None
-    data: Optional[Dict[str, Any]] = None
 
 
 class DecisionEngine:
