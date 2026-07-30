@@ -52,6 +52,107 @@ class CognitiveCore:
             if self.state_manager:
                 state = self.state_manager.get_state(session_id)
 
+            # ---------------------------------------------------------
+            # Pending action confirmation
+            # ---------------------------------------------------------
+
+            if (
+                self.state_manager
+                and state.get("pending_action_confirmation")
+            ):
+
+                normalized_query = str(query or "").strip().lower()
+
+                confirm_words = {
+                    "yes",
+                    "yes please",
+                    "yeah",
+                    "yep",
+                    "confirm",
+                    "continue",
+                    "proceed",
+                    "do it",
+                }
+
+                reject_words = {
+                    "no",
+                    "nope",
+                    "cancel",
+                    "stop",
+                    "don't",
+                    "do not",
+                }
+
+                if normalized_query in confirm_words:
+
+                    action_name = state.get("pending_action_name")
+                    action_params = state.get(
+                        "pending_action_params",
+                        {}
+                    ) or {}
+
+                    # Clear first so the same confirmation cannot be replayed.
+                    self.state_manager.clear_pending_action(
+                        session_id
+                    )
+
+                    if (
+                        not self.action_manager
+                        or not action_name
+                        or action_name not in self.action_manager.actions
+                    ):
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="action_confirmation",
+                            error="The pending action is no longer available."
+                        )
+
+                    logger.info(
+                        "[CognitiveCore] Confirmed action: %s",
+                        action_name
+                    )
+
+                    action_result = await self.action_manager.execute_action(
+                        action_name=action_name,
+                        params=action_params
+                    )
+
+                    return SystemResponse(
+                        success=action_result.success,
+                        confidence=1.0,
+                        source="action_manager",
+                        data={
+                            "action_name": action_name,
+                            "result": action_result.data
+                        },
+                        error=action_result.error
+                    )
+
+                if normalized_query in reject_words:
+
+                    pending_action_name = state.get(
+                        "pending_action_name"
+                    )
+
+                    self.state_manager.clear_pending_action(
+                        session_id
+                    )
+
+                    logger.info(
+                        "[CognitiveCore] User cancelled pending action: %s",
+                        pending_action_name
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="action_confirmation",
+                        data={
+                            "message": "Action cancelled."
+                        }
+                    )
+
             # 2. Get relevant existing memories
             memories = []
             if self.memory_router:
