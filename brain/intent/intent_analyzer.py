@@ -50,20 +50,30 @@ class IntentAnalyzer:
         # CONTROLLED NOTIFICATION ACTION
         # =====================================================
 
-        if q.startswith("notify me:"):
-            message = query.split(":", 1)[1].strip()
+        notification_prefixes = (
+            "notify me:",
+            "notify me that ",
+            "send me a notification saying ",
+            "send me a notification that ",
+            "alert me that ",
+            "alert me: ",
+        )
 
-            if message:
-                return Intent(
-                    name="action",
-                    confidence=0.99,
-                    data={
-                        "action_name": "notification_action",
-                        "action_params": {
-                            "message": message
+        for prefix in notification_prefixes:
+            if q.startswith(prefix):
+                message = query[len(prefix):].strip()
+
+                if message:
+                    return Intent(
+                        name="action",
+                        confidence=0.99,
+                        data={
+                            "action_name": "notification_action",
+                            "action_params": {
+                                "message": message
+                            }
                         }
-                    }
-                )
+                    )
 
         # =====================================================
         # DOCUMENT DELETE
