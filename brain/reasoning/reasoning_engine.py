@@ -386,6 +386,21 @@ class ReasoningEngine:
 
         if intent_name == "action":
 
+            intent_data = getattr(
+                intent,
+                "data",
+                {}
+            ) or {}
+
+            action_name = intent_data.get(
+                "action_name"
+            )
+
+            action_params = intent_data.get(
+                "action_params",
+                {}
+            ) or {}
+
             return ReasoningResult(
                 primary_action="action",
                 confidence=intent_confidence,
@@ -397,6 +412,8 @@ class ReasoningEngine:
                     "task_plan": task_plan,
                     "task_workflows": task_workflows,
                 },
+                action_name=action_name,
+                action_params=action_params,
                 workflow=workflow
             )
 
