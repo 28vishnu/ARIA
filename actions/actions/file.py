@@ -16,6 +16,7 @@ ALLOWED_EXTENSIONS = {
 }
 
 MAX_WRITE_BYTES = 1_000_000  # 1 MB
+MAX_READ_BYTES = 1_000_000  # 1 MB
 
 os.makedirs(FILE_WORKSPACE, exist_ok=True)
 
@@ -98,16 +99,49 @@ class FileAction(BaseAction):
         try:
             if mode == "read":
                 if not os.path.exists(path):
-                    return ActionResult(success=False, action_name=self.name, error="File not found.")
-                async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
+                    return ActionResult(
+                        success=False,
+                        action_name=self.name,
+                        error="File not found."
+                    )
+
+                if os.path.getsize(path) > MAX_READ_BYTES:
+                    return ActionResult(
+                        success=False,
+                        action_name=self.name,
+                        error="File exceeds maximum readable size."
+                    )
+
+                async with aiofiles.open(
+                    path,
+                    mode="r",
+                    encoding="utf-8"
+                ) as f:
                     data = await f.read()
-                return ActionResult(success=True, action_name=self.name, data={"content": data})
+
+                return ActionResult(
+                    success=True,
+                    action_name=self.name,
+                    data={"content": data}
+                )
 
             elif mode == "write":
                 async with aiofiles.open(path, mode="w", encoding="utf-8") as f:
                     await f.write(content)
-                return ActionResult(success=True, action_name=self.name, data={"status": "written successfully"})
+                return ActionResult(
+                    success=True,
+                    action_name=self.name,
+                    data={"status": "written successfully"}
+                )
 
-            return ActionResult(success=False, action_name=self.name, error="Invalid file mode.")
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error="Invalid file mode."
+            )
         except Exception as e:
-            return ActionResult(success=False, action_name=self.name, error=str(e))
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error=str(e)
+            )
