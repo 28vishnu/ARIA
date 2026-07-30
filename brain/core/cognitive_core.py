@@ -119,14 +119,27 @@ class CognitiveCore:
                         confirmed=True
                     )
 
+                    # Return useful action output directly to the response layer.
+                    response_data = {
+                        "action_name": action_name,
+                        "result": action_result.data
+                    }
+
+                    # File reads should expose the actual file contents.
+                    if (
+                        action_result.success
+                        and action_name == "file_action"
+                        and action_params.get("mode") == "read"
+                    ):
+                        content = (action_result.data or {}).get("content", "")
+
+                        response_data["message"] = content
+
                     return SystemResponse(
                         success=action_result.success,
                         confidence=1.0,
                         source="action_manager",
-                        data={
-                            "action_name": action_name,
-                            "result": action_result.data
-                        },
+                        data=response_data,
                         error=action_result.error
                     )
 
