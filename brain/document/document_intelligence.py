@@ -21,11 +21,13 @@ class DocumentIntelligence:
         self,
         memory_engine=None,
         llm_router=None,
-        vector_db=None
+        vector_db=None,
+        document_repository=None
     ):
         self.memory_engine = memory_engine
         self.llm_router = llm_router
         self.vector_db = vector_db
+        self.document_repository = document_repository
 
         self._embedding_cache: Dict[str, List[float]] = {}
 
