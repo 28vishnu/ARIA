@@ -127,6 +127,196 @@ class CognitiveCore:
             # an external LLM call.
             if intent:
 
+                # -------------------------------------------------
+                # DOCUMENT CATALOGUE FAST PATHS
+                # -------------------------------------------------
+
+                if intent.name in (
+                    "document_retrieve",
+                    "document_list",
+                    "document_query",
+                ):
+                    logger.info(
+                        "[CognitiveCore] Document fast-path activated: %s",
+                        intent.name
+                    )
+
+                    document_repository = None
+                    document_ai = ctx.get("document_intelligence")
+
+                    if base_context:
+                        app_state = base_context.get("app_state")
+
+                        if (
+                            app_state
+                            and app_state.registry.has(
+                                "document_repository"
+                            )
+                        ):
+                            document_repository = (
+                                app_state.registry.get(
+                                    "document_repository"
+                                )
+                            )
+
+                    # ---------------------------------------------
+                    # LIST STORED DOCUMENTS
+                    # ---------------------------------------------
+
+                    if intent.name == "document_list":
+
+                        if not document_repository:
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error="Document repository is unavailable."
+                            )
+
+                        documents = await document_repository.list_documents(
+                            user_id=user_id
+                        )
+
+                        if not documents:
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                data={
+                                    "message": (
+                                        "You don't have any stored "
+                                        "documents yet, Sir."
+                                    )
+                                }
+                            )
+
+                        filenames = [
+                            doc.get("filename", "Unnamed document")
+                            for doc in documents
+                        ]
+
+                        message = (
+                            "I currently have these documents, Sir:\n\n"
+                            + "\n".join(
+                                f"• {name}"
+                                for name in filenames
+                            )
+                        )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_repository",
+                            data={
+                                "message": message
+                            }
+                        )
+
+                    # ---------------------------------------------
+                    # RETRIEVE ORIGINAL DOCUMENT
+                    # ---------------------------------------------
+
+                    if intent.name == "document_retrieve":
+
+                        if not document_repository:
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error="Document repository is unavailable."
+                            )
+
+                        documents = await document_repository.search_documents(
+                            user_id=user_id,
+                            query=query,
+                            limit=10
+                        )
+
+                        # The raw request may contain words such as
+                        # "give", "send", "my", "pdf", etc., so a
+                        # filename search using the whole query may
+                        # fail. Fall back to all documents and let
+                        # the transport layer resolve the best match.
+                        if not documents:
+                            documents = await document_repository.list_documents(
+                                user_id=user_id,
+                                limit=20
+                            )
+
+                        if not documents:
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                data={
+                                    "message": (
+                                        "I couldn't find a stored "
+                                        "document matching that request, Sir."
+                                    )
+                                }
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_retrieval",
+                            data={
+                                "document_action": "send_document",
+                                "query": query,
+                                "documents": documents
+                            }
+                        )
+
+                    # ---------------------------------------------
+                    # QUERY / SUMMARISE STORED DOCUMENT
+                    # ---------------------------------------------
+
+                    if intent.name == "document_query":
+
+                        if not document_ai:
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document",
+                                error="Document intelligence is unavailable."
+                            )
+
+                        answer = await document_ai.answer_question(
+                            session_id=session_id,
+                            question=query,
+                            state=ctx.get("state")
+                        )
+
+                        if answer:
+
+                            if self.state_manager:
+                                self.state_manager.update_state(
+                                    session_id,
+                                    last_document_question=query,
+                                    last_document_answer=answer
+                                )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document",
+                                data={
+                                    "response": answer
+                                }
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document",
+                            data={
+                                "message": (
+                                    "I couldn't find enough information "
+                                    "in the stored document to answer that, Sir."
+                                )
+                            }
+                        )
+
                 # Greeting can be handled entirely by PersonalityEngine.
                 if intent.name == "greeting":
                     logger.info(
