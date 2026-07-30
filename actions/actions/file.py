@@ -47,7 +47,19 @@ class FileAction(BaseAction):
     async def validate(self, params: Dict[str, Any]) -> bool:
         mode = params.get("mode")
         path = params.get("path")
-        return bool(mode in ["read", "write"] and path)
+
+        if mode not in ("read", "write"):
+            return False
+
+        if not path:
+            return False
+
+        safe_path = self._resolve_safe_path(path)
+
+        if safe_path is None:
+            return False
+
+        return True
 
     async def execute(self, params: Dict[str, Any]) -> ActionResult:
         mode = params.get("mode")
