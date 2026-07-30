@@ -106,6 +106,26 @@ class IntentAnalyzer:
                     )
 
         # =====================================================
+        # CONTROLLED FILE READ ACTION
+        # =====================================================
+
+        if q.startswith("read file:"):
+            path = query.split(":", 1)[1].strip()
+
+            if path:
+                return Intent(
+                    name="action",
+                    confidence=0.99,
+                    data={
+                        "action_name": "file_action",
+                        "action_params": {
+                            "mode": "read",
+                            "path": path
+                        }
+                    }
+                )
+
+        # =====================================================
         # DOCUMENT DELETE
         # =====================================================
 
