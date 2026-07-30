@@ -135,14 +135,31 @@ class IntentAnalyzer:
             return Intent("writing", 0.93)
 
         # =====================================================
-        # PLANNER
+        # EXPLICIT ACTION REQUEST
         # =====================================================
 
         if self._looks_like_action_request(q):
             return Intent("planner", 0.90)
 
         # =====================================================
-        # DEFAULT CONVERSATION
+        # SEMANTIC INTENT UNDERSTANDING
+        # =====================================================
+        #
+        # Local rules above handle obvious/high-confidence cases.
+        # Anything still ambiguous is understood semantically
+        # instead of adding more and more keyword rules.
+        # =====================================================
+
+        semantic_intent = await self._semantic_intent(query)
+
+        if (
+            semantic_intent is not None
+            and semantic_intent.confidence >= 0.70
+        ):
+            return semantic_intent
+
+        # =====================================================
+        # SAFE DEFAULT
         # =====================================================
 
         return Intent("chat", 0.80)
