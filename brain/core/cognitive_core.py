@@ -579,8 +579,9 @@ class CognitiveCore:
 
                     if document_ai and doc_name:
                         await document_ai.delete_document(
-                            session_id,
-                            doc_name
+                            session_id=session_id,
+                            document_name=doc_name,
+                            user_id=user_id
                         )
 
                     if self.state_manager:
@@ -603,7 +604,8 @@ class CognitiveCore:
 
                     if document_ai:
                         await document_ai.delete_all_documents(
-                            session_id
+                            session_id=session_id,
+                            user_id=user_id
                         )
 
                     if self.state_manager:
