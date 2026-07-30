@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Dict, List
 
 import httpx
@@ -778,6 +779,212 @@ If there is nothing worth remembering return:
 
             logger.warning(
                 "[LLMRouter] Memory extraction failed: %s",
+                exc
+            )
+
+            return []
+
+    # =========================================================
+    # LLM MEMORY RELEVANCE SELECTION
+    # =========================================================
+
+    async def select_relevant_memories(
+        self,
+        query: str,
+        candidates: List[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Select memory keys that are semantically relevant to a
+        user's query.
+
+        This allows ARIA to understand natural memory questions
+        without requiring hard-coded aliases for every possible
+        topic.
+        """
+
+        if not query or not query.strip():
+            return []
+
+        if not candidates:
+            return []
+
+        # Keep the prompt bounded if memory grows large.
+        candidates = candidates[:100]
+
+        system_prompt = """
+You are ARIA's memory retrieval reasoning engine.
+
+The user has asked a question. You are given a list of memories
+ARIA has stored about that user.
+
+Your job is ONLY to determine which stored memories are relevant
+to answering the user's question.
+
+Understand meaning, paraphrases, indirect references, and context.
+
+For example:
+
+Question:
+Where was I thinking of going after college?
+
+Memory:
+{
+  "key": "planned_postgraduate_location",
+  "value": "Italy"
+}
+
+This memory is relevant even though the question does not contain
+the words "postgraduate location".
+
+Another example:
+
+Question:
+What car did I say I liked most?
+
+Memory:
+{
+  "key": "favorite_car",
+  "value": "Porsche"
+}
+
+This memory is relevant.
+
+Rules:
+
+- Select only genuinely relevant memories.
+- Do not invent memory keys.
+- Return keys exactly as provided.
+- Do not answer the user's question.
+- Do not include explanations.
+- Do not use Markdown.
+- If nothing is relevant, return an empty list.
+
+Return ONLY valid JSON in this exact format:
+
+{
+  "keys": ["memory_key_1", "memory_key_2"]
+}
+"""
+
+        memory_payload = []
+
+        for candidate in candidates:
+
+            if not isinstance(candidate, dict):
+                continue
+
+            key = str(
+                candidate.get("key", "")
+            ).strip()
+
+            value = str(
+                candidate.get("value", "")
+            ).strip()
+
+            if not key or not value:
+                continue
+
+            memory_payload.append({
+                "key": key,
+                "value": value,
+                "category": str(
+                    candidate.get(
+                        "category",
+                        "general"
+                    )
+                )
+            })
+
+        if not memory_payload:
+            return []
+
+        user_prompt = (
+            "USER QUESTION:\n"
+            f"{query}\n\n"
+            "AVAILABLE MEMORIES:\n"
+            f"{json.dumps(memory_payload, ensure_ascii=False)}"
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_prompt
+            }
+        ]
+
+        try:
+
+            response = await self.chat(
+                messages=messages,
+                temperature=0.0,
+                max_tokens=300
+            )
+
+            cleaned = response.strip()
+
+            # Remove accidental Markdown fences.
+            if cleaned.startswith("```"):
+
+                cleaned = re.sub(
+                    r"^```(?:json)?\s*",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE
+                )
+
+                cleaned = re.sub(
+                    r"\s*```$",
+                    "",
+                    cleaned
+                )
+
+                cleaned = cleaned.strip()
+
+            data = json.loads(cleaned)
+
+            keys = data.get(
+                "keys",
+                []
+            )
+
+            if not isinstance(keys, list):
+                return []
+
+            # Prevent the LLM from inventing keys.
+            valid_keys = {
+                item["key"]
+                for item in memory_payload
+            }
+
+            selected = []
+
+            for key in keys:
+
+                key = str(key).strip()
+
+                if (
+                    key
+                    and key in valid_keys
+                    and key not in selected
+                ):
+                    selected.append(key)
+
+            logger.info(
+                "[LLMRouter] Memory relevance selected %d/%d memories.",
+                len(selected),
+                len(memory_payload)
+            )
+
+            return selected
+
+        except Exception as exc:
+
+            logger.warning(
+                "[LLMRouter] Memory relevance selection failed: %s",
                 exc
             )
 
