@@ -3,6 +3,14 @@ import aiofiles
 from typing import Dict, Any
 from actions.base import BaseAction, ActionResult
 
+# All FileAction operations are restricted to this directory.
+FILE_WORKSPACE = os.path.abspath(
+    os.getenv("ARIA_FILE_WORKSPACE", "/tmp/aria_workspace")
+)
+
+os.makedirs(FILE_WORKSPACE, exist_ok=True)
+
+
 class FileAction(BaseAction):
     name = "file_action"
     description = "Safely reads or writes text files on disk."
