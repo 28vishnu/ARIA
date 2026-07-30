@@ -194,6 +194,64 @@ class IntentAnalyzer:
     # DOCUMENT INTENTS
     # =========================================================
 
+    def _looks_like_document_delete_all(self, q: str) -> bool:
+        """
+        Detect requests to delete all stored documents.
+        """
+
+        patterns = (
+            "delete all documents",
+            "delete all my documents",
+            "delete all pdfs",
+            "delete all my pdfs",
+            "delete all files",
+            "delete all my files",
+            "remove all documents",
+            "remove all my documents",
+            "remove all pdfs",
+            "remove all my pdfs",
+            "clear all documents",
+            "clear my documents",
+        )
+
+        return self._contains_any(q, patterns)
+
+    def _looks_like_document_delete(self, q: str) -> bool:
+        """
+        Detect requests to delete a specific stored document.
+
+        Examples:
+            Delete my resume
+            Remove my CV
+            Delete project report PDF
+        """
+
+        document_words = (
+            "pdf",
+            "document",
+            "file",
+            "resume",
+            "cv",
+            "report",
+        )
+
+        delete_words = (
+            "delete",
+            "remove",
+        )
+
+        has_document = any(
+            word in q
+            for word in document_words
+        )
+
+        has_delete = any(
+            word in q
+            for word in delete_words
+        )
+
+        return has_document and has_delete
+
     def _looks_like_document_retrieval(self, q: str) -> bool:
         """
         Detect requests for ARIA to return an original stored file.
