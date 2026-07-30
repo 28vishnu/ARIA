@@ -1,6 +1,8 @@
 import logging
 from typing import Any, Dict, Optional, List
 
+from brain.models.decision import Decision
+
 logger = logging.getLogger("aria")
 
 
