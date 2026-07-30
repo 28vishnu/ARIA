@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 import logging
+from typing import Any
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
@@ -81,7 +82,7 @@ def build_request_context(session_id: str, request_id: str, registry) -> Request
         personality_engine=registry.get("personality_engine")
     )
 
-async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> str:
+async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> Any:
     registry = app_state.registry
     ctx = build_request_context(session_id, request_id, registry)
 
@@ -103,6 +104,14 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         user_id=session_id,
         base_context=base_context
     )
+
+    # Preserve structured document actions for the transport layer.
+    if (
+        sys_res
+        and isinstance(sys_res.data, dict)
+        and sys_res.data.get("document_action")
+    ):
+        return sys_res
 
     return ctx.personality_engine.apply_personality(
         session_id,
