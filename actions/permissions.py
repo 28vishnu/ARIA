@@ -12,7 +12,7 @@ class PermissionManager:
         if permission_level == "deny":
             logger.warning("[PermissionManager] Action '%s' is explicitly denied.", action_name)
             return False
-        
+
         if permission_level == "safe":
             return True
 
@@ -20,8 +20,11 @@ class PermissionManager:
             logger.warning("[PermissionManager] Action '%s' blocked by locked system policy.", action_name)
             return False
 
-        if self.mode == "strict" and permission_level == "confirm":
-            logger.info("[PermissionManager] Action '%s' requires manual user confirmation.", action_name)
-            return False  # Requires explicit UI/Telegram confirmation step
+        if permission_level == "confirm":
+            logger.info(
+                "[PermissionManager] Action '%s' requires explicit user confirmation.",
+                action_name
+            )
+            return False
 
         return True
