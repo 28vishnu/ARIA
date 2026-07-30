@@ -67,5 +67,36 @@ class StateManager:
             pending_documents=[]
         )
 
+    def set_pending_action(
+        self,
+        session_id: str,
+        action_name: str,
+        action_params: Dict[str, Any]
+    ):
+        """
+        Store an executable action that is waiting for explicit
+        user confirmation.
+        """
+        self.update_state(
+            session_id,
+            pending_action_confirmation=True,
+            pending_action_name=action_name,
+            pending_action_params=dict(action_params or {})
+        )
+
+    def clear_pending_action(
+        self,
+        session_id: str
+    ):
+        """
+        Clear an action after it is confirmed, rejected, or cancelled.
+        """
+        self.update_state(
+            session_id,
+            pending_action_confirmation=False,
+            pending_action_name=None,
+            pending_action_params={}
+        )
+
     def clear_state(self, session_id: str):
         self._sessions.pop(session_id, None)
