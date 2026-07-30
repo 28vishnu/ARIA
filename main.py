@@ -181,6 +181,44 @@ async def telegram_webhook(req: Request):
 
         if pending.get("action") == "select_document":
 
+            # Allow the user to cancel/leave document selection.
+            cancel_phrases = {
+                "cancel",
+                "cancel it",
+                "leave it",
+                "leave",
+                "never mind",
+                "nevermind",
+                "forget it",
+                "stop",
+                "no",
+                "no thanks",
+                "no thank you",
+            }
+
+            if answer in cancel_phrases:
+
+                pending_document_actions.pop(
+                    confirmation_key,
+                    None
+                )
+
+                http_client = req.app.state.registry.get(
+                    "http_client"
+                )
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": "Alright, Sir. Document selection cancelled."
+                    }
+                )
+
+                return {
+                    "status": "document_selection_cancelled"
+                }
+
             documents = pending.get("documents", [])
 
             ignored_words = {
