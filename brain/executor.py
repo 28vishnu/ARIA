@@ -1,7 +1,7 @@
 import logging
 import re
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List, Set
 
 from brain.plan import ExecutionPlan
 from brain.verifier import Verifier
@@ -29,7 +29,7 @@ REFERENCE_PATTERN = re.compile(
 
 class Executor:
     """
-    Phase-3 hybrid executor.
+    ARIA Phase-3 hybrid workflow executor.
 
     Executes:
     - skills through SkillManager
@@ -37,10 +37,30 @@ class Executor:
 
     Supports:
     - task dependencies
-    - output references
-    - failure propagation
-    - retries
+    - task output references
+    - skill retries
     - execution timing
+    - failure propagation
+    - action confirmation
+    - workflow suspension
+    - workflow resumption
+    - preservation of completed task outputs
+
+    IMPORTANT:
+
+    Confirmation-required actions do NOT count as failures.
+
+    Instead execution returns:
+
+        {
+            "success": False,
+            "paused": True,
+            "requires_confirmation": True,
+            ...
+        }
+
+    CognitiveCore can then store the ExecutionPlan and progress
+    inside StateManager and resume execution after confirmation.
     """
 
     def __init__(
@@ -62,19 +82,21 @@ class Executor:
         field_path: str,
     ) -> Any:
         """
-        Resolve nested fields.
+        Resolve a nested value from a previous task output.
 
         Example:
 
-        output = {
-            "user": {
-                "name": "ARIA"
+            output = {
+                "user": {
+                    "name": "ARIA"
+                }
             }
-        }
 
-        field_path = "user.name"
+            field_path = "user.name"
 
-        -> "ARIA"
+        Returns:
+
+            "ARIA"
         """
 
         current = output
@@ -82,6 +104,7 @@ class Executor:
         for part in field_path.split("."):
 
             if isinstance(current, dict):
+
                 if part not in current:
                     return None
 
@@ -97,6 +120,17 @@ class Executor:
         value: str,
         task_outputs: Dict[str, Any],
     ) -> Any:
+        """
+        Resolve task references inside a string.
+
+        Example:
+
+            "{{1.content}}"
+
+        or:
+
+            "Send this message: {{1.content}}"
+        """
 
         matches = list(
             REFERENCE_PATTERN.finditer(value)
@@ -105,18 +139,26 @@ class Executor:
         if not matches:
             return value
 
-        # If the entire value is one reference,
-        # preserve the original value type.
+        # -----------------------------------------------------
+        # Entire string is exactly one reference.
+        #
+        # Preserve the original value type.
+        # -----------------------------------------------------
+
         if (
             len(matches) == 1
-            and matches[0].span()
-            == (0, len(value))
+            and matches[0].span() == (0, len(value))
         ):
 
             task_id = matches[0].group(1)
             field = matches[0].group(2)
 
             output = task_outputs.get(task_id)
+
+            if output is None:
+                raise ValueError(
+                    f"Task output '{task_id}' is unavailable."
+                )
 
             resolved = self._extract_value(
                 output,
@@ -131,13 +173,21 @@ class Executor:
 
             return resolved
 
-        # Otherwise interpolate references into text.
+        # -----------------------------------------------------
+        # Reference embedded inside normal text.
+        # -----------------------------------------------------
+
         def replace_reference(match):
 
             task_id = match.group(1)
             field = match.group(2)
 
             output = task_outputs.get(task_id)
+
+            if output is None:
+                raise ValueError(
+                    f"Task output '{task_id}' is unavailable."
+                )
 
             resolved = self._extract_value(
                 output,
@@ -162,14 +212,20 @@ class Executor:
         value: Any,
         task_outputs: Dict[str, Any],
     ) -> Any:
+        """
+        Recursively resolve task references inside strings,
+        dictionaries, lists and tuples.
+        """
 
         if isinstance(value, str):
+
             return self._resolve_string(
                 value,
                 task_outputs,
             )
 
         if isinstance(value, dict):
+
             return {
                 key: self._resolve_value(
                     item,
@@ -179,6 +235,7 @@ class Executor:
             }
 
         if isinstance(value, list):
+
             return [
                 self._resolve_value(
                     item,
@@ -187,7 +244,143 @@ class Executor:
                 for item in value
             ]
 
+        if isinstance(value, tuple):
+
+            return tuple(
+                self._resolve_value(
+                    item,
+                    task_outputs,
+                )
+                for item in value
+            )
+
         return value
+
+    # =========================================================
+    # ACTION MANAGER RESOLUTION
+    # =========================================================
+
+    def _resolve_action_manager(
+        self,
+        base_context: Dict[str, Any],
+    ):
+        """
+        Resolve ActionManager either from dependency injection
+        or from the application service registry.
+        """
+
+        if self.action_manager is not None:
+            return self.action_manager
+
+        app_state = (
+            base_context or {}
+        ).get(
+            "app_state"
+        )
+
+        if not app_state:
+            return None
+
+        registry = getattr(
+            app_state,
+            "registry",
+            None,
+        )
+
+        if registry is None:
+            return None
+
+        try:
+
+            if registry.has(
+                "action_manager"
+            ):
+
+                return registry.get(
+                    "action_manager"
+                )
+
+        except Exception:
+
+            logger.exception(
+                "[Executor] Failed resolving ActionManager "
+                "from service registry."
+            )
+
+        return None
+
+    # =========================================================
+    # WORKFLOW RESULT
+    # =========================================================
+
+    def _build_result(
+        self,
+        *,
+        task_outputs: Dict[str, Any],
+        workflow_results: Dict[str, Any],
+        completed: List[str],
+        failed: List[str],
+        skipped: List[str],
+        paused: bool = False,
+        requires_confirmation: bool = False,
+        pending_task_id: Optional[str] = None,
+        pending_action_name: Optional[str] = None,
+        pending_action_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Produce one consistent workflow result structure.
+        """
+
+        return {
+            "task_outputs": dict(
+                task_outputs
+            ),
+
+            "workflow_results": dict(
+                workflow_results
+            ),
+
+            "completed": list(
+                completed
+            ),
+
+            "failed": list(
+                failed
+            ),
+
+            "skipped": list(
+                skipped
+            ),
+
+            "paused": bool(
+                paused
+            ),
+
+            "requires_confirmation": bool(
+                requires_confirmation
+            ),
+
+            "pending_task_id": (
+                pending_task_id
+            ),
+
+            "pending_action_name": (
+                pending_action_name
+            ),
+
+            "pending_action_params": dict(
+                pending_action_params or {}
+            ),
+
+            # Paused is not failure, but the objective is not
+            # complete yet, so success remains False until the
+            # workflow actually finishes.
+            "success": (
+                not paused
+                and len(failed) == 0
+                and len(skipped) == 0
+            ),
+        }
 
     # =========================================================
     # MAIN EXECUTION
@@ -197,55 +390,206 @@ class Executor:
         self,
         plan: ExecutionPlan,
         base_context: Dict[str, Any],
+        resume_state: Optional[Dict[str, Any]] = None,
+        confirmed_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """
+        Execute or resume an ExecutionPlan.
 
-        task_outputs: Dict[str, Any] = {}
+        resume_state may contain:
 
-        completed = []
-        failed = []
-        skipped = []
+            {
+                "task_outputs": {...},
+                "completed": [...],
+                "failed": [...],
+                "skipped": [...]
+            }
 
-        workflow_results: Dict[str, Any] = {}
+        confirmed_task_id identifies the task which the user has
+        explicitly approved while resuming a paused workflow.
+        """
 
-        executed = set()
+        base_context = base_context or {}
+        resume_state = resume_state or {}
 
         # -----------------------------------------------------
-        # Resolve ActionManager from context if it wasn't
-        # injected directly.
+        # RESTORE PREVIOUS WORKFLOW PROGRESS
         # -----------------------------------------------------
 
-        action_manager = self.action_manager
+        task_outputs: Dict[str, Any] = dict(
+            resume_state.get(
+                "task_outputs",
+                {}
+            )
+            or {}
+        )
 
-        if action_manager is None:
+        completed: List[str] = list(
+            resume_state.get(
+                "completed",
+                []
+            )
+            or []
+        )
 
-            app_state = base_context.get(
-                "app_state"
+        failed: List[str] = list(
+            resume_state.get(
+                "failed",
+                []
+            )
+            or []
+        )
+
+        skipped: List[str] = list(
+            resume_state.get(
+                "skipped",
+                []
+            )
+            or []
+        )
+
+        workflow_results: Dict[str, Any] = dict(
+            resume_state.get(
+                "workflow_results",
+                {}
+            )
+            or {}
+        )
+
+        # Completed / failed / skipped tasks have already been
+        # processed and must not run again.
+        executed: Set[str] = set(
+            completed
+            + failed
+            + skipped
+        )
+
+        # -----------------------------------------------------
+        # NORMALIZE TASK STATE DURING RESUME
+        # -----------------------------------------------------
+
+        for task in plan.tasks:
+
+            if task.id in completed:
+
+                task.status = "completed"
+
+                if task.id in task_outputs:
+                    task.output = task_outputs[
+                        task.id
+                    ]
+
+            elif task.id in failed:
+
+                task.status = "failed"
+
+            elif task.id in skipped:
+
+                task.status = "skipped"
+
+            else:
+
+                # A previously suspended confirmation task may
+                # still say "awaiting_confirmation".
+                #
+                # Reset it so execution can reconsider it.
+                if (
+                    task.status
+                    == "awaiting_confirmation"
+                ):
+                    task.status = "pending"
+
+        # -----------------------------------------------------
+        # APPLY USER CONFIRMATION
+        # -----------------------------------------------------
+
+        if confirmed_task_id:
+
+            matching_task = next(
+                (
+                    task
+                    for task in plan.tasks
+                    if task.id
+                    == confirmed_task_id
+                ),
+                None,
             )
 
-            if (
-                app_state
-                and app_state.registry.has(
-                    "action_manager"
+            if matching_task is None:
+
+                logger.error(
+                    "[Executor] Confirmed workflow task "
+                    "%s does not exist.",
+                    confirmed_task_id,
                 )
-            ):
-                action_manager = app_state.registry.get(
-                    "action_manager"
+
+                return self._build_result(
+                    task_outputs=task_outputs,
+                    workflow_results=workflow_results,
+                    completed=completed,
+                    failed=[
+                        *failed,
+                        confirmed_task_id,
+                    ],
+                    skipped=skipped,
                 )
+
+            if not matching_task.is_action():
+
+                logger.error(
+                    "[Executor] Confirmation supplied for "
+                    "non-action task %s.",
+                    confirmed_task_id,
+                )
+
+                return self._build_result(
+                    task_outputs=task_outputs,
+                    workflow_results=workflow_results,
+                    completed=completed,
+                    failed=[
+                        *failed,
+                        confirmed_task_id,
+                    ],
+                    skipped=skipped,
+                )
+
+            matching_task.confirm()
+
+            logger.info(
+                "[Executor] Workflow task %s confirmed.",
+                confirmed_task_id,
+            )
+
+        # -----------------------------------------------------
+        # ACTION MANAGER
+        # -----------------------------------------------------
+
+        action_manager = (
+            self._resolve_action_manager(
+                base_context
+            )
+        )
 
         # -----------------------------------------------------
         # EXECUTION LOOP
         # -----------------------------------------------------
 
-        while len(executed) < len(plan.tasks):
+        while len(executed) < len(
+            plan.tasks
+        ):
 
             ready_tasks = [
                 task
                 for task in plan.tasks
                 if (
                     task.id not in executed
+
                     and all(
-                        dep in executed
-                        for dep in task.depends_on
+                        dependency
+                        in executed
+
+                        for dependency
+                        in task.depends_on
                     )
                 )
             ]
@@ -264,16 +608,42 @@ class Executor:
 
                 for task in remaining:
 
-                    task.mark_failed(
+                    error = (
                         "Unresolvable task dependencies."
                     )
 
-                    failed.append(task.id)
-                    executed.add(task.id)
+                    task.mark_failed(
+                        error
+                    )
+
+                    if task.id not in failed:
+                        failed.append(
+                            task.id
+                        )
+
+                    workflow_results[
+                        task.id
+                    ] = {
+                        "type": task.task_type,
+                        "target": (
+                            task.action_name
+                            if task.is_action()
+                            else task.skill
+                        ),
+                        "status": "failed",
+                        "error": error,
+                    }
+
+                    executed.add(
+                        task.id
+                    )
 
                 break
 
-            # Priority: higher priority first.
+            # -------------------------------------------------
+            # Priority
+            # -------------------------------------------------
+
             ready_tasks.sort(
                 key=lambda task: task.priority,
                 reverse=True,
@@ -286,9 +656,13 @@ class Executor:
                 # ---------------------------------------------
 
                 failed_dependencies = [
-                    dep
-                    for dep in task.depends_on
-                    if dep in failed or dep in skipped
+                    dependency
+                    for dependency
+                    in task.depends_on
+                    if (
+                        dependency in failed
+                        or dependency in skipped
+                    )
                 ]
 
                 if failed_dependencies:
@@ -300,9 +674,13 @@ class Executor:
                         )
                     )
 
-                    task.mark_skipped(reason)
+                    task.mark_skipped(
+                        reason
+                    )
 
-                    workflow_results[task.id] = {
+                    workflow_results[
+                        task.id
+                    ] = {
                         "type": task.task_type,
                         "target": (
                             task.action_name
@@ -313,25 +691,39 @@ class Executor:
                         "error": reason,
                     }
 
-                    skipped.append(task.id)
-                    executed.add(task.id)
+                    if task.id not in skipped:
+                        skipped.append(
+                            task.id
+                        )
+
+                    executed.add(
+                        task.id
+                    )
 
                     continue
 
                 # ---------------------------------------------
-                # RESOLVE INPUT REFERENCES
+                # RESOLVE REFERENCES
                 # ---------------------------------------------
 
                 try:
 
-                    resolved_input = self._resolve_value(
-                        dict(task.input),
-                        task_outputs,
+                    resolved_input = (
+                        self._resolve_value(
+                            dict(
+                                task.input or {}
+                            ),
+                            task_outputs,
+                        )
                     )
 
-                    resolved_params = self._resolve_value(
-                        dict(task.params),
-                        task_outputs,
+                    resolved_params = (
+                        self._resolve_value(
+                            dict(
+                                task.params or {}
+                            ),
+                            task_outputs,
+                        )
                     )
 
                 except Exception as exc:
@@ -345,53 +737,79 @@ class Executor:
                         error,
                     )
 
-                    task.mark_failed(error)
+                    task.mark_failed(
+                        error
+                    )
 
-                    workflow_results[task.id] = {
+                    workflow_results[
+                        task.id
+                    ] = {
                         "type": task.task_type,
+                        "target": (
+                            task.action_name
+                            if task.is_action()
+                            else task.skill
+                        ),
                         "status": "failed",
                         "error": error,
                     }
 
-                    failed.append(task.id)
-                    executed.add(task.id)
+                    if task.id not in failed:
+                        failed.append(
+                            task.id
+                        )
+
+                    executed.add(
+                        task.id
+                    )
 
                     continue
 
-                # Existing dependency context support.
+                # ---------------------------------------------
+                # DEPENDENCY CONTEXT
+                # ---------------------------------------------
+
                 for dep_id in task.depends_on:
 
                     if dep_id in task_outputs:
 
                         resolved_input[
                             f"context_from_{dep_id}"
-                        ] = task_outputs[dep_id]
+                        ] = task_outputs[
+                            dep_id
+                        ]
 
                 # ---------------------------------------------
-                # EXECUTE
+                # EXECUTE TASK
                 # ---------------------------------------------
 
                 task.mark_running()
 
-                start_time = time.perf_counter()
+                start_time = (
+                    time.perf_counter()
+                )
 
                 try:
 
                     if task.is_action():
 
-                        result = await self._execute_action(
-                            task=task,
-                            params=resolved_params,
-                            action_manager=action_manager,
+                        result = (
+                            await self._execute_action(
+                                task=task,
+                                params=resolved_params,
+                                action_manager=action_manager,
+                            )
                         )
 
                     else:
 
-                        result = await self._execute_skill(
-                            task=task,
-                            resolved_input=resolved_input,
-                            plan=plan,
-                            base_context=base_context,
+                        result = (
+                            await self._execute_skill(
+                                task=task,
+                                resolved_input=resolved_input,
+                                plan=plan,
+                                base_context=base_context,
+                            )
                         )
 
                 except Exception as exc:
@@ -403,6 +821,8 @@ class Executor:
 
                     result = {
                         "success": False,
+                        "paused": False,
+                        "requires_confirmation": False,
                         "data": {},
                         "error": str(exc),
                         "source": (
@@ -417,13 +837,90 @@ class Executor:
                     - start_time
                 ) * 1000
 
-                task.execution_time_ms = elapsed_ms
+                task.execution_time_ms = (
+                    elapsed_ms
+                )
 
-                # ---------------------------------------------
-                # RESULT
-                # ---------------------------------------------
+                # =============================================
+                # WORKFLOW PAUSE
+                # =============================================
 
-                if result["success"]:
+                if result.get(
+                    "requires_confirmation"
+                ):
+
+                    task.mark_awaiting_confirmation()
+
+                    confirmation_data = (
+                        result.get(
+                            "data",
+                            {}
+                        )
+                        or {}
+                    )
+
+                    workflow_results[
+                        task.id
+                    ] = {
+                        "type": task.task_type,
+                        "target": task.action_name,
+                        "status": (
+                            "awaiting_confirmation"
+                        ),
+                        "execution_time_ms": (
+                            elapsed_ms
+                        ),
+                    }
+
+                    logger.info(
+                        "[Executor] Workflow paused at "
+                        "task %s (%s).",
+                        task.id,
+                        task.action_name,
+                    )
+
+                    # IMPORTANT:
+                    # Do NOT mark task executed.
+                    # Do NOT mark task failed.
+                    # Do NOT execute later tasks.
+                    #
+                    # CognitiveCore will persist this state.
+
+                    plan.completed_tasks = list(
+                        completed
+                    )
+
+                    plan.failed_tasks = list(
+                        failed
+                    )
+
+                    return self._build_result(
+                        task_outputs=task_outputs,
+                        workflow_results=workflow_results,
+                        completed=completed,
+                        failed=failed,
+                        skipped=skipped,
+                        paused=True,
+                        requires_confirmation=True,
+                        pending_task_id=task.id,
+                        pending_action_name=(
+                            task.action_name
+                        ),
+                        pending_action_params=(
+                            confirmation_data.get(
+                                "params",
+                                resolved_params,
+                            )
+                        ),
+                    )
+
+                # =============================================
+                # SUCCESS
+                # =============================================
+
+                if result.get(
+                    "success"
+                ):
 
                     output = result.get(
                         "data",
@@ -433,56 +930,87 @@ class Executor:
                     if output is None:
                         output = {}
 
-                    if not isinstance(output, dict):
+                    if not isinstance(
+                        output,
+                        dict,
+                    ):
                         output = {
                             "result": output
                         }
 
-                    task.mark_completed(output)
+                    task.mark_completed(
+                        output
+                    )
 
-                    task_outputs[task.id] = output
+                    task_outputs[
+                        task.id
+                    ] = output
 
-                    workflow_results[task.id] = {
+                    workflow_results[
+                        task.id
+                    ] = {
                         "type": task.task_type,
                         "target": result.get(
                             "source"
                         ),
                         "status": "completed",
                         "output": output,
-                        "execution_time_ms": elapsed_ms,
+                        "execution_time_ms": (
+                            elapsed_ms
+                        ),
                     }
 
-                    completed.append(task.id)
+                    if task.id not in completed:
+                        completed.append(
+                            task.id
+                        )
 
                     logger.info(
                         "[Executor] Task %s completed "
                         "(%s: %s) in %.1f ms",
                         task.id,
                         task.task_type,
-                        result.get("source"),
+                        result.get(
+                            "source"
+                        ),
                         elapsed_ms,
                     )
+
+                # =============================================
+                # FAILURE
+                # =============================================
 
                 else:
 
                     error = (
-                        result.get("error")
+                        result.get(
+                            "error"
+                        )
                         or "Task execution failed."
                     )
 
-                    task.mark_failed(error)
+                    task.mark_failed(
+                        error
+                    )
 
-                    workflow_results[task.id] = {
+                    workflow_results[
+                        task.id
+                    ] = {
                         "type": task.task_type,
                         "target": result.get(
                             "source"
                         ),
                         "status": "failed",
                         "error": error,
-                        "execution_time_ms": elapsed_ms,
+                        "execution_time_ms": (
+                            elapsed_ms
+                        ),
                     }
 
-                    failed.append(task.id)
+                    if task.id not in failed:
+                        failed.append(
+                            task.id
+                        )
 
                     logger.warning(
                         "[Executor] Task %s failed: %s",
@@ -490,11 +1018,13 @@ class Executor:
                         error,
                     )
 
-                executed.add(task.id)
+                executed.add(
+                    task.id
+                )
 
-        # -----------------------------------------------------
-        # PLAN STATE
-        # -----------------------------------------------------
+        # =====================================================
+        # WORKFLOW COMPLETE
+        # =====================================================
 
         plan.completed_tasks = list(
             completed
@@ -504,17 +1034,29 @@ class Executor:
             failed
         )
 
-        return {
-            "task_outputs": task_outputs,
-            "workflow_results": workflow_results,
-            "completed": completed,
-            "failed": failed,
-            "skipped": skipped,
-            "success": (
-                len(failed) == 0
-                and len(skipped) == 0
-            ),
-        }
+        success = (
+            len(failed) == 0
+            and len(skipped) == 0
+        )
+
+        logger.info(
+            "[Executor] Workflow finished. "
+            "success=%s completed=%s failed=%s skipped=%s",
+            success,
+            completed,
+            failed,
+            skipped,
+        )
+
+        return self._build_result(
+            task_outputs=task_outputs,
+            workflow_results=workflow_results,
+            completed=completed,
+            failed=failed,
+            skipped=skipped,
+            paused=False,
+            requires_confirmation=False,
+        )
 
     # =========================================================
     # SKILL EXECUTION
@@ -527,8 +1069,12 @@ class Executor:
         plan,
         base_context,
     ) -> Dict[str, Any]:
+        """
+        Execute a skill with verification and retry support.
+        """
 
         attempt = 0
+
         max_attempts = (
             task.max_retries + 1
         )
@@ -545,35 +1091,65 @@ class Executor:
                 "task_input"
             ] = resolved_input
 
-            res: SkillResponse = (
-                await self.skill_manager.execute_skill(
-                    task.skill,
-                    resolved_input.get(
-                        "query",
-                        plan.goal,
-                    ),
-                    exec_context,
-                )
-            )
+            try:
 
-            if self.verifier.verify(
-                task.id,
-                res,
+                res: SkillResponse = (
+                    await self.skill_manager.execute_skill(
+                        task.skill,
+                        resolved_input.get(
+                            "query",
+                            plan.goal,
+                        ),
+                        exec_context,
+                    )
+                )
+
+            except Exception as exc:
+
+                logger.exception(
+                    "[Executor] Skill %s crashed.",
+                    task.skill,
+                )
+
+                last_error = str(
+                    exc
+                )
+
+                res = None
+
+            if (
+                res is not None
+                and self.verifier.verify(
+                    task.id,
+                    res,
+                )
             ):
 
                 return {
                     "success": True,
+                    "paused": False,
+                    "requires_confirmation": False,
                     "data": res.data or {},
                     "error": None,
                     "source": task.skill,
                 }
 
-            last_error = (
-                res.error
-                or "Skill execution failed."
-            )
+            if res is not None:
 
-            lowered = last_error.lower()
+                last_error = (
+                    res.error
+                    or "Skill execution failed."
+                )
+
+            if not last_error:
+
+                last_error = (
+                    "Skill execution failed."
+                )
+
+            lowered = (
+                str(last_error).lower()
+            )
 
             non_retryable = any(
                 phrase in lowered
@@ -585,7 +1161,10 @@ class Executor:
                 break
 
             attempt += 1
-            task.retry_count = attempt
+
+            task.retry_count = (
+                attempt
+            )
 
             if attempt < max_attempts:
 
@@ -599,6 +1178,8 @@ class Executor:
 
         return {
             "success": False,
+            "paused": False,
+            "requires_confirmation": False,
             "data": {},
             "error": last_error,
             "source": task.skill,
@@ -614,11 +1195,20 @@ class Executor:
         params,
         action_manager,
     ) -> Dict[str, Any]:
+        """
+        Execute one registered action.
+
+        Confirmation-sensitive actions return a PAUSE signal
+        until CognitiveCore resumes the workflow with the
+        corresponding task confirmed.
+        """
 
         if action_manager is None:
 
             return {
                 "success": False,
+                "paused": False,
+                "requires_confirmation": False,
                 "data": {},
                 "error": (
                     "Action manager is unavailable."
@@ -626,13 +1216,18 @@ class Executor:
                 "source": task.action_name,
             }
 
-        if (
-            task.action_name
-            not in action_manager.actions
-        ):
+        actions = getattr(
+            action_manager,
+            "actions",
+            {},
+        )
+
+        if task.action_name not in actions:
 
             return {
                 "success": False,
+                "paused": False,
+                "requires_confirmation": False,
                 "data": {},
                 "error": (
                     f"Action '{task.action_name}' "
@@ -641,7 +1236,7 @@ class Executor:
                 "source": task.action_name,
             }
 
-        action = action_manager.actions[
+        action = actions[
             task.action_name
         ]
 
@@ -652,10 +1247,7 @@ class Executor:
         )
 
         # -----------------------------------------------------
-        # Confirmation-sensitive actions
-        #
-        # Multi-step confirmation will be handled by
-        # CognitiveCore. Executor must not silently bypass it.
+        # CONFIRMATION REQUIRED
         # -----------------------------------------------------
 
         if (
@@ -663,25 +1255,43 @@ class Executor:
             and not task.confirmed
         ):
 
-            task.mark_awaiting_confirmation()
+            logger.info(
+                "[Executor] Task %s requires confirmation "
+                "before action '%s'.",
+                task.id,
+                task.action_name,
+            )
 
             return {
                 "success": False,
+                "paused": True,
+                "requires_confirmation": True,
                 "data": {
-                    "requires_confirmation": True,
-                    "action_name": task.action_name,
-                    "params": params,
-                    "task_id": task.id,
+                    "action_name": (
+                        task.action_name
+                    ),
+                    "params": dict(
+                        params or {}
+                    ),
+                    "task_id": (
+                        task.id
+                    ),
                 },
-                "error": "Action requires confirmation.",
+                "error": None,
                 "source": task.action_name,
             }
+
+        # -----------------------------------------------------
+        # EXECUTE CONFIRMED / NON-CONFIRM ACTION
+        # -----------------------------------------------------
 
         action_result = (
             await action_manager.execute_action(
                 action_name=task.action_name,
                 params=params,
-                confirmed=task.confirmed,
+                confirmed=bool(
+                    task.confirmed
+                ),
             )
         )
 
@@ -689,10 +1299,21 @@ class Executor:
             "success": bool(
                 action_result.success
             ),
+
+            "paused": False,
+
+            "requires_confirmation": False,
+
             "data": (
                 action_result.data
                 or {}
             ),
-            "error": action_result.error,
-            "source": task.action_name,
+
+            "error": (
+                action_result.error
+            ),
+
+            "source": (
+                task.action_name
+            ),
         }
