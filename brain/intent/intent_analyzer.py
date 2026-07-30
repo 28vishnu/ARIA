@@ -224,6 +224,24 @@ class IntentAnalyzer:
             return Intent("continue", 0.90)
 
         # =====================================================
+        # MULTI-STEP / COMPOUND SYSTEM ACTION
+        # =====================================================
+
+        if (
+            (" then " in q or " and then " in q)
+            and self._contains_any(q, (
+                "file",
+                "notification",
+                "notify",
+                "alert",
+                "read ",
+                "write ",
+                "send ",
+            ))
+        ):
+            return Intent("planner", 0.98)
+
+        # =====================================================
         # WRITING
         # =====================================================
 
