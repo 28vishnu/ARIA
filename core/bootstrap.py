@@ -268,7 +268,9 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     decision_engine = DecisionEngine()
-    intent_analyzer = IntentAnalyzer()
+    intent_analyzer = IntentAnalyzer(
+        llm_router=llm_router
+    )
 
     reasoning_engine = ReasoningEngine(
         agent_manager=agent_manager
