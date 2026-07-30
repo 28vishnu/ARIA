@@ -732,7 +732,8 @@ Question:
     async def delete_document(
         self,
         session_id: str,
-        document_name: str
+        document_name: str,
+        user_id: Optional[str] = None
     ):
         """
         Delete one document from MongoDB and ChromaDB.
@@ -776,7 +777,8 @@ Question:
 
     async def delete_all_documents(
         self,
-        session_id: str
+        session_id: str,
+        user_id: Optional[str] = None
     ):
         """
         Delete every uploaded document for a session.
