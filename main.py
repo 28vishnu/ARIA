@@ -33,6 +33,12 @@ class BackgroundTaskManager:
 
 background_manager = BackgroundTaskManager()
 
+# ---------------------------------------------------------
+# PENDING DOCUMENT CONFIRMATIONS
+# ---------------------------------------------------------
+
+pending_document_actions = {}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     registry = await bootstrap_application()
@@ -157,6 +163,141 @@ async def telegram_webhook(req: Request):
         return {"status": "unauthorized"}
 
     logger.info("[Security] Authorized Telegram user.")
+
+    # ---------------------------------------------------------
+    # HANDLE PENDING DOCUMENT CONFIRMATION
+    # ---------------------------------------------------------
+
+    confirmation_key = str(user_id)
+
+    if confirmation_key in pending_document_actions:
+
+        pending = pending_document_actions[confirmation_key]
+        answer = text.lower().strip()
+
+        # User cancelled the operation.
+        if answer in (
+            "no",
+            "n",
+            "cancel",
+            "stop",
+            "don't",
+            "dont",
+        ):
+            pending_document_actions.pop(
+                confirmation_key,
+                None
+            )
+
+            http_client = req.app.state.registry.get(
+                "http_client"
+            )
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "Cancelled, Sir."
+                }
+            )
+
+            return {
+                "status": "document_action_cancelled"
+            }
+
+        # User confirmed the operation.
+        if answer in (
+            "yes",
+            "y",
+            "confirm",
+            "yes delete",
+            "delete it",
+            "do it",
+        ):
+            document_repository = req.app.state.registry.get(
+                "document_repository"
+            )
+
+            action = pending.get("action")
+
+            if action == "delete_document":
+
+                document_id = pending.get(
+                    "document_id"
+                )
+
+                filename = pending.get(
+                    "filename",
+                    "document"
+                )
+
+                deleted = await document_repository.delete_document(
+                    document_id=document_id,
+                    user_id=str(user_id)
+                )
+
+                pending_document_actions.pop(
+                    confirmation_key,
+                    None
+                )
+
+                http_client = req.app.state.registry.get(
+                    "http_client"
+                )
+
+                message = (
+                    f"Deleted {filename}, Sir."
+                    if deleted
+                    else "I couldn't delete that document, Sir."
+                )
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": message
+                    }
+                )
+
+                return {
+                    "status": (
+                        "document_deleted"
+                        if deleted
+                        else "document_delete_failed"
+                    )
+                }
+
+            if action == "delete_all_documents":
+
+                deleted_count = (
+                    await document_repository.delete_all_user_documents(
+                        user_id=str(user_id)
+                    )
+                )
+
+                pending_document_actions.pop(
+                    confirmation_key,
+                    None
+                )
+
+                http_client = req.app.state.registry.get(
+                    "http_client"
+                )
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            f"Deleted {deleted_count} stored "
+                            f"document(s), Sir."
+                        )
+                    }
+                )
+
+                return {
+                    "status": "all_documents_deleted"
+                }
 
     # Handle document upload
     if "document" in msg:
