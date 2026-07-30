@@ -10,12 +10,17 @@ class Intent:
 
 class IntentAnalyzer:
     """
-    Lightweight first-stage intent classifier.
+    ARIA's first-stage intent understanding layer.
 
-    This layer identifies broad conversational intent.
-    It should recognize natural variations without trying
-    to understand every possible sentence through hard-coded rules.
+    Fast, obvious intents can be recognised locally.
+
+    Ambiguous natural-language requests can be delegated to the
+    language model so ARIA does not require an ever-growing list
+    of hard-coded phrases.
     """
+
+    def __init__(self, llm_router=None):
+        self.llm_router = llm_router
 
     async def analyze(self, query: str) -> Intent:
         q = self._normalize(query)
