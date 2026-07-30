@@ -175,6 +175,138 @@ async def telegram_webhook(req: Request):
         pending = pending_document_actions[confirmation_key]
         answer = text.lower().strip()
 
+        # -----------------------------------------------------
+        # USER IS SELECTING A DOCUMENT
+        # -----------------------------------------------------
+
+        if pending.get("action") == "select_document":
+
+            documents = pending.get("documents", [])
+
+            ignored_words = {
+                "pdf",
+                "document",
+                "file",
+                "the",
+                "my",
+                "one",
+                "give",
+                "send",
+                "me",
+                "please",
+            }
+
+            query_words = {
+                word
+                for word in (
+                    answer
+                    .replace(".pdf", "")
+                    .replace("_", " ")
+                    .replace("-", " ")
+                    .split()
+                )
+                if word not in ignored_words
+            }
+
+            best_document = None
+            best_score = 0
+
+            for document in documents:
+
+                filename = str(
+                    document.get("filename", "")
+                )
+
+                filename_words = {
+                    word
+                    for word in (
+                        filename
+                        .lower()
+                        .replace(".pdf", "")
+                        .replace("_", " ")
+                        .replace("-", " ")
+                        .split()
+                    )
+                    if word not in ignored_words
+                }
+
+                score = len(
+                    query_words.intersection(filename_words)
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_document = document
+
+            if best_document and best_score > 0:
+
+                telegram_file_id = best_document.get(
+                    "telegram_file_id"
+                )
+
+                filename = best_document.get(
+                    "filename",
+                    "document.pdf"
+                )
+
+                if telegram_file_id:
+
+                    http_client = req.app.state.registry.get(
+                        "http_client"
+                    )
+
+                    telegram_response = await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendDocument",
+                        json={
+                            "chat_id": chat_id,
+                            "document": telegram_file_id,
+                            "caption": filename,
+                        }
+                    )
+
+                    if telegram_response.is_success:
+
+                        pending_document_actions.pop(
+                            confirmation_key,
+                            None
+                        )
+
+                        return {
+                            "status": "document_sent"
+                        }
+
+            # No document matched the user's selection.
+            filenames = [
+                document.get(
+                    "filename",
+                    "Unnamed document"
+                )
+                for document in documents
+            ]
+
+            http_client = req.app.state.registry.get(
+                "http_client"
+            )
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": (
+                        "I couldn't identify which document you meant, Sir. "
+                        "Please choose one of these:\n\n"
+                        + "\n".join(
+                            f"• {name}"
+                            for name in filenames
+                        )
+                    )
+                }
+            )
+
+            return {
+                "status": "document_selection_required"
+            }
+
         # User cancelled the operation.
         if answer in (
             "no",
@@ -548,6 +680,13 @@ async def telegram_webhook(req: Request):
                     )
                     for document in documents
                 ]
+
+                # Remember that ARIA is waiting for the user
+                # to choose one of these documents.
+                pending_document_actions[str(user_id)] = {
+                    "action": "select_document",
+                    "documents": documents,
+                }
 
                 await http_client.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
