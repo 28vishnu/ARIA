@@ -515,7 +515,7 @@ class CognitiveCore:
                     secondary_actions = decision.secondary_actions
 
                 # -----------------------------------------------------
-                # EXECUTABLE ACTION
+                # EXECUTABLE ACTIONS
                 # -----------------------------------------------------
 
                 if decision.action == "action":
@@ -529,45 +529,70 @@ class CognitiveCore:
                         )
 
                     action_name = getattr(
-                        decision,
+                        reasoning,
                         "action_name",
                         None
                     )
 
                     action_params = getattr(
-                        decision,
+                        reasoning,
                         "action_params",
                         {}
-                    ) or {}
+                    )
 
-                    # Never execute an unnamed action.
                     if not action_name:
-                        logger.warning(
-                            "[CognitiveCore] Action route selected "
-                            "without an action name."
-                        )
-
                         return SystemResponse(
                             success=False,
                             confidence=decision.confidence,
                             source="action_manager",
-                            error="No executable action was selected."
+                            error="No action name specified."
                         )
 
                     # Only registered actions may reach execution.
                     if action_name not in self.action_manager.actions:
-                        logger.warning(
-                            "[CognitiveCore] Rejected unknown action: %s",
-                            action_name
-                        )
-
                         return SystemResponse(
                             success=False,
                             confidence=decision.confidence,
                             source="action_manager",
-                            error=(
-                                f"Action '{action_name}' is not registered."
+                            error=f"Action '{action_name}' is not registered."
+                        )
+
+                    # Actions marked "confirm" must never execute immediately.
+                    action_instance = self.action_manager.actions[action_name]
+
+                    if action_instance.permission_level == "confirm":
+
+                        if not self.state_manager:
+                            return SystemResponse(
+                                success=False,
+                                confidence=decision.confidence,
+                                source="action_confirmation",
+                                error="State manager is unavailable."
                             )
+
+                        self.state_manager.set_pending_action(
+                            session_id=session_id,
+                            action_name=action_name,
+                            action_params=action_params
+                        )
+
+                        logger.info(
+                            "[CognitiveCore] Action awaiting confirmation: %s",
+                            action_name
+                        )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=decision.confidence,
+                            source="action_confirmation",
+                            data={
+                                "confirmation_required": True,
+                                "action_name": action_name,
+                                "message": (
+                                    "This action requires your confirmation. "
+                                    "Shall I continue?"
+                                )
+                            }
                         )
 
                     logger.info(
@@ -575,20 +600,27 @@ class CognitiveCore:
                         action_name
                     )
 
-                    action_result = await self.action_manager.execute_action(
+                    result = await self.action_manager.execute(
                         action_name=action_name,
                         params=action_params
                     )
 
+                    if not result.success:
+                        return SystemResponse(
+                            success=False,
+                            confidence=decision.confidence,
+                            source="action_manager",
+                            error=result.error
+                        )
+
                     return SystemResponse(
-                        success=action_result.success,
+                        success=True,
                         confidence=decision.confidence,
                         source="action_manager",
                         data={
                             "action_name": action_name,
-                            "result": action_result.data
-                        },
-                        error=action_result.error
+                            "result": result.data
+                        }
                     )
 
                 # -----------------------------------------------------
@@ -609,6 +641,7 @@ class CognitiveCore:
                         "delete_document",
                         "delete_all_documents",
                         "reindex_documents",
+                        "action",
                     )
                 ):
 
