@@ -10,6 +10,7 @@ from core.dependency_injection import ServiceRegistry
 from brain.memory.memory_engine import MemoryEngine
 from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.document.document_intelligence import DocumentIntelligence
+from brain.document.document_repository import DocumentRepository
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
 from brain.agents.math_agent import MathAgent
@@ -67,6 +68,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     mongo_client = None
     memory_engine = None
+    document_repository = None
 
     if config.mongodb_uri:
 
@@ -80,6 +82,10 @@ async def bootstrap_application() -> ServiceRegistry:
             db_inst
         )
 
+        document_repository = DocumentRepository(
+            db_inst
+        )
+
         registry.register(
             "mongo_client",
             mongo_client
@@ -88,6 +94,11 @@ async def bootstrap_application() -> ServiceRegistry:
         registry.register(
             "memory_engine",
             memory_engine
+        )
+
+        registry.register(
+            "document_repository",
+            document_repository
         )
 
         logger.info(
