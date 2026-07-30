@@ -847,4 +847,59 @@ For an action:
                 return Intent(
                     name="action",
                     confidence=confidence,
-                    
+                    data={
+                        "action_name": "notification_action",
+                        "action_params": {
+                            "message": message
+                        }
+                    }
+                )
+
+            return Intent(
+                intent_name,
+                confidence
+            )
+
+        except Exception:
+            logger.exception(
+                "[IntentAnalyzer] Semantic intent parsing failed."
+            )
+            return None
+
+    # =========================================================
+    # ACTION REQUEST
+    # =========================================================
+
+    def _looks_like_action_request(self, q: str) -> bool:
+        """
+        Planner detection should focus on actual commands,
+        not merely the presence of words such as 'make'.
+        """
+
+        action_starts = (
+            "create ",
+            "build ",
+            "generate ",
+            "develop ",
+            "design ",
+            "make ",
+        )
+
+        return q.startswith(action_starts)
+
+    # =========================================================
+    # HELPERS
+    # =========================================================
+
+    def _contains_any(self, text: str, phrases) -> bool:
+        return any(
+            phrase in text
+            for phrase in phrases
+        )
+
+    def _normalize(self, query: str) -> str:
+        return re.sub(
+            r"\s+",
+            " ",
+            str(query or "").lower()
+        ).strip()
