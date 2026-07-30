@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Dict, Any
 import re
 
 
@@ -6,6 +7,7 @@ import re
 class Intent:
     name: str
     confidence: float
+    data: Dict[str, Any] = field(default_factory=dict)
 
 
 class IntentAnalyzer:
@@ -43,6 +45,25 @@ class IntentAnalyzer:
 
         if q in greetings:
             return Intent("greeting", 0.99)
+
+        # =====================================================
+        # CONTROLLED NOTIFICATION ACTION
+        # =====================================================
+
+        if q.startswith("notify me:"):
+            message = query.split(":", 1)[1].strip()
+
+            if message:
+                return Intent(
+                    name="action",
+                    confidence=0.99,
+                    data={
+                        "action_name": "notification_action",
+                        "action_params": {
+                            "message": message
+                        }
+                    }
+                )
 
         # =====================================================
         # DOCUMENT DELETE
@@ -737,52 +758,3 @@ Return ONLY valid JSON:
                 return None
 
             confidence = max(
-                0.0,
-                min(confidence, 1.0)
-            )
-
-            return Intent(
-                intent_name,
-                confidence
-            )
-
-        except Exception:
-            return None
-
-    # =========================================================
-    # ACTION REQUEST
-    # =========================================================
-
-    def _looks_like_action_request(self, q: str) -> bool:
-        """
-        Planner detection should focus on actual commands,
-        not merely the presence of words such as 'make'.
-        """
-
-        action_starts = (
-            "create ",
-            "build ",
-            "generate ",
-            "develop ",
-            "design ",
-            "make ",
-        )
-
-        return q.startswith(action_starts)
-
-    # =========================================================
-    # HELPERS
-    # =========================================================
-
-    def _contains_any(self, text: str, phrases) -> bool:
-        return any(
-            phrase in text
-            for phrase in phrases
-        )
-
-    def _normalize(self, query: str) -> str:
-        return re.sub(
-            r"\s+",
-            " ",
-            str(query or "").lower()
-        ).strip()
