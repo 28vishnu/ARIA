@@ -16,6 +16,37 @@ class StateManager:
         state = self.get_state(session_id)
         state.update(kwargs)
 
+    def set_pending_document_action(
+        self,
+        session_id: str,
+        action: str,
+        documents: list
+    ):
+        """
+        Remember that ARIA is waiting for the user to select
+        one document from a previous document operation.
+        """
+        self.update_state(
+            session_id,
+            pending_document_action=action,
+            pending_document_selection=True,
+            pending_documents=documents
+        )
+
+    def clear_pending_document_action(
+        self,
+        session_id: str
+    ):
+        """
+        Clear a pending document-selection operation.
+        """
+        self.update_state(
+            session_id,
+            pending_document_action=None,
+            pending_document_selection=False,
+            pending_documents=[]
+        )
+
     def clear_document_context(
         self,
         session_id: str
@@ -30,7 +61,10 @@ class StateManager:
             current_document=None,
             current_document_summary=None,
             last_document_question=None,
-            last_document_answer=None
+            last_document_answer=None,
+            pending_document_action=None,
+            pending_document_selection=False,
+            pending_documents=[]
         )
 
     def clear_state(self, session_id: str):
