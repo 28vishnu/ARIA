@@ -1409,134 +1409,176 @@ class CognitiveCore:
 
                 if decision.action == "action":
 
-                    if not self.action_manager:
-
-                        return SystemResponse(
-                            success=False,
-                            confidence=decision.confidence,
-                            source="action_manager",
-                            error=(
-                                "Action manager is unavailable."
-                            ),
-                        )
-
-                    action_name = getattr(
-                        reasoning,
-                        "action_name",
-                        None,
-                    )
-
-                    action_params = getattr(
-                        reasoning,
-                        "action_params",
-                        {},
-                    )
-
-                    if not action_name:
-
-                        return SystemResponse(
-                            success=False,
-                            confidence=decision.confidence,
-                            source="action_manager",
-                            error="No action name specified.",
-                        )
-
-                    if (
-                        action_name
-                        not in self.action_manager.actions
-                    ):
-
-                        return SystemResponse(
-                            success=False,
-                            confidence=decision.confidence,
-                            source="action_manager",
-                            error=(
-                                f"Action '{action_name}' "
-                                "is not registered."
-                            ),
-                        )
-
-                    action_instance = (
-                        self.action_manager.actions[
-                            action_name
-                        ]
-                    )
-
                     # -----------------------------------------
-                    # DIRECT ACTION CONFIRMATION
+                    # COMPOUND / MULTI-STEP ACTION DETECTION
+                    #
+                    # A request such as:
+                    #
+                    # "Read notes.txt and send its content
+                    #  as a notification"
+                    #
+                    # must go through Planner + Executor rather
+                    # than being incorrectly treated as one
+                    # direct file_action.
                     # -----------------------------------------
 
-                    if (
-                        action_instance.permission_level
-                        == "confirm"
-                    ):
+                    normalized_action_query = str(
+                        query or ""
+                    ).strip().lower()
 
-                        if not self.state_manager:
+                    compound_connectors = (
+                        " and ",
+                        " then ",
+                        " and then ",
+                        " after that ",
+                        " afterwards ",
+                    )
+
+                    is_compound_action = any(
+                        connector in normalized_action_query
+                        for connector in compound_connectors
+                    )
+
+                    if is_compound_action:
+
+                        logger.info(
+                            "[CognitiveCore] Compound action "
+                            "detected. Routing to Planner: %s",
+                            query,
+                        )
+
+                        decision.action = "planner"
+
+                    else:
+
+                        if not self.action_manager:
 
                             return SystemResponse(
                                 success=False,
                                 confidence=decision.confidence,
-                                source="action_confirmation",
+                                source="action_manager",
                                 error=(
-                                    "State manager is unavailable."
+                                    "Action manager is unavailable."
                                 ),
                             )
 
-                        self.state_manager.set_pending_action(
-                            session_id=session_id,
-                            action_name=action_name,
-                            action_params=action_params,
+                        action_name = getattr(
+                            reasoning,
+                            "action_name",
+                            None,
                         )
 
-                        logger.info(
-                            "[CognitiveCore] Direct action "
-                            "awaiting confirmation: %s",
-                            action_name,
+                        action_params = getattr(
+                            reasoning,
+                            "action_params",
+                            {},
                         )
+
+                        if not action_name:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=decision.confidence,
+                                source="action_manager",
+                                error="No action name specified.",
+                            )
+
+                        if (
+                            action_name
+                            not in self.action_manager.actions
+                        ):
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=decision.confidence,
+                                source="action_manager",
+                                error=(
+                                    f"Action '{action_name}' "
+                                    "is not registered."
+                                ),
+                            )
+
+                        action_instance = (
+                            self.action_manager.actions[
+                                action_name
+                            ]
+                        )
+
+                        # -----------------------------------------
+                        # DIRECT ACTION CONFIRMATION
+                        # -----------------------------------------
+
+                        if (
+                            action_instance.permission_level
+                            == "confirm"
+                        ):
+
+                            if not self.state_manager:
+
+                                return SystemResponse(
+                                    success=False,
+                                    confidence=decision.confidence,
+                                    source="action_confirmation",
+                                    error=(
+                                        "State manager is unavailable."
+                                    ),
+                                )
+
+                            self.state_manager.set_pending_action(
+                                session_id=session_id,
+                                action_name=action_name,
+                                action_params=action_params,
+                            )
+
+                            logger.info(
+                                "[CognitiveCore] Direct action "
+                                "awaiting confirmation: %s",
+                                action_name,
+                            )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=decision.confidence,
+                                source="action_confirmation",
+                                data={
+                                    "confirmation_required": True,
+                                    "action_name": action_name,
+                                    "message": (
+                                        "This action requires your "
+                                        "confirmation. Shall I continue?"
+                                    ),
+                                },
+                            )
+
+                        # -----------------------------------------
+                        # EXECUTE DIRECT ACTION
+                        # -----------------------------------------
+
+                        result = (
+                            await self.action_manager.execute_action(
+                                action_name=action_name,
+                                params=action_params,
+                            )
+                        )
+
+                        if not result.success:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=decision.confidence,
+                                source="action_manager",
+                                error=result.error,
+                            )
 
                         return SystemResponse(
                             success=True,
                             confidence=decision.confidence,
-                            source="action_confirmation",
+                            source="action_manager",
                             data={
-                                "confirmation_required": True,
                                 "action_name": action_name,
-                                "message": (
-                                    "This action requires your "
-                                    "confirmation. Shall I continue?"
-                                ),
+                                "result": result.data,
                             },
                         )
-
-                    # -----------------------------------------
-                    # EXECUTE DIRECT ACTION
-                    # -----------------------------------------
-
-                    result = (
-                        await self.action_manager.execute_action(
-                            action_name=action_name,
-                            params=action_params,
-                        )
-                    )
-
-                    if not result.success:
-
-                        return SystemResponse(
-                            success=False,
-                            confidence=decision.confidence,
-                            source="action_manager",
-                            error=result.error,
-                        )
-
-                    return SystemResponse(
-                        success=True,
-                        confidence=decision.confidence,
-                        source="action_manager",
-                        data={
-                            "action_name": action_name,
-                            "result": result.data,
-                        },
-                    )
 
                 # =============================================
                 # AGENT WORKFLOW
