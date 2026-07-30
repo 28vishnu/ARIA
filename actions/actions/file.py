@@ -8,6 +8,13 @@ FILE_WORKSPACE = os.path.abspath(
     os.getenv("ARIA_FILE_WORKSPACE", "/tmp/aria_workspace")
 )
 
+ALLOWED_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".json",
+    ".csv",
+}
+
 os.makedirs(FILE_WORKSPACE, exist_ok=True)
 
 
@@ -57,6 +64,11 @@ class FileAction(BaseAction):
         safe_path = self._resolve_safe_path(path)
 
         if safe_path is None:
+            return False
+
+        extension = os.path.splitext(safe_path)[1].lower()
+
+        if extension not in ALLOWED_EXTENSIONS:
             return False
 
         return True
