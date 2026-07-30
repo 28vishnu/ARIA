@@ -18,7 +18,12 @@ class ActionManager:
         self.actions[action.name] = action
         logger.info("[ActionManager] Registered action: %s (Permission: %s)", action.name, action.permission_level)
 
-    async def execute_action(self, action_name: str, params: Dict[str, Any]) -> ActionResult:
+    async def execute_action(
+        self,
+        action_name: str,
+        params: Dict[str, Any],
+        confirmed: bool = False
+    ) -> ActionResult:
         """Manages permissions, validation, timeout handling, retries, and rollbacks for system actions."""
         if action_name not in self.actions:
             return ActionResult(success=False, action_name=action_name, error=f"Action '{action_name}' not found.")
@@ -26,8 +31,26 @@ class ActionManager:
         action = self.actions[action_name]
 
         # 1. Evaluate permissions
-        if not self.permissions.evaluate(action.name, action.permission_level):
-            return ActionResult(success=False, action_name=action_name, error="Action blocked by permission policy.")
+        #
+        # "confirm" actions may execute only after CognitiveCore has
+        # explicitly received user confirmation.
+        if action.permission_level == "confirm" and not confirmed:
+            return ActionResult(
+                success=False,
+                action_name=action_name,
+                error="Action requires explicit user confirmation."
+            )
+
+        if action.permission_level != "confirm":
+            if not self.permissions.evaluate(
+                action.name,
+                action.permission_level
+            ):
+                return ActionResult(
+                    success=False,
+                    action_name=action_name,
+                    error="Action blocked by permission policy."
+                )
 
         # 2. Validate parameters
         if not await self.validator.validate_params(action.name, action, params):
@@ -46,10 +69,10 @@ class ActionManager:
                     return await action.execute(params)
 
                 result = await asyncio.wait_for(_run(), timeout=action.timeout_seconds)
-                
+
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
                 logger.info("[ActionManager] Action: %s | Success: %s | Time: %.1f ms", action.name, result.success, elapsed_ms)
-                
+
                 if result.success:
                     return result
                 else:
