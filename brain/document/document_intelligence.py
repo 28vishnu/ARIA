@@ -770,6 +770,18 @@ Question:
             if ids:
                 self.vector_db.delete(ids=ids)
 
+        if self.document_repository and user_id:
+            stored_document = await self.document_repository.find_by_filename(
+                user_id=user_id,
+                filename=document_name
+            )
+
+            if stored_document:
+                await self.document_repository.delete_document(
+                    document_id=stored_document["document_id"],
+                    user_id=user_id
+                )
+
         logger.info(
             "[DocumentAI] Deleted document %s",
             document_name
@@ -811,6 +823,11 @@ Question:
 
             if ids:
                 self.vector_db.delete(ids=ids)
+
+        if self.document_repository and user_id:
+            await self.document_repository.delete_all_user_documents(
+                user_id=user_id
+            )
 
         logger.info(
             "[DocumentAI] Deleted all documents."
