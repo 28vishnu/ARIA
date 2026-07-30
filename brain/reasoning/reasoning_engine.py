@@ -169,6 +169,40 @@ class ReasoningEngine:
                 )
 
         # -----------------------------------------------------
+        # DOCUMENT MANAGEMENT
+        # -----------------------------------------------------
+
+        if intent_name == "delete_document":
+            return ReasoningResult(
+                primary_action="delete_document",
+                confidence=intent_confidence,
+                reasoning="Delete a specific stored document.",
+                metadata={
+                    "goal": "delete_document",
+                    "execution_plan": ["delete_document"],
+                    "response_depth": "concise",
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows,
+                },
+                workflow=workflow
+            )
+
+        if intent_name == "delete_all_documents":
+            return ReasoningResult(
+                primary_action="delete_all_documents",
+                confidence=intent_confidence,
+                reasoning="Delete all stored documents.",
+                metadata={
+                    "goal": "delete_all_documents",
+                    "execution_plan": ["delete_all_documents"],
+                    "response_depth": "concise",
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows,
+                },
+                workflow=workflow
+            )
+
+        # -----------------------------------------------------
         # MEMORY OPERATIONS
         # -----------------------------------------------------
 
