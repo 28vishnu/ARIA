@@ -45,6 +45,16 @@ class IntentAnalyzer:
             return Intent("greeting", 0.99)
 
         # =====================================================
+        # DOCUMENT DELETE
+        # =====================================================
+
+        if self._looks_like_document_delete_all(q):
+            return Intent("delete_all_documents", 0.99)
+
+        if self._looks_like_document_delete(q):
+            return Intent("delete_document", 0.99)
+
+        # =====================================================
         # MEMORY DELETE
         # =====================================================
 
