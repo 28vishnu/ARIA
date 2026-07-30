@@ -198,6 +198,46 @@ async def telegram_webhook(req: Request):
             session_id=session_id
         )
 
+        # -----------------------------------------------------
+        # Persist document metadata in MongoDB
+        # -----------------------------------------------------
+
+        if req.app.state.registry.has("document_repository"):
+
+            document_repository = req.app.state.registry.get(
+                "document_repository"
+            )
+
+            try:
+                saved_document = await document_repository.save_document(
+                    user_id=str(user_id),
+                    filename=safe_filename,
+                    telegram_file_id=document.get("file_id"),
+                    telegram_file_unique_id=document.get(
+                        "file_unique_id"
+                    ),
+                    mime_type=document.get("mime_type"),
+                    size=document.get("file_size"),
+                    summary=result.get("summary"),
+                    text_preview=result.get("text_preview"),
+                    vector_ids=result.get("vector_ids", []),
+                    metadata={
+                        "source": "telegram",
+                        "chat_id": str(chat_id),
+                        "session_id": session_id,
+                    },
+                )
+
+                logger.info(
+                    "[Telegram] Document catalogue entry saved: %s",
+                    saved_document.get("document_id")
+                )
+
+            except Exception:
+                logger.exception(
+                    "[Telegram] Failed to persist document metadata."
+                )
+
         state_manager = req.app.state.registry.get("state_manager")
 
         if state_manager:
