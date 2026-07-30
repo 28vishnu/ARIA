@@ -376,6 +376,26 @@ class ReasoningEngine:
             )
 
         # -----------------------------------------------------
+        # EXECUTABLE ACTION
+        # -----------------------------------------------------
+
+        if intent_name == "action":
+
+            return ReasoningResult(
+                primary_action="action",
+                confidence=intent_confidence,
+                reasoning="Executable system action requested.",
+                metadata={
+                    "goal": "action_execution",
+                    "execution_plan": ["action"],
+                    "response_depth": "concise",
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows,
+                },
+                workflow=workflow
+            )
+
+        # -----------------------------------------------------
         # PLANNING / MULTI-STEP ACTION
         # -----------------------------------------------------
 
