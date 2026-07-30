@@ -16,6 +16,34 @@ class FileAction(BaseAction):
     description = "Safely reads or writes text files on disk."
     permission_level = "confirm"
 
+    def _resolve_safe_path(self, requested_path: str) -> str | None:
+        """
+        Resolve a user-supplied path inside ARIA's file workspace.
+
+        Returns None if the path attempts to escape the sandbox.
+        """
+        if not requested_path:
+            return None
+
+        requested_path = str(requested_path).strip()
+
+        # Treat user paths as relative to the workspace.
+        requested_path = requested_path.lstrip("/\\")
+
+        resolved = os.path.abspath(
+            os.path.join(FILE_WORKSPACE, requested_path)
+        )
+
+        try:
+            if os.path.commonpath(
+                [FILE_WORKSPACE, resolved]
+            ) != FILE_WORKSPACE:
+                return None
+        except ValueError:
+            return None
+
+        return resolved
+
     async def validate(self, params: Dict[str, Any]) -> bool:
         mode = params.get("mode")
         path = params.get("path")
