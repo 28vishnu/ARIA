@@ -27,8 +27,6 @@ from skills.memory import MemorySkill
 from skills.profile import ProfileSkill
 
 from actions.manager import ActionManager
-from actions.actions.file import FileAction
-from actions.actions.notification import NotificationAction
 
 from brain.planner import Planner
 from brain.executor import Executor
@@ -274,15 +272,6 @@ async def bootstrap_application() -> ServiceRegistry:
         permission_mode=config.permission_mode
     )
 
-    # Register executable actions
-    action_manager.register(FileAction())
-    action_manager.register(NotificationAction())
-
-    logger.info(
-        "[BOOT TEST] Registered executable actions: %s",
-        list(action_manager.actions.keys())
-    )
-
     planner = Planner(llm_router)
     executor = Executor(skill_manager)
 
@@ -362,6 +351,7 @@ async def bootstrap_application() -> ServiceRegistry:
         planner=planner,
         executor=executor,
         skill_manager=skill_manager,
+        action_manager=action_manager,
         memory_router=memory_engine,
         state_manager=state_manager,
         intent_analyzer=intent_analyzer,
