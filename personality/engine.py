@@ -209,6 +209,25 @@ class PersonalityEngine:
 
             return "Notification dispatched successfully, Sir."
 
+        # File actions
+        if action_name == "file_action":
+            if isinstance(result, dict):
+
+                # READ
+                if "content" in result:
+                    content = str(result["content"])
+
+                    if content:
+                        return content
+
+                    return "The file is empty, Sir."
+
+                # WRITE
+                if result.get("status") == "written successfully":
+                    return "File written successfully, Sir."
+
+            return "File operation completed successfully, Sir."
+
         # Generic formatting for future actions
         if isinstance(result, dict):
             if "message" in result:
