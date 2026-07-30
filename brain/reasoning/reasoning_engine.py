@@ -18,6 +18,11 @@ class ReasoningResult:
     confidence: float = 1.0
     reasoning: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # Structured executable action request.
+    action_name: Optional[str] = None
+    action_params: Dict[str, Any] = field(default_factory=dict)
+
     workflow: Optional[AgentWorkflow] = None
 
 
