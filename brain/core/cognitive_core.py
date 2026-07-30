@@ -515,6 +515,83 @@ class CognitiveCore:
                     secondary_actions = decision.secondary_actions
 
                 # -----------------------------------------------------
+                # EXECUTABLE ACTION
+                # -----------------------------------------------------
+
+                if decision.action == "action":
+
+                    if not self.action_manager:
+                        return SystemResponse(
+                            success=False,
+                            confidence=decision.confidence,
+                            source="action_manager",
+                            error="Action manager is unavailable."
+                        )
+
+                    action_name = getattr(
+                        decision,
+                        "action_name",
+                        None
+                    )
+
+                    action_params = getattr(
+                        decision,
+                        "action_params",
+                        {}
+                    ) or {}
+
+                    # Never execute an unnamed action.
+                    if not action_name:
+                        logger.warning(
+                            "[CognitiveCore] Action route selected "
+                            "without an action name."
+                        )
+
+                        return SystemResponse(
+                            success=False,
+                            confidence=decision.confidence,
+                            source="action_manager",
+                            error="No executable action was selected."
+                        )
+
+                    # Only registered actions may reach execution.
+                    if action_name not in self.action_manager.actions:
+                        logger.warning(
+                            "[CognitiveCore] Rejected unknown action: %s",
+                            action_name
+                        )
+
+                        return SystemResponse(
+                            success=False,
+                            confidence=decision.confidence,
+                            source="action_manager",
+                            error=(
+                                f"Action '{action_name}' is not registered."
+                            )
+                        )
+
+                    logger.info(
+                        "[CognitiveCore] Executing registered action: %s",
+                        action_name
+                    )
+
+                    action_result = await self.action_manager.execute_action(
+                        action_name=action_name,
+                        params=action_params
+                    )
+
+                    return SystemResponse(
+                        success=action_result.success,
+                        confidence=decision.confidence,
+                        source="action_manager",
+                        data={
+                            "action_name": action_name,
+                            "result": action_result.data
+                        },
+                        error=action_result.error
+                    )
+
+                # -----------------------------------------------------
                 # Execute the agent workflow selected during reasoning.
                 #
                 # Reasoning chooses the appropriate specialised agents.
