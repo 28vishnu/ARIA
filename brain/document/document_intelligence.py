@@ -798,14 +798,20 @@ Question:
 
         if self.memory_engine:
 
+            session_pattern = re.escape(str(session_id))
+
             await self.memory_engine.memory_col.delete_many(
                 {
                     "$or": [
                         {
-                            "category": "document"
+                            "key": {
+                                "$regex": f"^document_{session_pattern}_"
+                            }
                         },
                         {
-                            "category": "document_chunk"
+                            "key": {
+                                "$regex": f"^document_chunk_{session_pattern}_"
+                            }
                         }
                     ]
                 }
