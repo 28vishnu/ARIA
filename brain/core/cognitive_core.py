@@ -115,7 +115,8 @@ class CognitiveCore:
 
                     action_result = await self.action_manager.execute_action(
                         action_name=action_name,
-                        params=action_params
+                        params=action_params,
+                        confirmed=True
                     )
 
                     return SystemResponse(
@@ -701,7 +702,7 @@ class CognitiveCore:
                         action_name
                     )
 
-                    result = await self.action_manager.execute(
+                    result = await self.action_manager.execute_action(
                         action_name=action_name,
                         params=action_params
                     )
