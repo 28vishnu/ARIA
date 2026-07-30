@@ -1,7 +1,7 @@
 import logging
 import time
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any
 from actions.base import BaseAction, ActionResult
 from actions.permissions import PermissionManager
 from actions.validator import ActionValidator
