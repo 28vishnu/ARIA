@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any
+import logging
 import re
+
+logger = logging.getLogger("aria")
 
 
 @dataclass
@@ -630,8 +633,8 @@ class IntentAnalyzer:
         Uses ARIA's language intelligence when local rules cannot
         confidently understand the user's intention.
 
-        This avoids requiring hard-coded phrases for every possible
-        way a person can express the same meaning.
+        Semantic actions are strictly allowlisted before they are
+        allowed into the execution pipeline.
         """
 
         if not self.llm_router:
@@ -645,33 +648,41 @@ Determine what the user is trying to do from meaning, not keywords.
 Available intents:
 
 delete_document
-- The user wants to delete/remove one specific stored document,
-  PDF, resume, CV, report, or file.
+- Delete/remove one specific stored document.
 
 delete_all_documents
-- The user wants to delete/remove all stored documents,
-  PDFs, reports, or files.
+- Delete/remove all stored documents.
 
 memory_store
-- The user is telling ARIA a personal fact, preference, plan,
-  decision, background detail, or something useful to remember.
+- Store a personal fact, preference, plan, decision, or useful
+  personal information.
 
 memory_recall
-- The user is asking ARIA about information previously shared
-  about themselves.
+- Recall information previously shared by the user.
 
 memory_delete
-- The user wants stored personal information forgotten.
+- Forget stored personal information.
 
 planner
-- The user wants ARIA to create a plan, roadmap, schedule,
-  strategy, or organised sequence of actions.
+- Create a plan, roadmap, schedule, strategy, or organised
+  sequence of actions.
 
 writing
-- The user wants text written, rewritten, edited, or drafted.
+- Write, rewrite, edit, or draft text.
 
 python
-- The user explicitly wants Python code executed.
+- Explicitly execute Python code.
+
+action
+- Execute one of ARIA's explicitly available system actions.
+
+Currently the ONLY semantic action available is:
+
+notification_action
+- Use when the user explicitly asks ARIA to send, dispatch,
+  create, or issue a notification or alert.
+- Extract the notification text into:
+  action_params.message
 
 greeting
 - The message is primarily a greeting.
@@ -680,28 +691,52 @@ chat
 - General questions, explanations, conversation, or anything
   that does not belong to the intents above.
 
-Important distinction:
+Examples:
 
-"I had a backup plan for my master's. It's Germany."
-=> memory_store
+"Let me know that the server is ready"
+=> {
+  "intent": "action",
+  "confidence": 0.95,
+  "action_name": "notification_action",
+  "action_params": {
+    "message": "the server is ready"
+  }
+}
 
-"Make me a backup plan for doing my master's in Germany."
-=> planner
+"Send an alert saying the build passed"
+=> {
+  "intent": "action",
+  "confidence": 0.98,
+  "action_name": "notification_action",
+  "action_params": {
+    "message": "the build passed"
+  }
+}
 
-"My favourite car is Porsche."
-=> memory_store
+"What is a notification?"
+=> {
+  "intent": "chat",
+  "confidence": 0.99
+}
 
-"What car did I say I liked?"
-=> memory_recall
+Return ONLY valid JSON.
 
-"What is a Porsche?"
-=> chat
-
-Return ONLY valid JSON:
+For normal intents:
 
 {
   "intent": "chat",
   "confidence": 0.95
+}
+
+For an action:
+
+{
+  "intent": "action",
+  "confidence": 0.95,
+  "action_name": "notification_action",
+  "action_params": {
+    "message": "notification text"
+  }
 }
 """
 
@@ -718,7 +753,7 @@ Return ONLY valid JSON:
                     }
                 ],
                 temperature=0.0,
-                max_tokens=100
+                max_tokens=150
             )
 
             cleaned = str(response).strip()
@@ -762,6 +797,7 @@ Return ONLY valid JSON:
                 "python",
                 "greeting",
                 "chat",
+                "action",
             }
 
             if intent_name not in allowed:
@@ -772,48 +808,43 @@ Return ONLY valid JSON:
                 min(confidence, 1.0)
             )
 
-            return Intent(
-                intent_name,
-                confidence
-            )
+            # ---------------------------------------------
+            # CONTROLLED SEMANTIC ACTION
+            # ---------------------------------------------
 
-        except Exception:
-            return None
+            if intent_name == "action":
+                action_name = str(
+                    data.get("action_name", "")
+                ).strip()
 
-    # =========================================================
-    # ACTION REQUEST
-    # =========================================================
+                action_params = data.get(
+                    "action_params",
+                    {}
+                )
 
-    def _looks_like_action_request(self, q: str) -> bool:
-        """
-        Planner detection should focus on actual commands,
-        not merely the presence of words such as 'make'.
-        """
+                # Semantic action allowlist.
+                allowed_actions = {
+                    "notification_action",
+                }
 
-        action_starts = (
-            "create ",
-            "build ",
-            "generate ",
-            "develop ",
-            "design ",
-            "make ",
-        )
+                if action_name not in allowed_actions:
+                    logger.warning(
+                        "[IntentAnalyzer] Blocked semantic action: %s",
+                        action_name
+                    )
+                    return None
 
-        return q.startswith(action_starts)
+                if not isinstance(action_params, dict):
+                    return None
 
-    # =========================================================
-    # HELPERS
-    # =========================================================
+                message = str(
+                    action_params.get("message", "")
+                ).strip()
 
-    def _contains_any(self, text: str, phrases) -> bool:
-        return any(
-            phrase in text
-            for phrase in phrases
-        )
+                if not message:
+                    return None
 
-    def _normalize(self, query: str) -> str:
-        return re.sub(
-            r"\s+",
-            " ",
-            str(query or "").lower()
-        ).strip()
+                return Intent(
+                    name="action",
+                    confidence=confidence,
+                    
