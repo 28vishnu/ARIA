@@ -296,33 +296,73 @@ class IntentAnalyzer:
 
     def _looks_like_document_listing(self, q: str) -> bool:
         """
-        Detect requests to list stored documents.
+        Detect requests to list stored documents using broader
+        natural-language matching instead of exact phrases only.
+
+        Examples:
+            List all my documents
+            Show my PDFs
+            What files do you have?
+            List all documents you've saved
+            What documents have you stored?
+            Show all my uploads
         """
 
-        patterns = (
-            "list my documents",
-            "list all my documents",
-            "list my pdfs",
-            "list all my pdfs",
-            "list my files",
-            "list all my files",
-            "show my documents",
-            "show all my documents",
-            "show my pdfs",
-            "show all my pdfs",
-            "show my files",
-            "show all my files",
-            "what documents do you have",
-            "what pdfs do you have",
-            "what files do you have",
-            "which documents do you have",
-            "which pdfs do you have",
-            "which files do you have",
+        # Handle common document terminology / minor spelling variants.
+        document_terms = (
+            "document",
+            "documents",
+            "doccument",
+            "doccuments",
+            "pdf",
+            "pdfs",
+            "file",
+            "files",
+            "upload",
+            "uploads",
         )
 
-        return self._contains_any(
-            q,
-            patterns
+        listing_terms = (
+            "list",
+            "show",
+            "which",
+            "what",
+            "tell me",
+        )
+
+        storage_terms = (
+            "my",
+            "you have",
+            "you've",
+            "you saved",
+            "you've saved",
+            "you stored",
+            "you've stored",
+            "uploaded",
+            "saved",
+            "stored",
+            "available",
+        )
+
+        has_document = any(
+            term in q
+            for term in document_terms
+        )
+
+        has_listing = any(
+            term in q
+            for term in listing_terms
+        )
+
+        has_storage_context = any(
+            term in q
+            for term in storage_terms
+        )
+
+        return (
+            has_document
+            and has_listing
+            and has_storage_context
         )
 
     def _looks_like_document_question(self, q: str) -> bool:
