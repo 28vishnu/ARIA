@@ -301,15 +301,23 @@ class IntentAnalyzer:
 
         patterns = (
             "list my documents",
+            "list all my documents",
             "list my pdfs",
+            "list all my pdfs",
+            "list my files",
+            "list all my files",
             "show my documents",
+            "show all my documents",
             "show my pdfs",
+            "show all my pdfs",
+            "show my files",
+            "show all my files",
             "what documents do you have",
             "what pdfs do you have",
+            "what files do you have",
             "which documents do you have",
             "which pdfs do you have",
-            "what files do you have",
-            "list my files",
+            "which files do you have",
         )
 
         return self._contains_any(
