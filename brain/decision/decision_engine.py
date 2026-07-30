@@ -76,6 +76,18 @@ class DecisionEngine:
                 {}
             ) or {}
 
+            action_name = getattr(
+                reasoning,
+                "action_name",
+                None
+            )
+
+            action_params = getattr(
+                reasoning,
+                "action_params",
+                {}
+            ) or {}
+
             if action:
 
                 logger.info(
@@ -90,7 +102,9 @@ class DecisionEngine:
                     action=action,
                     confidence=confidence,
                     secondary_actions=secondary_actions,
-                    data=metadata
+                    data=metadata,
+                    action_name=action_name,
+                    action_params=action_params
                 )
 
         # -----------------------------------------------------
