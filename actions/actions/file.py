@@ -63,8 +63,17 @@ class FileAction(BaseAction):
 
     async def execute(self, params: Dict[str, Any]) -> ActionResult:
         mode = params.get("mode")
-        path = params.get("path")
+        requested_path = params.get("path")
         content = params.get("content", "")
+
+        path = self._resolve_safe_path(requested_path)
+
+        if path is None:
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error="Unsafe file path."
+            )
 
         try:
             if mode == "read":
