@@ -73,6 +73,22 @@ class IntentAnalyzer:
             return Intent("memory_store", 0.99)
 
         # =====================================================
+        # DOCUMENT REQUESTS
+        # =====================================================
+
+        # User wants the original stored document/file returned.
+        if self._looks_like_document_retrieval(q):
+            return Intent("document_retrieve", 0.99)
+
+        # User wants to know which documents ARIA has.
+        if self._looks_like_document_listing(q):
+            return Intent("document_list", 0.98)
+
+        # User is asking about the contents of a stored document.
+        if self._looks_like_document_question(q):
+            return Intent("document_query", 0.97)
+
+        # =====================================================
         # MEMORY RECALL
         # =====================================================
 
@@ -163,6 +179,121 @@ class IntentAnalyzer:
         # =====================================================
 
         return Intent("chat", 0.80)
+
+    # =========================================================
+    # DOCUMENT INTENTS
+    # =========================================================
+
+    def _looks_like_document_retrieval(self, q: str) -> bool:
+        """
+        Detect requests for ARIA to return an original stored file.
+
+        Examples:
+            Give me my resume PDF
+            Send my resume
+            Get my CV
+            Give me the project report
+        """
+
+        document_words = (
+            "pdf",
+            "document",
+            "file",
+            "resume",
+            "cv",
+            "report",
+        )
+
+        retrieval_words = (
+            "give",
+            "send",
+            "get",
+            "return",
+            "download",
+            "share",
+            "show",
+        )
+
+        has_document = any(
+            word in q
+            for word in document_words
+        )
+
+        has_retrieval = any(
+            word in q
+            for word in retrieval_words
+        )
+
+        return has_document and has_retrieval
+
+    def _looks_like_document_listing(self, q: str) -> bool:
+        """
+        Detect requests to list stored documents.
+        """
+
+        patterns = (
+            "list my documents",
+            "list my pdfs",
+            "show my documents",
+            "show my pdfs",
+            "what documents do you have",
+            "what pdfs do you have",
+            "which documents do you have",
+            "which pdfs do you have",
+            "what files do you have",
+            "list my files",
+        )
+
+        return self._contains_any(
+            q,
+            patterns
+        )
+
+    def _looks_like_document_question(self, q: str) -> bool:
+        """
+        Detect questions about document contents.
+
+        Examples:
+            Summarise my resume
+            What skills are in my resume?
+            What does my resume say?
+            Explain my project PDF
+        """
+
+        document_words = (
+            "pdf",
+            "document",
+            "resume",
+            "cv",
+            "report",
+        )
+
+        question_words = (
+            "summarize",
+            "summarise",
+            "summary",
+            "explain",
+            "what",
+            "which",
+            "who",
+            "where",
+            "when",
+            "how",
+            "tell me about",
+            "according to",
+        )
+
+        has_document = any(
+            word in q
+            for word in document_words
+        )
+
+        has_question = any(
+            word in q
+            for word in question_words
+        )
+
+        return has_document and has_question
 
     # =========================================================
     # PERSONAL MEMORY RECALL
