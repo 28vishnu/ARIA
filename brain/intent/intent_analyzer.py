@@ -565,6 +565,14 @@ Determine what the user is trying to do from meaning, not keywords.
 
 Available intents:
 
+delete_document
+- The user wants to delete/remove one specific stored document,
+  PDF, resume, CV, report, or file.
+
+delete_all_documents
+- The user wants to delete/remove all stored documents,
+  PDFs, reports, or files.
+
 memory_store
 - The user is telling ARIA a personal fact, preference, plan,
   decision, background detail, or something useful to remember.
@@ -665,6 +673,11 @@ Return ONLY valid JSON:
                 "memory_store",
                 "memory_recall",
                 "memory_delete",
+                "delete_document",
+                "delete_all_documents",
+                "document_retrieve",
+                "document_list",
+                "document_query",
                 "planner",
                 "writing",
                 "python",
