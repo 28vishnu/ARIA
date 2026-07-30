@@ -15,6 +15,8 @@ ALLOWED_EXTENSIONS = {
     ".csv",
 }
 
+MAX_WRITE_BYTES = 1_000_000  # 1 MB
+
 os.makedirs(FILE_WORKSPACE, exist_ok=True)
 
 
@@ -70,6 +72,12 @@ class FileAction(BaseAction):
 
         if extension not in ALLOWED_EXTENSIONS:
             return False
+
+        if mode == "write":
+            content = str(params.get("content", ""))
+
+            if len(content.encode("utf-8")) > MAX_WRITE_BYTES:
+                return False
 
         return True
 
