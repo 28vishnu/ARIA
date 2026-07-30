@@ -327,6 +327,152 @@ class IntentAnalyzer:
         return False
 
     # =========================================================
+    # SEMANTIC INTENT UNDERSTANDING
+    # =========================================================
+
+    async def _semantic_intent(self, query: str) -> Intent | None:
+        """
+        Uses ARIA's language intelligence when local rules cannot
+        confidently understand the user's intention.
+
+        This avoids requiring hard-coded phrases for every possible
+        way a person can express the same meaning.
+        """
+
+        if not self.llm_router:
+            return None
+
+        system_prompt = """
+You are ARIA's intent understanding system.
+
+Determine what the user is trying to do from meaning, not keywords.
+
+Available intents:
+
+memory_store
+- The user is telling ARIA a personal fact, preference, plan,
+  decision, background detail, or something useful to remember.
+
+memory_recall
+- The user is asking ARIA about information previously shared
+  about themselves.
+
+memory_delete
+- The user wants stored personal information forgotten.
+
+planner
+- The user wants ARIA to create a plan, roadmap, schedule,
+  strategy, or organised sequence of actions.
+
+writing
+- The user wants text written, rewritten, edited, or drafted.
+
+python
+- The user explicitly wants Python code executed.
+
+greeting
+- The message is primarily a greeting.
+
+chat
+- General questions, explanations, conversation, or anything
+  that does not belong to the intents above.
+
+Important distinction:
+
+"I had a backup plan for my master's. It's Germany."
+=> memory_store
+
+"Make me a backup plan for doing my master's in Germany."
+=> planner
+
+"My favourite car is Porsche."
+=> memory_store
+
+"What car did I say I liked?"
+=> memory_recall
+
+"What is a Porsche?"
+=> chat
+
+Return ONLY valid JSON:
+
+{
+  "intent": "chat",
+  "confidence": 0.95
+}
+"""
+
+        try:
+            response = await self.llm_router.chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": query
+                    }
+                ],
+                temperature=0.0,
+                max_tokens=100
+            )
+
+            cleaned = str(response).strip()
+
+            if cleaned.startswith("```"):
+                cleaned = re.sub(
+                    r"^```(?:json)?\s*",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE
+                )
+                cleaned = re.sub(
+                    r"\s*```$",
+                    "",
+                    cleaned
+                ).strip()
+
+            import json
+
+            data = json.loads(cleaned)
+
+            intent_name = str(
+                data.get("intent", "")
+            ).strip().lower()
+
+            confidence = float(
+                data.get("confidence", 0.0)
+            )
+
+            allowed = {
+                "memory_store",
+                "memory_recall",
+                "memory_delete",
+                "planner",
+                "writing",
+                "python",
+                "greeting",
+                "chat",
+            }
+
+            if intent_name not in allowed:
+                return None
+
+            confidence = max(
+                0.0,
+                min(confidence, 1.0)
+            )
+
+            return Intent(
+                intent_name,
+                confidence
+            )
+
+        except Exception:
+            return None
+
+    # =========================================================
     # ACTION REQUEST
     # =========================================================
 
