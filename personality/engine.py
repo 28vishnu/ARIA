@@ -61,6 +61,8 @@ class PersonalityEngine:
                 reply = self._format_memory(data)
             elif source == ResponseSource.PLANNER:
                 reply = self._format_planner(data)
+            elif source == "action_manager":
+                reply = self._format_action(data)
             else:
                 reply = self._format_fallback(data)
 
@@ -190,6 +192,32 @@ class PersonalityEngine:
                 summaries.append(f"{task_id}: {output}")
 
         return "Execution completed successfully, Sir. " + " | ".join(summaries)
+
+    def _format_action(self, data: Any) -> str:
+        if not isinstance(data, dict):
+            return "Action completed successfully, Sir."
+
+        action_name = data.get("action_name")
+        result = data.get("result", {})
+
+        if action_name == "notification_action":
+            if isinstance(result, dict):
+                message = result.get("message")
+
+                if message:
+                    return f"Notification dispatched: {message}, Sir."
+
+            return "Notification dispatched successfully, Sir."
+
+        # Generic formatting for future actions
+        if isinstance(result, dict):
+            if "message" in result:
+                return str(result["message"])
+
+            if "response" in result:
+                return str(result["response"])
+
+        return "Action completed successfully, Sir."
 
     def _format_fallback(self, data: Any) -> str:
 
