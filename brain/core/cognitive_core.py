@@ -135,6 +135,8 @@ class CognitiveCore:
                     "document_retrieve",
                     "document_list",
                     "document_query",
+                    "delete_document",
+                    "delete_all_documents",
                 ):
                     logger.info(
                         "[CognitiveCore] Document fast-path activated: %s",
@@ -158,6 +160,91 @@ class CognitiveCore:
                                     "document_repository"
                                 )
                             )
+
+                    # ---------------------------------------------
+                    # DELETE ALL STORED DOCUMENTS
+                    # ---------------------------------------------
+
+                    if intent.name == "delete_all_documents":
+
+                        if not document_repository:
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error="Document repository is unavailable."
+                            )
+
+                        documents = await document_repository.list_documents(
+                            user_id=user_id
+                        )
+
+                        if not documents:
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_management",
+                                data={
+                                    "message": "You don't have any stored documents to delete, Sir."
+                                }
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_management",
+                            data={
+                                "document_action": "confirm_delete_all_documents",
+                                "documents": documents
+                            }
+                        )
+
+                    # ---------------------------------------------
+                    # DELETE ONE STORED DOCUMENT
+                    # ---------------------------------------------
+
+                    if intent.name == "delete_document":
+
+                        if not document_repository:
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error="Document repository is unavailable."
+                            )
+
+                        documents = await document_repository.search_documents(
+                            user_id=user_id,
+                            query=query,
+                            limit=10
+                        )
+
+                        if not documents:
+                            documents = await document_repository.list_documents(
+                                user_id=user_id,
+                                limit=20
+                            )
+
+                        if not documents:
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_management",
+                                data={
+                                    "message": "I couldn't find that document, Sir."
+                                }
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_management",
+                            data={
+                                "document_action": "confirm_delete_document",
+                                "query": query,
+                                "documents": documents
+                            }
+                        )
 
                     # ---------------------------------------------
                     # LIST STORED DOCUMENTS
