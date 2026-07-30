@@ -79,6 +79,33 @@ class IntentAnalyzer:
                     )
 
         # =====================================================
+        # CONTROLLED FILE WRITE ACTION
+        # =====================================================
+
+        if q.startswith("write file:"):
+            payload = query.split(":", 1)[1].strip()
+
+            if "|" in payload:
+                path, content = payload.split("|", 1)
+
+                path = path.strip()
+                content = content.strip()
+
+                if path and content:
+                    return Intent(
+                        name="action",
+                        confidence=0.99,
+                        data={
+                            "action_name": "file_action",
+                            "action_params": {
+                                "mode": "write",
+                                "path": path,
+                                "content": content
+                            }
+                        }
+                    )
+
+        # =====================================================
         # DOCUMENT DELETE
         # =====================================================
 
