@@ -71,13 +71,21 @@ class PersonalityEngine:
             else:
                 reply = self._format_fallback(data)
 
+            # Basic deterministic conversation styling first.
             reply = ConversationStyle.apply(reply)
             reply = ConversationStyle.follow_up(reply, user_text)
+
+            # Universal ARIA personality pass.
+            reply = await self._apply_aria_voice(
+                user_text=user_text,
+                reply=reply,
+            )
 
             logger.info(
                 "[Personality] Reply before post_process: %r",
                 reply
             )
+
             return self._post_process(reply)
 
         except Exception as e:
@@ -327,6 +335,116 @@ class PersonalityEngine:
             return data
 
         return "Done."
+
+    async def _apply_aria_voice(
+        self,
+        user_text: str,
+        reply: str,
+    ) -> str:
+        """
+        Universal ARIA personality pass.
+
+        Rewrites presentation only.
+        Facts, code, numbers, URLs, commands, filenames,
+        warnings and technical details must remain unchanged.
+        """
+
+        reply = str(reply or "").strip()
+
+        if not reply:
+            return reply
+
+        if self.llm_router is None:
+            return reply
+
+        # Avoid wasting an LLM call on very small deterministic replies.
+        if len(reply) < 40:
+            return reply
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are ARIA's final personality and communication layer.\n\n"
+
+                    "Transform the supplied draft response into ARIA's "
+                    "natural speaking voice.\n\n"
+
+                    "ARIA is a sophisticated personal AI assistant: "
+                    "calm, composed, precise, highly intelligent, "
+                    "efficient, observant, and subtly personable.\n\n"
+
+                    "STYLE:\n"
+                    "- Speak like an advanced personal AI briefing its operator.\n"
+                    "- Be elegant and concise rather than verbose.\n"
+                    "- Address the user as 'Sir' naturally when appropriate.\n"
+                    "- Do not call the user 'Sir' repeatedly.\n"
+                    "- Prefer natural conversational prose over report-like dumps.\n"
+                    "- Lead with the useful answer, not generic introductions.\n"
+                    "- For complex information, organize it cleanly.\n"
+                    "- Use bullets only when they genuinely improve readability.\n"
+                    "- Avoid excessive headings and corporate-report language.\n"
+                    "- Be proactive when there is an obvious useful implication.\n"
+                    "- A small amount of dry wit is acceptable when appropriate.\n"
+                    "- Never become theatrical, cheesy, submissive, or exaggerated.\n"
+                    "- Do not imitate or quote any fictional character.\n"
+                    "- Maintain ARIA's own identity.\n\n"
+
+                    "CRITICAL FIDELITY RULES:\n"
+                    "- Change presentation and wording only.\n"
+                    "- Do NOT add new factual claims.\n"
+                    "- Do NOT remove important factual information.\n"
+                    "- Do NOT change numbers, dates, prices, measurements, "
+                    "statistics, names, URLs, filenames, commands, or code.\n"
+                    "- Do NOT turn uncertainty into certainty.\n"
+                    "- Preserve warnings, qualifications, citations, and sources.\n"
+                    "- Never fabricate information to make the answer sound smarter.\n"
+                    "- If the draft contains code, preserve the code exactly.\n"
+                    "- If the draft contains instructions, preserve their meaning "
+                    "and ordering exactly.\n\n"
+
+                    "Avoid generic chatbot phrases such as:\n"
+                    "- 'Here is a concise summary...'\n"
+                    "- 'Based on the provided information...'\n"
+                    "- 'As an AI...'\n"
+                    "- 'I hope this helps.'\n\n"
+
+                    "Return ONLY the rewritten response. "
+                    "Do not explain what you changed."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"USER MESSAGE:\n{user_text}\n\n"
+                    f"DRAFT RESPONSE:\n{reply}"
+                ),
+            },
+        ]
+
+        try:
+            styled = await self.llm_router.chat(
+                messages,
+                temperature=0.35,
+                max_tokens=1800,
+            )
+
+            styled = str(styled or "").strip()
+
+            if styled:
+                logger.info(
+                    "[Personality] Universal ARIA voice applied."
+                )
+                return styled
+
+        except Exception:
+            # Personality must never break an otherwise valid response.
+            logger.exception(
+                "[Personality] Universal ARIA voice pass failed. "
+                "Using original response."
+            )
+
+        return reply
 
     def _post_process(self, reply: str) -> str:
         """
