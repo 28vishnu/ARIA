@@ -98,6 +98,18 @@ class LLMRouter:
         # cooldown logic below can still route around any provider.
 
         task_orders = {
+            "command_reasoning": [
+                "Groq",
+                "Mistral",
+                "Gemini",
+                "OpenRouter",
+            ],
+            "planning": [
+                "Groq",
+                "Mistral",
+                "Gemini",
+                "OpenRouter",
+            ],
             "memory_relevance": [
                 "Groq",
                 "Mistral",
