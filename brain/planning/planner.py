@@ -1,6 +1,7 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Dict, Any, List, Optional
 
 from brain.memory.memory_router import MemoryRouter
 from brain.plan import ExecutionPlan
@@ -359,35 +360,30 @@ Return ONLY valid JSON in exactly this structure:
 
             raw_response = None
 
-            # Support the common router interfaces without
-            # coupling Planner to one provider.
             if hasattr(
-                self.llm_router,
-                "generate",
-            ):
-                raw_response = (
-                    await self.llm_router.generate(
-                        planner_prompt
-                    )
-                )
-
-            elif hasattr(
-                self.llm_router,
-                "complete",
-            ):
-                raw_response = (
-                    await self.llm_router.complete(
-                        planner_prompt
-                    )
-                )
-
-            elif hasattr(
                 self.llm_router,
                 "chat",
             ):
                 raw_response = (
                     await self.llm_router.chat(
-                        planner_prompt
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are ARIA's workflow planning engine. "
+                                    "Create executable plans using only the "
+                                    "capabilities provided to you. "
+                                    "Return only valid JSON."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": planner_prompt,
+                            },
+                        ],
+                        temperature=0.0,
+                        max_tokens=1200,
+                        task="planning",
                     )
                 )
 
