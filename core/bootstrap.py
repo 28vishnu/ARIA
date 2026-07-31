@@ -194,10 +194,21 @@ async def bootstrap_application() -> ServiceRegistry:
 
     # Connect LLM intelligence to long-term memory
     if memory_engine is not None:
+
         memory_engine.llm_router = llm_router
 
         logger.info(
             "[BOOT TEST] LLM Router connected to MemoryEngine"
+        )
+
+    # Connect semantic reasoning to memory conversation layer
+    if memory_conversation_manager is not None:
+
+        memory_conversation_manager.llm_router = llm_router
+
+        logger.info(
+            "[BOOT TEST] LLM Router connected to "
+            "MemoryConversationManager"
         )
 
     # ---------------------------------------------------------
