@@ -787,9 +787,9 @@ Use ONLY the supplied context.
             {
                 "role": "user",
                 "content": f"""
-DOCUMENT{context}
+DOCUMENT:{context}
 
-USER QUESTION{question}
+USER QUESTION:{question}
 
 Answer using only the document.
 """
