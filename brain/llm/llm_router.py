@@ -729,6 +729,11 @@ If there is nothing worth remembering return:
             # Remove accidental Markdown code fences.
             cleaned = response.strip()
 
+            logger.info(
+                "[LLMRouter] Raw memory extraction response: %r",
+                cleaned,
+            )
+
             if cleaned.startswith("```"):
                 cleaned = cleaned.replace("```json", "", 1)
                 cleaned = cleaned.replace("```", "")
