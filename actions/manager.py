@@ -25,7 +25,49 @@ class ActionManager:
 
     def register(self, action: BaseAction):
         self.actions[action.name] = action
-        logger.info("[ActionManager] Registered action: %s (Permission: %s)", action.name, action.permission_level)
+
+        logger.info(
+            "[ActionManager] Registered action: %s (Permission: %s)",
+            action.name,
+            action.permission_level
+        )
+
+    def get_capabilities(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Return the actions currently available to ARIA.
+
+        This allows reasoning/planning layers to discover capabilities
+        dynamically instead of hard-coding action names.
+        """
+
+        capabilities = {}
+
+        for name, action in self.actions.items():
+            capabilities[name] = {
+                "name": name,
+                "permission_level": getattr(
+                    action,
+                    "permission_level",
+                    "confirm",
+                ),
+                "description": getattr(
+                    action,
+                    "description",
+                    "",
+                ),
+            }
+
+        return capabilities
+
+    def has_action(self, action_name: str) -> bool:
+        """
+        Check whether an action actually exists.
+        """
+
+        return (
+            isinstance(action_name, str)
+            and action_name in self.actions
+        )
 
     async def execute_action(
         self,
