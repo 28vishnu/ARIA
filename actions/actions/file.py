@@ -126,8 +126,18 @@ class FileAction(BaseAction):
                 )
 
             elif mode == "write":
-                async with aiofiles.open(path, mode="w", encoding="utf-8") as f:
+                parent_dir = os.path.dirname(path)
+
+                if parent_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
+
+                async with aiofiles.open(
+                    path,
+                    mode="w",
+                    encoding="utf-8"
+                ) as f:
                     await f.write(content)
+
                 return ActionResult(
                     success=True,
                     action_name=self.name,
