@@ -560,7 +560,10 @@ class DocumentIntelligence:
         # Apply metadata filters if present
         if filters:
             if "document_name" in filters:
-                chunks = [c for c in chunks if c.get("document_name"] == filters["document_name"]]
+                chunks = [
+                    c for c in chunks
+                    if c.get("document_name") == filters["document_name"]
+                ]
             if "page" in filters:
                 chunks = [c for c in chunks if c.get("page") == filters["page"]]
 
