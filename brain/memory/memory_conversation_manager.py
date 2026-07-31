@@ -165,9 +165,30 @@ class MemoryConversationManager:
 
         # -----------------------------------------------------
         # 3. MEMORY RECALL
+        #
+        # Reuse memories already retrieved by CognitiveCore.
+        # Only query MemoryEngine directly when this manager
+        # was called without pre-retrieved memory context.
         # -----------------------------------------------------
 
-        memories = await self.memory_engine.retrieve(query)
+        memories = context.get("memory") or []
+
+        if memories:
+
+            logger.info(
+                "[MemoryConversationManager] Using %d "
+                "pre-retrieved memories from context.",
+                len(memories),
+            )
+
+        else:
+
+            logger.info(
+                "[MemoryConversationManager] No memories supplied "
+                "in context; falling back to direct retrieval."
+            )
+
+            memories = await self.memory_engine.retrieve(query)
 
         if memories:
 
