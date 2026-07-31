@@ -32,7 +32,7 @@ from actions.actions.file import FileAction
 from actions.actions.notification import NotificationAction
 from actions.actions.web_search import WebSearchAction
 
-from brain.planner import Planner
+from brain.planning.planner import Planner
 from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
 
@@ -292,7 +292,12 @@ async def bootstrap_application() -> ServiceRegistry:
     action_manager.register(NotificationAction())
     action_manager.register(WebSearchAction())
 
-    planner = Planner(llm_router)
+    planner = Planner(
+        memory_router=memory_engine,
+        llm_router=llm_router,
+        skill_manager=skill_manager,
+        action_manager=action_manager,
+    )
     executor = Executor(skill_manager)
 
     personality_engine = PersonalityEngine(
