@@ -870,7 +870,7 @@ async def telegram_webhook(req: Request):
 
             state_manager.add_conversation_turn(
                 session_id=str(chat_id),
-                user_text=text,
+                user_message=text,
                 assistant_message=reply_text
             )
 
