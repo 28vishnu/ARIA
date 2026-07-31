@@ -907,6 +907,26 @@ class CognitiveCore:
                             memory_result
                             and memory_result.get("success")
                         ):
+                            # Refresh memory context immediately after learning/updating.
+                            # The memories retrieved earlier may contain the old value.
+                            try:
+                                refreshed_memories = (
+                                    await self.memory_router.get_relevant_memories(query)
+                                )
+
+                                if refreshed_memories:
+                                    memories = refreshed_memories
+                                    ctx["memory"] = refreshed_memories
+
+                                    logger.info(
+                                        "[CognitiveCore] Memory context refreshed after learning."
+                                    )
+
+                            except Exception:
+                                logger.exception(
+                                    "[CognitiveCore] Failed to refresh memory context after learning."
+                                )
+
                             logger.info(
                                 "[CognitiveCore] Natural memory learned: "
                                 "key=%s action=%s",
