@@ -769,44 +769,44 @@ class CognitiveCore:
                     )
 
             # =================================================
-            # 5. AUTOMATIC MEMORY LEARNING
+            # 5. AUTOMATIC MEMORY LEARNING (TEMPORARILY DISABLED)
             # =================================================
 
-            if self.memory_router:
-
-                try:
-
-                    memory_result = (
-                        await self.memory_router
-                        .process_and_store(
-                            query
-                        )
-                    )
-
-                    if (
-                        memory_result
-                        and memory_result.get(
-                            "success"
-                        )
-                    ):
-
-                        logger.info(
-                            "[CognitiveCore] Learned memory: "
-                            "key=%s action=%s",
-                            memory_result.get(
-                                "key"
-                            ),
-                            memory_result.get(
-                                "action"
-                            ),
-                        )
-
-                except Exception:
-
-                    logger.exception(
-                        "[CognitiveCore] Automatic memory "
-                        "learning failed."
-                    )
+            # if self.memory_router:
+            #
+            #     try:
+            #
+            #         memory_result = (
+            #             await self.memory_router
+            #             .process_and_store(
+            #                 query
+            #             )
+            #         )
+            #
+            #         if (
+            #             memory_result
+            #             and memory_result.get(
+            #                 "success"
+            #             )
+            #         ):
+            #
+            #             logger.info(
+            #                 "[CognitiveCore] Learned memory: "
+            #                 "key=%s action=%s",
+            #                 memory_result.get(
+            #                     "key"
+            #                 ),
+            #                 memory_result.get(
+            #                     "action"
+            #                 ),
+            #             )
+            #
+            #     except Exception:
+            #
+            #         logger.exception(
+            #             "[CognitiveCore] Automatic memory "
+            #             "learning failed."
+            #         )
 
             # =================================================
             # 6. CONTEXT
