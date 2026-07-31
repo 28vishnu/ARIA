@@ -891,7 +891,6 @@ class CognitiveCore:
                     self.memory_router
                     and intent
                     and intent.name not in (
-                        "memory_recall",
                         "memory_delete",
                         "memory_store",
                         "memory_update",
