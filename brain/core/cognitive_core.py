@@ -1597,7 +1597,7 @@ class CognitiveCore:
                         "delete_document",
                         "delete_all_documents",
                         "reindex_documents",
-                        "action"
+                        "action",
                         "planner",
                     )
                 ):
