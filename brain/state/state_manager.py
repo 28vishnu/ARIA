@@ -57,6 +57,114 @@ class StateManager:
         )
 
     # =========================================================
+    # CONVERSATION STATE
+    # =========================================================
+
+    def add_conversation_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_message: str,
+        max_turns: int = 8
+    ):
+        """
+        Store a short rolling conversation history.
+
+        This is working conversational context, not persistent
+        long-term memory.
+
+        It allows ARIA to understand follow-ups such as:
+        - "yes"
+        - "continue"
+        - "what about that?"
+        - "the second one"
+        - "why?"
+        - "do that"
+        """
+
+        state = self.get_state(session_id)
+
+        history = list(
+            state.get(
+                "conversation_history",
+                []
+            )
+        )
+
+        history.append({
+            "user": str(user_message or "").strip(),
+            "assistant": str(assistant_message or "").strip()
+        })
+
+        # Keep only recent turns so runtime context
+        # remains small and fast.
+        history = history[-max_turns:]
+
+        self.update_state(
+            session_id,
+            conversation_history=history,
+            last_query=str(user_message or "").strip(),
+            last_assistant_response=str(
+                assistant_message or ""
+            ).strip()
+        )
+
+    def get_conversation_history(
+        self,
+        session_id: str,
+        limit: int = 8
+    ) -> List[Dict[str, str]]:
+        """
+        Return recent conversation turns.
+        """
+
+        history = self.get_state(
+            session_id
+        ).get(
+            "conversation_history",
+            []
+        )
+
+        if not isinstance(history, list):
+            return []
+
+        return history[-limit:]
+
+    def get_last_assistant_response(
+        self,
+        session_id: str
+    ) -> Optional[str]:
+        """
+        Return ARIA's previous response in this session.
+        """
+
+        value = self.get_value(
+            session_id,
+            "last_assistant_response"
+        )
+
+        if not value:
+            return None
+
+        return str(value)
+
+    def clear_conversation_history(
+        self,
+        session_id: str
+    ):
+        """
+        Clear short-term conversational context without
+        touching persistent user memory or workflow state.
+        """
+
+        self.update_state(
+            session_id,
+            conversation_history=[],
+            last_query=None,
+            last_assistant_response=None
+        )
+
+    # =========================================================
     # DOCUMENT STATE
     # =========================================================
 
