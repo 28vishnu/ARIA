@@ -1142,6 +1142,78 @@ class CognitiveCore:
                 )
 
                 # =============================================
+                # DOCUMENT COMMAND DISAMBIGUATION
+                #
+                # Prevent questions such as:
+                # "Summarize this document"
+                # "Explain this PDF"
+                # "What does this document say?"
+                #
+                # from being mistaken for requests to SEND the file.
+                # =============================================
+
+                document_analysis_terms = (
+                    "summarize",
+                    "summarise",
+                    "summary",
+                    "explain",
+                    "analyze",
+                    "analyse",
+                    "what does",
+                    "what is in",
+                    "what's in",
+                    "tell me about",
+                    "important information",
+                    "important points",
+                    "key points",
+                    "briefly",
+                    "according to",
+                )
+
+                document_send_terms = (
+                    "send me",
+                    "send the",
+                    "send this",
+                    "send document",
+                    "send the document",
+                    "send pdf",
+                    "send the pdf",
+                    "give me the document",
+                    "give me the file",
+                    "give me this file",
+                    "forward the document",
+                    "forward this",
+                    "share the document",
+                    "share this document",
+                    "download the document",
+                    "download the pdf",
+                )
+
+                is_document_analysis_request = any(
+                    term in query_lower
+                    for term in document_analysis_terms
+                )
+
+                is_explicit_document_send_request = any(
+                    term in query_lower
+                    for term in document_send_terms
+                )
+
+                # Correct an intent-analyzer mistake before entering
+                # the document fast path.
+                if (
+                    intent.name == "document_retrieve"
+                    and is_document_analysis_request
+                    and not is_explicit_document_send_request
+                ):
+                    logger.info(
+                        "[CognitiveCore] Correcting document_retrieve "
+                        "to document_query for analysis request."
+                    )
+
+                    intent.name = "document_query"
+
+                # =============================================
                 # DOCUMENT FAST PATHS
                 # =============================================
 
