@@ -211,6 +211,26 @@ class MemoryConversationManager:
 
                 return direct_answer
 
+            # -------------------------------------------------
+            # Deterministic matching was not confident enough.
+            #
+            # IMPORTANT:
+            # Do not claim that memory is missing here.
+            # Relevant memories were already retrieved, but this
+            # layer could not safely interpret them.
+            #
+            # Return an empty result so CognitiveCore can fall
+            # through to its semantic reasoning path.
+            # -------------------------------------------------
+
+            logger.info(
+                "[MemoryConversationManager] Relevant memories exist, "
+                "but deterministic recall could not answer confidently. "
+                "Delegating to semantic reasoning."
+            )
+
+            return ""
+
         # -----------------------------------------------------
         # 4. NOTHING FOUND
         # -----------------------------------------------------
