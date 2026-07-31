@@ -1180,11 +1180,60 @@ class CognitiveCore:
                     "show me ",
                 )
 
-                looks_like_document_followup = (
+                document_reference_terms = (
+                    "document",
+                    "pdf",
+                    "file",
+                    "this document",
+                    "this pdf",
+                    "this file",
+                    "it",
+                    "its",
+                    "according to",
+                    "in the document",
+                    "in this document",
+                    "from the document",
+                    "from this document",
+                    "schedule",
+                    "timetable",
+                    "class",
+                    "classes",
+                    "subject",
+                    "subjects",
+                    "faculty",
+                    "teacher",
+                    "lab",
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                )
+
+                explicit_document_reference = any(
+                    term in query_lower
+                    for term in document_reference_terms
+                )
+
+                recent_document_interaction = bool(
+                    state.get("last_document_question")
+                    or state.get("last_document_answer")
+                )
+
+                looks_like_question = (
                     query_lower.endswith("?")
                     or any(
                         query_lower.startswith(prefix)
                         for prefix in question_starters
+                    )
+                )
+
+                looks_like_document_followup = (
+                    explicit_document_reference
+                    or (
+                        recent_document_interaction
+                        and looks_like_question
                     )
                 )
 
