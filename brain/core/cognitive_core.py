@@ -556,6 +556,45 @@ class CognitiveCore:
             "[CognitiveCore] Workflow completed successfully."
         )
 
+        # =====================================================
+        # EXTRACT USER-FACING OUTPUT FROM FINAL TASK
+        # =====================================================
+
+        final_message = None
+
+        for task in reversed(plan.tasks):
+
+            output = task_outputs.get(task.id)
+
+            if not isinstance(output, dict):
+                continue
+
+            for field in (
+                "response",
+                "content",
+                "message",
+                "answer",
+                "summary",
+            ):
+
+                value = output.get(field)
+
+                if isinstance(value, str) and value.strip():
+                    final_message = value.strip()
+                    break
+
+            if final_message:
+                break
+
+        response_data = {
+            "task_outputs": task_outputs,
+            "workflow_results": workflow_results,
+        }
+
+        if final_message:
+            response_data["message"] = final_message
+            response_data["response"] = final_message
+
         return SystemResponse(
             success=True,
             confidence=getattr(
@@ -564,7 +603,7 @@ class CognitiveCore:
                 0.95,
             ),
             source="planner_executor",
-            data=task_outputs,
+            data=response_data,
         )
 
     # =========================================================
