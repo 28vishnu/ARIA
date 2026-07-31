@@ -144,7 +144,15 @@ class DocumentIntelligence:
             pages = []
 
             for page_number, page in enumerate(reader.pages, start=1):
-                text = page.extract_text() or ""
+                try:
+                    # Preserve the visual layout of tables, schedules,
+                    # columns, forms, etc. whenever pypdf supports it.
+                    text = page.extract_text(
+                        extraction_mode="layout"
+                    ) or ""
+                except TypeError:
+                    # Fallback for older pypdf versions.
+                    text = page.extract_text() or ""
 
                 # OCR Fallback if page text is empty
                 if not text.strip():
@@ -157,14 +165,19 @@ class DocumentIntelligence:
                             first_page=page_number,
                             last_page=page_number
                         )
+
                         if images:
-                            ocr_text = pytesseract.image_to_string(images[0])
+                            ocr_text = pytesseract.image_to_string(
+                                images[0]
+                            )
+
                             if ocr_text.strip():
                                 text = ocr_text.strip()
                                 logger.info(
                                     "[DocumentAI OCR] Successfully extracted page %d via OCR",
                                     page_number
                                 )
+
                     except Exception as ocr_err:
                         logger.warning(
                             "[DocumentAI OCR] OCR failed on page %d: %s",
