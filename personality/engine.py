@@ -158,40 +158,100 @@ class PersonalityEngine:
         if not isinstance(data, dict):
             return "Task executed successfully, Sir."
 
-        # NEW: if a Chat skill already generated a natural reply,
-        # use it instead of exposing internal workflow details.
+        # ---------------------------------------------------------
+        # 1. USER-FACING FINAL RESPONSE
+        #
+        # CognitiveCore already extracts the final task's natural
+        # response into these top-level fields.
+        # ---------------------------------------------------------
+
+        response = data.get("response")
+
+        if isinstance(response, str) and response.strip():
+            return response.strip()
+
+        message = data.get("message")
+
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+
+        # ---------------------------------------------------------
+        # 2. LEGACY CHAT OUTPUT
+        # ---------------------------------------------------------
+
         chat = data.get("chat")
 
         if isinstance(chat, dict):
-            if "response" in chat:
-                return str(chat["response"])
 
-            if "message" in chat:
-                return str(chat["message"])
+            response = chat.get("response")
 
-        # Otherwise look through every task
+            if isinstance(response, str) and response.strip():
+                return response.strip()
+
+            message = chat.get("message")
+
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+
+        # ---------------------------------------------------------
+        # 3. SEARCH THROUGH TASK OUTPUTS
+        # ---------------------------------------------------------
+
+        task_outputs = data.get(
+            "task_outputs",
+            {}
+        )
+
+        if isinstance(task_outputs, dict):
+
+            # Reverse insertion order so the final task wins.
+            for output in reversed(
+                list(task_outputs.values())
+            ):
+
+                if not isinstance(output, dict):
+                    continue
+
+                for field in (
+                    "response",
+                    "content",
+                    "message",
+                    "answer",
+                    "summary",
+                ):
+
+                    value = output.get(field)
+
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+
+        # ---------------------------------------------------------
+        # 4. GENERIC NESTED OUTPUT FALLBACK
+        # ---------------------------------------------------------
+
         for output in data.values():
 
             if not isinstance(output, dict):
                 continue
 
-            if "response" in output:
-                return str(output["response"])
+            for field in (
+                "response",
+                "content",
+                "message",
+                "answer",
+                "summary",
+            ):
 
-            if "message" in output:
-                return str(output["message"])
+                value = output.get(field)
 
-        summaries = []
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
 
-        for task_id, output in data.items():
+        # ---------------------------------------------------------
+        # 5. NOTHING USER-FACING WAS RETURNED
+        # ---------------------------------------------------------
 
-            if isinstance(output, dict):
-                status = output.get("status", "completed")
-                summaries.append(f"{task_id}: {status}")
-            else:
-                summaries.append(f"{task_id}: {output}")
-
-        return "Execution completed successfully, Sir. " + " | ".join(summaries)
+        return "Execution completed successfully, Sir."
 
     def _format_action(self, data: Any) -> str:
         if not isinstance(data, dict):
