@@ -323,6 +323,80 @@ READ:
 }}
 
 =============================================================
+WEB SEARCH + RESEARCH
+=============================================================
+
+If web_search_action and research are available:
+
+Use web_search_action ONLY to retrieve live web information.
+
+When the user asks to search, research, investigate, find current
+information, get latest news, or explain findings from the web,
+and also wants an answer or summary, use TWO tasks:
+
+1. web_search_action retrieves the information.
+2. research synthesizes the retrieved results into the final answer.
+
+Example:
+
+{{
+    "id": "1",
+    "name": "Search live web",
+    "task_type": "action",
+    "skill": "",
+    "action_name": "web_search_action",
+    "input": {{}},
+    "params": {{
+        "query": "SpaceX latest news",
+        "max_results": 5
+    }},
+    "depends_on": []
+}},
+{{
+    "id": "2",
+    "name": "Synthesize research",
+    "task_type": "skill",
+    "skill": "research",
+    "action_name": null,
+    "input": {{
+        "query": "Summarize the latest SpaceX news for the user.",
+        "research_material": "{{{{1.results}}}}"
+    }},
+    "params": {{}},
+    "depends_on": ["1"]
+}}
+
+IMPORTANT:
+
+web_search_action returns:
+
+{{
+    "query": "...",
+    "results": [...],
+    "result_count": 5
+}}
+
+Therefore use:
+
+{{{{1.results}}}}
+
+when passing web-search results to another task.
+
+Do NOT use {{{{1.content}}}} for web_search_action.
+
+Do NOT add notification_action merely to display research results.
+
+The research skill's output contains:
+
+{{
+    "content": "...",
+    "response": "..."
+}}
+
+For a web-search request where the user simply wants the findings,
+the research skill should normally be the FINAL task.
+
+=============================================================
 NOTIFICATION ACTION
 =============================================================
 
