@@ -84,8 +84,21 @@ class ActionManager:
 
                 if result.success:
                     return result
-                else:
-                    last_error = result.error
+
+                last_error = result.error or "Action execution failed."
+
+                normalized_error = last_error.lower()
+
+                if any(
+                    phrase in normalized_error
+                    for phrase in NON_RETRYABLE_ACTION_ERRORS
+                ):
+                    logger.warning(
+                        "[ActionManager] Non-retryable failure for '%s': %s",
+                        action.name,
+                        last_error,
+                    )
+                    break
             except asyncio.TimeoutError:
                 last_error = f"Action timed out after {action.timeout_seconds}s"
                 logger.warning("[ActionManager] Action '%s' timed out (Attempt %d/%d)", action.name, attempt + 1, max_retries + 1)
