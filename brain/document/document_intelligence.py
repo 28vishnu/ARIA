@@ -464,13 +464,22 @@ class DocumentIntelligence:
 
         t0 = time.perf_counter()
 
-        where_clause = {
-            "session_id": session_id
-        }
+        conditions = [
+            {"session_id": {"$eq": session_id}}
+        ]
 
         if filters:
             for k, v in filters.items():
-                where_clause[k] = v
+                conditions.append({
+                    k: {"$eq": v}
+                })
+
+        if len(conditions) == 1:
+            where_clause = conditions[0]
+        else:
+            where_clause = {
+                "$and": conditions
+            }
 
         try:
             query_embeddings = await self.llm_router.embed(
@@ -551,7 +560,7 @@ class DocumentIntelligence:
         # Apply metadata filters if present
         if filters:
             if "document_name" in filters:
-                chunks = [c for c in chunks if c.get("document_name") == filters["document_name"]]
+                chunks = [c for c in chunks if c.get("document_name"] == filters["document_name"]]
             if "page" in filters:
                 chunks = [c for c in chunks if c.get("page") == filters["page"]]
 
