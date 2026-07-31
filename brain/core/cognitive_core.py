@@ -1564,6 +1564,53 @@ class CognitiveCore:
                     0.99,
                 )
 
+            # -------------------------------------------------
+            # Web-search requests must use Planner + Executor
+            # -------------------------------------------------
+
+            web_search_phrases = (
+                "search the web",
+                "search web",
+                "search online",
+                "look up online",
+                "look it up online",
+                "browse the web",
+                "browse online",
+                "find online",
+                "search the internet",
+                "look up on the internet",
+                "latest news",
+                "current news",
+                "latest information",
+                "current information",
+                "latest updates",
+                "recent news",
+            )
+
+            looks_like_web_search_request = any(
+                phrase in query_lower
+                for phrase in web_search_phrases
+            )
+
+            if (
+                decision
+                and looks_like_web_search_request
+            ):
+                logger.info(
+                    "[CognitiveCore] Overriding routing "
+                    "to planner for web-search request."
+                )
+
+                decision.action = "planner"
+                decision.confidence = max(
+                    getattr(
+                        decision,
+                        "confidence",
+                        0.0,
+                    ),
+                    0.99,
+                )
+
             logger.info(
                 "[Decision] Selected action: %s",
                 (
