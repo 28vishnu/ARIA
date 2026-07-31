@@ -852,6 +852,46 @@ async def telegram_webhook(req: Request):
         reply_text
     )
 
+    # ---------------------------------------------------------
+    # SHORT-TERM CONVERSATION STATE
+    #
+    # Store the completed user -> ARIA turn so the next request
+    # can understand contextual follow-ups.
+    #
+    # This is deliberately separate from persistent MemoryEngine
+    # storage. Conversation history is temporary working context.
+    # ---------------------------------------------------------
+
+    state_manager = (
+        req.app.state.registry.get("state_manager")
+        if req.app.state.registry.has("state_manager")
+        else None
+    )
+
+    if state_manager:
+
+        try:
+
+            state_manager.add_conversation_turn(
+                session_id=str(chat_id),
+                user_message=text,
+                assistant_message=reply_text
+            )
+
+            logger.info(
+                "[Conversation] Stored completed turn "
+                "for session %s.",
+                str(chat_id)
+            )
+
+        except Exception:
+
+            # Conversation-history failure must never prevent
+            # ARIA from replying to the user.
+            logger.exception(
+                "[Conversation] Failed to store completed turn."
+            )
+
     await http_client.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         json={
