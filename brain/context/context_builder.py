@@ -16,8 +16,7 @@ class ContextBuilder:
         self,
         query: str,
         session_id: str,
-        user_id: str,
-        base_context: Optional[Dict[str, Any]] = None,
+        user_id: str, base_context: Optional[Dict[str, Any]] = None,
         memory=None,
         state=None,
     ) -> Dict[str, Any]:
@@ -38,6 +37,21 @@ class ContextBuilder:
         # -----------------------------------------------------
 
         previous_query = state_data.get("last_query")
+
+        last_assistant_response = state_data.get(
+            "last_assistant_response"
+        )
+
+        conversation_history = state_data.get(
+            "conversation_history",
+            []
+        )
+
+        if not isinstance(conversation_history, list):
+            conversation_history = []
+
+        # Keep cognitive context bounded even if state contains more.
+        recent_conversation = conversation_history[-8:]
 
         active_document = (
             state_data.get("active_document")
@@ -239,11 +253,15 @@ class ContextBuilder:
             # Conversation understanding
             "conversation": {
                 "previous_query": previous_query,
+                "last_assistant_response": last_assistant_response,
+                "history": recent_conversation,
+
                 "is_short_query": is_short_query,
                 "is_continuation": is_continuation,
                 "is_acknowledgement": is_acknowledgement,
                 "is_negative_acknowledgement": is_negative_acknowledgement,
                 "is_selection": is_selection,
+
                 "looks_like_follow_up": looks_like_follow_up,
                 "has_contextual_reference": has_contextual_reference,
             },
