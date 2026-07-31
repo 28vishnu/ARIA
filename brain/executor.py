@@ -1246,6 +1246,18 @@ class Executor:
             "confirm",
         )
 
+        # Operation-specific permission override.
+        if task.action_name == "file_action":
+            file_mode = str(
+                (params or {}).get("mode", "")
+            ).lower().strip()
+
+            if file_mode == "read":
+                permission_level = "safe"
+
+            elif file_mode == "write":
+                permission_level = "confirm"
+
         # -----------------------------------------------------
         # CONFIRMATION REQUIRED
         # -----------------------------------------------------
