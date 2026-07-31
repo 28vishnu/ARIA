@@ -895,15 +895,70 @@ class CognitiveCore:
             if intent:
 
                 # =============================================
+                # FILESYSTEM / ACTION WORKFLOW GUARD
+                # =============================================
+
+                query_lower = query.lower()
+
+                filesystem_extensions = (
+                    ".txt",
+                    ".json",
+                    ".csv",
+                    ".log",
+                    ".md",
+                    ".yaml",
+                    ".yml",
+                )
+
+                filesystem_verbs = (
+                    "write ",
+                    "read ",
+                    "append ",
+                    "rename ",
+                    "move ",
+                    "copy ",
+                    "create ",
+                )
+
+                action_chain_terms = (
+                    " then ",
+                    " and send ",
+                    " and notify ",
+                    " as a notification",
+                )
+
+                looks_like_filesystem_request = (
+                    any(
+                        extension in query_lower
+                        for extension in filesystem_extensions
+                    )
+                    and any(
+                        verb in query_lower
+                        for verb in filesystem_verbs
+                    )
+                )
+
+                looks_like_filesystem_workflow = (
+                    looks_like_filesystem_request
+                    and any(
+                        term in query_lower
+                        for term in action_chain_terms
+                    )
+                )
+
+                # =============================================
                 # DOCUMENT FAST PATHS
                 # =============================================
 
-                if intent.name in (
-                    "document_retrieve",
-                    "document_list",
-                    "document_query",
-                    "delete_document",
-                    "delete_all_documents",
+                if (
+                    not looks_like_filesystem_request
+                    and intent.name in (
+                        "document_retrieve",
+                        "document_list",
+                        "document_query",
+                        "delete_document",
+                        "delete_all_documents",
+                    )
                 ):
 
                     logger.info(
