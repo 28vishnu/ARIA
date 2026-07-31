@@ -795,6 +795,28 @@ class CognitiveCore:
                             memory_result.get("action"),
                         )
 
+                        # Refresh memory context after learning.
+                        # The memories retrieved earlier are stale and don't
+                        # contain the fact we just stored.
+                        try:
+                            refreshed_memories = (
+                                await self.memory_engine.retrieve(query)
+                            )
+
+                            ctx["memory"] = refreshed_memories or []
+
+                            logger.info(
+                                "[CognitiveCore] Refreshed memory context "
+                                "after learning: %d memories.",
+                                len(ctx["memory"]),
+                            )
+
+                        except Exception:
+                            logger.exception(
+                                "[CognitiveCore] Failed to refresh memory "
+                                "context after learning."
+                            )
+
                 except Exception:
 
                     logger.exception(
