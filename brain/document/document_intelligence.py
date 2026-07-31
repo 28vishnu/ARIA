@@ -42,7 +42,8 @@ class DocumentIntelligence:
     async def process_document(
         self,
         file_path: str,
-        session_id: str
+        session_id: str,
+        document_name: Optional[str] = None
     ):
         """
         Complete document pipeline with performance timing.
@@ -67,9 +68,15 @@ class DocumentIntelligence:
         # Step 3: Summarise
         summary = await self.summarize(full_text)
 
+        actual_document_name = (
+            str(document_name).strip()
+            if document_name
+            else Path(file_path).name
+        )
+
         document_metadata = {
             "file_path": file_path,
-            "document_name": Path(file_path).name
+            "document_name": actual_document_name
         }
 
         # Step 4: Store (if memory is available)
@@ -100,7 +107,7 @@ class DocumentIntelligence:
         t_total = time.perf_counter() - t_start
         logger.info(
             "[DocumentAI] Processed %s in %.2fs (Extract: %.2fs, Chunk: %.2fs)",
-            Path(file_path).name,
+            actual_document_name,
             t_total,
             t_extract,
             t_chunk
@@ -560,12 +567,24 @@ class DocumentIntelligence:
         # Apply metadata filters if present
         if filters:
             if "document_name" in filters:
+                target_document = filters["document_name"]
+
                 chunks = [
                     c for c in chunks
-                    if c.get("document_name") == filters["document_name"]
+                    if c.get("document_name") == target_document
                 ]
+
+                logger.info(
+                    "[DocumentAI] Keyword retrieval restricted to '%s': %d chunks remain.",
+                    target_document,
+                    len(chunks)
+                )
+
             if "page" in filters:
-                chunks = [c for c in chunks if c.get("page") == filters["page"]]
+                chunks = [
+                    c for c in chunks
+                    if c.get("page") == filters["page"]
+                ]
 
         query_words = {
             word.lower()
