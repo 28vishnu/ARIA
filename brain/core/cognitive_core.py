@@ -795,26 +795,39 @@ class CognitiveCore:
                             memory_result.get("action"),
                         )
 
-                        # Refresh memory context after learning.
-                        # The memories retrieved earlier are stale and don't
-                        # contain the fact we just stored.
-                        try:
-                            refreshed_memories = (
-                                await self.memory_engine.retrieve(query)
-                            )
+                        # Make the newly learned fact available immediately.
+                        learned_key = str(
+                            memory_result.get("key") or ""
+                        ).strip()
 
-                            ctx["memory"] = refreshed_memories or []
+                        learned_value = str(
+                            memory_result.get("value") or ""
+                        ).strip()
 
-                            logger.info(
-                                "[CognitiveCore] Refreshed memory context "
-                                "after learning: %d memories.",
-                                len(ctx["memory"]),
-                            )
+                        if learned_key and learned_value:
 
-                        except Exception:
-                            logger.exception(
-                                "[CognitiveCore] Failed to refresh memory "
-                                "context after learning."
+                            learned_memory = {
+                                "key": learned_key,
+                                "value": learned_value,
+                            }
+
+                            # Remove an older/stale copy of the same key.
+                            memories = [
+                                memory
+                                for memory in memories
+                                if not (
+                                    isinstance(memory, dict)
+                                    and str(
+                                        memory.get("key") or ""
+                                    ).strip().lower()
+                                    == learned_key.lower()
+                                )
+                            ]
+
+                            # Newly learned fact gets highest priority.
+                            memories.insert(
+                                0,
+                                learned_memory
                             )
 
                 except Exception:
