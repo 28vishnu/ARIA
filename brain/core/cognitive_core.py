@@ -769,75 +769,6 @@ class CognitiveCore:
                     )
 
             # =================================================
-            # 5. AUTOMATIC MEMORY LEARNING
-            # =================================================
-
-            if self.memory_router:
-
-                try:
-
-                    memory_result = (
-                        await self.memory_router
-                        .process_and_store(
-                            query
-                        )
-                    )
-
-                    if (
-                        memory_result
-                        and memory_result.get("success")
-                    ):
-
-                        logger.info(
-                            "[CognitiveCore] Learned memory: "
-                            "key=%s action=%s",
-                            memory_result.get("key"),
-                            memory_result.get("action"),
-                        )
-
-                        # Make the newly learned fact available immediately.
-                        learned_key = str(
-                            memory_result.get("key") or ""
-                        ).strip()
-
-                        learned_value = str(
-                            memory_result.get("value") or ""
-                        ).strip()
-
-                        if learned_key and learned_value:
-
-                            learned_memory = {
-                                "key": learned_key,
-                                "value": learned_value,
-                            }
-
-                            # Remove an older/stale copy of the same key.
-                            memories = [
-                                memory
-                                for memory in memories
-                                if not (
-                                    isinstance(memory, dict)
-                                    and str(
-                                        memory.get("key") or ""
-                                    ).strip().lower()
-                                    == learned_key.lower()
-                                )
-                            ]
-
-                            # Newly learned fact gets highest priority.
-                            memories.insert(
-                                0,
-                                learned_memory
-                            )
-
-                except Exception:
-
-                    logger.exception(
-                        "[CognitiveCore] Automatic memory "
-                        "learning failed."
-                    )
-
-            # =================================================
             # 6. CONTEXT
             # =================================================
 
@@ -916,6 +847,123 @@ class CognitiveCore:
                 )
 
                 ctx["intent"] = intent
+
+                # =============================================
+                # EXPLICIT MEMORY STORE / UPDATE FAST PATH
+                # =============================================
+
+                if (
+                    intent
+                    and intent.name in (
+                        "memory_store",
+                        "memory_update",
+                    )
+                    and self.memory_conversation_manager
+                ):
+
+                    logger.info(
+                        "[CognitiveCore] Memory write fast-path "
+                        "activated: %s",
+                        intent.name,
+                    )
+
+                    reply = (
+                        await self.memory_conversation_manager.handle(
+                            query=query,
+                            context=ctx,
+                        )
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=intent.confidence,
+                        data={
+                            "message": reply
+                        },
+                        source="memory_conversation",
+                    )
+
+                # =============================================
+                # NATURAL MEMORY LEARNING
+                # =============================================
+
+                if (
+                    self.memory_router
+                    and intent
+                    and intent.name not in (
+                        "memory_recall",
+                        "memory_delete",
+                        "memory_store",
+                        "memory_update",
+                    )
+                ):
+                    try:
+                        memory_result = (
+                            await self.memory_router.process_and_store(
+                                query
+                            )
+                        )
+
+                        if (
+                            memory_result
+                            and memory_result.get("success")
+                        ):
+                            logger.info(
+                                "[CognitiveCore] Natural memory learned: "
+                                "key=%s action=%s",
+                                memory_result.get("key"),
+                                memory_result.get("action"),
+                            )
+
+                            key = str(
+                                memory_result.get("key") or ""
+                            ).strip()
+
+                            value = str(
+                                memory_result.get("value") or ""
+                            ).strip()
+
+                            if key and value:
+                                readable_key = (
+                                    key
+                                    .replace("favorite_", "")
+                                    .replace("favourite_", "")
+                                    .replace("_", " ")
+                                    .strip()
+                                )
+
+                                action = str(
+                                    memory_result.get(
+                                        "action",
+                                        "stored",
+                                    )
+                                ).lower()
+
+                                if action == "update":
+                                    message = (
+                                        f"Updated, Sir. I'll remember that "
+                                        f"your {readable_key} is {value}."
+                                    )
+                                else:
+                                    message = (
+                                        f"Understood, Sir. I'll remember that "
+                                        f"your {readable_key} is {value}."
+                                    )
+
+                                return SystemResponse(
+                                    success=True,
+                                    confidence=1.0,
+                                    data={
+                                        "message": message
+                                    },
+                                    source="memory_learning",
+                                )
+
+                    except Exception:
+                        logger.exception(
+                            "[CognitiveCore] Natural memory "
+                            "learning failed."
+                        )
 
             # =================================================
             # 8. FAST PATHS
