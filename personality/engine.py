@@ -412,10 +412,6 @@ class PersonalityEngine:
         if self.llm_router is None:
             return reply
 
-        # Avoid wasting an LLM call on very small deterministic replies.
-        if len(reply) < 40:
-            return reply
-
         messages = [
             {
                 "role": "system",
@@ -479,7 +475,7 @@ class PersonalityEngine:
 
         def protect_code(match):
             code_blocks.append(match.group(0))
-            return f"__ARIA_CODE_BLOCK_{len(code_blocks) - 1}__"
+            return f"ARIA_CODE_BLOCK_PLACEHOLDER_{len(code_blocks) - 1}"
 
         reply = re.sub(
             r"```[\s\S]*?```",
@@ -585,7 +581,7 @@ class PersonalityEngine:
 
         for index, block in enumerate(code_blocks):
             reply = reply.replace(
-                f"__ARIA_CODE_BLOCK_{index}__",
+                f"ARIA_CODE_BLOCK_PLACEHOLDER_{index}",
                 block
             )
 
