@@ -1526,6 +1526,9 @@ class CognitiveCore:
                         == "document_query"
                     ):
 
+                        # Document answers must be document-grounded.
+                        ctx["memory"] = []
+
                         if not document_ai:
 
                             return SystemResponse(
