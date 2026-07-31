@@ -39,10 +39,12 @@ class ReasoningEngine:
         agent_manager=None,
         task_planner=None,
         llm_router=None,
+        action_manager=None,
     ):
         self.agent_manager = agent_manager
         self.task_planner = task_planner
         self.llm_router = llm_router
+        self.action_manager = action_manager
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
