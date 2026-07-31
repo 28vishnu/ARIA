@@ -307,6 +307,7 @@ async def bootstrap_application() -> ServiceRegistry:
     reasoning_engine = ReasoningEngine(
         agent_manager=agent_manager,
         llm_router=llm_router,
+        action_manager=action_manager,
     )
 
     registry.register(
