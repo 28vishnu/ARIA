@@ -656,9 +656,22 @@ class DocumentIntelligence:
             if previous:
                 question = f"{previous}\nFollow-up: {question}"
 
+        current_document = None
+
+        if state:
+            current_document = state.get("current_document")
+
+        search_query = question
+
+        if current_document:
+            search_query = (
+                f"{question} "
+                f"only in {current_document}"
+            )
+
         chunks = await self.hybrid_search(
             session_id=session_id,
-            query=question
+            query=search_query
         )
 
         logger.info(
