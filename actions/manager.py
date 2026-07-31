@@ -41,19 +41,32 @@ class ActionManager:
 
         # 1. Evaluate permissions
         #
-        # "confirm" actions may execute only after CognitiveCore has
-        # explicitly received user confirmation.
-        if action.permission_level == "confirm" and not confirmed:
+        # Some actions have operation-specific permissions.
+        # File reads are non-destructive and may run without confirmation.
+        # File writes remain confirmation-protected.
+
+        effective_permission = action.permission_level
+
+        if action.name == "file_action":
+            file_mode = str(params.get("mode", "")).lower().strip()
+
+            if file_mode == "read":
+                effective_permission = "safe"
+
+            elif file_mode == "write":
+                effective_permission = "confirm"
+
+        if effective_permission == "confirm" and not confirmed:
             return ActionResult(
                 success=False,
                 action_name=action_name,
                 error="Action requires explicit user confirmation."
             )
 
-        if action.permission_level != "confirm":
+        if effective_permission != "confirm":
             if not self.permissions.evaluate(
                 action.name,
-                action.permission_level
+                effective_permission
             ):
                 return ActionResult(
                     success=False,
