@@ -1363,13 +1363,25 @@ class CognitiveCore:
                             )
                         )
 
-                        return SystemResponse(
-                            success=True,
-                            confidence=intent.confidence,
-                            data={
-                                "message": reply
-                            },
-                            source="memory_conversation",
+                        # A non-empty reply means the memory layer was
+                        # confident enough to answer directly.
+                        if reply and reply.strip():
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                data={
+                                    "message": reply
+                                },
+                                source="memory_conversation",
+                            )
+
+                        # Relevant memory may exist, but deterministic
+                        # recall could not safely formulate the answer.
+                        # Continue through ARIA's normal reasoning pipeline.
+                        logger.info(
+                            "[CognitiveCore] Memory fast-path declined "
+                            "direct answer; continuing to semantic reasoning."
                         )
 
             # =================================================
