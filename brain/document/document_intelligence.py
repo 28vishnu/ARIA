@@ -210,7 +210,13 @@ class DocumentIntelligence:
             text = page["text"]
             page_number = page["page"]
 
-            paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+            # Preserve line spacing/alignment from layout-aware PDF extraction.
+            # This is important for tables, timetables, schedules and columns.
+            paragraphs = [
+                line.rstrip()
+                for line in text.splitlines()
+                if line.strip()
+            ]
             current_chunk = ""
 
             for paragraph in paragraphs:
