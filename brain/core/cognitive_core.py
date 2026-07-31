@@ -1433,6 +1433,29 @@ class CognitiveCore:
                     )
                 )
 
+            # -------------------------------------------------
+            # Filesystem requests must use Planner + Executor
+            # -------------------------------------------------
+
+            if (
+                decision
+                and looks_like_filesystem_request
+            ):
+                logger.info(
+                    "[CognitiveCore] Overriding routing "
+                    "to planner for filesystem request."
+                )
+
+                decision.action = "planner"
+                decision.confidence = max(
+                    getattr(
+                        decision,
+                        "confidence",
+                        0.0,
+                    ),
+                    0.99,
+                )
+
             logger.info(
                 "[Decision] Selected action: %s",
                 (
