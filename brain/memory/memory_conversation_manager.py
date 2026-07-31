@@ -220,24 +220,62 @@ class MemoryConversationManager:
 
                 return direct_answer
 
-            # -------------------------------------------------
-            # Deterministic matching was not confident enough.
-            #
-            # IMPORTANT:
-            # Do not claim that memory is missing here.
-            # Relevant memories were already retrieved, but this
-            # layer could not safely interpret them.
-            #
-            # Return an empty result so CognitiveCore can fall
-            # through to its semantic reasoning path.
-            # -------------------------------------------------
-
             logger.info(
                 "[MemoryConversationManager] Relevant memories exist, "
                 "but deterministic recall could not answer confidently. "
-                "Delegating to semantic reasoning."
+                "Attempting semantic memory reasoning."
             )
 
+            # -------------------------------------------------
+            # SEMANTIC MEMORY FALLBACK
+            #
+            # Deterministic matching could not understand the
+            # relationship between the user's wording and the
+            # retrieved memories. Let the LLM interpret those
+            # memories without allowing it to invent facts.
+            # -------------------------------------------------
+
+            if self.llm_router:
+
+                try:
+
+                    semantic_answer = (
+                        await self.llm_router.answer_from_memories(
+                            query=query,
+                            memories=memories
+                        )
+                    )
+
+                    if semantic_answer:
+
+                        logger.info(
+                            "[MemoryConversationManager] Answered through "
+                            "semantic persistent-memory reasoning."
+                        )
+
+                        return semantic_answer
+
+                    logger.info(
+                        "[MemoryConversationManager] Semantic memory "
+                        "reasoning found insufficient evidence."
+                    )
+
+                except Exception:
+
+                    logger.exception(
+                        "[MemoryConversationManager] Semantic memory "
+                        "reasoning failed."
+                    )
+
+            else:
+
+                logger.warning(
+                    "[MemoryConversationManager] Semantic memory reasoning "
+                    "unavailable because LLMRouter is not connected."
+                )
+
+            # Let CognitiveCore continue if neither deterministic nor
+            # semantic memory reasoning could produce a grounded answer.
             return ""
 
         # -----------------------------------------------------
