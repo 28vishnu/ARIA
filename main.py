@@ -513,9 +513,15 @@ async def telegram_webhook(req: Request):
 
         session_id = str(chat_id)
 
+        original_filename = (
+            document.get("file_name")
+            or Path(local_path).name
+        )
+
         result = await document_ai.process_document(
             file_path=local_path,
-            session_id=session_id
+            session_id=session_id,
+            document_name=original_filename
         )
 
         # -----------------------------------------------------
