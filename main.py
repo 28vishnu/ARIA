@@ -119,7 +119,7 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
     ):
         return sys_res
 
-    return ctx.personality_engine.apply_personality(
+    return await ctx.personality_engine.apply_personality(
         session_id,
         user_text,
         sys_res
