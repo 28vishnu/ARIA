@@ -58,6 +58,13 @@ class ContextBuilder:
 
         normalized = clean_query.lower()
 
+        # -----------------------------------------------------
+        # Conversation continuity signals
+        #
+        # These are linguistic hints, not hard routing rules.
+        # ReasoningEngine decides how much they matter.
+        # -----------------------------------------------------
+
         continuation_phrases = {
             "continue",
             "go on",
@@ -70,8 +77,54 @@ class ContextBuilder:
             "then?",
         }
 
-        is_continuation = (
-            normalized in continuation_phrases
+        acknowledgement_phrases = {
+            "yes",
+            "yeah",
+            "yep",
+            "yup",
+            "ok",
+            "okay",
+            "sure",
+            "right",
+            "correct",
+            "exactly",
+            "alright",
+            "got it",
+            "i see",
+            "makes sense",
+        }
+
+        negative_acknowledgements = {
+            "no",
+            "nope",
+            "not really",
+            "wrong",
+            "incorrect",
+        }
+
+        selection_phrases = {
+            "first one",
+            "second one",
+            "third one",
+            "last one",
+            "the first",
+            "the second",
+            "the third",
+            "the last",
+        }
+
+        is_continuation = normalized in continuation_phrases
+
+        is_acknowledgement = (
+            normalized in acknowledgement_phrases
+        )
+
+        is_negative_acknowledgement = (
+            normalized in negative_acknowledgements
+        )
+
+        is_selection = (
+            normalized in selection_phrases
         )
 
         # -----------------------------------------------------
@@ -111,6 +164,9 @@ class ContextBuilder:
             previous_query
             and (
                 is_continuation
+                or is_acknowledgement
+                or is_negative_acknowledgement
+                or is_selection
                 or has_contextual_reference
                 or (
                     is_short_query
@@ -185,6 +241,9 @@ class ContextBuilder:
                 "previous_query": previous_query,
                 "is_short_query": is_short_query,
                 "is_continuation": is_continuation,
+                "is_acknowledgement": is_acknowledgement,
+                "is_negative_acknowledgement": is_negative_acknowledgement,
+                "is_selection": is_selection,
                 "looks_like_follow_up": looks_like_follow_up,
                 "has_contextual_reference": has_contextual_reference,
             },
