@@ -27,7 +27,12 @@ class PersonalityEngine:
     def __init__(self, llm_router=None):
         self.llm_router = llm_router
 
-    def apply_personality(self, session_id: str, user_text: str, response: SystemResponse) -> str:
+    async def apply_personality(
+        self,
+        session_id: str,
+        user_text: str,
+        response: SystemResponse,
+    ) -> str:
         """Transforms structured SystemResponse payloads into natural, contextual language."""
         try:
             if not response.success:
