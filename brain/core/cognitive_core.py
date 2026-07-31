@@ -1655,6 +1655,700 @@ class CognitiveCore:
                         )
 
             # =================================================
+            # ACTIVE DOCUMENT CONTEXT ROUTING
+            #
+            # If a document was just uploaded/selected, natural
+            # questions about its contents should continue against
+            # that document even when the intent analyzer labels
+            # them as chat or memory_recall.
+            #
+            # Explicit non-document commands still keep priority.
+            # =================================================
+
+            active_document = bool(
+                state.get("active_document")
+                and state.get("current_document")
+            )
+
+            query_lower = str(query or "").strip().lower()
+
+            if active_document and intent:
+
+                # Requests that must NOT be hijacked by the active
+                # document context.
+                protected_intents = {
+                    "greeting",
+                    "memory_store",
+                    "memory_update",
+                    "memory_delete",
+                    "document_retrieve",
+                    "document_list",
+                    "delete_document",
+                    "delete_all_documents",
+                }
+
+                # Explicit personal-memory wording should remain memory.
+                explicit_memory_phrases = (
+                    "remember",
+                    "remember that",
+                    "do you remember",
+                    "what do you remember",
+                    "what's my",
+                    "what is my",
+                    "my favorite",
+                    "my favourite",
+                    "forget",
+                )
+
+                # Explicit web/current-information requests should not
+                # query the uploaded document.
+                explicit_web_request = (
+                    self._looks_like_web_search_request(query)
+                )
+
+                # Filesystem/action-style commands should remain actions.
+                explicit_action_terms = (
+                    "create file",
+                    "write file",
+                    "read file",
+                    "rename file",
+                    "move file",
+                    "copy file",
+                    "send notification",
+                    "notify me",
+                )
+
+                explicit_memory_request = any(
+                    phrase in query_lower
+                    for phrase in explicit_memory_phrases
+                )
+
+                explicit_action_request = any(
+                    phrase in query_lower
+                    for phrase in explicit_action_terms
+                )
+
+                # Natural informational questions are strong candidates
+                # for the currently active document.
+                question_starters = (
+                    "what ",
+                    "what's ",
+                    "who ",
+                    "when ",
+                    "where ",
+                    "which ",
+                    "how ",
+                    "why ",
+                    "is ",
+                    "are ",
+                    "does ",
+                    "do ",
+                    "tell me ",
+                    "explain ",
+                    "summarize ",
+                    "summarise ",
+                    "list ",
+                    "show me ",
+                )
+
+                looks_like_document_followup = (
+                    query_lower.endswith("?")
+                    or any(
+                        query_lower.startswith(prefix)
+                        for prefix in question_starters
+                    )
+                )
+
+                if (
+                    intent.name not in protected_intents
+                    and not explicit_memory_request
+                    and not explicit_web_request
+                    and not explicit_action_request
+                    and looks_like_document_followup
+                ):
+                    logger.info(
+                        "[CognitiveCore] Active document context "
+                        "routing '%s' -> document_query "
+                        "(document=%s, original_intent=%s).",
+                        query,
+                        state.get("current_document"),
+                        intent.name,
+                    )
+
+                    intent.name = "document_query"
+
+            # =================================================
+            # 8. FAST PATHS
+            # =================================================
+
+            if intent:
+
+                # =============================================
+                # FILESYSTEM / ACTION WORKFLOW GUARD
+                # =============================================
+
+                query_lower = query.lower()
+
+                filesystem_extensions = (
+                    ".txt",
+                    ".json",
+                    ".csv",
+                    ".log",
+                    ".md",
+                    ".yaml",
+                    ".yml",
+                )
+
+                filesystem_verbs = (
+                    "write ",
+                    "read ",
+                    "append ",
+                    "rename ",
+                    "move ",
+                    "copy ",
+                    "create ",
+                )
+
+                action_chain_terms = (
+                    " then ",
+                    " and send ",
+                    " and notify ",
+                    " as a notification",
+                )
+
+                looks_like_filesystem_request = (
+                    any(
+                        extension in query_lower
+                        for extension in filesystem_extensions
+                    )
+                    and any(
+                        verb in query_lower
+                        for verb in filesystem_verbs
+                    )
+                )
+
+                looks_like_filesystem_workflow = (
+                    looks_like_filesystem_request
+                    and any(
+                        term in query_lower
+                        for term in action_chain_terms
+                    )
+                )
+
+                # =============================================
+                # DOCUMENT COMMAND DISAMBIGUATION
+                #
+                # Prevent questions such as:
+                # "Summarize this document"
+                # "Explain this PDF"
+                # "What does this document say?"
+                #
+                # from being mistaken for requests to SEND the file.
+                # =============================================
+
+                document_analysis_terms = (
+                    "summarize",
+                    "summarise",
+                    "summary",
+                    "explain",
+                    "analyze",
+                    "analyse",
+                    "what does",
+                    "what is in",
+                    "what's in",
+                    "tell me about",
+                    "important information",
+                    "important points",
+                    "key points",
+                    "briefly",
+                    "according to",
+                )
+
+                document_send_terms = (
+                    "send me",
+                    "send the",
+                    "send this",
+                    "send document",
+                    "send the document",
+                    "send pdf",
+                    "send the pdf",
+                    "give me the document",
+                    "give me the file",
+                    "give me this file",
+                    "forward the document",
+                    "forward this",
+                    "share the document",
+                    "share this document",
+                    "download the document",
+                    "download the pdf",
+                )
+
+                is_document_analysis_request = any(
+                    term in query_lower
+                    for term in document_analysis_terms
+                )
+
+                is_explicit_document_send_request = any(
+                    term in query_lower
+                    for term in document_send_terms
+                )
+
+                # Correct an intent-analyzer mistake before entering
+                # the document fast path.
+                if (
+                    intent.name == "document_retrieve"
+                    and is_document_analysis_request
+                    and not is_explicit_document_send_request
+                ):
+                    logger.info(
+                        "[CognitiveCore] Correcting document_retrieve "
+                        "to document_query for analysis request."
+                    )
+
+                    intent.name = "document_query"
+
+                # =============================================
+                # DOCUMENT FAST PATHS
+                # =============================================
+
+                if (
+                    not looks_like_filesystem_request
+                    and intent.name in (
+                        "document_retrieve",
+                        "document_list",
+                        "document_query",
+                        "delete_document",
+                        "delete_all_documents",
+                    )
+                ):
+
+                    logger.info(
+                        "[CognitiveCore] Document fast-path "
+                        "activated: %s",
+                        intent.name,
+                    )
+
+                    document_repository = None
+
+                    document_ai = ctx.get(
+                        "document_intelligence"
+                    )
+
+                    if base_context:
+
+                        app_state = base_context.get(
+                            "app_state"
+                        )
+
+                        if (
+                            app_state
+                            and app_state.registry.has(
+                                "document_repository"
+                            )
+                        ):
+
+                            document_repository = (
+                                app_state.registry.get(
+                                    "document_repository"
+                                )
+                            )
+
+                    # -----------------------------------------
+                    # DELETE ALL DOCUMENTS
+                    # -----------------------------------------
+
+                    if (
+                        intent.name
+                        == "delete_all_documents"
+                    ):
+
+                        if not document_repository:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error=(
+                                    "Document repository "
+                                    "is unavailable."
+                                ),
+                            )
+
+                        documents = (
+                            await document_repository
+                            .list_documents(
+                                user_id=user_id
+                            )
+                        )
+
+                        if not documents:
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_management",
+                                data={
+                                    "message": (
+                                        "You don't have any "
+                                        "stored documents to "
+                                        "delete, Sir."
+                                    )
+                                },
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_management",
+                            data={
+                                "document_action":
+                                    "confirm_delete_all_documents",
+                                "documents": documents,
+                            },
+                        )
+
+                    # -----------------------------------------
+                    # DELETE ONE DOCUMENT
+                    # -----------------------------------------
+
+                    if (
+                        intent.name
+                        == "delete_document"
+                    ):
+
+                        if not document_repository:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error=(
+                                    "Document repository "
+                                    "is unavailable."
+                                ),
+                            )
+
+                        documents = (
+                            await document_repository
+                            .search_documents(
+                                user_id=user_id,
+                                query=query,
+                                limit=10,
+                            )
+                        )
+
+                        if not documents:
+
+                            documents = (
+                                await document_repository
+                                .list_documents(
+                                    user_id=user_id,
+                                    limit=20,
+                                )
+                            )
+
+                        if not documents:
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_management",
+                                data={
+                                    "message": (
+                                        "I couldn't find that "
+                                        "document, Sir."
+                                    )
+                                },
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_management",
+                            data={
+                                "document_action":
+                                    "confirm_delete_document",
+                                "query": query,
+                                "documents": documents,
+                            },
+                        )
+
+                    # -----------------------------------------
+                    # LIST DOCUMENTS
+                    # -----------------------------------------
+
+                    if (
+                        intent.name
+                        == "document_list"
+                    ):
+
+                        if not document_repository:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error=(
+                                    "Document repository "
+                                    "is unavailable."
+                                ),
+                            )
+
+                        documents = (
+                            await document_repository
+                            .list_documents(
+                                user_id=user_id
+                            )
+                        )
+
+                        if not documents:
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                data={
+                                    "message": (
+                                        "You don't have any "
+                                        "stored documents yet, "
+                                        "Sir."
+                                    )
+                                },
+                            )
+
+                        filenames = [
+                            doc.get(
+                                "filename",
+                                "Unnamed document",
+                            )
+                            for doc in documents
+                        ]
+
+                        message = (
+                            "I currently have these "
+                            "documents, Sir:\n\n"
+                            + "\n".join(
+                                f"• {name}"
+                                for name
+                                in filenames
+                            )
+                        )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_repository",
+                            data={
+                                "message": message
+                            },
+                        )
+
+                    # -----------------------------------------
+                    # RETRIEVE DOCUMENT
+                    # -----------------------------------------
+
+                    if (
+                        intent.name
+                        == "document_retrieve"
+                    ):
+
+                        if not document_repository:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                error=(
+                                    "Document repository "
+                                    "is unavailable."
+                                ),
+                            )
+
+                        documents = (
+                            await document_repository
+                            .search_documents(
+                                user_id=user_id,
+                                query=query,
+                                limit=10,
+                            )
+                        )
+
+                        if not documents:
+
+                            documents = (
+                                await document_repository
+                                .list_documents(
+                                    user_id=user_id,
+                                    limit=20,
+                                )
+                            )
+
+                        if not documents:
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document_repository",
+                                data={
+                                    "message": (
+                                        "I couldn't find a "
+                                        "stored document "
+                                        "matching that request, "
+                                        "Sir."
+                                    )
+                                },
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document_retrieval",
+                            data={
+                                "document_action":
+                                    "send_document",
+                                "query": query,
+                                "documents": documents,
+                            },
+                        )
+
+                    # -----------------------------------------
+                    # DOCUMENT QUESTION
+                    # -----------------------------------------
+
+                    if (
+                        intent.name
+                        == "document_query"
+                    ):
+
+                        # Document answers must be document-grounded.
+                        ctx["memory"] = []
+
+                        if not document_ai:
+
+                            return SystemResponse(
+                                success=False,
+                                confidence=intent.confidence,
+                                source="document",
+                                error=(
+                                    "Document intelligence "
+                                    "is unavailable."
+                                ),
+                            )
+
+                        answer = (
+                            await document_ai.answer_question(
+                                session_id=session_id,
+                                question=query,
+                                state=ctx.get(
+                                    "state"
+                                ),
+                            )
+                        )
+
+                        if answer:
+
+                            if self.state_manager:
+
+                                self.state_manager.update_state(
+                                    session_id,
+                                    last_document_question=query,
+                                    last_document_answer=answer,
+                                )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                source="document",
+                                data={
+                                    "response": answer
+                                },
+                            )
+
+                        return SystemResponse(
+                            success=True,
+                            confidence=intent.confidence,
+                            source="document",
+                            data={
+                                "message": (
+                                    "I couldn't find enough "
+                                    "information in the stored "
+                                    "document to answer that, "
+                                    "Sir."
+                                )
+                            },
+                        )
+
+                # =============================================
+                # GREETING
+                # =============================================
+
+                if intent.name == "greeting":
+
+                    logger.info(
+                        "[CognitiveCore] Greeting fast-path "
+                        "activated."
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=intent.confidence,
+                        data={
+                            "intent": "greeting",
+                            "query": query,
+                        },
+                        source="greeting_fast_path",
+                    )
+
+                # =============================================
+                # MEMORY FAST PATH
+                # =============================================
+
+                if intent.name in (
+                    "memory_recall",
+                    "memory_delete",
+                ):
+
+                    logger.info(
+                        "[CognitiveCore] Memory fast-path "
+                        "activated: %s",
+                        intent.name,
+                    )
+
+                    if (
+                        self.memory_conversation_manager
+                    ):
+
+                        reply = (
+                            await
+                            self.memory_conversation_manager
+                            .handle(
+                                query=query,
+                                context=ctx,
+                            )
+                        )
+
+                        # A non-empty reply means the memory layer was
+                        # confident enough to answer directly.
+                        if reply and reply.strip():
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=intent.confidence,
+                                data={
+                                    "message": reply
+                                },
+                                source="memory_conversation",
+                            )
+
+                        # Relevant memory may exist, but deterministic
+                        # recall could not safely formulate the answer.
+                        # Continue through ARIA's normal reasoning pipeline.
+                        logger.info(
+                            "[CognitiveCore] Memory fast-path declined "
+                            "direct answer; continuing to semantic reasoning."
+                        )
+
+            # =================================================
             # 9. REASONING
             # =================================================
 
