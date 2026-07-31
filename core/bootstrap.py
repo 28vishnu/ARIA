@@ -298,7 +298,10 @@ async def bootstrap_application() -> ServiceRegistry:
         skill_manager=skill_manager,
         action_manager=action_manager,
     )
-    executor = Executor(skill_manager)
+    executor = Executor(
+        skill_manager=skill_manager,
+        action_manager=action_manager,
+    )
 
     personality_engine = PersonalityEngine(
         llm_router=llm_router
