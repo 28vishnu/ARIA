@@ -29,6 +29,7 @@ from skills.profile import ProfileSkill
 from actions.manager import ActionManager
 from actions.actions.file import FileAction
 from actions.actions.notification import NotificationAction
+from actions.actions.web_search import WebSearchAction
 
 from brain.planner import Planner
 from brain.executor import Executor
@@ -287,6 +288,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     action_manager.register(FileAction())
     action_manager.register(NotificationAction())
+    action_manager.register(WebSearchAction())
 
     planner = Planner(llm_router)
     executor = Executor(skill_manager)
