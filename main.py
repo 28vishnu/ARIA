@@ -573,19 +573,15 @@ async def telegram_webhook(req: Request):
                 last_document_answer=None
             )
 
-        summary = result["summary"]
-        formatted_response = f"✅ Document processed successfully.\n\nSummary:\n\n{summary}"
-
-        await http_client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": formatted_response
-            }
+        logger.info(
+            "[Telegram] Document processed and stored for session %s. "
+            "Waiting for user instruction.",
+            session_id,
         )
 
         return {
-            "status": "processed"
+            "status": "processed",
+            "document_ready": True,
         }
 
     result = await process_task(
@@ -874,7 +870,7 @@ async def telegram_webhook(req: Request):
 
             state_manager.add_conversation_turn(
                 session_id=str(chat_id),
-                user_message=text,
+                user_text=text,
                 assistant_message=reply_text
             )
 
