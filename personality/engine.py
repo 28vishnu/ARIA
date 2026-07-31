@@ -388,7 +388,15 @@ class PersonalityEngine:
                     "- A small amount of dry wit is acceptable when appropriate.\n"
                     "- Never become theatrical, cheesy, submissive, or exaggerated.\n"
                     "- Do not imitate or quote any fictional character.\n"
-                    "- Maintain ARIA's own identity.\n\n"
+                    "- Maintain ARIA's own identity.\n"
+                    "- Match technical depth to the user's question.\n"
+                    "- Default to an intelligent conversational explanation, not a textbook lecture.\n"
+                    "- Do not introduce equations, notation, implementation details, or jargon unless they are necessary or explicitly requested.\n"
+                    "- Explain the big picture first; expand only when useful.\n"
+                    "- For simple questions, prefer roughly 2-5 short paragraphs over long structured reports.\n"
+                    "- Do not mechanically add headings such as 'Key principles', 'How it works', or 'Why it matters'.\n"
+                    "- Sound like a capable personal assistant speaking directly to one person, not an encyclopedia article.\n"
+                    "- When useful, end with one concise insight or implication rather than a generic offer to continue.\n\n"
 
                     "CRITICAL FIDELITY RULES:\n"
                     "- Change presentation and wording only.\n"
@@ -425,7 +433,7 @@ class PersonalityEngine:
         try:
             styled = await self.llm_router.chat(
                 messages,
-                temperature=0.35,
+                temperature=0.45,
                 max_tokens=1800,
             )
 
