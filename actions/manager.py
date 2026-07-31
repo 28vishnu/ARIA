@@ -8,6 +8,15 @@ from actions.validator import ActionValidator
 
 logger = logging.getLogger("aria")
 
+NON_RETRYABLE_ACTION_ERRORS = [
+    "not found",
+    "permission",
+    "validation failed",
+    "blocked",
+    "invalid",
+    "does not exist",
+]
+
 class ActionManager:
     def __init__(self, permission_mode: str = "confirm"):
         self.actions: Dict[str, BaseAction] = {}
