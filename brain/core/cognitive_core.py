@@ -115,6 +115,66 @@ class CognitiveCore:
             in REJECT_WORDS
         )
 
+    def _looks_like_web_search_request(
+        self,
+        query: str,
+    ) -> bool:
+        q = str(query or "").strip().lower()
+
+        explicit_search_phrases = (
+            "search the web",
+            "search web",
+            "search online",
+            "search the internet",
+            "browse the web",
+            "browse online",
+            "look up online",
+            "look it up online",
+            "find online",
+            "look up on the internet",
+        )
+
+        if any(
+            phrase in q
+            for phrase in explicit_search_phrases
+        ):
+            return True
+
+        freshness_terms = (
+            "latest",
+            "current",
+            "recent",
+            "today",
+            "today's",
+            "right now",
+            "newest",
+            "breaking",
+        )
+
+        information_terms = (
+            "news",
+            "update",
+            "updates",
+            "development",
+            "developments",
+            "information",
+            "announcement",
+            "announcements",
+            "happening",
+        )
+
+        has_freshness = any(
+            term in q
+            for term in freshness_terms
+        )
+
+        has_information = any(
+            term in q
+            for term in information_terms
+        )
+
+        return has_freshness and has_information
+
     def _build_confirmation_message(
         self,
         action_name: Optional[str] = None,
@@ -1607,28 +1667,10 @@ class CognitiveCore:
             # Web-search requests must use Planner + Executor
             # -------------------------------------------------
 
-            web_search_phrases = (
-                "search the web",
-                "search web",
-                "search online",
-                "look up online",
-                "look it up online",
-                "browse the web",
-                "browse online",
-                "find online",
-                "search the internet",
-                "look up on the internet",
-                "latest news",
-                "current news",
-                "latest information",
-                "current information",
-                "latest updates",
-                "recent news",
-            )
-
-            looks_like_web_search_request = any(
-                phrase in query_lower
-                for phrase in web_search_phrases
+            looks_like_web_search_request = (
+                self._looks_like_web_search_request(
+                    query
+                )
             )
 
             if (
