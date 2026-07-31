@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict
 
 from brain.models.decision import Decision
 
@@ -55,38 +55,103 @@ class DecisionEngine:
             action = getattr(
                 reasoning,
                 "primary_action",
-                None
+                None,
             )
 
-            confidence = getattr(
-                reasoning,
-                "confidence",
-                0.80
+            confidence = float(
+                getattr(
+                    reasoning,
+                    "confidence",
+                    0.80,
+                )
+                or 0.80
             )
 
-            secondary_actions = getattr(
-                reasoning,
-                "secondary_actions",
-                []
+            secondary_actions = list(
+                getattr(
+                    reasoning,
+                    "secondary_actions",
+                    [],
+                )
+                or []
             )
 
-            metadata = getattr(
-                reasoning,
-                "metadata",
-                {}
-            ) or {}
+            metadata = dict(
+                getattr(
+                    reasoning,
+                    "metadata",
+                    {},
+                )
+                or {}
+            )
 
             action_name = getattr(
                 reasoning,
                 "action_name",
-                None
+                None,
             )
 
-            action_params = getattr(
-                reasoning,
-                "action_params",
-                {}
-            ) or {}
+            action_params = dict(
+                getattr(
+                    reasoning,
+                    "action_params",
+                    {},
+                )
+                or {}
+            )
+
+            workflow = list(
+                getattr(
+                    reasoning,
+                    "workflow",
+                    [],
+                )
+                or []
+            )
+
+            requires_planning = bool(
+                metadata.get("requires_planning")
+                or metadata.get("multi_step")
+                or len(workflow) > 1
+            )
+
+            # -------------------------------------------------
+            # MULTI-STEP GOALS ALWAYS USE THE PLANNER
+            # -------------------------------------------------
+            #
+            # Reasoning understands WHAT the user wants.
+            # Planner determines HOW the capabilities should
+            # be combined and ordered.
+            # -------------------------------------------------
+
+            if requires_planning:
+
+                logger.info(
+                    "[Decision] Multi-step goal detected. "
+                    "Routing to planner. goal=%s workflow_steps=%d",
+                    metadata.get("goal"),
+                    len(workflow),
+                )
+
+                return Decision(
+                    action="planner",
+                    confidence=max(
+                        confidence,
+                        0.90,
+                    ),
+                    secondary_actions=secondary_actions,
+                    data={
+                        **metadata,
+                        "reasoning_action": action,
+                        "requires_planning": True,
+                    },
+                    action_name=action_name,
+                    action_params=action_params,
+                )
+
+            # -------------------------------------------------
+            # SINGLE CAPABILITY
+            # -------------------------------------------------
 
             if action:
 
@@ -95,7 +160,7 @@ class DecisionEngine:
                     "confidence=%.2f goal=%s",
                     action,
                     confidence,
-                    metadata.get("goal")
+                    metadata.get("goal"),
                 )
 
                 return Decision(
@@ -104,7 +169,7 @@ class DecisionEngine:
                     secondary_actions=secondary_actions,
                     data=metadata,
                     action_name=action_name,
-                    action_params=action_params
+                    action_params=action_params,
                 )
 
         # -----------------------------------------------------
@@ -155,22 +220,27 @@ class DecisionEngine:
             or state.get("current_document")
         )
 
-        if document_active:
+        if (
+            document_active
+            and conversation.get("looks_like_follow_up")
+        ):
 
             logger.info(
-                "[Decision] Falling back to active document context."
+                "[Decision] Preserving active document "
+                "context for unresolved follow-up."
             )
 
             return Decision(
                 action="document",
-                confidence=0.85,
+                confidence=0.75,
                 data={
                     "document_name": (
                         document.get("name")
                         or state.get("active_document")
                         or state.get("current_document")
-                    )
-                }
+                    ),
+                    "contextual_fallback": True,
+                },
             )
 
         # -----------------------------------------------------
