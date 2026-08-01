@@ -199,6 +199,17 @@ class CognitiveCore:
                 confidence = 0.89
                 if self.world_model and hasattr(self.world_model, "set_active_document"):
                     self.world_model.set_active_document(query)
+                if self.event_bus:
+                    await self.event_bus.publish(
+                        Event(
+                            type=event_types.DOCUMENT_ANSWERED,
+                            source="cognitive_core",
+                            data={
+                                "query": query,
+                                "answer": answer,
+                            }
+                        )
+                    )
             elif graph_res:
                 answer = str(graph_res)
                 source = "knowledge_graph"
@@ -251,7 +262,7 @@ class CognitiveCore:
                                         data={
                                             "query": query,
                                             "answer": answer,
-                                        },
+                                        }
                                     )
                                 )
                     except Exception:
@@ -274,6 +285,16 @@ class CognitiveCore:
                                         answer = out.get("response") or out.get("content") or out.get("message")
                                         if answer:
                                             break
+                                if self.event_bus:
+                                    await self.event_bus.publish(
+                                        Event(
+                                            type=event_types.PLAN_FINISHED,
+                                            source="planner",
+                                            data={
+                                                "query": query,
+                                            }
+                                        )
+                                    )
 
                         if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                             messages = [
@@ -299,21 +320,20 @@ class CognitiveCore:
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
 
-        # Publish chat response event via EventBus
         if self.event_bus:
-            try:
-                await self.event_bus.publish(
-                    Event(
-                        type=event_types.CHAT_RESPONSE,
-                        source="cognitive_core",
-                        data={
-                            "query": query,
-                            "answer": answer,
-                        },
-                    )
+            await self.event_bus.publish(
+                Event(
+                    type=event_types.CHAT_RESPONSE,
+                    source="cognitive_core",
+                    data={
+                        "query": query,
+                        "answer": answer,
+                        "confidence": confidence,
+                        "knowledge_source": source,
+                        "session_id": session_id,
+                    }
                 )
-            except Exception:
-                logger.exception("[CognitiveCore] EventBus publish failed for CHAT_RESPONSE.")
+            )
 
         # Step 9: Pass through PersonalityEngine
         return await self._format_response(answer, source, context, confidence)
@@ -1295,20 +1315,6 @@ class CognitiveCore:
                     )
                 )
 
-                if self.event_bus:
-                    try:
-                        await self.event_bus.publish(
-                            Event(
-                                type="profile",
-                                source="cognitive_core",
-                                data={
-                                    "profile": {intent.name: query},
-                                },
-                            )
-                        )
-                    except Exception:
-                        logger.exception("[CognitiveCore] EventBus publish failed for profile.")
-
                 return SystemResponse(
                     success=True,
                     confidence=getattr(
@@ -1346,6 +1352,17 @@ class CognitiveCore:
                             memory_result.get("key"),
                             memory_result.get("action"),
                         )
+
+                        if self.event_bus:
+                            await self.event_bus.publish(
+                                Event(
+                                    type=event_types.MEMORY_CREATED,
+                                    source="memory",
+                                    data={
+                                        "query": query,
+                                    }
+                                )
+                            )
 
                         try:
 
@@ -1394,18 +1411,16 @@ class CognitiveCore:
             )
 
             if self.event_bus:
-                try:
-                    await self.event_bus.publish(
-                        Event(
-                            type="failure",
-                            source="cognitive_core",
-                            data={
-                                "query": query,
-                            },
-                        )
+                await self.event_bus.publish(
+                    Event(
+                        type=event_types.ERROR,
+                        source="cognitive_core",
+                        data={
+                            "query": query,
+                            "error": str(exc),
+                        }
                     )
-                except Exception:
-                    logger.exception("[CognitiveCore] EventBus publish failed for failure.")
+                )
 
             return SystemResponse(
                 success=False,
