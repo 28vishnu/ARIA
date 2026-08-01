@@ -52,6 +52,10 @@ from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.llm.llm_router import LLMRouter
 
+from brain.events.event_bus import EventBus
+from brain.events.event import Event
+from brain.events import event_types
+
 
 logger = logging.getLogger("aria")
 
@@ -283,6 +287,38 @@ async def bootstrap_application() -> ServiceRegistry:
         world_model=world_model,
     )
 
+    event_bus = EventBus()
+
+    event_bus.register_listener(
+        event_types.CHAT_RESPONSE,
+        autonomous_learning,
+    )
+
+    event_bus.register_listener(
+        event_types.CHAT_RESPONSE,
+        self_reflection,
+    )
+
+    event_bus.register_listener(
+        event_types.DOCUMENT_UPLOADED,
+        autonomous_learning,
+    )
+
+    event_bus.register_listener(
+        event_types.DOCUMENT_SUMMARIZED,
+        autonomous_learning,
+    )
+
+    event_bus.register_listener(
+        event_types.WEB_SEARCH_FINISHED,
+        autonomous_learning,
+    )
+
+    event_bus.register_listener(
+        event_types.PLAN_FINISHED,
+        autonomous_learning,
+    )
+
     context_builder = ContextBuilder(
         state_manager=state_manager,
         world_model=world_model,
@@ -328,6 +364,11 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "autonomous_learning",
         autonomous_learning,
+    )
+
+    registry.register(
+        "event_bus",
+        event_bus,
     )
 
     registry.register(
@@ -394,11 +435,13 @@ async def bootstrap_application() -> ServiceRegistry:
         llm_router=llm_router,
         skill_manager=skill_manager,
         action_manager=action_manager,
+        event_bus=event_bus,
     )
 
     executor = Executor(
         skill_manager=skill_manager,
         action_manager=action_manager,
+        event_bus=event_bus,
     )
 
     personality_engine = PersonalityEngine(
@@ -414,6 +457,7 @@ async def bootstrap_application() -> ServiceRegistry:
         agent_manager=agent_manager,
         llm_router=llm_router,
         action_manager=action_manager,
+        event_bus=event_bus,
     )
 
     registry.register(
@@ -494,11 +538,20 @@ async def bootstrap_application() -> ServiceRegistry:
         world_model=world_model,
         self_reflection=self_reflection,
         autonomous_learning=autonomous_learning,
+        event_bus=event_bus,
     )
 
     registry.register(
         "cognitive_core",
         cognitive_core
+    )
+
+    await event_bus.publish(
+        Event(
+            type=event_types.SYSTEM_STARTUP,
+            source="bootstrap",
+            data={},
+        )
     )
 
     logger.info(
