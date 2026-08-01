@@ -5,7 +5,29 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger("aria")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+MEMORY_TYPES = {
+    "personal",
+    "preference",
+    "goal",
+    "project",
+    "decision",
+    "document",
+    "fact",
+    "schedule",
+    "relationship",
+    "skill",
+    "event",
+    "contact"
+}
+
+IMPORTANCE = {
+    "low": 20,
+    "medium": 50,
+    "high": 90,
+    "critical": 100
+}
 
 
 class MemoryEngine:
@@ -523,6 +545,11 @@ class MemoryEngine:
             timezone.utc
         ).isoformat()
 
+        if memory["importance"] in ("high", "critical"):
+            memory["is_permanent"] = True
+        else:
+            memory["is_permanent"] = False
+
         if memory.get("is_list"):
 
             stored = []
@@ -531,6 +558,24 @@ class MemoryEngine:
 
                 if not self._validate_value(item):
                     continue
+
+                existing = await self.memory_col.find_one(
+                    {
+                        "key": key,
+                        "value": item
+                    }
+                )
+
+                version = 1
+                history = []
+
+                if existing:
+                    version = existing.get("version", 1) + 1
+                    history = existing.get("history", [])
+                    history.append({
+                        "value": existing.get("value"),
+                        "updated_at": existing.get("updated_at")
+                    })
 
                 await self.memory_col.update_one(
                     {
@@ -543,15 +588,41 @@ class MemoryEngine:
                             "value": item,
                             "category": memory["category"],
                             "memory_type": memory["memory_type"],
-                            "importance": memory["importance"],
-                            "confidence": 1.0,
-                            "source": "deterministic",
+                            "importance": IMPORTANCE.get(
+                                memory["importance"], 50
+                            ),
+                            "confidence": memory.get(
+                                "confidence",
+                                1.0
+                            ),
+                            "source": memory.get(
+                                "source",
+                                "conversation"
+                            ),
+                            "tags": memory.get(
+                                "tags",
+                                []
+                            ),
+                            "aliases": memory.get(
+                                "aliases",
+                                []
+                            ),
+                            "summary": memory.get(
+                                "summary",
+                                str(item)
+                            ),
+                            "version": version,
+                            "history": history,
                             "schema_version": SCHEMA_VERSION,
-                            "updated_at": now
+                            "updated_at": now,
+                            "last_accessed": now
                         },
                         "$setOnInsert": {
-                            "first_seen": now,
-                            "last_used": now
+                            "created_at": now,
+                            "access_count": 0,
+                            "relationships": [],
+                            "expires_at": None,
+                            "is_permanent": memory["is_permanent"]
                         }
                     },
                     upsert=True
@@ -574,10 +645,18 @@ class MemoryEngine:
         )
 
         action = "stored"
+        version = 1
+        history = []
 
         if existing:
             if str(existing.get("value")) != str(value):
                 action = "update"
+            version = existing.get("version", 1) + 1
+            history = existing.get("history", [])
+            history.append({
+                "value": existing.get("value"),
+                "updated_at": existing.get("updated_at")
+            })
 
         await self.memory_col.update_one(
             {"key": key},
@@ -587,15 +666,41 @@ class MemoryEngine:
                     "value": str(value),
                     "category": memory["category"],
                     "memory_type": memory["memory_type"],
-                    "importance": memory["importance"],
-                    "confidence": 1.0,
-                    "source": "deterministic",
+                    "importance": IMPORTANCE.get(
+                        memory["importance"], 50
+                    ),
+                    "confidence": memory.get(
+                        "confidence",
+                        1.0
+                    ),
+                    "source": memory.get(
+                        "source",
+                        "conversation"
+                    ),
+                    "tags": memory.get(
+                        "tags",
+                        []
+                    ),
+                    "aliases": memory.get(
+                        "aliases",
+                        []
+                    ),
+                    "summary": memory.get(
+                        "summary",
+                        str(value)
+                    ),
+                    "version": version,
+                    "history": history,
                     "schema_version": SCHEMA_VERSION,
-                    "updated_at": now
+                    "updated_at": now,
+                    "last_accessed": now
                 },
                 "$setOnInsert": {
-                    "first_seen": now,
-                    "last_used": now
+                    "created_at": now,
+                    "access_count": 0,
+                    "relationships": [],
+                    "expires_at": None,
+                    "is_permanent": memory["is_permanent"]
                 }
             },
             upsert=True
@@ -737,6 +842,45 @@ class MemoryEngine:
     # MEMORY RETRIEVAL
     # =========================================================
 
+    def _calculate_score(
+        self,
+        memory,
+        semantic_score
+    ):
+
+        importance = memory.get(
+            "importance",
+            50
+        )
+
+        confidence = memory.get(
+            "confidence",
+            1
+        )
+
+        accesses = memory.get(
+            "access_count",
+            0
+        )
+
+        return (
+
+            semantic_score
+
+            +
+
+            importance * 0.15
+
+            +
+
+            confidence * 5
+
+            +
+
+            accesses * 0.08
+
+        )
+
     async def get_relevant_memories(
         self,
         query: str,
@@ -857,8 +1001,11 @@ class MemoryEngine:
                                 }
                             },
                             {
+                                "$inc": {
+                                    "access_count": 1
+                                },
                                 "$set": {
-                                    "last_used": now_iso
+                                    "last_accessed": now_iso
                                 }
                             }
                         )
@@ -877,7 +1024,7 @@ class MemoryEngine:
                             ),
                             "importance": m.get(
                                 "importance",
-                                "medium"
+                                50
                             ),
                             "confidence": m.get(
                                 "confidence",
@@ -1119,7 +1266,7 @@ class MemoryEngine:
                     )
                 )
 
-                score = 0.0
+                semantic_score = 0.0
 
                 # Direct word overlap
                 direct_matches = (
@@ -1127,7 +1274,7 @@ class MemoryEngine:
                     & memory_words
                 )
 
-                score += len(
+                semantic_score += len(
                     direct_matches
                 ) * 3.0
 
@@ -1137,7 +1284,7 @@ class MemoryEngine:
                     & memory_words
                 )
 
-                score += len(
+                semantic_score += len(
                     semantic_matches
                 ) * 1.5
 
@@ -1154,22 +1301,13 @@ class MemoryEngine:
                     & key_words
                 )
 
-                score += len(
+                semantic_score += len(
                     key_matches
                 ) * 2.5
 
-                # Importance bonus
-                importance = memory.get(
-                    "importance",
-                    "medium"
-                )
+                score = self._calculate_score(memory, semantic_score)
 
-                if importance == "high":
-                    score += 0.5
-                elif importance == "medium":
-                    score += 0.25
-
-                if score > 0:
+                if semantic_score > 0:
 
                     scored.append(
                         (
@@ -1245,7 +1383,7 @@ class MemoryEngine:
                             ):
                                 scored.append(
                                     (
-                                        2.0,
+                                        self._calculate_score(memory, 2.0),
                                         memory
                                     )
                                 )
@@ -1297,7 +1435,7 @@ class MemoryEngine:
                     ),
                     "importance": memory.get(
                         "importance",
-                        "medium"
+                        50
                     ),
                     "confidence": memory.get(
                         "confidence",
@@ -1315,7 +1453,7 @@ class MemoryEngine:
                 if len(final_memories) >= limit:
                     break
 
-            # Update last_used
+            # Update access_count and last_accessed
             returned_keys = [
                 m["key"]
                 for m in final_memories
@@ -1330,8 +1468,11 @@ class MemoryEngine:
                         }
                     },
                     {
+                        "$inc": {
+                            "access_count": 1
+                        },
                         "$set": {
-                            "last_used": datetime.now(
+                            "last_accessed": datetime.now(
                                 timezone.utc
                             ).isoformat()
                         }
