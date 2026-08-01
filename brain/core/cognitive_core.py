@@ -5,6 +5,8 @@ from typing import Dict, Any, Optional
 from personality.response import SystemResponse
 from brain.response.response_formatter import ResponseFormatter
 from brain.agents.response_fusion import ResponseFusion
+from brain.events.event import Event
+from brain.events import event_types
 
 logger = logging.getLogger("aria")
 
@@ -80,6 +82,7 @@ class CognitiveCore:
         world_model=None,
         self_reflection=None,
         autonomous_learning=None,
+        event_bus=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -100,6 +103,7 @@ class CognitiveCore:
         self.world_model = world_model
         self.self_reflection = self_reflection
         self.autonomous_learning = autonomous_learning
+        self.event_bus = event_bus
 
         self.brain_state = {
             "thinking": False,
@@ -239,11 +243,16 @@ class CognitiveCore:
                             )
                             source = "web_search"
                             confidence = 0.70
-                            if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
-                                await self.autonomous_learning.learn(
-                                    source="web",
-                                    query=query,
-                                    answer=answer,
+                            if self.event_bus:
+                                await self.event_bus.publish(
+                                    Event(
+                                        type=event_types.WEB_SEARCH_FINISHED,
+                                        source="cognitive_core",
+                                        data={
+                                            "query": query,
+                                            "answer": answer,
+                                        },
+                                    )
                                 )
                     except Exception:
                         logger.exception("[CognitiveCore] Web Search failed.")
@@ -285,45 +294,26 @@ class CognitiveCore:
                 if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
                     await self.knowledge_graph.learn(query, answer)
 
-            # Step 3: Autonomous Learning Integration
-            if self.autonomous_learning:
-                try:
-                    await self.autonomous_learning.learn(
-                        source=source,
-                        query=query,
-                        answer=answer,
-                    )
-                except Exception:
-                    logger.exception(
-                        "[CognitiveCore] Autonomous learning failed."
-                    )
-
         finally:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
 
-        # Step 4: Autonomous learning and self-reflection review upon successful response generation
-        if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+        # Publish chat response event via EventBus
+        if self.event_bus:
             try:
-                await self.autonomous_learning.learn(
-                    source="success",
-                    query=query,
-                    answer=answer,
+                await self.event_bus.publish(
+                    Event(
+                        type=event_types.CHAT_RESPONSE,
+                        source="cognitive_core",
+                        data={
+                            "query": query,
+                            "answer": answer,
+                        },
+                    )
                 )
             except Exception:
-                logger.exception("[CognitiveCore] Autonomous learning success hook failed.")
-
-        if self.self_reflection and hasattr(self.self_reflection, "reflect"):
-            try:
-                await self.self_reflection.reflect(
-                    event="review",
-                    query=query,
-                    answer=answer,
-                    source=source,
-                )
-            except Exception:
-                logger.exception("[CognitiveCore] Self-reflection review failed.")
+                logger.exception("[CognitiveCore] EventBus publish failed for CHAT_RESPONSE.")
 
         # Step 9: Pass through PersonalityEngine
         return await self._format_response(answer, source, context, confidence)
@@ -1305,14 +1295,19 @@ class CognitiveCore:
                     )
                 )
 
-                if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+                if self.event_bus:
                     try:
-                        await self.autonomous_learning.learn(
-                            source="profile",
-                            profile={intent.name: query},
+                        await self.event_bus.publish(
+                            Event(
+                                type="profile",
+                                source="cognitive_core",
+                                data={
+                                    "profile": {intent.name: query},
+                                },
+                            )
                         )
                     except Exception:
-                        logger.exception("[CognitiveCore] Autonomous learning profile hook failed.")
+                        logger.exception("[CognitiveCore] EventBus publish failed for profile.")
 
                 return SystemResponse(
                     success=True,
@@ -1398,14 +1393,19 @@ class CognitiveCore:
                 exc,
             )
 
-            if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+            if self.event_bus:
                 try:
-                    await self.autonomous_learning.learn(
-                        source="failure",
-                        query=query,
+                    await self.event_bus.publish(
+                        Event(
+                            type="failure",
+                            source="cognitive_core",
+                            data={
+                                "query": query,
+                            },
+                        )
                     )
                 except Exception:
-                    logger.exception("[CognitiveCore] Autonomous learning failure hook failed.")
+                    logger.exception("[CognitiveCore] EventBus publish failed for failure.")
 
             return SystemResponse(
                 success=False,
