@@ -72,6 +72,10 @@ class CognitiveCore:
         memory_conversation_manager=None,
         reasoning_engine=None,
         knowledge_manager=None,
+        knowledge_graph=None,
+        knowledge_database=None,
+        learning_engine=None,
+        personality_engine=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -85,9 +89,169 @@ class CognitiveCore:
         self.memory_conversation_manager = memory_conversation_manager
         self.reasoning_engine = reasoning_engine
         self.knowledge_manager = knowledge_manager
+        self.knowledge_graph = knowledge_graph
+        self.knowledge_database = knowledge_database
+        self.learning_engine = learning_engine
+        self.personality_engine = personality_engine
 
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
+
+    # =========================================================
+    # KNOWLEDGE FIRST PIPELINE
+    # =========================================================
+
+    async def knowledge_first_pipeline(
+        self,
+        session_id: str,
+        query: str,
+        context: Dict[str, Any],
+    ) -> SystemResponse:
+        """
+        ARIA's core knowledge-first intelligence pipeline.
+        Executes strict prioritization:
+        1. Personal Memory
+        2. Knowledge Graph
+        3. Documents
+        4. Skills
+        5. Knowledge Database
+        6. Web Search (if internet required)
+        7. LLM -> Reasoning -> Natural Language
+        8. Automatic Learning
+        9. Personality Engine
+        """
+        answer = None
+
+        # Step 1: Personal Memory
+        if self.memory_router and hasattr(self.memory_router, "answer"):
+            try:
+                answer = await self.memory_router.answer(query)
+            except Exception:
+                logger.exception("[CognitiveCore] Step 1 (Memory) failed.")
+
+        if answer:
+            return await self._format_response(answer, "memory", context)
+
+        # Step 2: Knowledge Graph
+        if self.knowledge_graph and hasattr(self.knowledge_graph, "answer"):
+            try:
+                answer = await self.knowledge_graph.answer(query)
+            except Exception:
+                logger.exception("[CognitiveCore] Step 2 (Knowledge Graph) failed.")
+
+        if answer:
+            return await self._format_response(answer, "knowledge_graph", context)
+
+        # Step 3: Documents
+        if self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+            try:
+                answer = await self.knowledge_manager.answer(
+                    session_id,
+                    query,
+                )
+            except Exception:
+                logger.exception("[CognitiveCore] Step 3 (Documents) failed.")
+
+        if answer:
+            return await self._format_response(answer, "document", context)
+
+        # Step 4: Skills (Calculator, Python, Time, Date, Weather, etc.)
+        if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+            try:
+                skill_result = await self.skill_manager.route_and_execute(
+                    query,
+                    context,
+                )
+                if skill_result and skill_result.success:
+                    answer = skill_result.data.get("response") or skill_result.data.get("message") or str(skill_result.data)
+            except Exception:
+                logger.exception("[CognitiveCore] Step 4 (Skills) failed.")
+
+        if answer:
+            return await self._format_response(answer, "skill", context)
+
+        # Step 5: Knowledge Database
+        if self.knowledge_database and hasattr(self.knowledge_database, "search"):
+            try:
+                answer = await self.knowledge_database.search(query)
+            except Exception:
+                logger.exception("[CognitiveCore] Step 5 (Knowledge Database) failed.")
+
+        if answer:
+            return await self._format_response(answer, "knowledge_database", context)
+
+        # Step 6: Web Search (if internet required)
+        if self._looks_like_web_search_request(query) and self.action_manager and "web_search" in self.action_manager.actions:
+            try:
+                web_result = await self.action_manager.execute_action(
+                    action_name="web_search",
+                    params={"query": query},
+                )
+                if web_result and web_result.success:
+                    answer = web_result.data.get("result") or web_result.data.get("content") or str(web_result.data)
+            except Exception:
+                logger.exception("[CognitiveCore] Step 6 (Web Search) failed.")
+
+        if answer:
+            return await self._format_response(answer, "web_search", context)
+
+        # Step 7: LLM -> Reasoning -> Natural language
+        try:
+            if self.reasoning_engine:
+                reasoning = await self.reasoning_engine.reason(context)
+                context["reasoning"] = reasoning
+
+            if self.planner:
+                plan = await self.planner.create_plan(query, context)
+                if plan and plan.tasks and self.executor:
+                    exec_result = await self.executor.execute_plan(plan, context)
+                    task_outputs = exec_result.get("task_outputs", {})
+                    for task in reversed(plan.tasks):
+                        out = task_outputs.get(task.id, {})
+                        if isinstance(out, dict):
+                            answer = out.get("response") or out.get("content") or out.get("message")
+                            if answer:
+                                break
+
+            if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
+                messages = [
+                    {"role": "system", "content": "You are ARIA, a helpful AI assistant."},
+                    {"role": "user", "content": query}
+                ]
+                answer = await self.llm_router.chat(messages)
+        except Exception:
+            logger.exception("[CognitiveCore] Step 7 (LLM/Reasoning) failed.")
+
+        if not answer:
+            answer = "I couldn't find the information to answer your request."
+
+        # Step 8: If LLM produced new information, automatically call learning_engine.learn()
+        if self.learning_engine and hasattr(self.learning_engine, "learn"):
+            try:
+                await self.learning_engine.learn(answer, source="llm_generation")
+            except Exception:
+                logger.exception("[CognitiveCore] Step 8 (LearningEngine) failed.")
+
+        # Step 9: Pass through PersonalityEngine
+        return await self._format_response(answer, "llm_generated", context)
+
+    async def _format_response(self, answer: str, source: str, context: Dict[str, Any]) -> SystemResponse:
+        formatted_answer = answer
+        if self.personality_engine and hasattr(self.personality_engine, "format"):
+            try:
+                formatted_answer = await self.personality_engine.format(answer, context)
+            except Exception:
+                logger.exception("[CognitiveCore] PersonalityEngine formatting failed.")
+
+        return SystemResponse(
+            success=True,
+            confidence=1.0,
+            source=source,
+            data={
+                "response": formatted_answer,
+                "message": formatted_answer,
+            },
+        )
 
     # =========================================================
     # HELPERS
@@ -1117,533 +1281,13 @@ class CognitiveCore:
                     )
 
             # =================================================
-            # 11. REASONING
-            #
-            # This becomes the semantic understanding layer.
+            # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION
             # =================================================
 
-            reasoning = None
-
-            if self.reasoning_engine:
-
-                try:
-
-                    reasoning = (
-                        await self.reasoning_engine.reason(ctx)
-                    )
-
-                    ctx["reasoning"] = reasoning
-
-                    logger.info(
-                        "[CognitiveCore] Reasoning completed: "
-                        "action=%s confidence=%s",
-                        getattr(
-                            reasoning,
-                            "primary_action",
-                            None,
-                        ),
-                        getattr(
-                            reasoning,
-                            "confidence",
-                            None,
-                        ),
-                    )
-
-                except Exception:
-
-                    logger.exception(
-                        "[CognitiveCore] Reasoning failed."
-                    )
-
-            # =================================================
-            # 12. DECISION
-            #
-            # DecisionEngine decides which CAPABILITY is suitable.
-            # CognitiveCore does not inspect Monday, PDF, news,
-            # filenames, conjunctions, etc.
-            # =================================================
-
-            decision = None
-
-            if self.decision_engine:
-
-                try:
-
-                    decision = (
-                        await self.decision_engine.decide(
-                            context=ctx,
-                            skill_manager=self.skill_manager,
-                            planner=self.planner,
-                        )
-                    )
-
-                    ctx["decision"] = decision
-
-                except Exception:
-
-                    logger.exception(
-                        "[CognitiveCore] Decision engine failed."
-                    )
-
-            selected_action = getattr(
-                decision,
-                "action",
-                None,
-            )
-
-            logger.info(
-                "[CognitiveCore] Selected capability: %s",
-                selected_action,
-            )
-
-            # =================================================
-            # 13. SAFE DETERMINISTIC CAPABILITIES
-            # =================================================
-
-            # -------------------------------------------------
-            # KNOWLEDGE MANAGER
-            # -------------------------------------------------
-
-            if self.knowledge_manager:
-
-                knowledge_answer = await self.knowledge_manager.answer(
-                    session_id=session_id,
-                    question=query,
-                )
-
-                if knowledge_answer:
-
-                    logger.info(
-                        "[CognitiveCore] KnowledgeManager answered request."
-                    )
-
-                    return SystemResponse(
-                        success=True,
-                        confidence=1.0,
-                        source="knowledge",
-                        data={
-                            "response": knowledge_answer,
-                        },
-                    )
-
-            # -------------------------------------------------
-            # MEMORY RECALL
-            # -------------------------------------------------
-
-            if (
-                selected_action == "memory_conversation"
-                and self.memory_conversation_manager
-            ):
-
-                reply = (
-                    await self.memory_conversation_manager.handle(
-                        query=query,
-                        context=ctx,
-                    )
-                )
-
-                if reply and reply.strip():
-
-                    return SystemResponse(
-                        success=True,
-                        confidence=getattr(
-                            decision,
-                            "confidence",
-                            0.9,
-                        ),
-                        source="memory",
-                        data={
-                            "message": reply,
-                        },
-                    )
-
-                # If memory cannot answer confidently, don't
-                # terminate cognition. Let Planner reason using
-                # other available sources.
-
-                logger.info(
-                    "[CognitiveCore] Memory could not answer; "
-                    "falling through to planner."
-                )
-
-            # -------------------------------------------------
-            # DOCUMENT
-            # -------------------------------------------------
-
-            if selected_action == "document":
-
-                if document_ai:
-
-                    answer = (
-                        await document_ai.answer_question(
-                            session_id=session_id,
-                            question=query,
-                            state=ctx.get("state"),
-                        )
-                    )
-
-                    if answer:
-
-                        if self.state_manager:
-                            self.state_manager.update_state(
-                                session_id,
-                                last_document_question=query,
-                                last_document_answer=answer,
-                            )
-
-                        return SystemResponse(
-                            success=True,
-                            confidence=getattr(
-                                decision,
-                                "confidence",
-                                0.9,
-                            ),
-                            source="document",
-                            data={
-                                "response": answer,
-                            },
-                        )
-
-                logger.info(
-                    "[CognitiveCore] Document capability could "
-                    "not answer; falling through to planner."
-                )
-
-            # -------------------------------------------------
-            # SKILL
-            # -------------------------------------------------
-
-            if selected_action in ("skill", "chat"):
-
-                if (
-                    self.skill_manager
-                    and hasattr(
-                        self.skill_manager,
-                        "route_and_execute",
-                    )
-                ):
-
-                    skill_result = (
-                        await self.skill_manager
-                        .route_and_execute(
-                            query,
-                            ctx,
-                        )
-                    )
-
-                    if (
-                        skill_result
-                        and skill_result.success
-                    ):
-
-                        return SystemResponse(
-                            success=True,
-                            confidence=getattr(
-                                skill_result,
-                                "confidence",
-                                0.9,
-                            ),
-                            source=getattr(
-                                skill_result,
-                                "source",
-                                "skill",
-                            ),
-                            data=skill_result.data,
-                        )
-
-            # -------------------------------------------------
-            # DIRECT ACTION
-            #
-            # Only execute directly when reasoning has produced
-            # exactly one clear registered action.
-            # Otherwise Planner handles it.
-            # -------------------------------------------------
-
-            if (
-                selected_action == "action"
-                and self.action_manager
-            ):
-
-                action_name = getattr(
-                    reasoning,
-                    "action_name",
-                    None,
-                )
-
-                action_params = getattr(
-                    reasoning,
-                    "action_params",
-                    {},
-                ) or {}
-
-                if (
-                    action_name
-                    and action_name
-                    in self.action_manager.actions
-                ):
-
-                    action_instance = (
-                        self.action_manager.actions[
-                            action_name
-                        ]
-                    )
-
-                    if (
-                        action_instance.permission_level
-                        == "confirm"
-                    ):
-
-                        if not self.state_manager:
-
-                            return SystemResponse(
-                                success=False,
-                                confidence=1.0,
-                                source="action_confirmation",
-                                error=(
-                                    "State manager is unavailable."
-                                ),
-                            )
-
-                        self.state_manager.set_pending_action(
-                            session_id=session_id,
-                            action_name=action_name,
-                            action_params=action_params,
-                        )
-
-                        return SystemResponse(
-                            success=True,
-                            confidence=getattr(
-                                decision,
-                                "confidence",
-                                0.9,
-                            ),
-                            source="action_confirmation",
-                            data={
-                                "confirmation_required": True,
-                                "action_name": action_name,
-                                "message": (
-                                    self._build_confirmation_message(
-                                        action_name
-                                    )
-                                ),
-                            },
-                        )
-
-                    result = (
-                        await self.action_manager.execute_action(
-                            action_name=action_name,
-                            params=action_params,
-                        )
-                    )
-
-                    if result.success:
-
-                        return SystemResponse(
-                            success=True,
-                            confidence=getattr(
-                                decision,
-                                "confidence",
-                                0.9,
-                            ),
-                            source="action_manager",
-                            data={
-                                "action_name": action_name,
-                                "result": result.data,
-                            },
-                        )
-
-                    return SystemResponse(
-                        success=False,
-                        confidence=getattr(
-                            decision,
-                            "confidence",
-                            0.5,
-                        ),
-                        source="action_manager",
-                        error=result.error,
-                    )
-
-                # Ambiguous action → Planner.
-                logger.info(
-                    "[CognitiveCore] Direct action was not "
-                    "sufficiently specified. Using planner."
-                )
-
-            # =================================================
-            # 14. PLANNER
-            #
-            # Everything that wasn't confidently solved by one
-            # capability reaches the Planner.
-            #
-            # This is what enables:
-            #
-            #   document → memory → web → action
-            #
-            # in ONE user request.
-            # =================================================
-
-            plan = None
-
-            if (
-                self.planner
-                and hasattr(
-                    self.planner,
-                    "create_plan",
-                )
-            ):
-
-                plan = (
-                    await self.planner.create_plan(
-                        query,
-                        ctx,
-                    )
-                )
-
-            elif (
-                self.planner
-                and hasattr(
-                    self.planner,
-                    "plan",
-                )
-            ):
-
-                possible_plan = (
-                    self.planner.plan(
-                        query,
-                        ctx,
-                    )
-                )
-
-                # Support both synchronous and asynchronous
-                # planner implementations.
-
-                if hasattr(
-                    possible_plan,
-                    "__await__",
-                ):
-                    plan = await possible_plan
-                else:
-                    plan = possible_plan
-
-            # =================================================
-            # 15. CONVERSATIONAL FALLBACK
-            # =================================================
-
-            if (
-                not plan
-                or not getattr(
-                    plan,
-                    "tasks",
-                    None,
-                )
-            ):
-
-                # If SkillManager can provide normal conversation,
-                # give it one final opportunity.
-
-                if (
-                    self.skill_manager
-                    and hasattr(
-                        self.skill_manager,
-                        "route_and_execute",
-                    )
-                ):
-
-                    try:
-
-                        chat_result = (
-                            await self.skill_manager
-                            .route_and_execute(
-                                query,
-                                ctx,
-                            )
-                        )
-
-                        if (
-                            chat_result
-                            and chat_result.success
-                        ):
-
-                            return SystemResponse(
-                                success=True,
-                                confidence=getattr(
-                                    chat_result,
-                                    "confidence",
-                                    0.8,
-                                ),
-                                source=getattr(
-                                    chat_result,
-                                    "source",
-                                    "chat",
-                                ),
-                                data=chat_result.data,
-                            )
-
-                    except Exception:
-
-                        logger.exception(
-                            "[CognitiveCore] Conversational "
-                            "fallback failed."
-                        )
-
-                return SystemResponse(
-                    success=True,
-                    confidence=getattr(
-                        plan,
-                        "confidence",
-                        0.5,
-                    ),
-                    source="planner_conversational",
-                    data={
-                        "intent": "conversational",
-                        "query": query,
-                    },
-                )
-
-            logger.info(
-                "[CognitiveCore] Executing cognitive plan "
-                "with %d task(s).",
-                len(plan.tasks),
-            )
-
-            # =================================================
-            # 16. EXECUTOR
-            # =================================================
-
-            if (
-                not self.executor
-                or not hasattr(
-                    self.executor,
-                    "execute_plan",
-                )
-            ):
-
-                return SystemResponse(
-                    success=False,
-                    confidence=getattr(
-                        plan,
-                        "confidence",
-                        0.0,
-                    ),
-                    source="planner_executor",
-                    error="Executor is unavailable.",
-                )
-
-            exec_result = (
-                await self.executor.execute_plan(
-                    plan,
-                    ctx,
-                )
-            )
-
-            # =================================================
-            # 17. PROCESS WORKFLOW RESULT
-            # =================================================
-
-            return self._process_workflow_result(
-                session_id=session_id,
-                plan=plan,
-                exec_result=exec_result,
+            return await self.knowledge_first_pipeline(
+                session_id,
+                query,
+                ctx,
             )
 
         # =====================================================
