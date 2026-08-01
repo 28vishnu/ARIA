@@ -15,6 +15,8 @@ from brain.knowledge.knowledge_database import KnowledgeDatabase
 from brain.knowledge.knowledge_graph import KnowledgeGraph
 from brain.knowledge.graph_builder import GraphBuilder
 from brain.knowledge.learning_engine import LearningEngine
+from brain.learning.autonomous_learning import AutonomousLearning
+from brain.self_reflection.self_reflection import SelfReflection
 from brain.world.world_model import WorldModel
 from brain.world.context_builder import ContextBuilder as WorldContextBuilder
 from brain.document.document_repository import DocumentRepository
@@ -266,6 +268,21 @@ async def bootstrap_application() -> ServiceRegistry:
         graph_builder=graph_builder,
     )
 
+    autonomous_learning = AutonomousLearning(
+        memory_engine=memory_engine,
+        learning_engine=learning_engine,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+        world_model=world_model,
+    )
+
+    self_reflection = SelfReflection(
+        memory_engine=memory_engine,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+        learning_engine=learning_engine,
+    )
+
     context_builder = ContextBuilder(
         state_manager=state_manager,
         world_model=world_model,
@@ -301,6 +318,16 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "learning_engine",
         learning_engine,
+    )
+
+    registry.register(
+        "autonomous_learning",
+        autonomous_learning,
+    )
+
+    registry.register(
+        "self_reflection",
+        self_reflection,
     )
 
     registry.register(
@@ -368,7 +395,7 @@ async def bootstrap_application() -> ServiceRegistry:
         skill_manager=skill_manager,
         action_manager=action_manager,
     )
-    
+
     executor = Executor(
         skill_manager=skill_manager,
         action_manager=action_manager,
@@ -465,6 +492,8 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_manager=knowledge_manager,
         learning_engine=learning_engine,
         world_model=world_model,
+        autonomous_learning=autonomous_learning,
+        self_reflection=self_reflection,
     )
 
     registry.register(
