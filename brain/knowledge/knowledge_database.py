@@ -1,5 +1,6 @@
 import logging
 from typing import List, Dict, Optional
+from datetime import datetime
 from uuid import uuid4
 
 logger = logging.getLogger("aria")
@@ -7,8 +8,14 @@ logger = logging.getLogger("aria")
 
 class KnowledgeDatabase:
 
-    def __init__(self):
-        self.knowledge = {}
+    def __init__(
+        self,
+        mongo_collection=None,
+        vector_db=None,
+    ):
+
+        self.collection = mongo_collection
+        self.vector_db = vector_db
 
     ############################################################
     # Store Knowledge
@@ -16,34 +23,63 @@ class KnowledgeDatabase:
 
     async def store(
         self,
-        title: str,
-        content: str,
-        source: str = "conversation",
-        metadata: Optional[Dict] = None,
+        title,
+        content,
+        source="conversation",
+        metadata=None,
     ):
 
-        knowledge_id = str(uuid4())
+        record = {
 
-        self.knowledge[knowledge_id] = {
-
-            "id": knowledge_id,
+            "_id": str(uuid4()),
 
             "title": title,
 
             "content": content,
 
+            "summary": content[:250],
+
             "source": source,
 
             "metadata": metadata or {},
 
+            "importance": 50,
+
+            "confidence": 1.0,
+
+            "entities": [],
+
+            "relationships": [],
+
+            "topics": [],
+
+            "created_at": datetime.utcnow(),
+
+            "updated_at": datetime.utcnow(),
+
+            "access_count": 0,
+
         }
+
+        if self.collection:
+
+            await self.collection.update_one(
+                {
+                    "title": title,
+                    "content": content,
+                },
+                {
+                    "$set": record,
+                },
+                upsert=True,
+            )
 
         logger.info(
             "[KnowledgeDB] Stored knowledge: %s",
             title,
         )
 
-        return knowledge_id
+        return record
 
     ############################################################
     # Search
@@ -51,35 +87,172 @@ class KnowledgeDatabase:
 
     async def search(
         self,
-        query: str,
-        limit: int = 5,
+        query,
+        limit=5,
     ):
 
-        query = query.lower()
+        if self.collection is None:
+            return []
 
-        matches = []
+        cursor = self.collection.find(
+            {
+                "$text": {
+                    "$search": query
+                }
+            }
+        ).limit(limit)
 
-        for item in self.knowledge.values():
+        return await cursor.to_list(limit)
 
-            text = (
-                item["title"]
-                + " "
-                + item["content"]
-            ).lower()
+    ############################################################
+    # Semantic Search
+    ############################################################
 
-            if query in text:
+    async def semantic_search(
+        self,
+        embedding,
+        limit=5,
+    ):
 
-                matches.append(item)
+        if self.vector_db is None:
+            return []
 
-        matches = matches[:limit]
-
-        if not matches:
-            return None
-
-        return "\n\n".join(
-            x["content"]
-            for x in matches
+        return self.vector_db.query(
+            query_embeddings=[embedding],
+            n_results=limit,
         )
+
+    ############################################################
+    # Exists
+    ############################################################
+
+    async def exists(
+        self,
+        text,
+    ):
+
+        if self.collection is None:
+            return False
+
+        doc = await self.collection.find_one(
+            {
+                "content": text
+            }
+        )
+
+        return doc is not None
+
+    ############################################################
+    # Update
+    ############################################################
+
+    async def update(
+        self,
+        knowledge_id,
+        data,
+    ):
+
+        if self.collection is None:
+            return
+
+        await self.collection.update_one(
+            {
+                "_id": knowledge_id
+            },
+            {
+                "$set": data
+            }
+        )
+
+    ############################################################
+    # Increment Access
+    ############################################################
+
+    async def increment_access(
+        self,
+        knowledge_id,
+    ):
+
+        if self.collection is None:
+            return
+
+        await self.collection.update_one(
+            {
+                "_id": knowledge_id
+            },
+            {
+                "$inc": {
+                    "access_count": 1
+                }
+            }
+        )
+
+    ############################################################
+    # Search by Topic
+    ############################################################
+
+    async def search_by_topic(
+        self,
+        topic,
+    ):
+
+        if self.collection is None:
+            return []
+
+        cursor = self.collection.find(
+            {
+                "topics": topic
+            }
+        )
+
+        return await cursor.to_list(100)
+
+    ############################################################
+    # Search by Entity
+    ############################################################
+
+    async def search_by_entity(
+        self,
+        entity,
+    ):
+
+        if self.collection is None:
+            return []
+
+        cursor = self.collection.find(
+            {
+                "entities": entity
+            }
+        )
+
+        return await cursor.to_list(100)
+
+    ############################################################
+    # Related Knowledge
+    ############################################################
+
+    async def related_knowledge(
+        self,
+        entity,
+    ):
+
+        if self.collection is None:
+            return []
+
+        cursor = self.collection.find(
+            {
+                "$or": [
+                    {
+                        "entities": entity
+                    },
+                    {
+                        "topics": entity
+                    }
+                ]
+            }
+        )
+
+        return await cursor.to_list(20)
 
     ############################################################
     # Store Fact
@@ -95,45 +268,4 @@ class KnowledgeDatabase:
             title=subject,
             content=fact,
             source="fact",
-        )
-
-    ############################################################
-    # Get All
-    ############################################################
-
-    async def get_all(self):
-
-        return list(
-            self.knowledge.values()
-        )
-
-    ############################################################
-    # Delete
-    ############################################################
-
-    async def delete(
-        self,
-        knowledge_id,
-    ):
-
-        if knowledge_id in self.knowledge:
-
-            del self.knowledge[
-                knowledge_id
-            ]
-
-            return True
-
-        return False
-
-    ############################################################
-    # Clear
-    ############################################################
-
-    async def clear(self):
-
-        self.knowledge.clear()
-
-        logger.info(
-            "[KnowledgeDB] Cleared."
         )
