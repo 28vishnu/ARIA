@@ -71,6 +71,7 @@ class CognitiveCore:
         decision_engine=None,
         memory_conversation_manager=None,
         reasoning_engine=None,
+        knowledge_manager=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -83,6 +84,7 @@ class CognitiveCore:
         self.decision_engine = decision_engine
         self.memory_conversation_manager = memory_conversation_manager
         self.reasoning_engine = reasoning_engine
+        self.knowledge_manager = knowledge_manager
 
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
