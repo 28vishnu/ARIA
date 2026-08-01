@@ -1,36 +1,56 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict
-import uuid
 
 
 @dataclass
 class Event:
     """
-    Universal event flowing inside ARIA.
+    Represents a single event inside ARIA.
 
-    Everything becomes an Event.
+    Every subsystem communicates by publishing Event objects
+    through the EventBus.
 
-    Examples:
-        Chat Completed
-        Document Uploaded
-        Memory Stored
-        Web Search Finished
-        Plan Executed
+    Example:
+
+    Event(
+        type=TASK_COMPLETED,
+        source="executor",
+        data={
+            "task": "search_web",
+            "result": "...",
+        }
+    )
     """
 
+    # Event type (TASK_COMPLETED, RESPONSE_GENERATED, etc.)
     type: str
 
+    # Which subsystem generated it
     source: str
 
+    # Payload
     data: Dict[str, Any] = field(default_factory=dict)
 
-    priority: int = 5
+    # Time of creation
+    timestamp: datetime = field(default_factory=datetime.utcnow)
 
-    timestamp: datetime = field(
-        default_factory=datetime.utcnow
-    )
+    # Optional session
+    session_id: str | None = None
 
-    event_id: str = field(
-        default_factory=lambda: str(uuid.uuid4())
-    )
+    # Optional user
+    user_id: str | None = None
+
+    # Unique event id
+    event_id: str | None = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "type": self.type,
+            "source": self.source,
+            "data": self.data,
+            "timestamp": self.timestamp.isoformat(),
+            "session_id": self.session_id,
+            "user_id": self.user_id,
+        }
