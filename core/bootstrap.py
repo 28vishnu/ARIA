@@ -243,7 +243,10 @@ async def bootstrap_application() -> ServiceRegistry:
     state_manager = StateManager()
     world_model = WorldModel()
 
-    knowledge_database = KnowledgeDatabase()
+    knowledge_database = KnowledgeDatabase(
+        mongo_collection=db_inst["knowledge"] if db_inst is not None else None,
+        vector_db=vector_store,
+    )
     knowledge_graph = KnowledgeGraph()
 
     graph_builder = GraphBuilder(
