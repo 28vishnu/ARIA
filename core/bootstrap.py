@@ -10,6 +10,7 @@ from core.dependency_injection import ServiceRegistry
 from brain.memory.memory_engine import MemoryEngine
 from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.document.document_intelligence import DocumentIntelligence
+from brain.knowledge.knowledge_manager import KnowledgeManager
 from brain.document.document_repository import DocumentRepository
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
