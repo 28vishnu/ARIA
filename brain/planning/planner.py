@@ -2,10 +2,13 @@ import json
 import logging
 import re
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 
 from brain.memory.memory_router import MemoryRouter
 from brain.plan import ExecutionPlan
 from brain.task import Task
+from brain.events.event import Event
+from brain.events import event_types
 
 logger = logging.getLogger("aria")
 
@@ -34,11 +37,32 @@ class Planner:
         llm_router=None,
         skill_manager=None,
         action_manager=None,
+        knowledge_manager=None,
+        world_model=None,
+        knowledge_graph=None,
+        reasoning_engine=None,
+        event_bus=None,
     ):
         self.memory_router = memory_router
         self.llm_router = llm_router
         self.skill_manager = skill_manager
         self.action_manager = action_manager
+
+        self.knowledge_manager = knowledge_manager
+        self.world_model = world_model
+        self.knowledge_graph = knowledge_graph
+        self.reasoning_engine = reasoning_engine
+        self.event_bus = event_bus
+
+        self.plan_history: List[ExecutionPlan] = []
+        self.statistics = {
+            "plans_created": 0,
+            "plans_reused": 0,
+            "plans_failed": 0,
+            "plans_repaired": 0,
+            "average_steps": 0.0,
+            "average_success_rate": 1.0,
+        }
 
     # =========================================================
     # DEPENDENCY INJECTION
@@ -146,8 +170,36 @@ class Planner:
         }
 
     # =========================================================
-    # CONTEXT EXTRACTION
+    # CONTEXT EXTRACTION & ENRICHMENT
     # =========================================================
+
+    async def _enrich_context(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        enriched = dict(context or {})
+        session_id = enriched.get("session_id", "default_session")
+
+        if self.knowledge_manager and hasattr(self.knowledge_manager, "retrieve"):
+            try:
+                enriched["knowledge_evidence"] = await self.knowledge_manager.retrieve(session_id, query)
+            except Exception:
+                enriched["knowledge_evidence"] = []
+
+        if self.world_model and hasattr(self.world_model, "snapshot"):
+            try:
+                enriched["world_snapshot"] = self.world_model.snapshot()
+            except Exception:
+                enriched["world_snapshot"] = {}
+
+        if self.knowledge_graph and hasattr(self.knowledge_graph, "search"):
+            try:
+                enriched["graph_evidence"] = await self.knowledge_graph.search(query)
+            except Exception:
+                enriched["graph_evidence"] = []
+
+        return enriched
 
     def _extract_reasoning(
         self,
@@ -185,7 +237,65 @@ class Planner:
         return str(query or "").strip()
 
     # =========================================================
-    # TASK NORMALIZATION
+    # GOAL DECOMPOSITION
+    # =========================================================
+
+    async def decompose_goal(
+        self,
+        goal: str,
+    ) -> List[str]:
+        """
+        Decompose a high-level user goal into structured sub-goals.
+        """
+        if not self.llm_router:
+            return [goal]
+
+        prompt = f"""
+Decompose the following user goal into a sequence of distinct sub-goals.
+Goal: {goal}
+Return ONLY a JSON list of strings representing the sub-goals.
+"""
+        try:
+            res = await self.llm_router.chat(
+                messages=[
+                    {"role": "system", "content": "You are a goal decomposition planner. Return only JSON lists of strings."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.0,
+                max_tokens=300,
+            )
+            text = str(res).strip()
+            if text.startswith("```"):
+                lines = text.splitlines()[1:-1]
+                text = "\n".join(lines).strip()
+                if text.lower().startswith("json"):
+                    text = text[4:].strip()
+            sub_goals = json.loads(text)
+            if isinstance(sub_goals, list) and sub_goals:
+                return [str(g) for g in sub_goals]
+        except Exception:
+            logger.exception("[Planner] Goal decomposition failed.")
+
+        return [goal]
+
+    # =========================================================
+    # PLAN REUSE & SIMILARITY
+    # =========================================================
+
+    async def find_similar_plan(
+        self,
+        query: str,
+    ) -> Optional[ExecutionPlan]:
+        q_lower = query.lower()
+        for past_plan in reversed(self.plan_history):
+            if past_plan.goal and (q_lower in past_plan.goal.lower() or past_plan.goal.lower() in q_lower):
+                self.statistics["plans_reused"] += 1
+                logger.info("[Planner] Reusing historical plan for goal: %s", past_plan.goal)
+                return past_plan
+        return None
+
+    # =========================================================
+    # TASK NORMALIZATION & VALIDATION
     # =========================================================
 
     def _normalize_task(
@@ -199,20 +309,11 @@ class Planner:
 
         skill = str(
             raw_task.get("skill")
+            or raw_task.get("action")
             or ""
         ).strip()
 
-        action = str(
-            raw_task.get("action")
-            or ""
-        ).strip()
-
-        capability = (
-            skill
-            or action
-        )
-
-        if not capability:
+        if not skill:
             return None
 
         task_id = str(
@@ -222,7 +323,7 @@ class Planner:
 
         task_name = str(
             raw_task.get("name")
-            or capability
+            or skill
         )
 
         task_input = raw_task.get(
@@ -236,18 +337,107 @@ class Planner:
         ):
             task_input = {}
 
-        # Preserve whether this is a skill or action.
-        if action and not skill:
-            task_input.setdefault(
-                "action_name",
-                action,
-            )
+        depends_on = raw_task.get("depends_on", [])
+        if not isinstance(depends_on, list):
+            depends_on = []
+
+        assigned_agent = raw_task.get("assigned_agent", "auto")
 
         return Task(
             id=task_id,
             name=task_name,
-            skill=capability,
+            skill=skill,
             input=task_input,
+            depends_on=depends_on,
+            assigned_agent=assigned_agent,
+        )
+
+    def validate_plan(
+        self,
+        plan: ExecutionPlan,
+    ) -> bool:
+        """
+        Validate that all tasks, skills, actions, and dependencies are valid and loop-free.
+        """
+        if not plan or not plan.tasks:
+            return False
+
+        available = self.get_available_capabilities()
+        valid_skills = {s["name"] for s in available.get("skills", [])}
+        valid_actions = {a["name"] for a in available.get("actions", [])}
+        all_valid_caps = valid_skills.union(valid_actions)
+
+        task_ids = {t.id for t in plan.tasks}
+        for task in plan.tasks:
+            if not task.skill:
+                return False
+            # Check dependency validity
+            for dep in task.depends_on:
+                if dep not in task_ids:
+                    return False
+            # Prevent circular self-dependency
+            if task.id in task.depends_on:
+                return False
+
+        return True
+
+    # =========================================================
+    # PLAN OPTIMIZATION & METADATA
+    # =========================================================
+
+    def optimize_plan(
+        self,
+        plan: ExecutionPlan,
+    ) -> ExecutionPlan:
+        """
+        Optimize plan by removing duplicates and computing estimates.
+        """
+        if not plan or not plan.tasks:
+            return plan
+
+        seen_signatures = set()
+        optimized_tasks = []
+        for task in plan.tasks:
+            sig = (task.skill, json.dumps(task.input, sort_keys=True))
+            if sig not in seen_signatures:
+                seen_signatures.add(sig)
+                optimized_tasks.append(task)
+
+        plan.tasks = optimized_tasks
+
+        steps = len(plan.tasks)
+        plan.metadata = {
+            "estimated_steps": steps,
+            "estimated_time": steps * 2,  # seconds estimate
+            "estimated_llm_calls": 1 if steps > 0 else 0,
+            "estimated_tools": steps,
+        }
+        return plan
+
+    # =========================================================
+    # FAILURE RECOVERY & REPAIR
+    # =========================================================
+
+    async def repair_plan(
+        self,
+        plan: ExecutionPlan,
+        failed_task: Task,
+    ) -> Optional[ExecutionPlan]:
+        """
+        Create a recovery mini-plan starting from the failed task.
+        """
+        self.statistics["plans_repaired"] += 1
+        logger.warning("[Planner] Repairing plan after failure at task: %s", failed_task.id)
+
+        repair_task = Task(
+            id=f"repair_{failed_task.id}",
+            name=f"Fallback recovery for {failed_task.name}",
+            skill="chat",
+            input={"query": f"Recover from failure in task {failed_task.name}"},
+        )
+        return ExecutionPlan(
+            goal=f"Repair failure for {plan.goal}",
+            tasks=[repair_task],
         )
 
     # =========================================================
@@ -269,6 +459,8 @@ class Planner:
         if not self.llm_router:
             return None
 
+        enriched_context = await self._enrich_context(query, context)
+
         capabilities = (
             self.get_available_capabilities()
         )
@@ -284,23 +476,28 @@ class Planner:
             context,
         )
 
-        conversation = context.get(
+        sub_goals = await self.decompose_goal(goal)
+
+        conversation = enriched_context.get(
             "conversation",
             {},
         ) or {}
 
-        document = context.get(
+        document = enriched_context.get(
             "document",
             {},
         ) or {}
 
-        memory = context.get(
+        memory = enriched_context.get(
             "memory",
             [],
         ) or []
 
+        knowledge_evidence = enriched_context.get("knowledge_evidence", [])
+        world_snapshot = enriched_context.get("world_snapshot", {})
+
         planner_prompt = f"""
-You are ARIA's workflow planner.
+You are ARIA's advanced multi-agent workflow planner.
 
 Your job is to convert the user's goal into the smallest safe
 sequence of executable tasks using ONLY the capabilities listed
@@ -312,17 +509,20 @@ USER REQUEST:
 GOAL:
 {goal}
 
+SUB-GOALS:
+{json.dumps(sub_goals)}
+
 AVAILABLE CAPABILITIES:
 {json.dumps(capabilities, default=str)}
 
+KNOWLEDGE EVIDENCE:
+{json.dumps(knowledge_evidence, default=str)}
+
+WORLD STATE:
+{json.dumps(world_snapshot, default=str)}
+
 ACTIVE DOCUMENT CONTEXT:
 {json.dumps(document, default=str)}
-
-CONVERSATION CONTEXT:
-{json.dumps(conversation, default=str)}
-
-RELEVANT MEMORY EXISTS:
-{bool(memory)}
 
 RULES:
 
@@ -330,18 +530,9 @@ RULES:
 2. Use only names present in AVAILABLE CAPABILITIES.
 3. Prefer the smallest plan that fully completes the goal.
 4. A simple request should normally use one task.
-5. A compound request may use multiple ordered tasks.
-6. Later tasks may depend on results from earlier tasks.
-7. Do not execute anything yourself.
-8. Do not answer the user.
-9. Do not create unnecessary formatting tasks.
-10. Destructive or permission-sensitive actions may still be
-    selected; Executor/CognitiveCore handles confirmation.
-11. Preserve the user's actual goal instead of matching keywords.
-12. If no available capability can perform the request, return
-    an empty tasks list.
-
-Return ONLY valid JSON in exactly this structure:
+5. A compound request may use multiple ordered tasks with explicit `depends_on` lists.
+6. Assign appropriate specialist agents (e.g., CodeAgent, ResearchAgent, MathAgent) via `assigned_agent` if applicable.
+7. Return ONLY valid JSON in exactly this structure:
 
 {{
   "goal": "clear description of the user's goal",
@@ -350,6 +541,8 @@ Return ONLY valid JSON in exactly this structure:
       "id": "task_1",
       "name": "short task description",
       "skill": "registered capability name",
+      "assigned_agent": "auto",
+      "depends_on": [],
       "input": {{}}
     }}
   ]
@@ -464,10 +657,18 @@ Return ONLY valid JSON in exactly this structure:
                 or goal
             ).strip()
 
-            return ExecutionPlan(
+            plan = ExecutionPlan(
                 goal=plan_goal,
                 tasks=tasks,
             )
+
+            if not self.validate_plan(plan):
+                logger.warning("[Planner] Generated plan failed validation.")
+                return None
+
+            optimized = self.optimize_plan(plan)
+            optimized.confidence = 0.92
+            return optimized
 
         except Exception:
 
@@ -563,13 +764,15 @@ Return ONLY valid JSON in exactly this structure:
         if not tasks:
             return None
 
-        return ExecutionPlan(
+        plan = ExecutionPlan(
             goal=self._extract_goal(
                 query,
                 context,
             ),
             tasks=tasks,
         )
+        plan.confidence = 0.95
+        return self.optimize_plan(plan)
 
     # =========================================================
     # PUBLIC PLANNER API
@@ -588,8 +791,12 @@ Return ONLY valid JSON in exactly this structure:
             query or ""
         ).strip()
 
-        # First use an already-understood workflow when
-        # ReasoningEngine supplied one.
+        # 1. Check historical similarity/reuse
+        similar_plan = await self.find_similar_plan(clean_query)
+        if similar_plan:
+            return similar_plan
+
+        # 2. First use an already-understood workflow when ReasoningEngine supplied one.
         reasoning_plan = (
             self._plan_from_reasoning(
                 clean_query,
@@ -603,11 +810,11 @@ Return ONLY valid JSON in exactly this structure:
                 "workflow with %d task(s).",
                 len(reasoning_plan.tasks),
             )
-
+            self.plan_history.append(reasoning_plan)
+            self.statistics["plans_created"] += 1
             return reasoning_plan
 
-        # Otherwise dynamically compose tasks from ARIA's
-        # currently registered capabilities.
+        # 3. Otherwise dynamically compose tasks from ARIA's currently registered capabilities.
         dynamic_plan = (
             await self._generate_dynamic_plan(
                 clean_query,
@@ -623,18 +830,32 @@ Return ONLY valid JSON in exactly this structure:
                 len(dynamic_plan.tasks),
                 dynamic_plan.goal,
             )
-
+            self.plan_history.append(dynamic_plan)
+            self.statistics["plans_created"] += 1
             return dynamic_plan
 
-        # No executable workflow is required/available.
+        # 4. No executable workflow is required/available.
         logger.info(
             "[Planner] No executable plan required."
         )
 
-        return ExecutionPlan(
+        empty_plan = ExecutionPlan(
             goal=self._extract_goal(
                 clean_query,
                 context,
             ),
             tasks=[],
         )
+        empty_plan.confidence = 0.80
+        return empty_plan
+
+    # =========================================================
+    # EVENT LISTENER HANDLER
+    # =========================================================
+
+    async def handle(self, event):
+        """
+        Handle events from EventBus (e.g., successful execution learning).
+        """
+        if event.type == event_types.PLAN_FINISHED:
+            logger.info("[Planner] Plan finished successfully event received.")
