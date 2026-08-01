@@ -1,79 +1,146 @@
 """
-All event names used inside ARIA.
+ARIA Global Event Types
 
-Never hardcode strings anywhere else.
+This file contains every event that can occur inside ARIA.
+
+All subsystems communicate only through these events.
+Never hardcode event names anywhere else.
 """
 
-# Chat
+# ==========================================================
+# Workflow Events
+# ==========================================================
 
-CHAT_RECEIVED = "chat_received"
+WORKFLOW_STARTED = "workflow_started"
+WORKFLOW_COMPLETED = "workflow_completed"
+WORKFLOW_PAUSED = "workflow_paused"
+WORKFLOW_RESUMED = "workflow_resumed"
+WORKFLOW_CANCELLED = "workflow_cancelled"
 
-CHAT_RESPONSE = "chat_response"
+# ==========================================================
+# Task Events
+# ==========================================================
 
-# Memory
+TASK_STARTED = "task_started"
+TASK_COMPLETED = "task_completed"
+TASK_FAILED = "task_failed"
+TASK_RETRY = "task_retry"
+TASK_SKIPPED = "task_skipped"
+
+# ==========================================================
+# Chat Events
+# ==========================================================
+
+CHAT_STARTED = "chat_started"
+CHAT_COMPLETED = "chat_completed"
+
+USER_MESSAGE_RECEIVED = "user_message_received"
+ASSISTANT_MESSAGE_GENERATED = "assistant_message_generated"
+
+RESPONSE_GENERATED = "response_generated"
+
+# ==========================================================
+# Memory Events
+# ==========================================================
 
 MEMORY_CREATED = "memory_created"
-
 MEMORY_UPDATED = "memory_updated"
-
 MEMORY_DELETED = "memory_deleted"
+MEMORY_RETRIEVED = "memory_retrieved"
 
-MEMORY_RECALLED = "memory_recalled"
+# ==========================================================
+# Knowledge Events
+# ==========================================================
 
-# Documents
+KNOWLEDGE_ADDED = "knowledge_added"
+KNOWLEDGE_UPDATED = "knowledge_updated"
+KNOWLEDGE_DELETED = "knowledge_deleted"
+
+FACT_LEARNED = "fact_learned"
+FACT_UPDATED = "fact_updated"
+
+# ==========================================================
+# Knowledge Graph Events
+# ==========================================================
+
+GRAPH_ENTITY_CREATED = "graph_entity_created"
+GRAPH_ENTITY_UPDATED = "graph_entity_updated"
+
+GRAPH_FACT_CREATED = "graph_fact_created"
+GRAPH_FACT_UPDATED = "graph_fact_updated"
+
+GRAPH_REBUILT = "graph_rebuilt"
+
+# ==========================================================
+# Document Events
+# ==========================================================
 
 DOCUMENT_UPLOADED = "document_uploaded"
-
+DOCUMENT_INDEXED = "document_indexed"
+DOCUMENT_PROCESSED = "document_processed"
 DOCUMENT_SUMMARIZED = "document_summarized"
-
 DOCUMENT_DELETED = "document_deleted"
 
-DOCUMENT_ANSWERED = "document_answered"
+# ==========================================================
+# World Model Events
+# ==========================================================
 
-# Knowledge
+WORLD_UPDATED = "world_updated"
 
-KNOWLEDGE_CREATED = "knowledge_created"
+PERSON_ADDED = "person_added"
+PROJECT_ADDED = "project_added"
+GOAL_ADDED = "goal_added"
+TASK_ADDED = "task_added"
 
-KNOWLEDGE_UPDATED = "knowledge_updated"
+# ==========================================================
+# Learning Events
+# ==========================================================
 
-KNOWLEDGE_GRAPH_UPDATED = "knowledge_graph_updated"
-
-# Web
-
-WEB_SEARCH_STARTED = "web_search_started"
-
-WEB_SEARCH_FINISHED = "web_search_finished"
-
-# Planner
-
-PLAN_CREATED = "plan_created"
-
-PLAN_STARTED = "plan_started"
-
-PLAN_FINISHED = "plan_finished"
-
-# Skills
-
-SKILL_EXECUTED = "skill_executed"
-
-# Actions
-
-ACTION_EXECUTED = "action_executed"
-
-# Learning
-
+LEARNING_STARTED = "learning_started"
 LEARNING_COMPLETED = "learning_completed"
 
-# Reflection
+AUTONOMOUS_LEARNING = "autonomous_learning"
 
-SELF_REFLECTION = "self_reflection"
+# ==========================================================
+# Reflection Events
+# ==========================================================
 
-# Error
+REFLECTION_STARTED = "reflection_started"
+REFLECTION_COMPLETED = "reflection_completed"
 
-ERROR = "error"
+KNOWLEDGE_GAP_FOUND = "knowledge_gap_found"
 
-# Shutdown
+# ==========================================================
+# Skill Events
+# ==========================================================
 
-SYSTEM_STARTUP = "system_startup"
+SKILL_STARTED = "skill_started"
+SKILL_COMPLETED = "skill_completed"
+SKILL_FAILED = "skill_failed"
 
+# ==========================================================
+# Planner Events
+# ==========================================================
+
+PLAN_CREATED = "plan_created"
+PLAN_UPDATED = "plan_updated"
+PLAN_COMPLETED = "plan_completed"
+
+# ==========================================================
+# Action Events
+# ==========================================================
+
+ACTION_STARTED = "action_started"
+ACTION_COMPLETED = "action_completed"
+ACTION_FAILED = "action_failed"
+
+# ==========================================================
+# System Events
+# ==========================================================
+
+SYSTEM_STARTED = "system_started"
+SYSTEM_READY = "system_ready"
 SYSTEM_SHUTDOWN = "system_shutdown"
+
+ERROR_OCCURRED = "error_occurred"
+WARNING_OCCURRED = "warning_occurred"
