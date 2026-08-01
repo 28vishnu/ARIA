@@ -6,7 +6,7 @@ from brain.document_index import DocumentIndex
 from brain.graph import GraphManager
 from brain.cache import CacheManager
 from brain.retrieval import RetrievalEngine
-from brain.learning import LearningEngine
+from brain.knowledge.learning_engine import LearningEngine
 
 class AriaBrain:
     def __init__(self, chroma_client, mongo_db):
