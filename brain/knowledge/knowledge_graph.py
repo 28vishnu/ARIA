@@ -2,8 +2,34 @@ import logging
 from collections import defaultdict, deque
 from typing import Dict, List, Set
 from datetime import datetime
+from uuid import uuid4
 
 logger = logging.getLogger("aria")
+
+
+VALID_RELATIONS = {
+
+    "friend",
+
+    "studies_at",
+
+    "works_at",
+
+    "faculty",
+
+    "owns",
+
+    "uses",
+
+    "member_of",
+
+    "located_in",
+
+    "capital",
+
+    "depends_on",
+
+}
 
 
 class KnowledgeGraph:
@@ -20,7 +46,11 @@ class KnowledgeGraph:
     Retrieval is deterministic and requires no LLM.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        mongodb=None,
+        vector_db=None,
+    ):
 
         self.nodes = {}
 
@@ -40,6 +70,34 @@ class KnowledgeGraph:
 
         }
 
+        self.mongodb = mongodb
+
+        self.collection = None
+
+        if mongodb:
+            self.collection = mongodb["knowledge_graph"]
+
+        self.vector_db = vector_db
+
+    ############################################################
+
+    async def save_entity(
+        self,
+        entity,
+    ):
+        if self.collection is None:
+            return
+
+        await self.collection.update_one(
+            {
+                "id": entity.get("id")
+            },
+            {
+                "$set": entity
+            },
+            upsert=True,
+        )
+
     ############################################################
 
     async def add_entity(
@@ -56,9 +114,15 @@ class KnowledgeGraph:
             self.nodes[name]["times_seen"] += 1
             self.nodes[name]["updated_at"] = datetime.utcnow()
 
+            await self.save_entity(
+                self.nodes[name]
+            )
+
             return
 
         self.nodes[name] = {
+
+            "id": str(uuid4()),
 
             "name": name,
 
@@ -78,6 +142,31 @@ class KnowledgeGraph:
 
         self.statistics["nodes"] += 1
 
+        await self.save_entity(
+            self.nodes[name]
+        )
+
+    ############################################################
+
+    async def save_fact(
+        self,
+        edge,
+    ):
+        if self.collection is None:
+            return
+
+        await self.collection.update_one(
+            {
+                "subject": edge["subject"],
+                "relation": edge["relation"],
+                "object": edge["object"],
+            },
+            {
+                "$set": edge
+            },
+            upsert=True,
+        )
+
     ############################################################
 
     async def add_fact(
@@ -94,6 +183,10 @@ class KnowledgeGraph:
         relation = relation.strip().lower()
         obj = obj.strip()
 
+        if relation not in VALID_RELATIONS:
+
+            relation = "related_to"
+
         await self.add_entity(subject)
         await self.add_entity(obj)
 
@@ -105,7 +198,7 @@ class KnowledgeGraph:
 
             "object": obj,
 
-            "confidence": 1.0,
+            "confidence": 0.60,
 
             "importance": 50,
 
@@ -113,11 +206,19 @@ class KnowledgeGraph:
 
             "created_at": datetime.utcnow(),
 
+            "history": [],
+
+            "updated_at": datetime.utcnow(),
+
+            "updated_by": "system",
+
         }
 
         self.edges[subject].append(edge)
 
         self.reverse_edges[obj].append(edge)
+
+        await self.save_fact(edge)
 
         reverse = {
 
@@ -127,7 +228,7 @@ class KnowledgeGraph:
 
             "object": subject,
 
-            "confidence": 1.0,
+            "confidence": 0.60,
 
             "importance": 50,
 
@@ -135,9 +236,17 @@ class KnowledgeGraph:
 
             "created_at": datetime.utcnow(),
 
+            "history": [],
+
+            "updated_at": datetime.utcnow(),
+
+            "updated_by": "system",
+
         }
 
         self.edges[obj].append(reverse)
+
+        await self.save_fact(reverse)
 
         self.statistics["edges"] += 2
         self.statistics["facts"] += 1
@@ -148,6 +257,71 @@ class KnowledgeGraph:
             relation,
             obj,
         )
+
+    ############################################################
+
+    async def increase_confidence(
+        self,
+        subject,
+        relation,
+        obj,
+    ):
+        for edge in self.edges.get(subject, []):
+            if edge["relation"] == relation and edge["object"] == obj:
+                edge["confidence"] = min(1.0, edge["confidence"] + 0.05)
+                edge["updated_at"] = datetime.utcnow()
+                edge["history"].append({
+                    "action": "increase_confidence",
+                    "value": edge["confidence"],
+                    "timestamp": datetime.utcnow(),
+                })
+                await self.save_fact(edge)
+
+    ############################################################
+
+    async def decrease_confidence(
+        self,
+        subject,
+        relation,
+        obj,
+    ):
+        for edge in self.edges.get(subject, []):
+            if edge["relation"] == relation and edge["object"] == obj:
+                edge["confidence"] = max(0.0, edge["confidence"] - 0.10)
+                edge["updated_at"] = datetime.utcnow()
+                edge["history"].append({
+                    "action": "decrease_confidence",
+                    "value": edge["confidence"],
+                    "timestamp": datetime.utcnow(),
+                })
+                await self.save_fact(edge)
+
+    ############################################################
+
+    async def load_graph(
+        self,
+    ):
+        if self.collection is None:
+            return
+
+        cursor = self.collection.find({})
+        async for doc in cursor:
+            if "name" in doc:
+                # Node entity
+                self.nodes[doc["name"]] = doc
+                if "aliases" in doc and isinstance(doc["aliases"], list):
+                    doc["aliases"] = set(doc["aliases"])
+                if "topics" in doc and isinstance(doc["topics"], list):
+                    doc["topics"] = set(doc["topics"])
+                self.statistics["nodes"] += 1
+            elif "subject" in doc and "relation" in doc and "object" in doc:
+                # Edge fact
+                edge = doc
+                self.edges[edge["subject"]].append(edge)
+                self.reverse_edges[edge["object"]].append(edge)
+                self.statistics["edges"] += 1
+                if not edge["relation"].startswith("reverse_"):
+                    self.statistics["facts"] += 1
 
     ############################################################
 
@@ -210,7 +384,56 @@ class KnowledgeGraph:
 
     ############################################################
 
+    async def snapshot(
+        self,
+    ):
+        return {
+
+            "nodes": self.nodes,
+
+            "edges": self.edges,
+
+            "topics": self.topic_clusters,
+
+            "statistics": self.statistics,
+
+        }
+
+    ############################################################
+
+    async def detect_duplicates(
+        self,
+    ):
+        pass
+
+    ############################################################
+
+    async def rebuild(
+        self,
+    ):
+        await self.clear()
+
+        await self.load_graph()
+
+    ############################################################
+
     async def summary(self):
+
+        all_confidences = []
+        entity_types = defaultdict(int)
+
+        for node in self.nodes.values():
+            entity_types[node.get("type", "general")] += 1
+
+        for edge_list in self.edges.values():
+            for edge in edge_list:
+                all_confidences.append(edge.get("confidence", 1.0))
+
+        avg_confidence = (
+            sum(all_confidences) / len(all_confidences)
+            if all_confidences
+            else 1.0
+        )
 
         return {
 
@@ -224,6 +447,12 @@ class KnowledgeGraph:
             "topics": len(
                 self.topic_clusters
             ),
+
+            "confidence_average": avg_confidence,
+
+            "entity_types": dict(entity_types),
+
+            "facts": self.statistics["facts"],
 
         }
 
