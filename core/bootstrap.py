@@ -8,6 +8,8 @@ from core.configuration import load_config
 from core.dependency_injection import ServiceRegistry
 
 from brain.memory.memory_engine import MemoryEngine
+from brain.memory.working_memory import WorkingMemory
+from brain.memory.memory_router import MemoryRouter
 from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.document.document_intelligence import DocumentIntelligence
 from brain.knowledge.knowledge_manager import KnowledgeManager
@@ -285,6 +287,19 @@ async def bootstrap_application() -> ServiceRegistry:
         memory_router=memory_engine,
     )
 
+    # ---------------------------------------------------------
+    # Memory Router Setup
+    # ---------------------------------------------------------
+    working_memory = WorkingMemory()
+    memory_router = MemoryRouter(
+        working_memory=working_memory,
+        memory_engine=memory_engine,
+        knowledge_engine=knowledge_manager,
+        knowledge_graph=knowledge_graph,
+        document_repository=document_repository,
+    )
+    registry.register("memory_router", memory_router)
+
     self_reflection = SelfReflection(
         memory_engine=memory_engine,
         knowledge_database=knowledge_database,
@@ -320,7 +335,7 @@ async def bootstrap_application() -> ServiceRegistry:
     context_builder = ContextBuilder(
         state_manager=state_manager,
         world_model=world_model,
-        memory_router=memory_engine,
+        memory_router=memory_router,
         knowledge_graph=knowledge_graph,
     )
 
@@ -397,10 +412,14 @@ async def bootstrap_application() -> ServiceRegistry:
     action_manager.register(WebSearchAction())
 
     planner = Planner(
-        memory_router=memory_engine,
+        memory_router=memory_router,
         llm_router=llm_router,
         skill_manager=skill_manager,
         action_manager=action_manager,
+        knowledge_manager=knowledge_manager,
+        knowledge_graph=knowledge_graph,
+        world_model=world_model,
+        event_bus=event_bus,
     )
 
     executor = Executor(
@@ -430,7 +449,6 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         world_model=world_model,
-        learning_engine=learning_engine,
         event_bus=event_bus,
     )
 
@@ -457,7 +475,7 @@ async def bootstrap_application() -> ServiceRegistry:
         executor=executor,
         skill_manager=skill_manager,
         action_manager=action_manager,
-        memory_router=memory_engine,
+        memory_router=memory_router,
         state_manager=state_manager,
         intent_analyzer=intent_analyzer,
         context_builder=context_builder,
