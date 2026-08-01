@@ -79,6 +79,7 @@ class CognitiveCore:
         personality_engine=None,
         world_model=None,
         self_reflection=None,
+        autonomous_learning=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -98,6 +99,7 @@ class CognitiveCore:
         self.personality_engine = personality_engine
         self.world_model = world_model
         self.self_reflection = self_reflection
+        self.autonomous_learning = autonomous_learning
 
         self.brain_state = {
             "thinking": False,
@@ -237,6 +239,12 @@ class CognitiveCore:
                             )
                             source = "web_search"
                             confidence = 0.70
+                            if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+                                await self.autonomous_learning.learn(
+                                    source="web",
+                                    query=query,
+                                    answer=answer,
+                                )
                     except Exception:
                         logger.exception("[CognitiveCore] Web Search failed.")
 
@@ -292,13 +300,24 @@ class CognitiveCore:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
 
-        # Step 6: Self Reflection review
-        if self.self_reflection and hasattr(self.self_reflection, "review"):
+        # Step 4: Autonomous learning and self-reflection review upon successful response generation
+        if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
             try:
-                await self.self_reflection.review(
+                await self.autonomous_learning.learn(
+                    source="success",
                     query=query,
                     answer=answer,
-                    source=source,
+                )
+            except Exception:
+                logger.exception("[CognitiveCore] Autonomous learning success hook failed.")
+
+        if self.self_reflection and hasattr(self.self_reflection, "reflect"):
+            try:
+                await self.self_reflection.reflect(
+                    event="review",
+                    query=query,
+                    answer=answer,
+                    source="brain",
                 )
             except Exception:
                 logger.exception("[CognitiveCore] Self-reflection review failed.")
@@ -1283,6 +1302,15 @@ class CognitiveCore:
                     )
                 )
 
+                if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+                    try:
+                        await self.autonomous_learning.learn(
+                            source="profile",
+                            profile={intent.name: query},
+                        )
+                    except Exception:
+                        logger.exception("[CognitiveCore] Autonomous learning profile hook failed.")
+
                 return SystemResponse(
                     success=True,
                     confidence=getattr(
@@ -1364,6 +1392,15 @@ class CognitiveCore:
                 "[CognitiveCore ERROR] Processing failed: %s",
                 exc,
             )
+
+            if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+                try:
+                    await self.autonomous_learning.learn(
+                        source="failure",
+                        query=query,
+                    )
+                except Exception:
+                    logger.exception("[CognitiveCore] Autonomous learning failure hook failed.")
 
             return SystemResponse(
                 success=False,
