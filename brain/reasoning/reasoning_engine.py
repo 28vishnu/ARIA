@@ -55,6 +55,7 @@ class ReasoningEngine:
         learning_engine=None,
         llm_router=None,
         action_manager=None,
+        event_bus=None,
     ):
         self.agent_manager = agent_manager
         self.planner = planner
@@ -65,6 +66,7 @@ class ReasoningEngine:
         self.learning_engine = learning_engine
         self.llm_router = llm_router
         self.action_manager = action_manager
+        self.event_bus = event_bus
 
     async def understand_goal(
         self,
