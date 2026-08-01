@@ -13,6 +13,7 @@ from brain.document.document_intelligence import DocumentIntelligence
 from brain.knowledge.knowledge_manager import KnowledgeManager
 from brain.knowledge.knowledge_database import KnowledgeDatabase
 from brain.knowledge.knowledge_graph import KnowledgeGraph
+from brain.knowledge.graph_builder import GraphBuilder
 from brain.knowledge.learning_engine import LearningEngine
 from brain.document.document_repository import DocumentRepository
 from brain.agents.agent_manager import AgentManager
@@ -249,6 +250,15 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "knowledge_graph",
         knowledge_graph,
+    )
+
+    graph_builder = GraphBuilder(
+        knowledge_graph
+    )
+
+    registry.register(
+        "graph_builder",
+        graph_builder,
     )
 
     learning_engine = LearningEngine(
