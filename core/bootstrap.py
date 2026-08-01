@@ -12,6 +12,7 @@ from brain.memory.memory_conversation_manager import MemoryConversationManager
 from brain.document.document_intelligence import DocumentIntelligence
 from brain.knowledge.knowledge_manager import KnowledgeManager
 from brain.knowledge.knowledge_database import KnowledgeDatabase
+from brain.knowledge.learning_engine import LearningEngine
 from brain.document.document_repository import DocumentRepository
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
@@ -242,11 +243,22 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database,
     )
 
+    learning_engine = LearningEngine(
+        knowledge_database=knowledge_database,
+        memory_engine=memory_engine,
+    )
+
+    registry.register(
+        "learning_engine",
+        learning_engine,
+    )
+
     knowledge_manager = KnowledgeManager(
         document_ai=doc_intelligence,
         memory_engine=memory_engine,
         state_manager=StateManager(),
         knowledge_database=knowledge_database,
+        learning_engine=learning_engine,
     )
 
     registry.register(
