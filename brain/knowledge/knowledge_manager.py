@@ -16,6 +16,7 @@ class KnowledgeManager:
         skill_manager=None,
         web_search=None,
         llm_router=None,
+        event_bus=None,
     ):
 
         self.document_ai = document_ai
@@ -31,6 +32,7 @@ class KnowledgeManager:
         self.skill_manager = skill_manager
         self.web_search = web_search
         self.llm_router = llm_router
+        self.event_bus = event_bus
 
     ###########################################################
     # Individual Search Methods
