@@ -23,7 +23,7 @@ class WorldModel:
         self.mongodb = mongodb
         self.collection = None
 
-        if mongodb:
+        if mongodb is not None:
             self.collection = mongodb["world_model"]
 
         self.people: Dict[str, Any] = {}
