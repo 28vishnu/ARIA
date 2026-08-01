@@ -247,29 +247,43 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     state_manager = StateManager()
-    world_model = WorldModel()
+    world_model = WorldModel(mongodb=db_inst if mongo_client else None)
+    await world_model.load()
 
     knowledge_database = KnowledgeDatabase(
         mongo_collection=db_inst["knowledge"] if db_inst is not None else None,
         vector_db=vector_store,
     )
-    knowledge_graph = KnowledgeGraph()
+    knowledge_graph = KnowledgeGraph(
+        mongodb=db_inst if mongo_client else None,
+        vector_db=vector_store,
+    )
+    await knowledge_graph.load_graph()
 
     graph_builder = GraphBuilder(
         knowledge_graph
     )
 
-    knowledge_manager = KnowledgeManager(
-        document_ai=doc_intelligence,
-        memory_engine=memory_engine,
-        state_manager=state_manager,
-    )
+    event_bus = EventBus()
 
     learning_engine = LearningEngine(
         knowledge_database=knowledge_database,
         memory_engine=memory_engine,
         knowledge_graph=knowledge_graph,
         graph_builder=graph_builder,
+        event_bus=event_bus,
+    )
+
+    knowledge_manager = KnowledgeManager(
+        document_ai=doc_intelligence,
+        memory_engine=memory_engine,
+        state_manager=state_manager,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+        learning_engine=learning_engine,
+        world_model=world_model,
+        memory_router=memory_engine,
+        event_bus=event_bus,
     )
 
     self_reflection = SelfReflection(
@@ -277,6 +291,7 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         learning_engine=learning_engine,
+        event_bus=event_bus,
     )
 
     autonomous_learning = AutonomousLearning(
@@ -285,39 +300,25 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         world_model=world_model,
+        event_bus=event_bus,
     )
 
-    event_bus = EventBus()
+    def register_event_listeners():
+        event_bus.register_listener(event_types.CHAT_RESPONSE, autonomous_learning)
+        event_bus.register_listener(event_types.CHAT_RESPONSE, self_reflection)
+        event_bus.register_listener(event_types.DOCUMENT_UPLOADED, autonomous_learning)
+        event_bus.register_listener(event_types.DOCUMENT_SUMMARIZED, autonomous_learning)
+        event_bus.register_listener(event_types.WEB_SEARCH_FINISHED, autonomous_learning)
+        event_bus.register_listener(event_types.PLAN_FINISHED, autonomous_learning)
+        event_bus.register_listener(event_types.WORKFLOW_COMPLETED, self_reflection)
+        event_bus.register_listener(event_types.TASK_FAILED, self_reflection)
+        event_bus.register_listener(event_types.RESPONSE_GENERATED, self_reflection)
+        event_bus.register_listener(event_types.TASK_COMPLETED, autonomous_learning)
+        event_bus.register_listener(event_types.WORKFLOW_COMPLETED, autonomous_learning)
+        event_bus.register_listener(event_types.KNOWLEDGE_ADDED, knowledge_graph)
+        event_bus.register_listener(event_types.KNOWLEDGE_ADDED, world_model)
 
-    event_bus.register_listener(
-        event_types.CHAT_RESPONSE,
-        autonomous_learning,
-    )
-
-    event_bus.register_listener(
-        event_types.CHAT_RESPONSE,
-        self_reflection,
-    )
-
-    event_bus.register_listener(
-        event_types.DOCUMENT_UPLOADED,
-        autonomous_learning,
-    )
-
-    event_bus.register_listener(
-        event_types.DOCUMENT_SUMMARIZED,
-        autonomous_learning,
-    )
-
-    event_bus.register_listener(
-        event_types.WEB_SEARCH_FINISHED,
-        autonomous_learning,
-    )
-
-    event_bus.register_listener(
-        event_types.PLAN_FINISHED,
-        autonomous_learning,
-    )
+    register_event_listeners()
 
     context_builder = ContextBuilder(
         state_manager=state_manager,
@@ -326,64 +327,32 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_graph=knowledge_graph,
     )
 
-    registry.register(
-        "knowledge_database",
-        knowledge_database,
-    )
+    # Group registrations
+    # ---------------------------------------------------------
+    # Knowledge & Memory
+    # ---------------------------------------------------------
+    registry.register("knowledge_database", knowledge_database)
+    registry.register("knowledge_graph", knowledge_graph)
+    registry.register("world_model", world_model)
+    registry.register("graph_builder", graph_builder)
+    registry.register("knowledge_manager", knowledge_manager)
 
-    registry.register(
-        "knowledge_graph",
-        knowledge_graph,
-    )
-
-    registry.register(
-        "world_model",
-        world_model,
-    )
-
-    registry.register(
-        "graph_builder",
-        graph_builder,
-    )
-
-    registry.register(
-        "knowledge_manager",
-        knowledge_manager,
-    )
-
-    registry.register(
-        "learning_engine",
-        learning_engine,
-    )
-
-    registry.register(
-        "self_reflection",
-        self_reflection,
-    )
-
-    registry.register(
-        "autonomous_learning",
-        autonomous_learning,
-    )
-
-    registry.register(
-        "event_bus",
-        event_bus,
-    )
-
-    registry.register(
-        "context_builder",
-        context_builder,
-    )
+    # ---------------------------------------------------------
+    # Learning & Events
+    # ---------------------------------------------------------
+    registry.register("learning_engine", learning_engine)
+    registry.register("self_reflection", self_reflection)
+    registry.register("autonomous_learning", autonomous_learning)
+    registry.register("event_bus", event_bus)
+    registry.register("context_builder", context_builder)
 
     logger.info(
         "[BOOT TEST] 7 - DocumentIntelligence created"
     )
 
     # ---------------------------------------------------------
-    # Agent Manager
+    # Agents
     # ---------------------------------------------------------
-
     logger.info(
         "[BOOT TEST] 8 - Starting AgentManager"
     )
@@ -408,7 +377,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Core Services
+    # Skills & Actions
     # ---------------------------------------------------------
 
     session_manager = SessionManager(state_manager)
@@ -435,6 +404,9 @@ async def bootstrap_application() -> ServiceRegistry:
         llm_router=llm_router,
         skill_manager=skill_manager,
         action_manager=action_manager,
+        knowledge_manager=knowledge_manager,
+        world_model=world_model,
+        knowledge_graph=knowledge_graph,
         event_bus=event_bus,
     )
 
@@ -442,13 +414,17 @@ async def bootstrap_application() -> ServiceRegistry:
         skill_manager=skill_manager,
         action_manager=action_manager,
         event_bus=event_bus,
+        planner=planner,
     )
 
     personality_engine = PersonalityEngine(
         llm_router=llm_router
     )
 
-    decision_engine = DecisionEngine()
+    decision_engine = DecisionEngine(
+        knowledge_manager=knowledge_manager,
+        self_reflection=self_reflection,
+    )
     intent_analyzer = IntentAnalyzer(
         llm_router=llm_router
     )
@@ -457,63 +433,26 @@ async def bootstrap_application() -> ServiceRegistry:
         agent_manager=agent_manager,
         llm_router=llm_router,
         action_manager=action_manager,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+        world_model=world_model,
+        learning_engine=learning_engine,
         event_bus=event_bus,
     )
 
-    registry.register(
-        "session_manager",
-        session_manager
-    )
-
-    registry.register(
-        "state_manager",
-        state_manager
-    )
-
-    registry.register(
-        "skill_manager",
-        skill_manager
-    )
-
-    registry.register(
-        "action_manager",
-        action_manager
-    )
-
-    registry.register(
-        "planner",
-        planner
-    )
-
-    registry.register(
-        "executor",
-        executor
-    )
-
-    registry.register(
-        "personality_engine",
-        personality_engine
-    )
-
-    registry.register(
-        "context_builder",
-        context_builder
-    )
-
-    registry.register(
-        "decision_engine",
-        decision_engine
-    )
-
-    registry.register(
-        "intent_analyzer",
-        intent_analyzer
-    )
-
-    registry.register(
-        "reasoning_engine",
-        reasoning_engine
-    )
+    # ---------------------------------------------------------
+    # Core Services & AI
+    # ---------------------------------------------------------
+    registry.register("session_manager", session_manager)
+    registry.register("state_manager", state_manager)
+    registry.register("skill_manager", skill_manager)
+    registry.register("action_manager", action_manager)
+    registry.register("planner", planner)
+    registry.register("executor", executor)
+    registry.register("personality_engine", personality_engine)
+    registry.register("decision_engine", decision_engine)
+    registry.register("intent_analyzer", intent_analyzer)
+    registry.register("reasoning_engine", reasoning_engine)
 
     # ---------------------------------------------------------
     # Cognitive Core
