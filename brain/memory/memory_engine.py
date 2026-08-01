@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger("aria")
 
 SCHEMA_VERSION = 3
+MEMORY_SCHEMA_VERSION = 4
 
 MEMORY_TYPES = {
     "personal",
@@ -527,6 +528,98 @@ class MemoryEngine:
         return items
 
     # =========================================================
+    # MEMORY RECORD BUILDER
+    # =========================================================
+
+    def _build_memory_record(
+        self,
+        memory: Dict[str, Any]
+    ):
+        now = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        return {
+
+            "key": memory["key"],
+
+            "value": memory["value"],
+
+            "summary": memory.get(
+                "summary",
+                str(memory["value"])
+            ),
+
+            "category": memory.get(
+                "category",
+                "general"
+            ),
+
+            "memory_type": memory.get(
+                "memory_type",
+                "fact"
+            ),
+
+            "importance": IMPORTANCE.get(
+                memory.get("importance", "medium"),
+                50
+            ),
+
+            "confidence": memory.get(
+                "confidence",
+                1.0
+            ),
+
+            "source": memory.get(
+                "source",
+                "conversation"
+            ),
+
+            "entities": memory.get(
+                "entities",
+                []
+            ),
+
+            "relationships": memory.get(
+                "relationships",
+                []
+            ),
+
+            "topics": memory.get(
+                "topics",
+                []
+            ),
+
+            "aliases": memory.get(
+                "aliases",
+                []
+            ),
+
+            "tags": memory.get(
+                "tags",
+                []
+            ),
+
+            "embedding_id": memory.get(
+                "embedding_id"
+            ),
+
+            "document_id": memory.get(
+                "document_id"
+            ),
+
+            "created_at": now,
+
+            "updated_at": now,
+
+            "last_accessed": now,
+
+            "access_count": 0,
+
+            "schema_version": MEMORY_SCHEMA_VERSION
+        }
+
+    # =========================================================
     # STORE MEMORY
     # =========================================================
 
@@ -541,11 +634,7 @@ class MemoryEngine:
         key = memory["key"]
         value = memory["value"]
 
-        now = datetime.now(
-            timezone.utc
-        ).isoformat()
-
-        if memory["importance"] in ("high", "critical"):
+        if memory.get("importance") in ("high", "critical"):
             memory["is_permanent"] = True
         else:
             memory["is_permanent"] = False
@@ -558,6 +647,10 @@ class MemoryEngine:
 
                 if not self._validate_value(item):
                     continue
+
+                item_memory = dict(memory)
+                item_memory["value"] = item
+                record = self._build_memory_record(item_memory)
 
                 existing = await self.memory_col.find_one(
                     {
@@ -576,6 +669,12 @@ class MemoryEngine:
                         "value": existing.get("value"),
                         "updated_at": existing.get("updated_at")
                     })
+                    record["created_at"] = existing.get("created_at", record["created_at"])
+                    record["access_count"] = existing.get("access_count", 0)
+
+                record["version"] = version
+                record["history"] = history
+                record["is_permanent"] = memory["is_permanent"]
 
                 await self.memory_col.update_one(
                     {
@@ -583,44 +682,8 @@ class MemoryEngine:
                         "value": item
                     },
                     {
-                        "$set": {
-                            "key": key,
-                            "value": item,
-                            "category": memory["category"],
-                            "memory_type": memory["memory_type"],
-                            "importance": IMPORTANCE.get(
-                                memory["importance"], 50
-                            ),
-                            "confidence": memory.get(
-                                "confidence",
-                                1.0
-                            ),
-                            "source": memory.get(
-                                "source",
-                                "conversation"
-                            ),
-                            "tags": memory.get(
-                                "tags",
-                                []
-                            ),
-                            "aliases": memory.get(
-                                "aliases",
-                                []
-                            ),
-                            "summary": memory.get(
-                                "summary",
-                                str(item)
-                            ),
-                            "version": version,
-                            "history": history,
-                            "schema_version": SCHEMA_VERSION,
-                            "updated_at": now,
-                            "last_accessed": now
-                        },
+                        "$set": record,
                         "$setOnInsert": {
-                            "created_at": now,
-                            "access_count": 0,
-                            "relationships": [],
                             "expires_at": None,
                             "is_permanent": memory["is_permanent"]
                         }
@@ -640,6 +703,8 @@ class MemoryEngine:
         if not self._validate_value(str(value)):
             return {"success": False}
 
+        record = self._build_memory_record(memory)
+
         existing = await self.memory_col.find_one(
             {"key": key}
         )
@@ -657,48 +722,18 @@ class MemoryEngine:
                 "value": existing.get("value"),
                 "updated_at": existing.get("updated_at")
             })
+            record["created_at"] = existing.get("created_at", record["created_at"])
+            record["access_count"] = existing.get("access_count", 0)
+
+        record["version"] = version
+        record["history"] = history
+        record["is_permanent"] = memory["is_permanent"]
 
         await self.memory_col.update_one(
             {"key": key},
             {
-                "$set": {
-                    "key": key,
-                    "value": str(value),
-                    "category": memory["category"],
-                    "memory_type": memory["memory_type"],
-                    "importance": IMPORTANCE.get(
-                        memory["importance"], 50
-                    ),
-                    "confidence": memory.get(
-                        "confidence",
-                        1.0
-                    ),
-                    "source": memory.get(
-                        "source",
-                        "conversation"
-                    ),
-                    "tags": memory.get(
-                        "tags",
-                        []
-                    ),
-                    "aliases": memory.get(
-                        "aliases",
-                        []
-                    ),
-                    "summary": memory.get(
-                        "summary",
-                        str(value)
-                    ),
-                    "version": version,
-                    "history": history,
-                    "schema_version": SCHEMA_VERSION,
-                    "updated_at": now,
-                    "last_accessed": now
-                },
+                "$set": record,
                 "$setOnInsert": {
-                    "created_at": now,
-                    "access_count": 0,
-                    "relationships": [],
                     "expires_at": None,
                     "is_permanent": memory["is_permanent"]
                 }
@@ -763,9 +798,13 @@ class MemoryEngine:
         )
 
         if memory:
-            return await self._store_extracted_memory(
+            res = await self._store_extracted_memory(
                 memory
             )
+            if res.get("success"):
+                if hasattr(self, "learning_engine") and self.learning_engine:
+                    await self.learning_engine.learn_from_memory(memory)
+            return res
 
         # ---------------------------------------------------------
         # LEVEL 2 — INTELLIGENT LLM MEMORY UNDERSTANDING
@@ -817,6 +856,8 @@ class MemoryEngine:
 
                         if result.get("success"):
                             stored_results.append(result)
+                            if hasattr(self, "learning_engine") and self.learning_engine:
+                                await self.learning_engine.learn_from_memory(memory_data)
 
                     if stored_results:
 
@@ -1560,3 +1601,59 @@ class MemoryEngine:
         except Exception:
             logger.exception("[MemoryEngine Delete Error]")
             return False
+
+    # =========================================================
+    # ADDITIONAL ROUTER METHODS
+    # =========================================================
+
+    async def store_chat(self, chat):
+        return await self.process_and_store(chat)
+
+    async def store_profile(self, profile):
+        if self.profile_col is None:
+            return
+
+        await self.profile_col.update_one(
+            {},
+            {
+                "$set": profile
+            },
+            upsert=True
+        )
+
+    async def update_memory(
+        self,
+        memory_id,
+        data
+    ):
+        if self.memory_col is None:
+            return False
+
+        await self.memory_col.update_one(
+            {
+                "_id": memory_id
+            },
+            {
+                "$set": data
+            }
+        )
+
+        return True
+
+    async def memory_exists(
+        self,
+        query
+    ):
+        if self.memory_col is None:
+            return False
+
+        memory = await self.memory_col.find_one(
+            {
+                "$or": [
+                    {"key": query},
+                    {"value": query}
+                ]
+            }
+        )
+
+        return memory is not None
