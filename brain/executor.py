@@ -52,6 +52,15 @@ class Executor:
     - event publication via EventBus
     - workflow and task timeouts
     - safety cancellation and rollback support
+    - rollback manager
+    - task queue
+    - workflow persistence via MongoDB
+    - resource locking via asyncio.Lock
+    - workflow visualization
+    - extended metrics and statistics
+    - automated recovery on startup
+    - background execution
+    - executor snapshot
     """
 
     def __init__(
@@ -60,6 +69,7 @@ class Executor:
         action_manager=None,
         event_bus=None,
         planner=None,
+        mongodb=None,
     ):
         self.skill_manager = skill_manager
         self.action_manager = action_manager
@@ -67,8 +77,16 @@ class Executor:
         self.planner = planner
         self.verifier = Verifier()
 
+        self.mongodb = mongodb
+        self.collection = None
+        if mongodb is not None:
+            self.collection = mongodb["workflows"]
+
         self.paused_workflows: Dict[str, Dict[str, Any]] = {}
         self.execution_history: List[Dict[str, Any]] = []
+
+        self.task_queue: asyncio.Queue = asyncio.Queue()
+        self._resource_locks: Dict[str, asyncio.Lock] = {}
 
         self.statistics = {
             "workflows": 0,
@@ -77,11 +95,27 @@ class Executor:
             "failed": 0,
             "paused": 0,
             "average_time": 0.0,
+            "success_rate": 1.0,
+            "average_task_time": 0.0,
+            "longest_workflow": 0.0,
+            "parallel_tasks": 0,
+            "rollback_count": 0,
+            "timeouts": 0,
+            "cancelled": 0,
         }
         self._active_workflows: Set[str] = set()
 
     # =========================================================
-    # CANCELLATION
+    # RESOURCE LOCKING
+    # =========================================================
+
+    def _get_resource_lock(self, resource_name: str) -> asyncio.Lock:
+        if resource_name not in self._resource_locks:
+            self._resource_locks[resource_name] = asyncio.Lock()
+        return self._resource_locks[resource_name]
+
+    # =========================================================
+    # CANCELLATION & ROLLBACK MANAGER
     # =========================================================
 
     def cancel_workflow(self, workflow_id: str):
@@ -90,7 +124,70 @@ class Executor:
         """
         if workflow_id in self._active_workflows:
             self._active_workflows.remove(workflow_id)
+            self.statistics["cancelled"] += 1
             logger.info("[Executor] Workflow %s marked for cancellation.", workflow_id)
+
+    async def rollback_workflow(self, plan: ExecutionPlan, completed_task_ids: List[str]):
+        """
+        Rollback completed tasks in reverse order if they define a rollback action.
+        """
+        logger.info("[Executor] Initiating rollback for workflow: %s", plan.goal)
+        self.statistics["rollback_count"] += 1
+
+        # Map task IDs back to task objects
+        task_map = {t.id: t for t in plan.tasks}
+        for task_id in reversed(completed_task_ids):
+            task = task_map.get(task_id)
+            if task and hasattr(task, "rollback_action") and task.rollback_action:
+                try:
+                    logger.info("[Executor] Rolling back task %s using action %s", task.id, task.rollback_action)
+                    # Execute rollback action if action manager available
+                    action_mgr = self._resolve_action_manager({})
+                    if action_mgr and task.rollback_action in getattr(action_mgr, "actions", {}):
+                        await action_mgr.execute_action(task.rollback_action, task.input, confirmed=True)
+                except Exception:
+                    logger.exception("[Executor] Rollback failed for task %s", task.id)
+
+    # =========================================================
+    # WORKFLOW PERSISTENCE & RECOVERY
+    # =========================================================
+
+    async def _persist_workflow_state(self, workflow_id: str, state_data: Dict[str, Any]):
+        if self.collection is not None:
+            try:
+                state_data["_id"] = workflow_id
+                await self.collection.replace_one({"_id": workflow_id}, state_data, upsert=True)
+            except Exception:
+                logger.exception("[Executor] Failed to persist workflow %s", workflow_id)
+
+    async def recover_workflows(self):
+        """
+        Load paused/active workflows from MongoDB on startup and resume automatically.
+        """
+        if self.collection is not None:
+            try:
+                cursor = self.collection.find({"status": "paused"})
+                async for doc in cursor:
+                    wf_id = doc.get("_id")
+                    if wf_id:
+                        self.paused_workflows[wf_id] = doc
+                        logger.info("[Executor] Recovered paused workflow: %s", wf_id)
+            except Exception:
+                logger.exception("[Executor] Failed to recover workflows from database.")
+
+    # =========================================================
+    # WORKFLOW VISUALIZATION
+    # =========================================================
+
+    def workflow_graph(self, plan: ExecutionPlan) -> str:
+        """
+        Return a textual flowchart representation of the workflow.
+        """
+        lines = []
+        for task in plan.tasks:
+            deps = ", ".join(task.depends_on) if task.depends_on else "None"
+            lines.append(f"Task [{task.id}] ({task.name}) -> depends on: [{deps}]")
+        return "\n └── ▼ \n".join(lines)
 
     # =========================================================
     # SNAPSHOT
@@ -98,11 +195,12 @@ class Executor:
 
     def snapshot(self) -> Dict[str, Any]:
         """
-        Return executor statistics, history, and active/paused workflows.
+        Return executor statistics, history, queue state, and active/paused workflows.
         """
         return {
-            "running_workflows": list(self._active_workflows),
-            "paused_workflows": list(self.paused_workflows.keys()),
+            "running": list(self._active_workflows),
+            "paused": list(self.paused_workflows.keys()),
+            "queue_size": self.task_queue.qsize(),
             "history": self.execution_history[-20:],  # last 20 entries
             "statistics": self.statistics,
         }
@@ -317,6 +415,17 @@ class Executor:
         }
 
     # =========================================================
+    # BACKGROUND EXECUTION SUPPORT
+    # =========================================================
+
+    def execute_background(self, plan: ExecutionPlan, base_context: Dict[str, Any]):
+        """
+        Execute workflow in the background without awaiting result directly.
+        """
+        asyncio.create_task(self.execute_plan(plan, base_context))
+        logger.info("[Executor] Dispatched background workflow for goal: %s", plan.goal)
+
+    # =========================================================
     # MAIN EXECUTION
     # =========================================================
 
@@ -448,7 +557,6 @@ class Executor:
                 )
 
         action_manager = self._resolve_action_manager(base_context)
-
         workflow_timeout = base_context.get("workflow_timeout", 300)  # default 5 mins
 
         try:
@@ -459,6 +567,7 @@ class Executor:
 
                 if time.time() - start_time_all > workflow_timeout:
                     logger.warning("[Executor] Workflow %s timed out.", workflow_id)
+                    self.statistics["timeouts"] += 1
                     if self.event_bus:
                         await self.event_bus.publish(
                             Event(
@@ -502,11 +611,8 @@ class Executor:
 
                 ready_tasks.sort(key=lambda task: task.priority, reverse=True)
 
-                # Determine if we can execute tasks in parallel using asyncio.gather
-                # Tasks in ready_tasks that do not depend on each other's runtime output can be parallelized.
                 parallel_batch = []
                 for task in ready_tasks:
-                    # check if task has dependency on another task in ready_tasks
                     has_peer_dependency = any(dep in [t.id for t in ready_tasks] for dep in task.depends_on)
                     if not has_peer_dependency:
                         parallel_batch.append(task)
@@ -514,7 +620,9 @@ class Executor:
                 if not parallel_batch:
                     parallel_batch = [ready_tasks[0]]
 
-                # Execute batch concurrently
+                if len(parallel_batch) > 1:
+                    self.statistics["parallel_tasks"] += len(parallel_batch)
+
                 async def execute_single_task(task):
                     failed_dependencies = [
                         dependency
@@ -533,6 +641,14 @@ class Executor:
                         if task.id not in skipped:
                             skipped.append(task.id)
                         executed.add(task.id)
+                        if self.event_bus:
+                            await self.event_bus.publish(
+                                Event(
+                                    type=event_types.TASK_SKIPPED,
+                                    source="executor",
+                                    data={"task_id": task.id, "reason": reason},
+                                )
+                            )
                         return "skipped"
 
                     try:
@@ -556,6 +672,14 @@ class Executor:
                         if task.id not in failed:
                             failed.append(task.id)
                         executed.add(task.id)
+                        if self.event_bus:
+                            await self.event_bus.publish(
+                                Event(
+                                    type=event_types.TASK_FAILED,
+                                    source="executor",
+                                    data={"task_id": task.id, "error": error},
+                                )
+                            )
                         return "failed"
 
                     for dep_id in task.depends_on:
@@ -576,7 +700,14 @@ class Executor:
                     start_time = time.perf_counter()
                     task_timeout = getattr(task, "timeout", 30)
 
+                    # Acquire resource lock if specified in task
+                    resource_name = getattr(task, "resource", None)
+                    lock = self._get_resource_lock(resource_name) if resource_name else None
+
                     try:
+                        if lock:
+                            await lock.acquire()
+
                         if task.is_action():
                             result = await asyncio.wait_for(
                                 self._execute_action(
@@ -597,6 +728,7 @@ class Executor:
                                 timeout=task_timeout,
                             )
                     except asyncio.TimeoutError:
+                        self.statistics["timeouts"] += 1
                         result = {
                             "success": False,
                             "paused": False,
@@ -605,6 +737,14 @@ class Executor:
                             "error": f"Task timed out after {task_timeout} seconds.",
                             "source": task.action_name if task.is_action() else task.skill,
                         }
+                        if self.event_bus:
+                            await self.event_bus.publish(
+                                Event(
+                                    type=event_types.TASK_TIMEOUT,
+                                    source="executor",
+                                    data={"task_id": task.id, "timeout": task_timeout},
+                                )
+                            )
                     except Exception as exc:
                         result = {
                             "success": False,
@@ -614,9 +754,13 @@ class Executor:
                             "error": str(exc),
                             "source": task.action_name if task.is_action() else task.skill,
                         }
+                    finally:
+                        if lock and lock.locked():
+                            lock.release()
 
                     elapsed_ms = (time.perf_counter() - start_time) * 1000
                     task.execution_time_ms = elapsed_ms
+                    self.statistics["average_task_time"] = (self.statistics["average_task_time"] + elapsed_ms) / 2
 
                     if result.get("requires_confirmation"):
                         task.mark_awaiting_confirmation()
@@ -626,6 +770,17 @@ class Executor:
                             "status": "awaiting_confirmation",
                             "execution_time_ms": elapsed_ms,
                         }
+                        self.paused_workflows[workflow_id] = {
+                            "plan": plan,
+                            "task_outputs": task_outputs,
+                            "completed": completed,
+                            "failed": failed,
+                            "skipped": skipped,
+                            "workflow_results": workflow_results,
+                            "status": "paused",
+                        }
+                        await self._persist_workflow_state(workflow_id, self.paused_workflows[workflow_id])
+
                         if self.event_bus:
                             await self.event_bus.publish(
                                 Event(
@@ -683,6 +838,9 @@ class Executor:
                                 )
                             )
 
+                        # Rollback completed tasks on failure
+                        await self.rollback_workflow(plan, completed)
+
                         # Failure Recovery via Planner
                         if self.planner and hasattr(self.planner, "repair_plan"):
                             try:
@@ -719,6 +877,12 @@ class Executor:
 
         elapsed_all_ms = (time.time() - start_time_all) * 1000
         self.statistics["average_time"] = (self.statistics["average_time"] + elapsed_all_ms) / 2
+        if elapsed_all_ms > self.statistics["longest_workflow"]:
+            self.statistics["longest_workflow"] = elapsed_all_ms
+
+        total_workflows = self.statistics["workflows"]
+        total_failed = self.statistics["failed"]
+        self.statistics["success_rate"] = max(0.0, (total_workflows - total_failed) / max(1, total_workflows))
 
         res_built = self._build_result(
             task_outputs=task_outputs,
@@ -739,9 +903,10 @@ class Executor:
         })
 
         if self.event_bus:
+            event_name = event_types.WORKFLOW_COMPLETED if success else event_types.WORKFLOW_FAILED
             await self.event_bus.publish(
                 Event(
-                    type=event_types.WORKFLOW_COMPLETED,
+                    type=event_name,
                     source="executor",
                     data={"workflow_id": workflow_id, "success": success},
                 )
@@ -808,6 +973,14 @@ class Executor:
                     attempt + 1,
                     max_attempts,
                 )
+                if self.event_bus:
+                    await self.event_bus.publish(
+                        Event(
+                            type=event_types.TASK_RETRY,
+                            source="executor",
+                            data={"task_id": task.id, "attempt": attempt + 1},
+                        )
+                    )
 
         return {
             "success": False,
