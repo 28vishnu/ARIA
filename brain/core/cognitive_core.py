@@ -285,20 +285,23 @@ class CognitiveCore:
                 if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
                     await self.knowledge_graph.learn(query, answer)
 
-            # Step 2, 4, 5, 8: Continuous Learning & Updates from Retrieved/Generated Data
-            if self.learning_engine:
+            # Step 3: Autonomous Learning Integration
+            if self.autonomous_learning:
                 try:
-                    await self.learning_engine.learn(answer, source=source)
-                    if hasattr(self.knowledge_graph, "learn"):
-                        await self.knowledge_graph.learn(query, answer)
-                    if self.world_model and hasattr(self.world_model, "learn"):
-                        await self.world_model.learn(query, answer)
+                    await self.autonomous_learning.learn(
+                        source=source,
+                        query=query,
+                        answer=answer,
+                    )
                 except Exception:
-                    logger.exception("[CognitiveCore] Learning engine integration failed.")
+                    logger.exception(
+                        "[CognitiveCore] Autonomous learning failed."
+                    )
 
         finally:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
+            self.brain_state["reasoning"] = False
 
         # Step 4: Autonomous learning and self-reflection review upon successful response generation
         if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
@@ -317,7 +320,7 @@ class CognitiveCore:
                     event="review",
                     query=query,
                     answer=answer,
-                    source="brain",
+                    source=source,
                 )
             except Exception:
                 logger.exception("[CognitiveCore] Self-reflection review failed.")
@@ -1376,6 +1379,8 @@ class CognitiveCore:
             # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION
             # =================================================
 
+            self.brain_state["thinking"] = True
+            self.brain_state["reasoning"] = True
             return await self.knowledge_first_pipeline(
                 session_id,
                 query,
