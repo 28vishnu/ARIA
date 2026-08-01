@@ -1,10 +1,11 @@
 import logging
 from datetime import datetime
+from brain.events.event_listener import EventListener
 
 logger = logging.getLogger("aria")
 
 
-class AutonomousLearning:
+class AutonomousLearning(EventListener):
 
     """
     Central automatic learning system.
@@ -289,3 +290,17 @@ class AutonomousLearning:
                 kwargs.get("query"),
                 kwargs.get("answer"),
             )
+
+    # =========================================================
+    # EVENT LISTENER HANDLER
+    # =========================================================
+
+    async def handle(self, event):
+
+        await self.learn(
+
+            source=event.type,
+
+            **event.data,
+
+        )
