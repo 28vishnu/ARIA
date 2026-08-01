@@ -1201,6 +1201,32 @@ class CognitiveCore:
             # =================================================
 
             # -------------------------------------------------
+            # KNOWLEDGE MANAGER
+            # -------------------------------------------------
+
+            if self.knowledge_manager:
+
+                knowledge_answer = await self.knowledge_manager.answer(
+                    session_id=session_id,
+                    question=query,
+                )
+
+                if knowledge_answer:
+
+                    logger.info(
+                        "[CognitiveCore] KnowledgeManager answered request."
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="knowledge",
+                        data={
+                            "response": knowledge_answer,
+                        },
+                    )
+
+            # -------------------------------------------------
             # MEMORY RECALL
             # -------------------------------------------------
 
