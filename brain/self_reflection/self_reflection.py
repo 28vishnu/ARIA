@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from brain.events.event_listener import EventListener
+from brain.events import event_types
 
 logger = logging.getLogger("aria")
 
@@ -208,14 +209,36 @@ class SelfReflection(EventListener):
 
     async def handle(self, event):
 
-        await self.reflect(
+        if event.type == event_types.RESPONSE_GENERATED:
 
-            "review",
+            await self.reflect(
+                event="review",
+                query=event.data.get("query"),
+                answer=event.data.get("answer"),
+                source=event.source,
+            )
 
-            query=event.data.get("query"),
+        elif event.type == event_types.TASK_FAILED:
 
-            answer=event.data.get("answer"),
+            await self.reflect(
+                event="failure",
+                query=event.data.get("query"),
+            )
 
-            source=event.source,
+        elif event.type == event_types.WORKFLOW_COMPLETED:
 
-        )
+            await self.reflect(
+                event="daily",
+            )
+
+        elif event.type == event_types.WORKFLOW_STARTED:
+
+            logger.info(
+                "[SelfReflection] Workflow started."
+            )
+
+        elif event.type == event_types.TASK_COMPLETED:
+
+            logger.debug(
+                "[SelfReflection] Task completed."
+            )
