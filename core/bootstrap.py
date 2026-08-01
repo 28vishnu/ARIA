@@ -234,6 +234,12 @@ async def bootstrap_application() -> ServiceRegistry:
         doc_intelligence
     )
 
+    knowledge_manager = KnowledgeManager(
+        document_ai=doc_intelligence,
+        memory_engine=memory_engine,
+        state_manager=StateManager(),
+    )
+
     logger.info(
         "[BOOT TEST] 7 - DocumentIntelligence created"
     )
@@ -372,6 +378,11 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "reasoning_engine",
         reasoning_engine
+    )
+
+    registry.register(
+        "knowledge_manager",
+        knowledge_manager
     )
 
     # ---------------------------------------------------------
