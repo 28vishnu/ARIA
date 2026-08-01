@@ -91,38 +91,10 @@ class MemoryRouter:
         return memories
 
     # =====================================================
-    # Knowledge Recall
-    # =====================================================
-
-    async def recall_knowledge(
-        self,
-        query: str
-    ):
-
-        if self.knowledge_engine is None:
-            return None
-
-        return await self.knowledge_engine.search(query)
-
-    # =====================================================
-    # Graph Recall
-    # =====================================================
-
-    async def recall_graph(
-        self,
-        query: str
-    ):
-
-        if self.knowledge_graph is None:
-            return None
-
-        return await self.knowledge_graph.search(query)
-
-    # =====================================================
     # Unified Recall
     # =====================================================
 
-    async def search(
+    async def search_everywhere(
         self,
         query: str,
         limit: int = 10
@@ -167,6 +139,88 @@ class MemoryRouter:
             )
 
         return result
+
+    # =====================================================
+    # Answer API
+    # =====================================================
+
+    async def answer(self, query: str):
+
+        result = await self.search_everywhere(query)
+
+        if result["personal_memory"]:
+            return result["personal_memory"]
+
+        if result["knowledge"]:
+            return result["knowledge"]
+
+        if result["graph"]:
+            return result["graph"]
+
+        return None
+
+    # =====================================================
+    # Store APIs
+    # =====================================================
+
+    async def store_document(
+        self,
+        document
+    ):
+        if self.document_repository:
+            return await self.document_repository.store(document)
+
+    async def store_chat(
+        self,
+        chat
+    ):
+        if self.memory_engine:
+            return await self.memory_engine.store_chat(chat)
+
+    async def store_profile(
+        self,
+        profile
+    ):
+        if self.memory_engine:
+            return await self.memory_engine.store_profile(profile)
+
+    async def learn(
+        self,
+        knowledge
+    ):
+        if self.knowledge_engine:
+            return await self.knowledge_engine.learn(
+                knowledge
+            )
+
+    async def update_memory(
+        self,
+        memory_id,
+        data
+    ):
+        if self.memory_engine:
+            return await self.memory_engine.update_memory(
+                memory_id,
+                data
+            )
+
+    async def memory_exists(
+        self,
+        query
+    ):
+        if self.memory_engine:
+            return await self.memory_engine.memory_exists(query)
+
+        return False
+
+    async def knowledge_exists(
+        self,
+        fact
+    ):
+        if self.knowledge_engine:
+            return await self.knowledge_engine.exists(fact)
+
+        return False
 
     # =====================================================
     # Delete Memory
