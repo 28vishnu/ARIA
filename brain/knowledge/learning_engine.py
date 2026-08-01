@@ -23,12 +23,15 @@ class LearningEngine:
         memory_engine,
         knowledge_graph,
         graph_builder,
+        llm_router=None,
     ):
 
         self.database = knowledge_database
         self.memory = memory_engine
         self.graph = knowledge_graph
         self.builder = graph_builder
+        self.llm_router = llm_router
+        self.learned_count = 0
 
     ############################################################
 
@@ -43,10 +46,12 @@ class LearningEngine:
 
         text = text.strip()
 
-        if len(text) < 25:
+        if not self._should_learn(text):
             return
 
-        if self._is_small_talk(text):
+        existing = await self.database.search(text)
+
+        if existing:
             return
 
         title = self._generate_title(text)
@@ -59,6 +64,8 @@ class LearningEngine:
 
         await self.builder.learn(text)
 
+        self.learned_count += 1
+
         logger.info(
             "[LearningEngine] Learned: %s",
             title,
@@ -70,6 +77,7 @@ class LearningEngine:
         self,
         filename,
         summary,
+        entities=None,
     ):
 
         if not summary:
@@ -78,8 +86,18 @@ class LearningEngine:
         await self.database.store(
             title=filename,
             content=summary,
-            source="document",
+            source="document"
         )
+
+        await self.builder.learn(summary)
+
+        if entities:
+
+            for entity in entities:
+
+                await self.graph.add_entity(entity)
+
+        self.learned_count += 1
 
         logger.info(
             "[LearningEngine] Learned document %s",
@@ -100,8 +118,12 @@ class LearningEngine:
         await self.database.store(
             title=query,
             content=answer,
-            source="web",
+            source="web"
         )
+
+        await self.builder.learn(answer)
+
+        self.learned_count += 1
 
     ############################################################
 
@@ -119,6 +141,110 @@ class LearningEngine:
                 relation,
                 value,
             )
+
+    ############################################################
+
+    async def learn_from_memory(
+        self,
+        memory,
+    ):
+
+        if not memory:
+            return
+
+        text = f"{memory.get('key')} : {memory.get('value')}"
+
+        await self.learn(
+            text,
+            source="memory"
+        )
+
+    ############################################################
+
+    async def learn_chat(
+        self,
+        user,
+        assistant,
+    ):
+
+        text = user + "\n" + assistant
+
+        await self.learn(
+            text,
+            source="conversation"
+        )
+
+    ############################################################
+
+    async def learn_concepts(
+        self,
+        text,
+    ):
+
+        if self.llm_router is None:
+            return
+
+        concepts = await self.llm_router.extract_concepts(text)
+
+        if not concepts:
+            return
+
+        for concept in concepts:
+
+            await self.database.store(
+
+                title=concept,
+
+                content=text,
+
+                source="concept"
+            )
+
+        self.learned_count += 1
+
+    ############################################################
+
+    async def learn_relationships(
+        self,
+        text,
+    ):
+
+        if self.builder:
+
+            await self.builder.learn(text)
+
+    ############################################################
+
+    async def learn_profile(
+        self,
+        profile,
+    ):
+
+        if not profile:
+            return
+
+        for key, value in profile.items():
+
+            await self.graph.add_fact(
+
+                "User",
+
+                key,
+
+                value
+            )
+
+    ############################################################
+
+    async def remember_document(
+        self,
+        filename,
+        summary,
+    ):
+
+        await self.memory.process_and_store(
+            summary
+        )
 
     ############################################################
 
@@ -148,6 +274,21 @@ class LearningEngine:
         ]
 
         return text in ignore
+
+    ############################################################
+
+    def _should_learn(
+        self,
+        text,
+    ):
+
+        if self._is_small_talk(text):
+            return False
+
+        if len(text) < 20:
+            return False
+
+        return True
 
     ############################################################
 
