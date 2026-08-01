@@ -589,4 +589,273 @@ RULES:
             ):
                 parsed = raw_response
 
-            else
+            else:
+
+                text = str(
+                    raw_response
+                ).strip()
+
+                # Tolerate fenced JSON from providers.
+                if text.startswith("```"):
+                    lines = text.splitlines()
+
+                    if lines:
+                        lines = lines[1:]
+
+                    if (
+                        lines
+                        and lines[-1].strip()
+                        == "```"
+                    ):
+                        lines = lines[:-1]
+
+                    text = "\n".join(
+                        lines
+                    ).strip()
+
+                    if text.lower().startswith(
+                        "json"
+                    ):
+                        text = text[4:].strip()
+
+                parsed = json.loads(text)
+
+            if not isinstance(
+                parsed,
+                dict,
+            ):
+                return None
+
+            raw_tasks = parsed.get(
+                "tasks",
+                [],
+            )
+
+            if not isinstance(
+                raw_tasks,
+                list,
+            ):
+                return None
+
+            tasks: List[Task] = []
+
+            for index, raw_task in enumerate(
+                raw_tasks,
+                start=1,
+            ):
+
+                task = self._normalize_task(
+                    raw_task,
+                    index,
+                )
+
+                if task:
+                    tasks.append(task)
+
+            plan_goal = str(
+                parsed.get("goal")
+                or goal
+            ).strip()
+
+            plan = ExecutionPlan(
+                goal=plan_goal,
+                tasks=tasks,
+            )
+
+            if not self.validate_plan(plan):
+                logger.warning("[Planner] Generated plan failed validation.")
+                return None
+
+            optimized = self.optimize_plan(plan)
+            optimized.confidence = 0.92
+            return optimized
+
+        except Exception:
+
+            logger.exception(
+                "[Planner] Dynamic planning failed."
+            )
+
+            return None
+
+    # =========================================================
+    # REASONING WORKFLOW FALLBACK
+    # =========================================================
+
+    def _plan_from_reasoning(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> Optional[ExecutionPlan]:
+        """
+        If ReasoningEngine has already constructed a workflow,
+        convert it into an ExecutionPlan without reinterpreting
+        individual commands.
+        """
+
+        reasoning = self._extract_reasoning(
+            context
+        )
+
+        if not reasoning:
+            return None
+
+        workflow = getattr(
+            reasoning,
+            "workflow",
+            None,
+        )
+
+        if not workflow:
+            return None
+
+        tasks: List[Task] = []
+
+        for index, step in enumerate(
+            workflow,
+            start=1,
+        ):
+
+            if isinstance(step, dict):
+
+                task = self._normalize_task(
+                    step,
+                    index,
+                )
+
+                if task:
+                    tasks.append(task)
+
+                continue
+
+            name = str(
+                getattr(
+                    step,
+                    "name",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not name:
+                continue
+
+            task_input = getattr(
+                step,
+                "input",
+                {},
+            )
+
+            if not isinstance(
+                task_input,
+                dict,
+            ):
+                task_input = {}
+
+            tasks.append(
+                Task(
+                    id=f"task_{index}",
+                    name=name,
+                    skill=name,
+                    input=task_input,
+                )
+            )
+
+        if not tasks:
+            return None
+
+        plan = ExecutionPlan(
+            goal=self._extract_goal(
+                query,
+                context,
+            ),
+            tasks=tasks,
+        )
+        plan.confidence = 0.95
+        return self.optimize_plan(plan)
+
+    # =========================================================
+    # PUBLIC PLANNER API
+    # =========================================================
+
+    async def create_plan(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> ExecutionPlan:
+        """
+        Canonical planning entry point used by CognitiveCore.
+        """
+
+        clean_query = str(
+            query or ""
+        ).strip()
+
+        # 1. Check historical similarity/reuse
+        similar_plan = await self.find_similar_plan(clean_query)
+        if similar_plan:
+            return similar_plan
+
+        # 2. First use an already-understood workflow when ReasoningEngine supplied one.
+        reasoning_plan = (
+            self._plan_from_reasoning(
+                clean_query,
+                context,
+            )
+        )
+
+        if reasoning_plan:
+            logger.info(
+                "[Planner] Using reasoning-generated "
+                "workflow with %d task(s).",
+                len(reasoning_plan.tasks),
+            )
+            self.plan_history.append(reasoning_plan)
+            self.statistics["plans_created"] += 1
+            return reasoning_plan
+
+        # 3. Otherwise dynamically compose tasks from ARIA's currently registered capabilities.
+        dynamic_plan = (
+            await self._generate_dynamic_plan(
+                clean_query,
+                context,
+            )
+        )
+
+        if dynamic_plan:
+
+            logger.info(
+                "[Planner] Dynamic plan generated with "
+                "%d task(s). Goal=%s",
+                len(dynamic_plan.tasks),
+                dynamic_plan.goal,
+            )
+            self.plan_history.append(dynamic_plan)
+            self.statistics["plans_created"] += 1
+            return dynamic_plan
+
+        # 4. No executable workflow is required/available.
+        logger.info(
+            "[Planner] No executable plan required."
+        )
+
+        empty_plan = ExecutionPlan(
+            goal=self._extract_goal(
+                clean_query,
+                context,
+            ),
+            tasks=[],
+        )
+        empty_plan.confidence = 0.80
+        return empty_plan
+
+    # =========================================================
+    # EVENT LISTENER HANDLER
+    # =========================================================
+
+    async def handle(self, event):
+        """
+        Handle events from EventBus (e.g., successful execution learning).
+        """
+        if event.type == event_types.PLAN_FINISHED:
+            logger.info("[Planner] Plan finished successfully event received.")
