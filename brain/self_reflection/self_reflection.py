@@ -1,10 +1,11 @@
 import logging
 from datetime import datetime
+from brain.events.event_listener import EventListener
 
 logger = logging.getLogger("aria")
 
 
-class SelfReflection:
+class SelfReflection(EventListener):
     """
     ARIA's internal reviewer.
 
@@ -200,3 +201,21 @@ class SelfReflection:
             return await self.detect_duplicates()
         elif event == "graph":
             return await self.improve_graph()
+
+    # =========================================================
+    # EVENT LISTENER HANDLER
+    # =========================================================
+
+    async def handle(self, event):
+
+        await self.reflect(
+
+            "review",
+
+            query=event.data.get("query"),
+
+            answer=event.data.get("answer"),
+
+            source=event.source,
+
+        )
