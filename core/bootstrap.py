@@ -283,7 +283,6 @@ async def bootstrap_application() -> ServiceRegistry:
         learning_engine=learning_engine,
         world_model=world_model,
         memory_router=memory_engine,
-        event_bus=event_bus,
     )
 
     self_reflection = SelfReflection(
@@ -291,7 +290,6 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         learning_engine=learning_engine,
-        event_bus=event_bus,
     )
 
     autonomous_learning = AutonomousLearning(
@@ -300,7 +298,6 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         world_model=world_model,
-        event_bus=event_bus,
     )
 
     def register_event_listeners():
@@ -404,10 +401,6 @@ async def bootstrap_application() -> ServiceRegistry:
         llm_router=llm_router,
         skill_manager=skill_manager,
         action_manager=action_manager,
-        knowledge_manager=knowledge_manager,
-        world_model=world_model,
-        knowledge_graph=knowledge_graph,
-        event_bus=event_bus,
     )
 
     executor = Executor(
@@ -415,6 +408,7 @@ async def bootstrap_application() -> ServiceRegistry:
         action_manager=action_manager,
         event_bus=event_bus,
         planner=planner,
+        mongodb=db_inst if mongo_client else None,
     )
 
     personality_engine = PersonalityEngine(
