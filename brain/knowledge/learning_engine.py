@@ -20,13 +20,15 @@ class LearningEngine:
     def __init__(
         self,
         knowledge_database,
-        memory_engine=None,
-        knowledge_graph=None,
+        memory_engine,
+        knowledge_graph,
+        graph_builder,
     ):
 
-        self.knowledge_database = knowledge_database
-        self.memory_engine = memory_engine
-        self.knowledge_graph = knowledge_graph
+        self.database = knowledge_database
+        self.memory = memory_engine
+        self.graph = knowledge_graph
+        self.builder = graph_builder
 
     ############################################################
 
@@ -49,11 +51,13 @@ class LearningEngine:
 
         title = self._generate_title(text)
 
-        await self.knowledge_database.store(
+        await self.database.store(
             title=title,
             content=text,
             source=source,
         )
+
+        await self.builder.learn(text)
 
         logger.info(
             "[LearningEngine] Learned: %s",
@@ -71,7 +75,7 @@ class LearningEngine:
         if not summary:
             return
 
-        await self.knowledge_database.store(
+        await self.database.store(
             title=filename,
             content=summary,
             source="document",
@@ -93,7 +97,7 @@ class LearningEngine:
         if not answer:
             return
 
-        await self.knowledge_database.store(
+        await self.database.store(
             title=query,
             content=answer,
             source="web",
@@ -108,9 +112,9 @@ class LearningEngine:
         value,
     ):
 
-        if self.knowledge_graph:
+        if self.graph:
 
-            await self.knowledge_graph.add_fact(
+            await self.graph.add_fact(
                 subject,
                 relation,
                 value,
