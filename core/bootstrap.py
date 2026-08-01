@@ -215,7 +215,7 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
     # ---------------------------------------------------------
-    # Document Intelligence
+    # Document Intelligence & Knowledge Manager
     # ---------------------------------------------------------
 
     logger.info(
@@ -240,6 +240,11 @@ async def bootstrap_application() -> ServiceRegistry:
         state_manager=StateManager(),
     )
 
+    registry.register(
+        "knowledge_manager",
+        knowledge_manager
+    )
+
     logger.info(
         "[BOOT TEST] 7 - DocumentIntelligence created"
     )
@@ -255,8 +260,6 @@ async def bootstrap_application() -> ServiceRegistry:
     agent_manager = AgentManager()
 
     # Register ARIA's specialist reasoning agents.
-    # These agents allow the reasoning layer to dynamically select
-    # expertise instead of relying entirely on hard-coded routing.
     agent_manager.register(CodeAgent())
     agent_manager.register(MathAgent())
     agent_manager.register(PlanningAgent())
@@ -305,6 +308,7 @@ async def bootstrap_application() -> ServiceRegistry:
         skill_manager=skill_manager,
         action_manager=action_manager,
     )
+    
     executor = Executor(
         skill_manager=skill_manager,
         action_manager=action_manager,
@@ -380,11 +384,6 @@ async def bootstrap_application() -> ServiceRegistry:
         reasoning_engine
     )
 
-    registry.register(
-        "knowledge_manager",
-        knowledge_manager
-    )
-
     # ---------------------------------------------------------
     # Cognitive Core
     # ---------------------------------------------------------
@@ -400,7 +399,8 @@ async def bootstrap_application() -> ServiceRegistry:
         context_builder=context_builder,
         decision_engine=decision_engine,
         memory_conversation_manager=memory_conversation_manager,
-        reasoning_engine=reasoning_engine
+        reasoning_engine=reasoning_engine,
+        knowledge_manager=knowledge_manager,
     )
 
     registry.register(
