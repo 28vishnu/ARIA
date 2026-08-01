@@ -74,7 +74,7 @@ class KnowledgeGraph:
 
         self.collection = None
 
-        if mongodb:
+        if mongodb is not None:
             self.collection = mongodb["knowledge_graph"]
 
         self.vector_db = vector_db
