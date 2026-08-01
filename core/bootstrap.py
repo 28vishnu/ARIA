@@ -268,19 +268,19 @@ async def bootstrap_application() -> ServiceRegistry:
         graph_builder=graph_builder,
     )
 
+    self_reflection = SelfReflection(
+        memory_engine=memory_engine,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+        learning_engine=learning_engine,
+    )
+
     autonomous_learning = AutonomousLearning(
         memory_engine=memory_engine,
         learning_engine=learning_engine,
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         world_model=world_model,
-    )
-
-    self_reflection = SelfReflection(
-        memory_engine=memory_engine,
-        knowledge_database=knowledge_database,
-        knowledge_graph=knowledge_graph,
-        learning_engine=learning_engine,
     )
 
     context_builder = ContextBuilder(
@@ -321,13 +321,13 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     registry.register(
-        "autonomous_learning",
-        autonomous_learning,
+        "self_reflection",
+        self_reflection,
     )
 
     registry.register(
-        "self_reflection",
-        self_reflection,
+        "autonomous_learning",
+        autonomous_learning,
     )
 
     registry.register(
@@ -492,8 +492,8 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_manager=knowledge_manager,
         learning_engine=learning_engine,
         world_model=world_model,
-        autonomous_learning=autonomous_learning,
         self_reflection=self_reflection,
+        autonomous_learning=autonomous_learning,
     )
 
     registry.register(
