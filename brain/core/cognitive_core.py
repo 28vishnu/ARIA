@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 
 from personality.response import SystemResponse
@@ -76,6 +77,8 @@ class CognitiveCore:
         knowledge_database=None,
         learning_engine=None,
         personality_engine=None,
+        world_model=None,
+        self_reflection=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -93,6 +96,15 @@ class CognitiveCore:
         self.knowledge_database = knowledge_database
         self.learning_engine = learning_engine
         self.personality_engine = personality_engine
+        self.world_model = world_model
+        self.self_reflection = self_reflection
+
+        self.brain_state = {
+            "thinking": False,
+            "learning": False,
+            "reasoning": False,
+            "retrieving": False,
+        }
 
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
@@ -109,133 +121,192 @@ class CognitiveCore:
     ) -> SystemResponse:
         """
         ARIA's core knowledge-first intelligence pipeline.
-        Executes strict prioritization:
+        Executes parallel retrieval and strict prioritization:
         1. Personal Memory
-        2. Knowledge Graph
-        3. Documents
-        4. Skills
-        5. Knowledge Database
-        6. Web Search (if internet required)
-        7. LLM -> Reasoning -> Natural Language
-        8. Automatic Learning
+        2. World Model
+        3. Knowledge Graph
+        4. Documents
+        5. Skills
+        6. Knowledge Database
+        7. Web Search -> Learn -> LLM -> Summarize -> Store
+        8. Automatic Learning & Reflection
         9. Personality Engine
         """
+        self.brain_state["retrieving"] = True
         answer = None
+        source = "llm_generated"
+        confidence = 0.5
 
-        # Step 1: Personal Memory
-        if self.memory_router and hasattr(self.memory_router, "answer"):
-            try:
-                answer = await self.memory_router.answer(query)
-            except Exception:
-                logger.exception("[CognitiveCore] Step 1 (Memory) failed.")
-
-        if answer:
-            return await self._format_response(answer, "memory", context)
-
-        # Step 2: Knowledge Graph
-        if self.knowledge_graph and hasattr(self.knowledge_graph, "answer"):
-            try:
-                answer = await self.knowledge_graph.answer(query)
-            except Exception:
-                logger.exception("[CognitiveCore] Step 2 (Knowledge Graph) failed.")
-
-        if answer:
-            return await self._format_response(answer, "knowledge_graph", context)
-
-        # Step 3: Documents
-        if self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-            try:
-                answer = await self.knowledge_manager.answer(
-                    session_id,
-                    query,
-                )
-            except Exception:
-                logger.exception("[CognitiveCore] Step 3 (Documents) failed.")
-
-        if answer:
-            return await self._format_response(answer, "document", context)
-
-        # Step 4: Skills (Calculator, Python, Time, Date, Weather, etc.)
-        if self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
-            try:
-                skill_result = await self.skill_manager.route_and_execute(
-                    query,
-                    context,
-                )
-                if skill_result and skill_result.success:
-                    answer = skill_result.data.get("response") or skill_result.data.get("message") or str(skill_result.data)
-            except Exception:
-                logger.exception("[CognitiveCore] Step 4 (Skills) failed.")
-
-        if answer:
-            return await self._format_response(answer, "skill", context)
-
-        # Step 5: Knowledge Database
-        if self.knowledge_database and hasattr(self.knowledge_database, "search"):
-            try:
-                answer = await self.knowledge_database.search(query)
-            except Exception:
-                logger.exception("[CognitiveCore] Step 5 (Knowledge Database) failed.")
-
-        if answer:
-            return await self._format_response(answer, "knowledge_database", context)
-
-        # Step 6: Web Search (if internet required)
-        if self._looks_like_web_search_request(query) and self.action_manager and "web_search" in self.action_manager.actions:
-            try:
-                web_result = await self.action_manager.execute_action(
-                    action_name="web_search",
-                    params={"query": query},
-                )
-                if web_result and web_result.success:
-                    answer = web_result.data.get("result") or web_result.data.get("content") or str(web_result.data)
-            except Exception:
-                logger.exception("[CognitiveCore] Step 6 (Web Search) failed.")
-
-        if answer:
-            return await self._format_response(answer, "web_search", context)
-
-        # Step 7: LLM -> Reasoning -> Natural language
         try:
-            if self.reasoning_engine:
-                reasoning = await self.reasoning_engine.reason(context)
-                context["reasoning"] = reasoning
+            # Parallel Retrieval across subsystems
+            memory_task = (
+                self.memory_router.answer(query)
+                if self.memory_router and hasattr(self.memory_router, "answer")
+                else asyncio.sleep(0)
+            )
+            world_task = (
+                asyncio.to_thread(self.world_model.search, query)
+                if self.world_model and hasattr(self.world_model, "search")
+                else asyncio.sleep(0)
+            )
+            graph_task = (
+                self.knowledge_graph.search(query)
+                if self.knowledge_graph and hasattr(self.knowledge_graph, "search")
+                else asyncio.sleep(0)
+            )
+            doc_task = (
+                self.knowledge_manager.answer(session_id, query)
+                if self.knowledge_manager and hasattr(self.knowledge_manager, "answer")
+                else asyncio.sleep(0)
+            )
+            db_task = (
+                self.knowledge_database.search(query)
+                if self.knowledge_database and hasattr(self.knowledge_database, "search")
+                else asyncio.sleep(0)
+            )
 
-            if self.planner:
-                plan = await self.planner.create_plan(query, context)
-                if plan and plan.tasks and self.executor:
-                    exec_result = await self.executor.execute_plan(plan, context)
-                    task_outputs = exec_result.get("task_outputs", {})
-                    for task in reversed(plan.tasks):
-                        out = task_outputs.get(task.id, {})
-                        if isinstance(out, dict):
-                            answer = out.get("response") or out.get("content") or out.get("message")
-                            if answer:
-                                break
+            results = await asyncio.gather(
+                memory_task,
+                world_task,
+                graph_task,
+                doc_task,
+                db_task,
+                return_exceptions=True,
+            )
 
-            if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
-                messages = [
-                    {"role": "system", "content": "You are ARIA, a helpful AI assistant."},
-                    {"role": "user", "content": query}
-                ]
-                answer = await self.llm_router.chat(messages)
-        except Exception:
-            logger.exception("[CognitiveCore] Step 7 (LLM/Reasoning) failed.")
+            mem_res, world_res, graph_res, doc_res, db_res = [
+                r if not isinstance(r, Exception) else None for r in results
+            ]
 
-        if not answer:
-            answer = "I couldn't find the information to answer your request."
+            # Confidence Ranking / Prioritization Selection
+            if mem_res:
+                answer = mem_res
+                source = "memory"
+                confidence = 0.94
+            elif world_res:
+                answer = str(world_res)
+                source = "world_model"
+                confidence = 0.91
+            elif doc_res:
+                answer = doc_res
+                source = "document"
+                confidence = 0.89
+                if self.world_model and hasattr(self.world_model, "set_active_document"):
+                    self.world_model.set_active_document(query)
+            elif graph_res:
+                answer = str(graph_res)
+                source = "knowledge_graph"
+                confidence = 0.81
+            elif db_res:
+                answer = str(db_res)
+                source = "knowledge_database"
+                confidence = 0.75
 
-        # Step 8: If LLM produced new information, automatically call learning_engine.learn()
-        if self.learning_engine and hasattr(self.learning_engine, "learn"):
+            # Step 4 & 5: Skills Fallback if no knowledge/memory hit
+            if not answer and self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+                try:
+                    skill_result = await self.skill_manager.route_and_execute(
+                        query,
+                        context,
+                    )
+                    if skill_result and skill_result.success:
+                        answer = (
+                            skill_result.data.get("response")
+                            or skill_result.data.get("message")
+                            or str(skill_result.data)
+                        )
+                        source = "skill"
+                        confidence = 0.80
+                except Exception:
+                    logger.exception("[CognitiveCore] Skills execution failed.")
+
+            # Step 6 & 10 & 11: Web Search -> Learn -> LLM Fallback (Cache if found)
+            if not answer:
+                self.brain_state["thinking"] = True
+                if self._looks_like_web_search_request(query) and self.action_manager and "web_search" in self.action_manager.actions:
+                    try:
+                        web_result = await self.action_manager.execute_action(
+                            action_name="web_search",
+                            params={"query": query},
+                        )
+                        if web_result and web_result.success:
+                            answer = (
+                                web_result.data.get("result")
+                                or web_result.data.get("content")
+                                or str(web_result.data)
+                            )
+                            source = "web_search"
+                            confidence = 0.70
+                    except Exception:
+                        logger.exception("[CognitiveCore] Web Search failed.")
+
+                if not answer:
+                    try:
+                        if self.reasoning_engine:
+                            reasoning = await self.reasoning_engine.reason(context)
+                            context["reasoning"] = reasoning
+
+                        if self.planner:
+                            plan = await self.planner.create_plan(query, context)
+                            if plan and plan.tasks and self.executor:
+                                exec_result = await self.executor.execute_plan(plan, context)
+                                task_outputs = exec_result.get("task_outputs", {})
+                                for task in reversed(plan.tasks):
+                                    out = task_outputs.get(task.id, {})
+                                    if isinstance(out, dict):
+                                        answer = out.get("response") or out.get("content") or out.get("message")
+                                        if answer:
+                                            break
+
+                        if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
+                            messages = [
+                                {"role": "system", "content": "You are ARIA, a helpful AI assistant."},
+                                {"role": "user", "content": query}
+                            ]
+                            answer = await self.llm_router.chat(messages)
+                    except Exception:
+                        logger.exception("[CognitiveCore] LLM/Reasoning fallback failed.")
+
+                if not answer:
+                    answer = "I couldn't find the information to answer your request."
+                    confidence = 0.1
+
+                # Cache/Store newly generated/searched knowledge
+                if self.knowledge_database and hasattr(self.knowledge_database, "store"):
+                    await self.knowledge_database.store(title=query[:50], content=answer, source=source)
+                if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
+                    await self.knowledge_graph.learn(query, answer)
+
+            # Step 2, 4, 5, 8: Continuous Learning & Updates from Retrieved/Generated Data
+            if self.learning_engine:
+                try:
+                    await self.learning_engine.learn(answer, source=source)
+                    if hasattr(self.knowledge_graph, "learn"):
+                        await self.knowledge_graph.learn(query, answer)
+                    if self.world_model and hasattr(self.world_model, "learn"):
+                        await self.world_model.learn(query, answer)
+                except Exception:
+                    logger.exception("[CognitiveCore] Learning engine integration failed.")
+
+        finally:
+            self.brain_state["retrieving"] = False
+            self.brain_state["thinking"] = False
+
+        # Step 6: Self Reflection review
+        if self.self_reflection and hasattr(self.self_reflection, "review"):
             try:
-                await self.learning_engine.learn(answer, source="llm_generation")
+                await self.self_reflection.review(
+                    query=query,
+                    answer=answer,
+                    source=source,
+                )
             except Exception:
-                logger.exception("[CognitiveCore] Step 8 (LearningEngine) failed.")
+                logger.exception("[CognitiveCore] Self-reflection review failed.")
 
         # Step 9: Pass through PersonalityEngine
-        return await self._format_response(answer, "llm_generated", context)
+        return await self._format_response(answer, source, context, confidence)
 
-    async def _format_response(self, answer: str, source: str, context: Dict[str, Any]) -> SystemResponse:
+    async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
         formatted_answer = answer
         if self.personality_engine and hasattr(self.personality_engine, "format"):
             try:
@@ -245,7 +316,7 @@ class CognitiveCore:
 
         return SystemResponse(
             success=True,
-            confidence=1.0,
+            confidence=confidence,
             source=source,
             data={
                 "response": formatted_answer,
@@ -1040,7 +1111,7 @@ class CognitiveCore:
                 )
 
             # =================================================
-            # 4. RETRIEVE RELEVANT MEMORY
+            # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER
             # =================================================
 
             memories = []
@@ -1049,8 +1120,7 @@ class CognitiveCore:
 
                 try:
                     memories = (
-                        await self.memory_router
-                        .get_relevant_memories(query)
+                        await self.memory_router.recall(query)
                     ) or []
 
                 except Exception:
@@ -1227,10 +1297,7 @@ class CognitiveCore:
                 )
 
             # =================================================
-            # 10. NATURAL MEMORY LEARNING
-            #
-            # Learn useful persistent facts without turning the
-            # entire message into a memory-only interaction.
+            # 10. NATURAL MEMORY LEARNING VIA ROUTER
             # =================================================
 
             if self.memory_router:
@@ -1239,7 +1306,7 @@ class CognitiveCore:
 
                     memory_result = (
                         await self.memory_router
-                        .process_and_store(query)
+                        .remember(query)
                     )
 
                     if (
@@ -1249,19 +1316,16 @@ class CognitiveCore:
 
                         logger.info(
                             "[CognitiveCore] Natural memory "
-                            "learning: key=%s action=%s",
+                            "learning via router: key=%s action=%s",
                             memory_result.get("key"),
                             memory_result.get("action"),
                         )
-
-                        # Refresh retrieved context so reasoning
-                        # sees the newest value immediately.
 
                         try:
 
                             refreshed = (
                                 await self.memory_router
-                                .get_relevant_memories(query)
+                                .recall(query)
                             )
 
                             if refreshed is not None:
