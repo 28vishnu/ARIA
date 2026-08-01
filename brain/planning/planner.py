@@ -7,8 +7,7 @@ from datetime import datetime
 from brain.memory.memory_router import MemoryRouter
 from brain.plan import ExecutionPlan
 from brain.task import Task
-from brain.events.event import Event
-from brain.events import event_types
+
 
 logger = logging.getLogger("aria")
 
