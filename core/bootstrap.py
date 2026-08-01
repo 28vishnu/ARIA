@@ -15,6 +15,8 @@ from brain.knowledge.knowledge_database import KnowledgeDatabase
 from brain.knowledge.knowledge_graph import KnowledgeGraph
 from brain.knowledge.graph_builder import GraphBuilder
 from brain.knowledge.learning_engine import LearningEngine
+from brain.world.world_model import WorldModel
+from brain.world.context_builder import ContextBuilder as WorldContextBuilder
 from brain.document.document_repository import DocumentRepository
 from brain.agents.agent_manager import AgentManager
 from brain.agents.code_agent import CodeAgent
@@ -219,7 +221,7 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
     # ---------------------------------------------------------
-    # Document Intelligence & Knowledge Manager
+    # Document Intelligence & Knowledge Objects
     # ---------------------------------------------------------
 
     logger.info(
@@ -238,22 +240,49 @@ async def bootstrap_application() -> ServiceRegistry:
         doc_intelligence
     )
 
+    state_manager = StateManager()
+    world_model = WorldModel()
+
     knowledge_database = KnowledgeDatabase()
+    knowledge_graph = KnowledgeGraph()
+
+    graph_builder = GraphBuilder(
+        knowledge_graph
+    )
+
+    knowledge_manager = KnowledgeManager(
+        document_ai=doc_intelligence,
+        memory_engine=memory_engine,
+        state_manager=state_manager,
+    )
+
+    learning_engine = LearningEngine(
+        knowledge_database=knowledge_database,
+        memory_engine=memory_engine,
+        knowledge_graph=knowledge_graph,
+        graph_builder=graph_builder,
+    )
+
+    context_builder = ContextBuilder(
+        state_manager=state_manager,
+        world_model=world_model,
+        memory_router=memory_engine,
+        knowledge_graph=knowledge_graph,
+    )
 
     registry.register(
         "knowledge_database",
         knowledge_database,
     )
 
-    knowledge_graph = KnowledgeGraph()
-
     registry.register(
         "knowledge_graph",
         knowledge_graph,
     )
 
-    graph_builder = GraphBuilder(
-        knowledge_graph
+    registry.register(
+        "world_model",
+        world_model,
     )
 
     registry.register(
@@ -261,10 +290,9 @@ async def bootstrap_application() -> ServiceRegistry:
         graph_builder,
     )
 
-    learning_engine = LearningEngine(
-        knowledge_database=knowledge_database,
-        memory_engine=memory_engine,
-        knowledge_graph=knowledge_graph,
+    registry.register(
+        "knowledge_manager",
+        knowledge_manager,
     )
 
     registry.register(
@@ -272,18 +300,9 @@ async def bootstrap_application() -> ServiceRegistry:
         learning_engine,
     )
 
-    knowledge_manager = KnowledgeManager(
-        document_ai=doc_intelligence,
-        memory_engine=memory_engine,
-        state_manager=StateManager(),
-        knowledge_database=knowledge_database,
-        knowledge_graph=knowledge_graph,
-        learning_engine=learning_engine,
-    )
-
     registry.register(
-        "knowledge_manager",
-        knowledge_manager
+        "context_builder",
+        context_builder,
     )
 
     logger.info(
@@ -320,9 +339,6 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Core Services
     # ---------------------------------------------------------
-
-    context_builder = ContextBuilder()
-    state_manager = StateManager()
 
     session_manager = SessionManager(state_manager)
 
@@ -441,7 +457,11 @@ async def bootstrap_application() -> ServiceRegistry:
         decision_engine=decision_engine,
         memory_conversation_manager=memory_conversation_manager,
         reasoning_engine=reasoning_engine,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
         knowledge_manager=knowledge_manager,
+        learning_engine=learning_engine,
+        world_model=world_model,
     )
 
     registry.register(
