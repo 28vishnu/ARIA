@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from brain.events.event_listener import EventListener
+from brain.events import event_types
 
 logger = logging.getLogger("aria")
 
@@ -295,12 +296,40 @@ class AutonomousLearning(EventListener):
     # EVENT LISTENER HANDLER
     # =========================================================
 
-    async def handle(self, event):
+    async def handle(
+        self,
+        event,
+    ):
+        if event.type == event_types.CHAT_COMPLETED:
+            await self.process_chat(
+                event.data.get("user"),
+                event.data.get("assistant"),
+            )
 
-        await self.learn(
+        elif event.type == event_types.DOCUMENT_PROCESSED:
+            await self.process_document(
+                event.data.get("filename"),
+                event.data.get("summary"),
+            )
 
-            source=event.type,
+        elif event.type == event_types.TASK_COMPLETED:
+            await self.process_skill(
+                event.data.get("task"),
+                event.data.get("result"),
+            )
 
-            **event.data,
+        elif event.type == event_types.RESPONSE_GENERATED:
+            await self.process_success(
+                event.data.get("query"),
+                event.data.get("answer"),
+            )
 
-        )
+        elif event.type == event_types.TASK_FAILED:
+            await self.process_failure(
+                event.data.get("query"),
+            )
+
+        elif event.type == event_types.PLAN_COMPLETED:
+            await self.process_plan(
+                event.data.get("plan"),
+            )
