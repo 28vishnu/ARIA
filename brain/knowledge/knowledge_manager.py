@@ -17,8 +17,9 @@ class KnowledgeManager:
     ):
         state = self.state_manager.get_state(session_id)
 
-        # If a document is active, answer from it first.
+        # 1. Active document
         if state.get("active_document"):
+
             answer = await self.document_ai.answer_question(
                 session_id=session_id,
                 question=question,
@@ -28,10 +29,13 @@ class KnowledgeManager:
             if answer:
                 return answer
 
-        # Otherwise search memory.
-        memories = await self.memory_engine.retrieve(question)
+        # 2. Memory
+        memories = await self.memory_engine.get_relevant_memories(question)
 
         if memories:
-            return memories
+            return "\n".join(
+                m.get("content", str(m))
+                for m in memories
+            )
 
         return None
