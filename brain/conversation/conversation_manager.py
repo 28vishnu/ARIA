@@ -54,14 +54,18 @@ class ConversationManager:
         if intent is not None:
             session["current_intent"] = intent
 
-        if entities is not None:
+        if entities:
             session["entities"] = entities
-            if entities:
-                # Extract first entity or joined entities as the new topic
-                new_topic = str(entities[0]) if isinstance(entities, list) and entities else str(entities)
-                if new_topic and new_topic != session.get("current_topic"):
-                    session["previous_topic"] = session.get("current_topic")
-                    session["current_topic"] = new_topic
+            new_topic = str(entities[0]) if isinstance(entities, list) and entities else str(entities)
+        else:
+            entities = []
+            session["entities"] = entities
+            new_topic = self.extract_topic(user_message)
+
+        if new_topic:
+            if new_topic != session.get("current_topic"):
+                session["previous_topic"] = session.get("current_topic")
+                session["current_topic"] = new_topic
 
     def get_context(self, session_id: str) -> Dict[str, Any]:
         """
@@ -190,3 +194,36 @@ class ConversationManager:
         """
         if session_id in self._sessions:
             del self._sessions[session_id]
+
+    def extract_topic(self, text: str) -> Optional[str]:
+        """
+        Lightweight topic extractor.
+        Used only when no entities are supplied.
+        """
+
+        if not text:
+            return None
+
+        COMMON_TOPICS = {
+            "python",
+            "java",
+            "javascript",
+            "c++",
+            "docker",
+            "linux",
+            "mongodb",
+            "postgres",
+            "redis",
+            "fastapi",
+            "django",
+            "flask",
+        }
+
+        words = text.lower().split()
+
+        for word in words:
+            word = word.strip(".,?!")
+            if word in COMMON_TOPICS:
+                return word.title()
+
+        return None
