@@ -248,7 +248,10 @@ class CognitiveCore:
                 source = "document"
                 confidence = 0.89
                 if self.world_model and hasattr(self.world_model, "set_active_document"):
-                    self.world_model.set_active_document(resolved_query)
+                    if asyncio.iscoroutinefunction(self.world_model.set_active_document):
+                        await self.world_model.set_active_document(resolved_query)
+                    else:
+                        self.world_model.set_active_document(resolved_query)
                 if self.event_bus:
                     await self.event_bus.publish(
                         Event(
@@ -1301,6 +1304,8 @@ Relevant knowledge:
                     },
                 )
 
+            resolved_query = await self._resolve_query(session_id, query)
+
             # =================================================
             # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER
             # =================================================
@@ -1311,7 +1316,7 @@ Relevant knowledge:
 
                 try:
                     memories = (
-                        await self.memory_router.recall(query)
+                        await self.memory_router.recall(resolved_query)
                     ) or []
 
                 except Exception:
@@ -1326,7 +1331,7 @@ Relevant knowledge:
             if self.context_builder:
 
                 ctx = await self.context_builder.build(
-                    query=query,
+                    query=resolved_query,
                     session_id=session_id,
                     user_id=user_id,
                     base_context=base_context,
@@ -1338,7 +1343,7 @@ Relevant knowledge:
 
                 ctx = dict(base_context or {})
 
-                ctx["query"] = query
+                ctx["query"] = resolved_query
                 ctx["session_id"] = session_id
                 ctx["user_id"] = user_id
                 ctx["state"] = state
@@ -1347,7 +1352,7 @@ Relevant knowledge:
             # Guarantee essential context exists even if the
             # ContextBuilder omitted one of these fields.
 
-            ctx.setdefault("query", query)
+            ctx.setdefault("query", resolved_query)
             ctx.setdefault("session_id", session_id)
             ctx.setdefault("user_id", user_id)
             ctx.setdefault("state", state)
@@ -1419,7 +1424,7 @@ Relevant knowledge:
             if self.state_manager:
                 self.state_manager.update_state(
                     session_id,
-                    last_query=query,
+                    last_query=resolved_query,
                 )
 
             # =================================================
@@ -1435,7 +1440,7 @@ Relevant knowledge:
 
                 try:
                     intent = (
-                        await self.intent_analyzer.analyze(query)
+                        await self.intent_analyzer.analyze(resolved_query)
                     )
 
                     ctx["intent"] = intent
@@ -1469,7 +1474,7 @@ Relevant knowledge:
 
                 reply = (
                     await self.memory_conversation_manager.handle(
-                        query=query,
+                        query=resolved_query,
                         context=ctx,
                     )
                 )
@@ -1497,7 +1502,7 @@ Relevant knowledge:
 
                     memory_result = (
                         await self.memory_router
-                        .remember(query)
+                        .remember(resolved_query)
                     )
 
                     if (
@@ -1518,7 +1523,7 @@ Relevant knowledge:
                                     type=event_types.MEMORY_CREATED,
                                     source="memory",
                                     data={
-                                        "query": query,
+                                        "query": resolved_query,
                                     }
                                 )
                             )
@@ -1527,7 +1532,7 @@ Relevant knowledge:
 
                             refreshed = (
                                 await self.memory_router
-                                .recall(query)
+                                .recall(resolved_query)
                             )
 
                             if refreshed is not None:
@@ -1554,7 +1559,7 @@ Relevant knowledge:
             self.brain_state["reasoning"] = True
             return await self.knowledge_first_pipeline(
                 session_id,
-                query,
+                resolved_query,
                 ctx,
             )
 
