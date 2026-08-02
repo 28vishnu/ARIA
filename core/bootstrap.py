@@ -30,6 +30,7 @@ from brain.agents.research_agent import ResearchAgent
 from brain.agents.writing_agent import WritingAgent
 from brain.session import SessionManager
 from brain.state.state_manager import StateManager
+from brain.conversation.conversation_manager import ConversationManager
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -153,6 +154,16 @@ async def bootstrap_application() -> ServiceRegistry:
         logger.warning(
             "[BOOT TEST] MemoryConversationManager disabled because MemoryEngine is unavailable"
         )
+
+    # ---------------------------------------------------------
+    # Conversation Manager
+    # ---------------------------------------------------------
+    conversation_manager = ConversationManager()
+    registry.register(
+        "conversation_manager",
+        conversation_manager
+    )
+    logger.info("[BOOT TEST] ConversationManager configured")
 
     # ---------------------------------------------------------
     # ChromaDB
@@ -356,6 +367,7 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("autonomous_learning", autonomous_learning)
     registry.register("event_bus", event_bus)
     registry.register("context_builder", context_builder)
+    registry.register("conversation_manager", conversation_manager)
 
     logger.info(
         "[BOOT TEST] 7 - DocumentIntelligence created"
@@ -489,6 +501,8 @@ async def bootstrap_application() -> ServiceRegistry:
         self_reflection=self_reflection,
         autonomous_learning=autonomous_learning,
         event_bus=event_bus,
+        llm_router=llm_router,
+        conversation_manager=conversation_manager,
     )
 
     registry.register(
