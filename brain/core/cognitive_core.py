@@ -322,14 +322,13 @@ class CognitiveCore:
                                         if answer:
                                             break
 
-                        # Agents Execution (if needed)
-                        if not answer and reasoning and reasoning.selected_agents:
-                            for agent in reasoning.selected_agents:
-                                if hasattr(agent, "execute"):
-                                    res = await agent.execute(resolved_query, context)
-                                    if res:
-                                        answer = str(res)
-                                        break
+                        # Multi-Agent Outputs Fusion via ResponseFusion
+                        if not answer and reasoning and reasoning.agent_outputs:
+                            answer = await self.response_fusion.fuse(
+                                reasoning.agent_outputs,
+                                context,
+                            )
+                            source = "multi_agent"
 
                         # LLM Fallback
                         if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
