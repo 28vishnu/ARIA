@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Optional, Dict, Any, List
 
 
 class ConversationManager:
@@ -26,6 +26,9 @@ class ConversationManager:
                 "active_document": None,
                 "active_plan": None,
                 "turn_count": 0,
+                "user_goal": None,
+                "pending_followup": None,
+                "conversation_summary": "",
             }
         return self._sessions[session_id]
 
@@ -84,6 +87,9 @@ class ConversationManager:
             "last_assistant": session.get("last_assistant_message"),
             "document": session.get("active_document"),
             "plan": session.get("active_plan"),
+            "user_goal": session.get("user_goal"),
+            "pending_followup": session.get("pending_followup"),
+            "conversation_summary": session.get("conversation_summary"),
         }
 
     def is_followup(self, query: str) -> bool:
@@ -196,6 +202,22 @@ class ConversationManager:
         """
         session = self.get_session(session_id)
         session["active_plan"] = None
+
+    def set_user_goal(
+        self,
+        session_id,
+        goal,
+    ):
+        session = self.get_session(session_id)
+        session["user_goal"] = goal
+
+    def set_pending_followup(
+        self,
+        session_id,
+        followup,
+    ):
+        session = self.get_session(session_id)
+        session["pending_followup"] = followup
 
     def clear_session(self, session_id: str) -> None:
         """
