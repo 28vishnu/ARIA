@@ -160,7 +160,7 @@ class CognitiveCore:
         context: Dict[str, Any],
     ) -> SystemResponse:
         """
-        ARIA's core knowledge-first intelligence pipeline orchestrated via advanced ReasoningResult.
+        ARIA's core unified cognitive intelligence pipeline orchestrated via Reasoning, Planner, Executor, Memory, WorldModel, Reflection, and Learning.
         """
         self.brain_state["retrieving"] = True
         answer = None
@@ -168,368 +168,150 @@ class CognitiveCore:
         confidence = 0.5
 
         resolved_query = await self._resolve_query(session_id, query)
-        
-        # Advanced Reasoning Flow calls as requested
-        reasoning = None
-        hypotheses = []
-        best = None
-        reflection = {}
 
+        # Step 1: Build context first via context_builder if available
+        if self.context_builder:
+            context = await self.context_builder.build(
+                query=resolved_query,
+                session_id=session_id,
+                user_id=context.get("user_id", session_id),
+                base_context=context,
+            )
+        else:
+            context.setdefault("query", resolved_query)
+            context.setdefault("session_id", session_id)
+
+        # Step 2: Call the reasoning engine immediately
+        reasoning = None
         if self.reasoning_engine:
             try:
                 reasoning = await self.reasoning_engine.reason(context)
                 context["reasoning"] = reasoning
-
-                if hasattr(self.reasoning_engine, "generate_hypotheses"):
-                    hypotheses = await self.reasoning_engine.generate_hypotheses(resolved_query, reasoning.evidence)
-
-                if hasattr(self.reasoning_engine, "choose_best_reasoning"):
-                    best = await self.reasoning_engine.choose_best_reasoning(hypotheses, reasoning.simulations)
-
-                if hasattr(self.reasoning_engine, "self_critique"):
-                    reflection = await self.reasoning_engine.self_critique(hypotheses, reasoning.evidence)
             except Exception:
-                logger.exception("[CognitiveCore] Advanced ReasoningEngine pipeline invocation failed.")
+                logger.exception("[CognitiveCore] ReasoningEngine invocation failed.")
 
         try:
-            # 1. Memory Subsystem Control via ReasoningResult
-            mem_res = None
-            if reasoning and getattr(reasoning, "retrieved_memory", None):
-                mem_res = reasoning.retrieved_memory
-            elif self.memory_router and hasattr(self.memory_router, "answer"):
-                mem_res = await self.memory_router.answer(resolved_query)
+            # Step 3: If reasoning already contains an answer
+            if reasoning and getattr(reasoning, "answer", None):
+                answer = reasoning.answer
+                source = "reasoning"
+                confidence = getattr(reasoning, "confidence", 0.90)
 
-            # 2. Document Subsystem Control via ReasoningResult
-            doc_res = None
-            if reasoning and getattr(reasoning, "retrieved_knowledge", None) and self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-                doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
-            elif self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-                doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
-
-            # 3. Knowledge Graph & Database Search
-            graph_res = reasoning.graph_results if reasoning and hasattr(reasoning, "graph_results") else (await self.knowledge_graph.search(resolved_query) if self.knowledge_graph and hasattr(self.knowledge_graph, "search") else None)
-            db_res = None
-            if self.knowledge_database and hasattr(self.knowledge_database, "search"):
-                db_res = await self.knowledge_database.search(resolved_query)
-
-            world_res = reasoning.world_state if reasoning and hasattr(reasoning, "world_state") else (asyncio.to_thread(self.world_model.search, resolved_query) if self.world_model and hasattr(self.world_model, "search") else None)
-
-            # Confidence Ranking / Prioritization Selection
-            if mem_res:
-                if isinstance(mem_res, str):
-                    answer = mem_res
-                    source = "memory"
-                    confidence = 0.94
-                elif isinstance(mem_res, list):
-                    cleaned_memories = []
-                    for m in mem_res:
-                        if isinstance(m, dict):
-                            k = m.get("key", "").replace("_", " ").title()
-                            v = m.get("value", "")
-                            if k and v:
-                                cleaned_memories.append(f"- {k}: {v}")
-                        elif isinstance(m, str):
-                            cleaned_memories.append(f"- {m}")
-                    context["memory"] = cleaned_memories
-                elif isinstance(mem_res, dict):
-                    m = mem_res
-                    k = m.get("key", "").replace("_", " ").title()
-                    v = m.get("value", "")
-                    context["memory"] = [f"- {k}: {v}"] if k and v else [str(m)]
-
-            if not answer and doc_res:
-                answer = doc_res
-                source = "document"
-                confidence = 0.89
-                if self.world_model and hasattr(self.world_model, "set_active_document"):
-                    if asyncio.iscoroutinefunction(self.world_model.set_active_document):
-                        await self.world_model.set_active_document(resolved_query)
-                    else:
-                        self.world_model.set_active_document(resolved_query)
-                if self.event_bus:
-                    await self.event_bus.publish(
-                        Event(
-                            type=event_types.DOCUMENT_PROCESSED,
-                            source="cognitive_core",
-                            data={
-                                "query": resolved_query,
-                                "answer": answer,
-                            }
-                        )
-                    )
-            elif not answer and graph_res:
-                answer = str(graph_res)
-                source = "knowledge_graph"
-                confidence = 0.81
-            elif not answer and db_res:
-                answer = str(db_res)
-                source = "knowledge_database"
-                confidence = 0.75
-            elif not answer and world_res:
-                answer = str(world_res)
-                source = "world_model"
-                confidence = 0.91
-
-            # Skills Fallback if no knowledge/memory hit
-            if not answer and self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
+            # Step 4: If reasoning generated a plan, execute it via the executor
+            if not answer and reasoning and getattr(reasoning, "plan", None) and self.executor:
                 try:
-                    skill_result = await self.skill_manager.route_and_execute(
-                        resolved_query,
+                    result = await self.executor.execute_plan(
+                        reasoning.plan,
                         context,
                     )
-                    if skill_result and skill_result.success:
-                        answer = (
-                            skill_result.data.get("response")
-                            or skill_result.data.get("message")
-                            or str(skill_result.data)
-                        )
-                        source = "skill"
-                        confidence = 0.80
+                    if result:
+                        answer = result.get("response") or result.get("message") or (result.get("task_outputs") and str(result.get("task_outputs")))
+                        if answer:
+                            source = "planner_executor"
+                            confidence = getattr(reasoning, "plan", {}).get("confidence", 0.92)
                 except Exception:
-                    logger.exception("[CognitiveCore] Skills execution failed.")
+                    logger.exception("[CognitiveCore] Executor plan execution failed.")
 
-            # Web Search & Planner & Agents Control via ReasoningResult
+            # Step 5: Only if there is still no answer, fallback to Memory -> Knowledge -> World -> LLM
             if not answer:
                 self.brain_state["thinking"] = True
-                should_web = reasoning and hasattr(reasoning, "metadata") and reasoning.metadata.get("should_use_web") or self._looks_like_web_search_request(resolved_query)
-                if should_web and self.action_manager and "web_search" in self.action_manager.actions:
-                    try:
-                        web_result = await self.action_manager.execute_action(
-                            action_name="web_search",
-                            params={"query": resolved_query},
-                        )
-                        if web_result and web_result.success:
-                            answer = (
-                                web_result.data.get("result")
-                                or web_result.data.get("content")
-                                or str(web_result.data)
-                            )
-                            source = "web_search"
-                            confidence = 0.70
-                    except Exception:
-                        logger.exception("[CognitiveCore] Web Search failed.")
 
+                # Memory Subsystem
+                mem_res = None
+                if reasoning and getattr(reasoning, "retrieved_memory", None):
+                    mem_res = reasoning.retrieved_memory
+                elif self.memory_router and hasattr(self.memory_router, "answer"):
+                    mem_res = await self.memory_router.answer(resolved_query)
+
+                if mem_res:
+                    if isinstance(mem_res, str):
+                        answer = mem_res
+                        source = "memory"
+                        confidence = 0.94
+                    elif isinstance(mem_res, list) and mem_res:
+                        answer = str(mem_res)
+                        source = "memory"
+                        confidence = 0.94
+
+                # Knowledge Subsystem
                 if not answer:
+                    doc_res = None
+                    if reasoning and getattr(reasoning, "retrieved_knowledge", None) and self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+                        doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
+                    elif self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+                        doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
+
+                    if doc_res:
+                        answer = doc_res
+                        source = "document"
+                        confidence = 0.89
+                    elif reasoning and getattr(reasoning, "graph_results", None):
+                        answer = str(reasoning.graph_results)
+                        source = "knowledge_graph"
+                        confidence = 0.81
+                    elif self.knowledge_database and hasattr(self.knowledge_database, "search"):
+                        db_res = await self.knowledge_database.search(resolved_query)
+                        if db_res:
+                            answer = str(db_res)
+                            source = "knowledge_database"
+                            confidence = 0.75
+
+                # World Model Subsystem
+                if not answer:
+                    world_res = reasoning.world_state if reasoning and hasattr(reasoning, "world_state") else (asyncio.to_thread(self.world_model.search, resolved_query) if self.world_model and hasattr(self.world_model, "search") else None)
+                    if world_res:
+                        answer = str(world_res)
+                        source = "world_model"
+                        confidence = 0.91
+
+                # LLM Fallback (only if required)
+                if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                     try:
-                        # Planner Execution with Autonomous Monitoring and Dynamic Replanning Loop
-                        if reasoning and reasoning.plan and self.executor:
-                            plan = reasoning.plan
-                            exec_result = await self.executor.execute_plan(plan, context)
-                            
-                            goal_finished = await self.planner.monitor_goal_progress(
-                                plan,
-                                exec_result,
-                            )
-
-                            if not goal_finished and self.planner and hasattr(self.planner, "dynamic_replan"):
-                                plan = await self.planner.dynamic_replan(
-                                    plan.goal,
-                                    exec_result.get("completed", []),
-                                    exec_result.get("failed", []),
-                                    context,
-                                )
-                                if plan:
-                                    exec_result = await self.executor.execute_plan(
-                                        plan,
-                                        context,
-                                    )
-
-                            task_outputs = exec_result.get("task_outputs", {})
-                            for task in reversed(plan.tasks):
-                                out = task_outputs.get(task.id, {})
-                                if isinstance(out, dict):
-                                    answer = out.get("response") or out.get("content") or out.get("message")
-                                    if answer:
-                                        break
-                            if self.event_bus:
-                                await self.event_bus.publish(
-                                    Event(
-                                        type=event_types.PLAN_COMPLETED,
-                                        source="planner",
-                                        data={
-                                            "query": resolved_query,
-                                        }
-                                    )
-                                )
-                        elif self.planner and reasoning and getattr(reasoning, "goal", "") == "plan":
-                            plan = await self.planner.create_plan(resolved_query, context)
-                            if plan and plan.tasks and self.executor:
-                                exec_result = await self.executor.execute_plan(plan, context)
-                                
-                                goal_finished = await self.planner.monitor_goal_progress(
-                                    plan,
-                                    exec_result,
-                                )
-
-                                if not goal_finished and hasattr(self.planner, "dynamic_replan"):
-                                    plan = await self.planner.dynamic_replan(
-                                        plan.goal,
-                                        exec_result.get("completed", []),
-                                        exec_result.get("failed", []),
-                                        context,
-                                    )
-                                    if plan:
-                                        exec_result = await self.executor.execute_plan(
-                                            plan,
-                                            context,
-                                        )
-
-                                task_outputs = exec_result.get("task_outputs", {})
-                                for task in reversed(plan.tasks):
-                                    out = task_outputs.get(task.id, {})
-                                    if isinstance(out, dict):
-                                        answer = out.get("response") or out.get("content") or out.get("message")
-                                        if answer:
-                                            break
-
-                        # Multi-Agent Outputs Fusion via ResponseFusion
-                        if not answer and reasoning and reasoning.agent_outputs:
-                            answer = await self.response_fusion.fuse(
-                                reasoning.agent_outputs,
-                                context,
-                            )
-                            source = "multi_agent"
-
-                        # LLM Fallback
-                        if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
-                            conversation = context.get("conversation", {})
-                            
-                            conversation.setdefault("history", [])
-                            if not conversation["history"] and self.state_manager:
-                                try:
-                                    conversation["history"] = self.state_manager.get_conversation_history(session_id) or []
-                                except Exception:
-                                    pass
-
-                            memory_items = context.get("memory", [])
-                            document = context.get("document", {})
-                            knowledge = context.get("knowledge", {})
-
-                            memories_str = "\n".join(memory_items) if isinstance(memory_items, list) else str(memory_items)
-                            if not memories_str.strip():
-                                memories_str = "None recorded."
-
-                            doc_str = str(document) if document else "None"
-                            knowledge_str = str(knowledge) if knowledge else "None"
-
-                            conversation_context = {}
-                            if self.conversation_manager:
-                                conversation_context = self.conversation_manager.get_context(session_id)
-
-                            system_prompt = f"""You are ARIA, an advanced personal AI collaborator.
-
-Conversation Context:
-
-Current Topic:
-{conversation_context.get("topic")}
-
-Previous Topic:
-{conversation_context.get("previous_topic")}
-
-Last User Message:
-{conversation_context.get("last_user")}
-
-Last Assistant Message:
-{conversation_context.get("last_assistant")}
-
-Relevant user memories:
-{memories_str}
-
-Active document:
-{doc_str}
-
-Relevant knowledge:
-{knowledge_str}
-"""
-
-                            messages = [
-                                {
-                                    "role": "system",
-                                    "content": system_prompt
-                                }
-                            ]
-
-                            for turn in conversation.get("history", []):
-                                if not isinstance(turn, dict):
-                                    continue
-
-                                user_turn = turn.get("user")
-                                assistant_turn = turn.get("assistant")
-
-                                if user_turn:
-                                    messages.append({
-                                        "role": "user",
-                                        "content": str(user_turn)
-                                    })
-
-                                if assistant_turn:
-                                    messages.append({
-                                        "role": "assistant",
-                                        "content": str(assistant_turn)
-                                    })
-
-                            messages.append({
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": "You are ARIA, an advanced personal AI collaborator. Answer the user request directly."
+                            },
+                            {
                                 "role": "user",
                                 "content": resolved_query
-                            })
-
-                            answer = await self.llm_router.chat(messages)
+                            }
+                        ]
+                        answer = await self.llm_router.chat(messages)
+                        source = "llm_generated"
+                        confidence = 0.70
                     except Exception:
-                        logger.exception("[CognitiveCore] LLM/Reasoning fallback failed.")
+                        logger.exception("[CognitiveCore] LLM fallback generation failed.")
 
                 if not answer:
                     answer = "I couldn't find the information to answer your request."
                     confidence = 0.1
-
-                if source != "llm_generated" or confidence > 0.85:
-                    if self.knowledge_database and hasattr(self.knowledge_database, "store"):
-                        await self.knowledge_database.store(title=resolved_query[:50], content=answer, source=source)
-                    if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
-                        await self.knowledge_graph.learn(resolved_query, answer)
 
         finally:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
 
-        # Store the reflection safely in knowledge database or memory if available
-        if reflection and self.knowledge_database and hasattr(self.knowledge_database, "store"):
+        # Step 6: Reflection and Learning hooks before returning
+        if self.self_reflection:
             try:
-                await self.knowledge_database.store(
-                    title=f"Reflection: {resolved_query[:35]}",
-                    content=str(reflection),
-                    source="self_critique"
+                await self.self_reflection.reflect(
+                    session_id,
+                    resolved_query,
+                    answer,
                 )
             except Exception:
-                logger.exception("[CognitiveCore] Failed to store reflection in knowledge database.")
-
-        # Execution Report generation and recording via WorldModel, SelfReflection, and AutonomousLearning
-        execution_report = {
-            "query": resolved_query,
-            "response_source": source,
-            "confidence": confidence,
-            "success": bool(answer),
-        }
-
-        if self.world_model:
-            await self.world_model.record_execution(
-                execution_report
-            )
-
-        if self.self_reflection:
-            await self.self_reflection.reflect(
-                session_id,
-                resolved_query,
-                answer,
-            )
+                logger.exception("[CognitiveCore] Self reflection hook failed.")
 
         if self.autonomous_learning:
-            if answer:
+            try:
                 await self.autonomous_learning.learn(
                     session_id,
                     resolved_query,
                     answer,
                 )
+            except Exception:
+                logger.exception("[CognitiveCore] Autonomous learning hook failed.")
 
         if self.state_manager:
             try:
