@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any, List
 import logging
+import asyncio
 
 logger = logging.getLogger("aria")
 
@@ -36,6 +37,48 @@ class KnowledgeManager:
         self.web_search = web_search
         self.llm_router = llm_router
         self.event_bus = event_bus
+
+    ###########################################################
+    # Unified Search Entrypoint
+    ###########################################################
+
+    async def search(self, query: str):
+        """
+        Unified knowledge search entrypoint.
+        """
+        results = []
+
+        if self.document_ai:
+            try:
+                docs = None
+                if hasattr(self.document_ai, "search"):
+                    docs = await self.document_ai.search(query)
+                elif hasattr(self.document_ai, "retrieve"):
+                    docs = await self.document_ai.retrieve(query)
+                elif hasattr(self.document_ai, "semantic_search"):
+                    docs = await self.document_ai.semantic_search(query)
+                elif hasattr(self.document_ai, "find"):
+                    docs = await self.document_ai.find(query)
+
+                if docs:
+                    results.extend(docs)
+            except Exception:
+                pass
+
+        if self.knowledge_database:
+            try:
+                kb = None
+                if hasattr(self.knowledge_database, "search"):
+                    kb = await self.knowledge_database.search(query)
+                elif hasattr(self.knowledge_database, "retrieve"):
+                    kb = await self.knowledge_database.retrieve(query)
+
+                if kb:
+                    results.extend(kb)
+            except Exception:
+                pass
+
+        return results
 
     ###########################################################
     # Individual Search Methods
