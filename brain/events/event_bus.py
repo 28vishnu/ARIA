@@ -156,3 +156,25 @@ class EventBus:
     def summary(self):
 
         return self.statistics
+
+
+# =========================================================
+# WORKFLOW & REPLAN EVENT CONSTANTS
+# =========================================================
+
+TASK_STARTED = "TASK_STARTED"
+TASK_FINISHED = "TASK_FINISHED"
+TASK_RETRY = "TASK_RETRY"
+TASK_FAILED = "TASK_FAILED"
+
+WORKFLOW_PROGRESS = "WORKFLOW_PROGRESS"
+
+PLAN_UPDATED = "PLAN_UPDATED"
+
+GOAL_COMPLETED = "GOAL_COMPLETED"
+
+GOAL_FAILED = "GOAL_FAILED"
+
+REPLAN_STARTED = "REPLAN_STARTED"
+
+REPLAN_FINISHED = "REPLAN_FINISHED"
