@@ -18,6 +18,9 @@ class EventBus:
 
         self.listeners = defaultdict(list)
 
+        self.history = []
+        self.max_history = 1000
+
         self.statistics = {
 
             "events": 0,
@@ -68,6 +71,10 @@ class EventBus:
         self,
         event,
     ):
+        self.history.append(event)
+
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
 
         self.statistics["events"] += 1
 
@@ -103,6 +110,10 @@ class EventBus:
         self,
         event,
     ):
+        self.history.append(event)
+
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
 
         self.statistics["events"] += 1
 
@@ -145,9 +156,15 @@ class EventBus:
 
     ####################################################
 
+    def get_recent_events(self, limit=100):
+        return self.history[-limit:]
+
+    ####################################################
+
     def clear(self):
 
         self.listeners.clear()
+        self.history.clear()
 
         self.statistics["listeners"] = 0
 
@@ -155,7 +172,10 @@ class EventBus:
 
     def summary(self):
 
-        return self.statistics
+        return {
+            **self.statistics,
+            "history_size": len(self.history),
+        }
 
 
 # =========================================================
