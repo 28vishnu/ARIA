@@ -308,21 +308,28 @@ class ReasoningEngine:
             if self.memory_router and hasattr(self.memory_router, "recall")
             else asyncio.sleep(0)
         )
-        knowledge_task = (
-            self.knowledge_database.retrieve(query)
-            if self.knowledge_database and hasattr(self.knowledge_database, "retrieve")
-            else asyncio.sleep(0)
-        )
+
+        knowledge_task = asyncio.sleep(0)
+        if self.knowledge_database:
+            if hasattr(self.knowledge_database, "retrieve"):
+                knowledge_task = self.knowledge_database.retrieve(query)
+            elif hasattr(self.knowledge_database, "search"):
+                knowledge_task = self.knowledge_database.search(query)
+            elif hasattr(self.knowledge_database, "answer"):
+                knowledge_task = self.knowledge_database.answer(question=query)
+
         graph_task = (
             self.knowledge_graph.search(query)
             if self.knowledge_graph and hasattr(self.knowledge_graph, "search")
             else asyncio.sleep(0)
         )
-        world_task = (
-            asyncio.to_thread(self.world_model.search, query)
-            if self.world_model and hasattr(self.world_model, "search")
-            else asyncio.sleep(0)
-        )
+
+        world_task = asyncio.sleep(0)
+        if self.world_model and hasattr(self.world_model, "search"):
+            world_task = asyncio.to_thread(
+                self.world_model.search,
+                query,
+            )
 
         results = await asyncio.gather(
             memories_task,
