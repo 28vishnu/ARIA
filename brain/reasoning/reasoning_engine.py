@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -408,8 +409,10 @@ class ReasoningEngine:
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
         Comprehensive advanced reasoning pipeline incorporating hypothesis generation,
-        future simulation, self-critique, action prediction, and multi-path reasoning.
+        future simulation, self-critique, action prediction, and multi-path reasoning,
+        fully populating detailed metadata for decision tracking.
         """
+        start_time = time.time()
         raw_query = str(context.get("query", "")).strip()
         reasoning_steps = []
 
@@ -497,14 +500,50 @@ class ReasoningEngine:
         elif goal == "plan":
             action = "planner"
 
+        reasoning_time = round(time.time() - start_time, 3)
+
+        # Detailed Subsystem Usage Indicators
+        memory_used = bool(memories)
+        graph_used = bool(graph_results)
+        world_used = bool(world_state)
+        web_used = use_web
+        planner_used = bool(plan)
+        tool_used = bool(agent_outputs or selected_agents)
+
+        # Confidence breakdown per source type
+        mem_conf = max([m.get("confidence", 0.5) for m in memories], default=0.5) if memories else 0.5
+        know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
+        world_conf = 0.90 if world_state else 0.5
+
+        metadata = {
+            "reasoning_time": reasoning_time,
+            "planner_used": planner_used,
+            "memory_used": memory_used,
+            "graph_used": graph_used,
+            "world_used": world_used,
+            "web_used": web_used,
+            "tool_used": tool_used,
+            "confidence_breakdown": {
+                "memory": mem_conf,
+                "knowledge": know_conf,
+                "world": world_conf,
+            },
+            "source": ranked_evidence[0].get("source") if ranked_evidence else "chat",
+            "response_depth": context.get("response", {}).get("depth", "normal"),
+            "conflicts": conflicts,
+            "reasoning_steps": reasoning_steps,
+            "best_path": best_path,
+        }
+
         trace = await self.build_reasoning_trace(reasoning_steps)
 
         logger.info(
-            "[ReasoningEngine] Goal=%s Mode=%s Action=%s Confidence=%.2f Trace=%s",
+            "[ReasoningEngine] Goal=%s Mode=%s Action=%s Confidence=%.2f Time=%.3fs Trace=%s",
             goal,
             reasoning_mode,
             action,
             confidence,
+            reasoning_time,
             trace
         )
 
@@ -519,14 +558,7 @@ class ReasoningEngine:
             retrieved_knowledge=knowledge,
             graph_results=graph_results,
             world_state=world_state,
-            metadata={
-                "source": ranked_evidence[0].get("source") if ranked_evidence else "chat",
-                "response_depth": context.get("response", {}).get("depth", "normal"),
-                "conflicts": conflicts,
-                "reasoning_steps": reasoning_steps,
-                "should_use_web": use_web,
-                "best_path": best_path,
-            },
+            metadata=metadata,
             resolved_query=query,
             topic=conv_tracking.get("topic", ""),
             working_memory=working_memory,
