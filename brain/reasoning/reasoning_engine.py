@@ -42,6 +42,7 @@ class ReasoningResult:
     action_name: Optional[str] = None
     action_params: Dict[str, Any] = field(default_factory=dict)
     workflow: Optional[AgentWorkflow] = None
+    agent_outputs: Dict[str, Any] = field(default_factory=dict)
 
 
 class ReasoningEngine:
@@ -85,7 +86,6 @@ class ReasoningEngine:
         entities = conv.get("entities", [])
         history = conv.get("history", [])
 
-        # Determine dialogue stage
         turn_count = len(history)
         dialogue_stage = "greeting" if turn_count <= 1 else "ongoing"
 
@@ -111,7 +111,6 @@ class ReasoningEngine:
         clean_q = query.strip()
         lower_q = clean_q.lower()
 
-        # Quick programmatic handling for common short follow-ups if topic is present
         if topic:
             if lower_q == "continue":
                 return f"Continue explaining {topic}."
@@ -124,7 +123,6 @@ class ReasoningEngine:
         if not history:
             return clean_q
 
-        # Fallback to LLM reference resolution if history exists
         if self.llm_router and hasattr(self.llm_router, "chat"):
             try:
                 messages = [
@@ -456,29 +454,83 @@ class ReasoningEngine:
         context: Dict[str, Any],
     ) -> List[Any]:
         """
-        Score available agents and pick the best combination.
+        Evaluate all available agents to see which ones can handle the query.
         """
-        if not self.agent_manager or not hasattr(self.agent_manager, "agents"):
+        if not self.agent_manager:
             return []
 
         selected = []
-        try:
-            if hasattr(self.agent_manager, "select_agent"):
-                best_agent, score = await self.agent_manager.select_agent(query, context)
-                if best_agent:
-                    selected.append(best_agent)
-            else:
-                for agent in self.agent_manager.agents.values():
+
+        for agent in self.agent_manager.agents.values():
+
+            try:
+
+                if hasattr(agent, "can_handle"):
+
+                    if await agent.can_handle(query, context):
+
+                        selected.append(agent)
+
+                else:
+
                     selected.append(agent)
-        except Exception:
-            logger.exception("[ReasoningEngine] Agent selection failed.")
+
+            except Exception:
+
+                logger.exception(
+                    "[ReasoningEngine] Agent scoring failed."
+                )
 
         return selected
+
+    async def execute_agents(
+
+        self,
+
+        agents,
+
+        query,
+
+        context,
+
+    ):
+
+        outputs = {}
+
+        async def run(agent):
+
+            try:
+
+                if hasattr(agent, "execute"):
+
+                    result = await agent.execute(
+                        query,
+                        context,
+                    )
+
+                    outputs[
+                        agent.__class__.__name__
+                    ] = result
+
+            except Exception:
+
+                logger.exception(
+                    "[ReasoningEngine] Agent execution failed."
+                )
+
+        await asyncio.gather(
+            *[
+                run(agent)
+                for agent in agents
+            ]
+        )
+
+        return outputs
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
         Analyze context, build evidence, execute multi-hop reasoning, rank evidence,
-        detect conflicts, calculate confidence, select agents, and return ReasoningResult
+        detect conflicts, calculate confidence, select and execute agents, and return ReasoningResult
         with all required new fields populated.
         """
         raw_query = str(context.get("query", "")).strip()
@@ -534,12 +586,20 @@ class ReasoningEngine:
         confidence = self.calculate_confidence(ranked_evidence)
         reasoning_steps.append(f"Calculated confidence: {confidence:.2f}")
 
-        # 6. Multi-Agent Reasoning Selection
+        # 6. Multi-Agent Reasoning Selection & Execution
         selected_agents = await self.choose_agents(query, context) if use_agents else []
         workflow = AgentWorkflow()
         for agent in selected_agents:
             workflow.add(agent)
-        reasoning_steps.append(f"Selected {len(selected_agents)} agent(s)")
+
+        agent_outputs = {}
+        if selected_agents:
+            agent_outputs = await self.execute_agents(
+                selected_agents,
+                query,
+                context,
+            )
+        reasoning_steps.append(f"Selected and executed {len(selected_agents)} agent(s)")
 
         # 7. Determine Plan Automatically if Multi-step Required
         plan = []
@@ -597,5 +657,6 @@ class ReasoningEngine:
             reasoning_trace=trace,
             primary_action=action,
             reasoning=f"Resolved objective '{goal}' under mode '{reasoning_mode}' with confidence {confidence:.2f}.",
-            workflow=workflow
+            workflow=workflow,
+            agent_outputs=agent_outputs
         )
