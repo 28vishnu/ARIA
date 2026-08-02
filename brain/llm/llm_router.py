@@ -69,6 +69,11 @@ class LLMRouter:
         - Permanent failure: move to next provider.
         """
 
+        logger.info(
+            "[LLMRouter] Messages being sent:\n%s",
+            json.dumps(messages, indent=2, ensure_ascii=False),
+        )
+
         errors = []
 
         available_providers = {
