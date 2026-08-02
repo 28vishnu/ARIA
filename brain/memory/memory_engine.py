@@ -25,10 +25,10 @@ MEMORY_TYPES = {
 }
 
 IMPORTANCE = {
-    "low": 20,
-    "medium": 50,
-    "high": 90,
-    "critical": 100
+    "low": 0.25,
+    "medium": 0.5,
+    "high": 0.75,
+    "critical": 1.0
 }
 
 
@@ -273,7 +273,7 @@ class MemoryEngine:
                     "value": value,
                     "category": "identity",
                     "memory_type": "fact",
-                    "importance": "high",
+                    "importance": 0.75,
                     "is_list": False
                 }
 
@@ -306,7 +306,7 @@ class MemoryEngine:
                     "value": value,
                     "category": "identity",
                     "memory_type": "preference",
-                    "importance": "high",
+                    "importance": 0.75,
                     "is_list": False
                 }
 
@@ -324,7 +324,7 @@ class MemoryEngine:
                 "value": "false",
                 "category": "interaction_preference",
                 "memory_type": "preference",
-                "importance": "high",
+                "importance": 0.75,
                 "is_list": False
             }
 
@@ -357,7 +357,7 @@ class MemoryEngine:
                     "value": value,
                     "category": "personal",
                     "memory_type": "fact",
-                    "importance": "high",
+                    "importance": 0.75,
                     "is_list": False
                 }
 
@@ -386,7 +386,7 @@ class MemoryEngine:
                 "value": value,
                 "category": "preference",
                 "memory_type": "preference",
-                "importance": "medium",
+                "importance": 0.5,
                 "is_list": False
             }
 
@@ -411,7 +411,7 @@ class MemoryEngine:
                 "value": value,
                 "category": "education",
                 "memory_type": "fact",
-                "importance": "medium",
+                "importance": 0.5,
                 "is_list": False
             }
 
@@ -442,7 +442,7 @@ class MemoryEngine:
                     "value": items,
                     "category": "preference",
                     "memory_type": "preference",
-                    "importance": "low",
+                    "importance": 0.25,
                     "is_list": True
                 }
 
@@ -474,7 +474,7 @@ class MemoryEngine:
                     "value": segment,
                     "category": "interaction_preference",
                     "memory_type": "preference",
-                    "importance": "medium",
+                    "importance": 0.5,
                     "is_list": False
                 }
 
@@ -540,6 +540,19 @@ class MemoryEngine:
             timezone.utc
         ).isoformat()
 
+        imp = memory.get("importance", 0.5)
+        if isinstance(imp, str):
+            imp = {
+                "low": 0.25,
+                "medium": 0.5,
+                "high": 0.75,
+                "critical": 1.0,
+            }.get(imp.lower(), 0.5)
+        try:
+            imp = float(imp)
+        except (TypeError, ValueError):
+            imp = 0.5
+
         return {
 
             "key": memory["key"],
@@ -561,10 +574,7 @@ class MemoryEngine:
                 "fact"
             ),
 
-            "importance": IMPORTANCE.get(
-                memory.get("importance", "medium"),
-                50
-            ),
+            "importance": imp,
 
             "confidence": memory.get(
                 "confidence",
@@ -635,10 +645,15 @@ class MemoryEngine:
         key = memory["key"]
         value = memory["value"]
 
-        if memory.get("importance") in ("high", "critical"):
-            memory["is_permanent"] = True
+        imp_val = memory.get("importance", 0.5)
+        if isinstance(imp_val, str):
+            is_perm = imp_val in ("high", "critical")
         else:
-            memory["is_permanent"] = False
+            try:
+                is_perm = float(imp_val) >= 0.75
+            except (TypeError, ValueError):
+                is_perm = False
+        memory["is_permanent"] = is_perm
 
         if memory.get("is_list"):
 
@@ -838,7 +853,7 @@ class MemoryEngine:
                             ),
                             "importance": extracted.get(
                                 "importance",
-                                "medium"
+                                0.5
                             ),
                             "is_list": False
                         }
@@ -890,8 +905,22 @@ class MemoryEngine:
 
         importance = memory.get(
             "importance",
-            50
+            0.5
         )
+
+        # Convert string importance to numeric value
+        if isinstance(importance, str):
+            importance = {
+                "low": 0.25,
+                "medium": 0.5,
+                "high": 0.75,
+                "critical": 1.0,
+            }.get(importance.lower(), 0.5)
+
+        try:
+            importance = float(importance)
+        except (TypeError, ValueError):
+            importance = 0.5
 
         confidence = memory.get(
             "confidence",
@@ -1064,7 +1093,7 @@ class MemoryEngine:
                             ),
                             "importance": m.get(
                                 "importance",
-                                50
+                                0.5
                             ),
                             "confidence": m.get(
                                 "confidence",
@@ -1475,7 +1504,7 @@ class MemoryEngine:
                     ),
                     "importance": memory.get(
                         "importance",
-                        50
+                        0.5
                     ),
                     "confidence": memory.get(
                         "confidence",
