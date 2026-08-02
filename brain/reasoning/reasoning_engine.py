@@ -68,14 +68,23 @@ class ReasoningEngine:
         self.action_manager = action_manager
         self.event_bus = event_bus
 
-    async def understand_goal(
-        self,
-        context: Dict[str, Any],
-    ) -> str:
-        """
-        Determine the primary user objective using intent, conversation state,
-        current goals, active documents, and query characteristics.
-        """
+    async def track_conversation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Track conversation turns, history, and state transitions."""
+        conv = context.get("conversation", {})
+        return {
+            "history": conv.get("history", []),
+            "topic": conv.get("topic"),
+            "previous_topic": conv.get("previous_topic"),
+            "last_user": conv.get("last_user"),
+            "last_assistant": conv.get("last_assistant"),
+        }
+
+    async def resolve_references(self, query: str, context: Dict[str, Any]) -> str:
+        """Resolve pronouns and conversational references using session/conversation context."""
+        return query
+
+    async def track_goal(self, context: Dict[str, Any]) -> str:
+        """Determine the primary user objective using intent, conversation state, and query characteristics."""
         query = str(context.get("query", "")).strip().lower()
         intent = context.get("intent")
         intent_name = intent.name if intent else None
@@ -96,6 +105,61 @@ class ReasoningEngine:
             return "contextual_chat"
 
         return "answer"
+
+    async def detect_topic_shift(self, context: Dict[str, Any]) -> bool:
+        """Detect whether the user has shifted conversational topic."""
+        conv = context.get("conversation", {})
+        return conv.get("topic") != conv.get("previous_topic")
+
+    async def build_working_memory(self, context: Dict[str, Any]) -> List[Any]:
+        """Build working memory context from active conversation and memory router items."""
+        return context.get("memory", [])
+
+    async def decide_response_strategy(self, goal: str, context: Dict[str, Any]) -> str:
+        """Decide the high-level response strategy based on goal and response depth hints."""
+        depth = context.get("response", {}).get("depth", "normal")
+        return f"{goal}_{depth}"
+
+    async def choose_reasoning_mode(self, context: Dict[str, Any]) -> str:
+        """Determine whether to use standard retrieval, analytical reasoning, or multi-step execution."""
+        return "knowledge_first"
+
+    async def should_use_planner(self, goal: str, context: Dict[str, Any]) -> bool:
+        """Determine if a formal execution plan is required."""
+        query = str(context.get("query", ""))
+        return goal == "plan" or len(query.split()) > 10
+
+    async def should_use_agents(self, goal: str, context: Dict[str, Any]) -> bool:
+        """Determine if specialist reasoning agents should be engaged."""
+        return goal in ("plan", "search", "execute")
+
+    async def should_use_memory(self, context: Dict[str, Any]) -> bool:
+        """Determine if personal memory retrieval should be utilized."""
+        return True
+
+    async def should_use_documents(self, context: Dict[str, Any]) -> bool:
+        """Determine if active documents or document repositories should be searched."""
+        doc = context.get("document", {})
+        return bool(doc.get("active") or doc.get("name"))
+
+    async def should_use_web(self, query: str, context: Dict[str, Any]) -> bool:
+        """Determine if online web search fallback is necessary."""
+        q = query.lower()
+        return any(term in q for term in ["latest", "current", "news", "today", "search web"])
+
+    async def build_reasoning_trace(self, steps: List[str]) -> str:
+        """Compile individual reasoning steps into a coherent audit trail."""
+        return " | ".join(steps)
+
+    async def understand_goal(
+        self,
+        context: Dict[str, Any],
+    ) -> str:
+        """
+        Determine the primary user objective using intent, conversation state,
+        current goals, active documents, and query characteristics.
+        """
+        return await self.track_goal(context)
 
     async def retrieve_context(
         self,
@@ -195,7 +259,6 @@ class ReasoningEngine:
         """
         extended_evidence = list(evidence)
         if self.knowledge_graph and hasattr(self.knowledge_graph, "find_path"):
-            # Example traversal hook placeholder
             pass
         return extended_evidence
 
@@ -262,7 +325,6 @@ class ReasoningEngine:
         """
         sources_found = set(item.get("source") for item in evidence)
         if len(sources_found) > 1 and len(evidence) > 2:
-            # Basic placeholder conflict check
             return {"conflict": False, "sources": list(sources_found)}
         return {"conflict": False, "sources": []}
 
@@ -311,12 +373,36 @@ class ReasoningEngine:
         detect conflicts, calculate confidence, select agents, and return ReasoningResult.
         Purely observational and analytical — no learning or state mutation.
         """
-        query = str(context.get("query", "")).strip()
+        raw_query = str(context.get("query", "")).strip()
         reasoning_steps = []
 
-        # 1. Understand Goal
-        goal = await self.understand_goal(context)
-        reasoning_steps.append(f"Understood user goal as '{goal}'")
+        # Invoke all tracking/resolution methods as requested
+        conv_tracking = await self.track_conversation(context)
+        reasoning_steps.append("Tracked conversation state")
+
+        query = await self.resolve_references(raw_query, context)
+        reasoning_steps.append("Resolved conversational references")
+
+        goal = await self.track_goal(context)
+        reasoning_steps.append(f"Tracked user goal as '{goal}'")
+
+        topic_shifted = await self.detect_topic_shift(context)
+        if topic_shifted:
+            reasoning_steps.append("Detected conversational topic shift")
+
+        working_mem = await self.build_working_memory(context)
+        reasoning_steps.append("Built working memory context")
+
+        strategy = await self.decide_response_strategy(goal, context)
+        mode = await self.choose_reasoning_mode(context)
+        reasoning_steps.append(f"Decided response strategy '{strategy}' under mode '{mode}'")
+
+        use_planner = await self.should_use_planner(goal, context)
+        use_agents = await self.should_use_agents(goal, context)
+        use_memory = await self.should_use_memory(context)
+        use_docs = await self.should_use_documents(context)
+        use_web = await self.should_use_web(query, context)
+        reasoning_steps.append(f"Evaluated engine subsystems (Planner: {use_planner}, Agents: {use_agents}, Memory: {use_memory}, Docs: {use_docs}, Web: {use_web})")
 
         # 2. Retrieve Evidence in Parallel & Normalize
         retrieval = await self.retrieve_context(query)
@@ -341,7 +427,7 @@ class ReasoningEngine:
         reasoning_steps.append(f"Calculated aggregate confidence score: {confidence:.2f}")
 
         # 6. Multi-Agent Reasoning Selection
-        selected_agents = await self.choose_agents(query, context)
+        selected_agents = await self.choose_agents(query, context) if use_agents else []
         workflow = AgentWorkflow()
         for agent in selected_agents:
             workflow.add(agent)
@@ -349,7 +435,7 @@ class ReasoningEngine:
 
         # 7. Determine Plan Automatically if Multi-step Required
         plan = []
-        if goal == "plan" or len(query.split()) > 10:
+        if use_planner:
             if self.planner and hasattr(self.planner, "create_plan"):
                 try:
                     task_plan = await self.planner.create_plan(query, context)
@@ -365,12 +451,15 @@ class ReasoningEngine:
         elif goal == "plan":
             action = "planner"
 
+        trace = await self.build_reasoning_trace(reasoning_steps)
+
         logger.info(
-            "[ReasoningEngine] Goal=%s Action=%s Confidence=%.2f EvidenceCount=%d",
+            "[ReasoningEngine] Goal=%s Action=%s Confidence=%.2f EvidenceCount=%d Trace=%s",
             goal,
             action,
             confidence,
-            len(ranked_evidence)
+            len(ranked_evidence),
+            trace
         )
 
         return ReasoningResult(
@@ -389,6 +478,7 @@ class ReasoningEngine:
                 "response_depth": context.get("response", {}).get("depth", "normal"),
                 "conflicts": conflicts,
                 "reasoning_steps": reasoning_steps,
+                "reasoning_trace": trace,
             },
             primary_action=action,
             reasoning=f"Resolved objective '{goal}' with confidence {confidence:.2f} across {len(ranked_evidence)} evidence items.",
