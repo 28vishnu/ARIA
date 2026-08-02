@@ -148,6 +148,19 @@ class MemoryRouter:
                 return mems[0]
         return None
 
+    async def process_successful_reasoning(self, query: str, reasoning: Any):
+        """
+        Store reusable reasoning patterns at the end of a successful reasoning cycle.
+        """
+        await self.store_reasoning_pattern(
+            pattern_key=query,
+            pattern_data={
+                "reasoning": reasoning,
+                "success": True,
+                "timestamp": time.time(),
+            },
+        )
+
     # =====================================================
     # Unified Recall
     # =====================================================
