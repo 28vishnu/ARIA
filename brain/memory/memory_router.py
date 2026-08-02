@@ -88,6 +88,9 @@ class MemoryRouter:
             limit
         )
 
+        if memories is None:
+            return []
+
         return memories
 
     # =====================================================
@@ -113,12 +116,13 @@ class MemoryRouter:
         # Personal Memory
         if self.memory_engine:
 
-            result["personal_memory"] = (
+            pm = (
                 await self.memory_engine.get_relevant_memories(
                     query,
                     limit
                 )
             )
+            result["personal_memory"] = pm if pm is not None else []
 
         # Knowledge Engine
         if self.knowledge_engine:
@@ -157,7 +161,7 @@ class MemoryRouter:
         if result["graph"]:
             return result["graph"]
 
-        return None
+        return []
 
     # =====================================================
     # Store APIs
