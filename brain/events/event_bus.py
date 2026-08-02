@@ -80,7 +80,13 @@ class EventBus:
 
             try:
 
-                await listener.handle(event)
+                if hasattr(listener, "handle"):
+                    await listener.handle(event)
+                else:
+                    logger.warning(
+                        "%s has no handle() method",
+                        listener.__class__.__name__,
+                    )
 
             except Exception as e:
 
@@ -102,20 +108,29 @@ class EventBus:
             [],
         )
 
-        tasks = [
+        tasks = []
+        for listener in listeners:
+            if hasattr(listener, "handle"):
+                tasks.append(listener.handle(event))
+            else:
+                logger.warning(
+                    "%s has no handle() method",
+                    listener.__class__.__name__,
+                )
 
-            listener.handle(event)
-
-            for listener in listeners
-
-        ]
+        if not tasks:
+            return
 
         try:
 
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *tasks,
                 return_exceptions=True,
             )
+            for res in results:
+                if isinstance(res, Exception):
+                    self.statistics["errors"] += 1
+                    logger.exception("[EventBus] Listener failed: %s", res)
 
         except Exception as e:
 
