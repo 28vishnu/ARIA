@@ -26,6 +26,15 @@ class ReasoningResult:
     world_state: dict
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    # Required new fields
+    resolved_query: str = ""
+    topic: str = ""
+    working_memory: Dict[str, Any] = field(default_factory=dict)
+    response_strategy: str = ""
+    reasoning_mode: str = ""
+    topic_changed: bool = False
+    reasoning_trace: str = ""
+
     # Legacy compatibility fields for orchestrators
     primary_action: str = "chat"
     secondary_actions: List[str] = field(default_factory=list)
@@ -69,19 +78,78 @@ class ReasoningEngine:
         self.event_bus = event_bus
 
     async def track_conversation(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Track conversation turns, history, and state transitions."""
+        """Track conversation turns, history, active topic, previous topic, entities, and dialogue stage."""
         conv = context.get("conversation", {})
+        topic = conv.get("topic")
+        previous_topic = conv.get("previous_topic")
+        entities = conv.get("entities", [])
+        history = conv.get("history", [])
+
+        # Determine dialogue stage
+        turn_count = len(history)
+        dialogue_stage = "greeting" if turn_count <= 1 else "ongoing"
+
         return {
-            "history": conv.get("history", []),
-            "topic": conv.get("topic"),
-            "previous_topic": conv.get("previous_topic"),
+            "history": history,
+            "topic": topic,
+            "previous_topic": previous_topic,
+            "entities": entities,
+            "dialogue_stage": dialogue_stage,
             "last_user": conv.get("last_user"),
             "last_assistant": conv.get("last_assistant"),
         }
 
     async def resolve_references(self, query: str, context: Dict[str, Any]) -> str:
-        """Resolve pronouns and conversational references using session/conversation context."""
-        return query
+        """
+        Rewrite follow-up questions (like 'continue', 'why', 'compare it', 'what about that')
+        into standalone queries using conversation history and LLM or context.
+        """
+        conv_state = await self.track_conversation(context)
+        history = conv_state["history"]
+        topic = conv_state["topic"]
+
+        clean_q = query.strip()
+        lower_q = clean_q.lower()
+
+        # Quick programmatic handling for common short follow-ups if topic is present
+        if topic:
+            if lower_q == "continue":
+                return f"Continue explaining {topic}."
+            if lower_q == "why":
+                last_u = conv_state.get("last_user")
+                return f"Why {last_u}" if last_u else f"Why is {topic} significant?"
+            if lower_q.startswith("compare it"):
+                return clean_q.lower().replace("compare it", f"Compare {topic}", 1)
+
+        if not history:
+            return clean_q
+
+        # Fallback to LLM reference resolution if history exists
+        if self.llm_router and hasattr(self.llm_router, "chat"):
+            try:
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Rewrite follow-up questions, pronouns (it, that), and context references "
+                            "into fully self-contained standalone questions using the conversation history. "
+                            "Return ONLY the rewritten question."
+                        ),
+                    }
+                ]
+                for turn in history[-5:]:
+                    if isinstance(turn, dict):
+                        messages.append({"role": "user", "content": turn.get("user", "")})
+                        messages.append({"role": "assistant", "content": turn.get("assistant", "")})
+
+                messages.append({"role": "user", "content": clean_q})
+                resolved = await self.llm_router.chat(messages, task="command_reasoning")
+                if resolved and resolved.strip():
+                    return resolved.strip()
+            except Exception:
+                logger.exception("[ReasoningEngine] LLM reference resolution failed.")
+
+        return clean_q
 
     async def track_goal(self, context: Dict[str, Any]) -> str:
         """Determine the primary user objective using intent, conversation state, and query characteristics."""
@@ -95,9 +163,9 @@ class ReasoningEngine:
             return "remember" if "forget" not in query and "delete" not in query else "delete"
         if intent_name in ("delete_document", "delete_all_documents") or any(w in query for w in ["delete", "remove", "clear"]):
             return "delete"
-        if intent_name == "planner" or any(w in query for w in ["plan", "how to", "steps", "build", "create"]):
+        if intent_name == "planner" or any(w in query for w in ["plan", "roadmap", "how to", "steps", "build", "create"]):
             return "plan"
-        if any(w in query for w in ["search", "find", "look up", "what is", "who is", "when"]):
+        if any(w in query for w in ["search", "find", "look up", "what is", "who is", "when", "latest"]):
             return "search"
         if any(w in query for w in ["run", "execute", "calculate"]):
             return "execute"
@@ -107,31 +175,70 @@ class ReasoningEngine:
         return "answer"
 
     async def detect_topic_shift(self, context: Dict[str, Any]) -> bool:
-        """Detect whether the user has shifted conversational topic."""
+        """Detect whether the user has shifted conversational topic by comparing current and previous topics."""
         conv = context.get("conversation", {})
-        return conv.get("topic") != conv.get("previous_topic")
+        curr = conv.get("topic")
+        prev = conv.get("previous_topic")
+        if curr and prev and curr.lower() != prev.lower():
+            return True
+        return False
 
-    async def build_working_memory(self, context: Dict[str, Any]) -> List[Any]:
-        """Build working memory context from active conversation and memory router items."""
-        return context.get("memory", [])
+    async def build_working_memory(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build rich working memory including retrieved memories, recent conversation,
+        active document, detected entities, current goal, and current topic.
+        """
+        conv = context.get("conversation", {})
+        return {
+            "retrieved_memories": context.get("memory", []),
+            "recent_conversation": conv.get("history", [])[-5:],
+            "active_document": context.get("document", {}),
+            "detected_entities": conv.get("entities", []),
+            "current_goal": context.get("current_goal"),
+            "current_topic": conv.get("topic"),
+        }
 
     async def decide_response_strategy(self, goal: str, context: Dict[str, Any]) -> str:
         """Decide the high-level response strategy based on goal and response depth hints."""
         depth = context.get("response", {}).get("depth", "normal")
-        return f"{goal}_{depth}"
+        return f"{goal}_strategy_{depth}"
 
     async def choose_reasoning_mode(self, context: Dict[str, Any]) -> str:
-        """Determine whether to use standard retrieval, analytical reasoning, or multi-step execution."""
+        """
+        Dynamically choose reasoning mode based on query characteristics:
+        - conversational (continue, greetings, acknowledgements)
+        - analytical (compare, explain, why, how)
+        - planning (create roadmap, steps, plan)
+        - memory (remember, my profile, save)
+        - web (latest, current news, today)
+        - knowledge_first (default fallback)
+        """
+        query = str(context.get("query", "")).strip().lower()
+        conv = context.get("conversation", {})
+
+        if conv.get("is_continuation") or conv.get("is_acknowledgement") or query in ["hi", "hello", "thanks"]:
+            return "conversational"
+        if any(w in query for w in ["compare", "analys", "analyze", "why", "how", "difference"]):
+            return "analytical"
+        if any(w in query for w in ["plan", "roadmap", "steps", "build", "create"]):
+            return "planning"
+        if any(w in query for w in ["remember", "profile", "my ", "save"]):
+            return "memory"
+        if any(w in query for w in ["latest", "current", "news", "today", "recent"]):
+            return "web"
+
         return "knowledge_first"
 
     async def should_use_planner(self, goal: str, context: Dict[str, Any]) -> bool:
         """Determine if a formal execution plan is required."""
         query = str(context.get("query", ""))
-        return goal == "plan" or len(query.split()) > 10
+        mode = await self.choose_reasoning_mode(context)
+        return goal == "plan" or mode == "planning" or len(query.split()) > 10
 
     async def should_use_agents(self, goal: str, context: Dict[str, Any]) -> bool:
         """Determine if specialist reasoning agents should be engaged."""
-        return goal in ("plan", "search", "execute")
+        mode = await self.choose_reasoning_mode(context)
+        return goal in ("plan", "search", "execute") or mode in ("analytical", "planning")
 
     async def should_use_memory(self, context: Dict[str, Any]) -> bool:
         """Determine if personal memory retrieval should be utilized."""
@@ -144,12 +251,13 @@ class ReasoningEngine:
 
     async def should_use_web(self, query: str, context: Dict[str, Any]) -> bool:
         """Determine if online web search fallback is necessary."""
+        mode = await self.choose_reasoning_mode(context)
         q = query.lower()
-        return any(term in q for term in ["latest", "current", "news", "today", "search web"])
+        return mode == "web" or any(term in q for term in ["latest", "current", "news", "today", "search web"])
 
     async def build_reasoning_trace(self, steps: List[str]) -> str:
         """Compile individual reasoning steps into a coherent audit trail."""
-        return " | ".join(steps)
+        return " -> ".join(steps)
 
     async def understand_goal(
         self,
@@ -370,13 +478,13 @@ class ReasoningEngine:
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
         Analyze context, build evidence, execute multi-hop reasoning, rank evidence,
-        detect conflicts, calculate confidence, select agents, and return ReasoningResult.
-        Purely observational and analytical — no learning or state mutation.
+        detect conflicts, calculate confidence, select agents, and return ReasoningResult
+        with all required new fields populated.
         """
         raw_query = str(context.get("query", "")).strip()
         reasoning_steps = []
 
-        # Invoke all tracking/resolution methods as requested
+        # 1. Conversation tracking & Reference resolution
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
 
@@ -386,31 +494,31 @@ class ReasoningEngine:
         goal = await self.track_goal(context)
         reasoning_steps.append(f"Tracked user goal as '{goal}'")
 
-        topic_shifted = await self.detect_topic_shift(context)
-        if topic_shifted:
-            reasoning_steps.append("Detected conversational topic shift")
+        topic_changed = await self.detect_topic_shift(context)
+        if topic_changed:
+            reasoning_steps.append("Detected topic shift")
 
-        working_mem = await self.build_working_memory(context)
+        working_memory = await self.build_working_memory(context)
         reasoning_steps.append("Built working memory context")
 
-        strategy = await self.decide_response_strategy(goal, context)
-        mode = await self.choose_reasoning_mode(context)
-        reasoning_steps.append(f"Decided response strategy '{strategy}' under mode '{mode}'")
+        response_strategy = await self.decide_response_strategy(goal, context)
+        reasoning_mode = await self.choose_reasoning_mode(context)
+        reasoning_steps.append(f"Chosen reasoning mode: {reasoning_mode} with strategy: {response_strategy}")
 
         use_planner = await self.should_use_planner(goal, context)
         use_agents = await self.should_use_agents(goal, context)
         use_memory = await self.should_use_memory(context)
         use_docs = await self.should_use_documents(context)
         use_web = await self.should_use_web(query, context)
-        reasoning_steps.append(f"Evaluated engine subsystems (Planner: {use_planner}, Agents: {use_agents}, Memory: {use_memory}, Docs: {use_docs}, Web: {use_web})")
+        reasoning_steps.append(f"Subsystems -> Planner: {use_planner}, Agents: {use_agents}, Memory: {use_memory}, Docs: {use_docs}, Web: {use_web}")
 
         # 2. Retrieve Evidence in Parallel & Normalize
         retrieval = await self.retrieve_context(query)
-        memories = retrieval["memories"]
+        memories = retrieval["memories"] if use_memory else []
         knowledge = retrieval["knowledge"]
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
-        reasoning_steps.append("Retrieved and normalized context across memory, knowledge, graph, and world model")
+        reasoning_steps.append("Retrieved and normalized context evidence")
 
         # 3. Evidence Fusion & Multi-Hop Reasoning
         merged_evidence = await self.merge_evidence(memories, knowledge, graph_results, world_state)
@@ -420,18 +528,18 @@ class ReasoningEngine:
         # 4. Rank Evidence & Conflict Detection
         ranked_evidence = await self.rank_evidence(evidence)
         conflicts = await self.detect_conflicts(ranked_evidence)
-        reasoning_steps.append("Ranked evidence by confidence and importance")
+        reasoning_steps.append("Ranked evidence and checked conflicts")
 
         # 5. Calculate Confidence
         confidence = self.calculate_confidence(ranked_evidence)
-        reasoning_steps.append(f"Calculated aggregate confidence score: {confidence:.2f}")
+        reasoning_steps.append(f"Calculated confidence: {confidence:.2f}")
 
         # 6. Multi-Agent Reasoning Selection
         selected_agents = await self.choose_agents(query, context) if use_agents else []
         workflow = AgentWorkflow()
         for agent in selected_agents:
             workflow.add(agent)
-        reasoning_steps.append(f"Selected {len(selected_agents)} specialist agent(s)")
+        reasoning_steps.append(f"Selected {len(selected_agents)} agent(s)")
 
         # 7. Determine Plan Automatically if Multi-step Required
         plan = []
@@ -441,7 +549,7 @@ class ReasoningEngine:
                     task_plan = await self.planner.create_plan(query, context)
                     if task_plan and hasattr(task_plan, "tasks"):
                         plan = task_plan.tasks
-                        reasoning_steps.append("Generated structured execution plan")
+                        reasoning_steps.append("Generated structured plan")
                 except Exception:
                     logger.exception("[ReasoningEngine] Task planning failed.")
 
@@ -454,11 +562,11 @@ class ReasoningEngine:
         trace = await self.build_reasoning_trace(reasoning_steps)
 
         logger.info(
-            "[ReasoningEngine] Goal=%s Action=%s Confidence=%.2f EvidenceCount=%d Trace=%s",
+            "[ReasoningEngine] Goal=%s Mode=%s Action=%s Confidence=%.2f Trace=%s",
             goal,
+            reasoning_mode,
             action,
             confidence,
-            len(ranked_evidence),
             trace
         )
 
@@ -478,9 +586,16 @@ class ReasoningEngine:
                 "response_depth": context.get("response", {}).get("depth", "normal"),
                 "conflicts": conflicts,
                 "reasoning_steps": reasoning_steps,
-                "reasoning_trace": trace,
+                "should_use_web": use_web,
             },
+            resolved_query=query,
+            topic=conv_tracking.get("topic", ""),
+            working_memory=working_memory,
+            response_strategy=response_strategy,
+            reasoning_mode=reasoning_mode,
+            topic_changed=topic_changed,
+            reasoning_trace=trace,
             primary_action=action,
-            reasoning=f"Resolved objective '{goal}' with confidence {confidence:.2f} across {len(ranked_evidence)} evidence items.",
+            reasoning=f"Resolved objective '{goal}' under mode '{reasoning_mode}' with confidence {confidence:.2f}.",
             workflow=workflow
         )
