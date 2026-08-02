@@ -426,6 +426,53 @@ class Executor:
         logger.info("[Executor] Dispatched background workflow for goal: %s", plan.goal)
 
     # =========================================================
+    # REPLAN & PROGRESS TRACKING
+    # =========================================================
+
+    async def replan_if_needed(
+        self,
+        plan: ExecutionPlan,
+        failed_tasks: List[str],
+        completed: List[str],
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Trigger dynamic replanning via planner if tasks have failed.
+        """
+        if failed_tasks and self.planner and hasattr(self.planner, "dynamic_replan"):
+            logger.info("[Executor] Triggering dynamic replan due to failed tasks.")
+            new_plan = await self.planner.dynamic_replan(
+                plan.goal,
+                completed,
+                failed_tasks,
+                context,
+            )
+            if new_plan:
+                return await self.execute_plan(new_plan, context)
+        return {}
+
+    async def update_progress(self, plan: ExecutionPlan, completed: List[str], running: List[str], start_time: float) -> Dict[str, Any]:
+        """
+        Update and calculate percentage completion, running status, remaining tasks, and ETA.
+        """
+        total_tasks = len(plan.tasks) if plan and plan.tasks else 1
+        completed_count = len(completed)
+        percent = (completed_count / total_tasks) * 100.0
+
+        elapsed = time.time() - start_time
+        avg_time_per_task = elapsed / max(1, completed_count)
+        remaining_count = total_tasks - completed_count
+        eta = remaining_count * avg_time_per_task
+
+        progress_info = {
+            "percent_completed": round(percent, 2),
+            "running": running,
+            "remaining": remaining_count,
+            "eta_seconds": round(eta, 2),
+        }
+        return progress_info
+
+    # =========================================================
     # MAIN EXECUTION
     # =========================================================
 
@@ -841,14 +888,11 @@ class Executor:
                         # Rollback completed tasks on failure
                         await self.rollback_workflow(plan, completed)
 
-                        # Failure Recovery via Planner
-                        if self.planner and hasattr(self.planner, "repair_plan"):
-                            try:
-                                repaired_plan = await self.planner.repair_plan(plan, task)
-                                if repaired_plan:
-                                    logger.info("[Executor] Successfully repaired plan after task failure.")
-                            except Exception:
-                                logger.exception("[Executor] Plan repair failed.")
+                        # Failure Recovery via Planner & Replanning
+                        if failed:
+                            replan_res = await self.replan_if_needed(plan, failed, completed, base_context)
+                            if replan_res:
+                                return replan_res
 
                     executed.add(task.id)
                     return "done"
