@@ -12,7 +12,8 @@ logger = logging.getLogger("aria")
 @dataclass
 class ReasoningResult:
     """
-    Represents the complete reasoning outcome and evidence package before execution.
+    Represents the complete decision package determining what subsystems
+    are required to fulfill the user request.
     """
 
     goal: str
@@ -27,7 +28,16 @@ class ReasoningResult:
     world_state: dict
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # Required new fields
+    # Core Orchestration Decision Flags
+    answer: Optional[str] = None
+    requires_memory: bool = True
+    requires_documents: bool = False
+    requires_tools: bool = False
+    requires_web: bool = False
+    requires_planning: bool = False
+    requires_clarification: bool = False
+
+    # Required tracking fields
     resolved_query: str = ""
     topic: str = ""
     working_memory: Dict[str, Any] = field(default_factory=dict)
@@ -52,11 +62,11 @@ class ReasoningResult:
 
 class ReasoningEngine:
     """
-    ARIA's core advanced reasoning layer.
+    ARIA's core advanced decision-making and routing layer.
 
-    It analyzes context, builds comprehensive evidence, generates hypotheses,
-    simulates future consequences, self-critiques, scores confidence, and chooses
-    the best multi-path reasoning strategy.
+    Instead of answering questions directly, it analyzes context and determines
+    precisely what sub-pipelines (clarification, memory, documents, planner,
+    tools, web, or direct LLM) are required via a structured ReasoningResult.
     Purely observational, analytical, and non-mutating.
     """
 
@@ -153,12 +163,6 @@ class ReasoningEngine:
                 logger.exception("[ReasoningEngine] LLM reference resolution failed.")
 
         return clean_q
-
-    async def prioritize_goals(self, goals: List[str], context: Dict[str, Any]) -> List[str]:
-        """Prioritize multiple user goals based on context, urgency, and importance."""
-        if not goals:
-            return []
-        return sorted(goals, key=lambda g: len(g), reverse=True)
 
     async def track_goal(self, context: Dict[str, Any]) -> str:
         """Determine the primary user objective using intent, conversation state, and query characteristics."""
@@ -267,6 +271,13 @@ class ReasoningEngine:
 
         return "knowledge_first"
 
+    async def needs_clarification(self, query: str, context: Dict[str, Any]) -> bool:
+        """Determine if the user query is excessively vague or ambiguous."""
+        clean = query.strip()
+        if len(clean.split()) <= 1 and clean.lower() not in ["hi", "hello", "help", "status"]:
+            return True
+        return False
+
     async def should_use_planner(self, goal: str, context: Dict[str, Any]) -> bool:
         query = str(context.get("query", ""))
         mode = await self.choose_reasoning_mode(context)
@@ -290,9 +301,6 @@ class ReasoningEngine:
 
     async def build_reasoning_trace(self, steps: List[str]) -> str:
         return " -> ".join(steps)
-
-    async def understand_goal(self, context: Dict[str, Any]) -> str:
-        return await self.track_goal(context)
 
     async def retrieve_context(self, query: str) -> Dict[str, List[Dict[str, Any]]]:
         memories_task = (
@@ -408,9 +416,8 @@ class ReasoningEngine:
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
-        Comprehensive advanced reasoning pipeline incorporating hypothesis generation,
-        future simulation, self-critique, action prediction, and multi-path reasoning,
-        fully populating detailed metadata for decision tracking.
+        Core decision pipeline determining precisely what sub-pipelines are required
+        and returning a comprehensive ReasoningResult object.
         """
         start_time = time.time()
         raw_query = str(context.get("query", "")).strip()
@@ -421,6 +428,10 @@ class ReasoningEngine:
 
         query = await self.resolve_references(raw_query, context)
         reasoning_steps.append("Resolved conversational references")
+
+        requires_clarification = await self.needs_clarification(query, context)
+        if requires_clarification:
+            reasoning_steps.append("Flagged need for clarification")
 
         goal = await self.track_goal(context)
         reasoning_steps.append(f"Tracked user goal as '{goal}'")
@@ -436,14 +447,15 @@ class ReasoningEngine:
         reasoning_mode = await self.choose_reasoning_mode(context)
         reasoning_steps.append(f"Chosen reasoning mode: {reasoning_mode}")
 
-        use_planner = await self.should_use_planner(goal, context)
-        use_agents = await self.should_use_agents(goal, context)
-        use_memory = await self.should_use_memory(context)
-        use_web = await self.should_use_web(query, context)
+        requires_planning = await self.should_use_planner(goal, context)
+        requires_tools = await self.should_use_agents(goal, context)
+        requires_memory = await self.should_use_memory(context)
+        requires_documents = await self.should_use_documents(context)
+        requires_web = await self.should_use_web(query, context)
 
         retrieval = await self.retrieve_context(query)
-        memories = retrieval["memories"] if use_memory else []
-        knowledge = retrieval["knowledge"]
+        memories = retrieval["memories"] if requires_memory else []
+        knowledge = retrieval["knowledge"] if requires_documents else []
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
         reasoning_steps.append("Retrieved context evidence")
@@ -473,7 +485,7 @@ class ReasoningEngine:
 
         conflicts = await self.detect_conflicts(ranked_evidence)
 
-        selected_agents = await self.choose_agents(query, context) if use_agents else []
+        selected_agents = await self.choose_agents(query, context) if requires_tools else []
         workflow = AgentWorkflow()
         for agent in selected_agents:
             workflow.add(agent)
@@ -484,7 +496,7 @@ class ReasoningEngine:
         reasoning_steps.append(f"Executed {len(selected_agents)} specialist agent(s)")
 
         plan = []
-        if use_planner:
+        if requires_planning:
             if self.planner and hasattr(self.planner, "create_plan"):
                 try:
                     task_plan = await self.planner.create_plan(query, context)
@@ -493,6 +505,10 @@ class ReasoningEngine:
                         reasoning_steps.append("Generated structured plan")
                 except Exception:
                     logger.exception("[ReasoningEngine] Task planning failed.")
+
+        answer = None
+        if requires_clarification:
+            answer = "Could you please clarify your request with a bit more detail?"
 
         action = "chat"
         if goal == "remember" or goal == "delete":
@@ -506,11 +522,10 @@ class ReasoningEngine:
         memory_used = bool(memories)
         graph_used = bool(graph_results)
         world_used = bool(world_state)
-        web_used = use_web
+        web_used = requires_web
         planner_used = bool(plan)
         tool_used = bool(agent_outputs or selected_agents)
 
-        # Confidence breakdown per source type
         mem_conf = max([m.get("confidence", 0.5) for m in memories], default=0.5) if memories else 0.5
         know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
         world_conf = 0.90 if world_state else 0.5
@@ -559,6 +574,13 @@ class ReasoningEngine:
             graph_results=graph_results,
             world_state=world_state,
             metadata=metadata,
+            answer=answer,
+            requires_memory=requires_memory,
+            requires_documents=requires_documents,
+            requires_tools=requires_tools,
+            requires_web=requires_web,
+            requires_planning=requires_planning,
+            requires_clarification=requires_clarification,
             resolved_query=query,
             topic=conv_tracking.get("topic", ""),
             working_memory=working_memory,
