@@ -64,6 +64,19 @@ class WorldModel:
             "location": None,
         }
 
+        # Current working session context fields
+        self.current_session_context = {
+            "current_topic": None,
+            "active_document": None,
+            "active_plan": None,
+            "active_project": None,
+            "active_goal": None,
+            "last_tool": None,
+            "last_web_result": None,
+            "last_code_file": None,
+            "last_uploaded_document": None,
+        }
+
         self.routines = {}
         self.habits = {}
         self.long_term_plans = {}
@@ -140,6 +153,7 @@ class WorldModel:
         self.execution_history = doc.get("execution_history", [])
         self.workflow_state = doc.get("workflow_state", self.workflow_state)
         self.active = doc.get("active", self.active)
+        self.current_session_context = doc.get("current_session_context", self.current_session_context)
         self.routines = doc.get("routines", {})
         self.habits = doc.get("habits", {})
         self.long_term_plans = doc.get("long_term_plans", {})
@@ -152,6 +166,19 @@ class WorldModel:
     async def rebuild(self):
         self.__init__(mongodb=self.mongodb)
         await self.load()
+
+    # ---------------------------------------------------------
+    # WORKING SESSION CONTEXT SETTERS
+    # ---------------------------------------------------------
+
+    async def update_session_context(self, updates: Dict[str, Any]):
+        """Update current working session context elements."""
+        self.current_session_context.update(updates)
+        await self.save()
+
+    def get_session_context(self) -> Dict[str, Any]:
+        """Retrieve current working session context elements."""
+        return self.current_session_context
 
     # ---------------------------------------------------------
     # REASONING & DECISION TRACKING
@@ -186,7 +213,7 @@ class WorldModel:
         return self.decision_history
 
     # ---------------------------------------------------------
-    # EXECUTION TRACKING (NEW METHODS)
+    # EXECUTION TRACKING
     # ---------------------------------------------------------
 
     async def record_execution(self, report):
@@ -648,13 +675,14 @@ class WorldModel:
             "decision_history": self.decision_history,
             "execution_history": self.execution_history,
             "workflow_state": self.workflow_state,
+            "active": self.active,
+            "current_session_context": self.current_session_context,
             "tasks": self.tasks,
             "habits": self.habits,
             "routines": self.routines,
             "skills": self.user_skills,
             "interests": self.interests,
             "session": self.session,
-            "active": self.active,
             "timeline": self.timeline,
             "statistics": self.statistics,
         }
