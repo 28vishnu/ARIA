@@ -288,6 +288,11 @@ class ContextBuilder:
                 "topic": conversation_context.get("topic"),
                 "previous_topic": conversation_context.get("previous_topic"),
                 "entities": conversation_context.get("entities", []),
+                "follow_up": looks_like_follow_up,
+                "active_document": active_document,
+                "last_plan": state_data.get("last_plan"),
+                "last_tool": state_data.get("last_tool"),
+                "user_goal": state_data.get("current_goal"),
 
                 "is_short_query": is_short_query,
                 "is_continuation": is_continuation,
