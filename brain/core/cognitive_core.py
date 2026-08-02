@@ -84,6 +84,7 @@ class CognitiveCore:
         autonomous_learning=None,
         event_bus=None,
         llm_router=None,
+        conversation_manager=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -106,6 +107,7 @@ class CognitiveCore:
         self.autonomous_learning = autonomous_learning
         self.event_bus = event_bus
         self.llm_router = llm_router
+        self.conversation_manager = conversation_manager
 
         self.brain_state = {
             "thinking": False,
@@ -146,7 +148,7 @@ class CognitiveCore:
         confidence = 0.5
 
         try:
-            # Parallel Retrieval across subsystems
+            # Parallel Retrieval across subsystems (using resolved query via context/parameters)
             memory_task = (
                 self.memory_router.answer(query)
                 if self.memory_router and hasattr(self.memory_router, "answer")
@@ -364,6 +366,7 @@ Relevant knowledge:
                                         "content": str(assistant_turn)
                                     })
 
+                            # Sending resolved_query to the LLM instead of raw user_message
                             messages.append({
                                 "role": "user",
                                 "content": query
@@ -1056,6 +1059,17 @@ Relevant knowledge:
         """
 
         try:
+            # Step 1: Initialize session and obtain user message & session ID
+            user_message = query
+            session = self.conversation_manager.get_session(session_id)
+
+            # Step 2: Resolve reference if it's a follow-up
+            resolved_query = user_message
+            if self.conversation_manager.is_followup(user_message):
+                resolved_query = self.conversation_manager.resolve_reference(
+                    session_id,
+                    user_message
+                )
 
             # =================================================
             # 1. LOAD STATE
@@ -1075,7 +1089,7 @@ Relevant knowledge:
 
             workflow_response = (
                 await self._handle_pending_workflow(
-                    query=query,
+                    query=resolved_query,
                     session_id=session_id,
                     base_context=base_context,
                     state=state,
@@ -1095,7 +1109,7 @@ Relevant knowledge:
             ):
 
                 normalized_query = (
-                    self._normalize_confirmation_text(query)
+                    self._normalize_confirmation_text(resolved_query)
                 )
 
                 # ---------------------------------------------
@@ -1222,7 +1236,7 @@ Relevant knowledge:
                 )
 
             # =================================================
-            # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER
+            # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER (using resolved_query)
             # =================================================
 
             memories = []
@@ -1231,7 +1245,7 @@ Relevant knowledge:
 
                 try:
                     memories = (
-                        await self.memory_router.recall(query)
+                        await self.memory_router.recall(resolved_query)
                     ) or []
 
                 except Exception:
@@ -1246,7 +1260,7 @@ Relevant knowledge:
             if self.context_builder:
 
                 ctx = await self.context_builder.build(
-                    query=query,
+                    query=resolved_query,
                     session_id=session_id,
                     user_id=user_id,
                     base_context=base_context,
@@ -1258,7 +1272,7 @@ Relevant knowledge:
 
                 ctx = dict(base_context or {})
 
-                ctx["query"] = query
+                ctx["query"] = resolved_query
                 ctx["session_id"] = session_id
                 ctx["user_id"] = user_id
                 ctx["state"] = state
@@ -1267,7 +1281,7 @@ Relevant knowledge:
             # Guarantee essential context exists even if the
             # ContextBuilder omitted one of these fields.
 
-            ctx.setdefault("query", query)
+            ctx.setdefault("query", resolved_query)
             ctx.setdefault("session_id", session_id)
             ctx.setdefault("user_id", user_id)
             ctx.setdefault("state", state)
@@ -1339,7 +1353,7 @@ Relevant knowledge:
             if self.state_manager:
                 self.state_manager.update_state(
                     session_id,
-                    last_query=query,
+                    last_query=resolved_query,
                 )
 
             # =================================================
@@ -1355,7 +1369,7 @@ Relevant knowledge:
 
                 try:
                     intent = (
-                        await self.intent_analyzer.analyze(query)
+                        await self.intent_analyzer.analyze(resolved_query)
                     )
 
                     ctx["intent"] = intent
@@ -1389,10 +1403,21 @@ Relevant knowledge:
 
                 reply = (
                     await self.memory_conversation_manager.handle(
-                        query=query,
+                        query=resolved_query,
                         context=ctx,
                     )
                 )
+
+                # Step 5: Update conversation turn after explicit memory action reply
+                if self.conversation_manager:
+                    intent_name = getattr(intent, "name", None)
+                    self.conversation_manager.update_turn(
+                        session_id=session_id,
+                        user_message=user_message,
+                        assistant_message=reply,
+                        intent=intent_name,
+                        entities=[]
+                    )
 
                 return SystemResponse(
                     success=True,
@@ -1408,7 +1433,7 @@ Relevant knowledge:
                 )
 
             # =================================================
-            # 10. NATURAL MEMORY LEARNING VIA ROUTER
+            # 10. NATURAL MEMORY LEARNING VIA ROUTER (using resolved_query)
             # =================================================
 
             if self.memory_router:
@@ -1417,7 +1442,7 @@ Relevant knowledge:
 
                     memory_result = (
                         await self.memory_router
-                        .remember(query)
+                        .remember(resolved_query)
                     )
 
                     if (
@@ -1438,7 +1463,7 @@ Relevant knowledge:
                                     type=event_types.MEMORY_CREATED,
                                     source="memory",
                                     data={
-                                        "query": query,
+                                        "query": resolved_query,
                                     }
                                 )
                             )
@@ -1447,7 +1472,7 @@ Relevant knowledge:
 
                             refreshed = (
                                 await self.memory_router
-                                .recall(query)
+                                .recall(resolved_query)
                             )
 
                             if refreshed is not None:
@@ -1467,16 +1492,30 @@ Relevant knowledge:
                     )
 
             # =================================================
-            # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION
+            # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION (using resolved_query)
             # =================================================
 
             self.brain_state["thinking"] = True
             self.brain_state["reasoning"] = True
-            return await self.knowledge_first_pipeline(
+            pipeline_response = await self.knowledge_first_pipeline(
                 session_id,
-                query,
+                resolved_query,
                 ctx,
             )
+
+            # Step 5 & 6: Update conversation turn after receiving the final response
+            if self.conversation_manager:
+                final_reply = pipeline_response.data.get("response") or pipeline_response.data.get("message") or ""
+                intent_name = getattr(intent, "name", None) if intent else None
+                self.conversation_manager.update_turn(
+                    session_id=session_id,
+                    user_message=user_message,
+                    assistant_message=str(final_reply),
+                    intent=intent_name,
+                    entities=[]
+                )
+
+            return pipeline_response
 
         # =====================================================
         # GLOBAL ERROR HANDLER
