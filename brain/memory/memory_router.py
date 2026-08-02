@@ -114,6 +114,41 @@ class MemoryRouter:
         return memories
 
     # =====================================================
+    # Long-Term Continuous Learning & Reasoning Patterns
+    # =====================================================
+
+    async def learn_from_success(self, task_description: str, outcome: Any):
+        """
+        Store successful task execution patterns for continuous improvement.
+        """
+        if self.memory_engine and hasattr(self.memory_engine, "process_and_store"):
+            await self.memory_engine.process_and_store(f"Successful pattern for {task_description}: {outcome}")
+
+    async def learn_from_failure(self, task_description: str, error: str):
+        """
+        Store failure patterns to avoid repeating mistakes.
+        """
+        if self.memory_engine and hasattr(self.memory_engine, "process_and_store"):
+            await self.memory_engine.process_and_store(f"Failure pattern to avoid for {task_description}: {error}")
+
+    async def store_reasoning_pattern(self, pattern_key: str, pattern_data: Dict[str, Any]):
+        """
+        Store generalized reasoning workflow patterns.
+        """
+        if self.memory_engine and hasattr(self.memory_engine, "process_and_store"):
+            await self.memory_engine.process_and_store(f"Reasoning pattern [{pattern_key}]: {pattern_data}")
+
+    async def retrieve_reasoning_pattern(self, pattern_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve stored reasoning patterns for optimization.
+        """
+        if self.memory_engine and hasattr(self.memory_engine, "get_relevant_memories"):
+            mems = await self.memory_engine.get_relevant_memories(pattern_key, limit=1)
+            if mems:
+                return mems[0]
+        return None
+
+    # =====================================================
     # Unified Recall
     # =====================================================
 
