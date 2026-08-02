@@ -285,6 +285,7 @@ async def bootstrap_application() -> ServiceRegistry:
         learning_engine=learning_engine,
         world_model=world_model,
         memory_router=memory_engine,
+        event_bus=event_bus,
     )
 
     # ---------------------------------------------------------
@@ -320,8 +321,7 @@ async def bootstrap_application() -> ServiceRegistry:
         event_bus.register_listener(event_types.RESPONSE_GENERATED, self_reflection)
         event_bus.register_listener(event_types.DOCUMENT_UPLOADED, autonomous_learning)
         event_bus.register_listener(event_types.DOCUMENT_SUMMARIZED, autonomous_learning)
-        event_bus.register_listener(event_types.WEB_SEARCH_FINISHED, autonomous_learning)
-        event_bus.register_listener(event_types.PLAN_FINISHED, autonomous_learning)
+        event_bus.register_listener(event_types.PLAN_COMPLETED, autonomous_learning)
         event_bus.register_listener(event_types.WORKFLOW_COMPLETED, self_reflection)
         event_bus.register_listener(event_types.TASK_FAILED, self_reflection)
         event_bus.register_listener(event_types.TASK_COMPLETED, autonomous_learning)
@@ -498,7 +498,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     await event_bus.publish(
         Event(
-            type=event_types.SYSTEM_STARTUP,
+            type=event_types.SYSTEM_STARTED,
             source="bootstrap",
             data={},
         )
