@@ -82,13 +82,11 @@ class EventBus:
 
                 await listener.handle(event)
 
-            except Exception:
+            except Exception as e:
 
                 self.statistics["errors"] += 1
 
-                logger.exception(
-                    "[EventBus] Listener failed"
-                )
+                logger.exception("[EventBus] Listener failed: %s", e)
 
     ####################################################
 
@@ -119,9 +117,11 @@ class EventBus:
                 return_exceptions=True,
             )
 
-        except Exception:
+        except Exception as e:
 
             self.statistics["errors"] += 1
+
+            logger.exception("[EventBus] Listener failed: %s", e)
 
     ####################################################
 
