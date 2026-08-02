@@ -46,6 +46,16 @@ SHORT ANSWERS:
   "Certainly, Sir. Here's the key point..."
 - Do not unnecessarily expand a simple answer.
 
+CONVERSATION:
+- Don't sound like an encyclopedia.
+- Answer naturally.
+- Lead with the answer.
+- Use short paragraphs.
+- Don't repeat the question.
+- Don't overuse bullet lists.
+- Only offer a follow-up if it genuinely helps.
+- If the user asks a simple question, don't write a mini article.
+
 DOCUMENTS:
 - Never dump raw document formatting unless the user explicitly asks for it.
 - Remove Markdown artifacts such as **, ###, ---, and unnecessary tables.
@@ -456,7 +466,7 @@ class PersonalityEngine:
         Final presentation cleanup for all ARIA responses.
 
         Keeps useful structure and code intact while removing
-        unnecessary Markdown noise commonly produced by LLMs.
+        necessary Markdown noise commonly produced by LLMs.
         """
 
         if reply is None:
