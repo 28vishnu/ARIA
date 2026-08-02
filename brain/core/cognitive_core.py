@@ -1,6 +1,7 @@
 import logging
 import asyncio
-from typing import Dict, Any, Optional
+import re
+from typing import Dict, Any, Optional, List
 
 from personality.response import SystemResponse
 from brain.response.response_formatter import ResponseFormatter
@@ -118,6 +119,42 @@ class CognitiveCore:
 
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
+
+    # =========================================================
+    # ENTITY EXTRACTION HELPER (Bug #5)
+    # =========================================================
+
+    def _extract_entities(self, text: str) -> List[str]:
+        """
+        Automatically detects key entities (technologies, proper nouns, important terms)
+        to track conversation topics.
+        """
+        if not text:
+            return []
+
+        # Common capitalized technical terms, proper nouns, or domain keywords
+        known_keywords = {
+            "python", "java", "javascript", "typescript", "c", "c++", "c#", "rust", "go",
+            "react", "node", "mongodb", "supabase", "sql", "kubernetes", "devops", "aws",
+            "tony stark", "iron man", "nasa", "openai", "claude", "groq", "aria"
+        }
+
+        found = []
+        lower_text = text.lower()
+        
+        # Check known dictionary keywords
+        for kw in known_keywords:
+            if kw in lower_text:
+                found.append(kw.title() if len(kw) > 3 else kw.upper())
+
+        # Extract capitalized words/phrases as potential entities
+        caps = re.findall(r'\b[A-Z][a-zA-Z0-9\+#._-]+\b', text)
+        for cap in caps:
+            if cap.lower() not in {"i", "aria", "a", "an", "the", "and", "or", "to", "in", "on"}:
+                if cap not in found:
+                    found.append(cap)
+
+        return found
 
     # =========================================================
     # KNOWLEDGE FIRST PIPELINE
@@ -328,7 +365,20 @@ class CognitiveCore:
                             doc_str = str(document) if document else "None"
                             knowledge_str = str(knowledge) if knowledge else "None"
 
+                            # Bug #3 Injection of Conversation Context into System Prompt
+                            conv_ctx = context.get("conv_context", {})
+                            current_topic_str = conv_ctx.get("topic") or "None"
+                            prev_topic_str = conv_ctx.get("previous_topic") or "None"
+                            last_user_str = conv_ctx.get("last_user") or "None"
+                            last_assistant_str = conv_ctx.get("last_assistant") or "None"
+
                             system_prompt = f"""You are ARIA, an advanced personal AI collaborator.
+
+Conversation State:
+- Current Topic: {current_topic_str}
+- Previous Topic: {prev_topic_str}
+- Last User Message: {last_user_str}
+- Last Assistant Response: {last_assistant_str}
 
 Relevant user memories:
 {memories_str}
@@ -1061,11 +1111,12 @@ Relevant knowledge:
         try:
             # Step 1: Initialize session and obtain user message & session ID
             user_message = query
-            session = self.conversation_manager.get_session(session_id)
+            session = self.conversation_manager.get_session(session_id) if self.conversation_manager else {}
+            conv_context = self.conversation_manager.get_context(session_id) if self.conversation_manager else {}
 
-            # Step 2: Resolve reference if it's a follow-up
+            # Step 2: Resolve reference if it's a follow-up (Bug #4 enhanced reference words are handled via ConversationManager)
             resolved_query = user_message
-            if self.conversation_manager.is_followup(user_message):
+            if self.conversation_manager and self.conversation_manager.is_followup(user_message):
                 resolved_query = self.conversation_manager.resolve_reference(
                     session_id,
                     user_message
@@ -1082,6 +1133,19 @@ Relevant knowledge:
                     self.state_manager.get_state(session_id)
                     or {}
                 )
+
+            # Pass conversation context down into base_context / state for context builder
+            if base_context is None:
+                base_context = {}
+            base_context["conv_context"] = conv_context
+
+            # Bug #2: Save/append history into StateManager so history persists and isn't empty
+            if self.state_manager:
+                history = state.get("conversation_history", [])
+                if not isinstance(history, list):
+                    history = []
+                # Append current turn skeleton if not already tracked
+                state["conversation_history"] = history
 
             # =================================================
             # 2. RESUME / CANCEL PENDING WORKFLOW
@@ -1286,6 +1350,7 @@ Relevant knowledge:
             ctx.setdefault("user_id", user_id)
             ctx.setdefault("state", state)
             ctx.setdefault("memory", memories)
+            ctx["conv_context"] = conv_context
 
             # =================================================
             # 6. ATTACH REGISTERED CAPABILITIES
@@ -1408,16 +1473,28 @@ Relevant knowledge:
                     )
                 )
 
-                # Step 5: Update conversation turn after explicit memory action reply
+                # Bug #1 & #5: Build entities properly and update conversation turn
                 if self.conversation_manager:
                     intent_name = getattr(intent, "name", None)
+                    entities = []
+                    if intent and hasattr(intent, "entities") and intent.entities:
+                        entities = intent.entities
+                    if not entities:
+                        entities = self._extract_entities(resolved_query)
+
                     self.conversation_manager.update_turn(
                         session_id=session_id,
                         user_message=user_message,
                         assistant_message=reply,
                         intent=intent_name,
-                        entities=[]
+                        entities=entities
                     )
+
+                    # Bug #2: Save turn into StateManager history
+                    if self.state_manager:
+                        hist = state.get("conversation_history", [])
+                        hist.append({"user": user_message, "assistant": reply})
+                        self.state_manager.update_state(session_id, conversation_history=hist)
 
                 return SystemResponse(
                     success=True,
@@ -1503,17 +1580,29 @@ Relevant knowledge:
                 ctx,
             )
 
-            # Step 5 & 6: Update conversation turn after receiving the final response
+            # Bug #1, #2, #5: Update conversation turn and state history after final response
             if self.conversation_manager:
                 final_reply = pipeline_response.data.get("response") or pipeline_response.data.get("message") or ""
                 intent_name = getattr(intent, "name", None) if intent else None
+                
+                entities = []
+                if intent and hasattr(intent, "entities") and intent.entities:
+                    entities = intent.entities
+                if not entities:
+                    entities = self._extract_entities(resolved_query)
+
                 self.conversation_manager.update_turn(
                     session_id=session_id,
                     user_message=user_message,
                     assistant_message=str(final_reply),
                     intent=intent_name,
-                    entities=[]
+                    entities=entities
                 )
+
+                if self.state_manager:
+                    hist = state.get("conversation_history", [])
+                    hist.append({"user": user_message, "assistant": str(final_reply)})
+                    self.state_manager.update_state(session_id, conversation_history=hist)
 
             return pipeline_response
 
