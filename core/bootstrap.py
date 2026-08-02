@@ -316,7 +316,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     def register_event_listeners():
-        event_bus.register_listener(event_types.CHAT_RESPONSE, autonomous_learning)
+        event_bus.register_listener(event_types.RESPONSE_GENERATED, autonomous_learning)
         event_bus.register_listener(event_types.CHAT_RESPONSE, self_reflection)
         event_bus.register_listener(event_types.DOCUMENT_UPLOADED, autonomous_learning)
         event_bus.register_listener(event_types.DOCUMENT_SUMMARIZED, autonomous_learning)
