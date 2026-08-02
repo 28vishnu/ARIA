@@ -97,13 +97,12 @@ class MemoryRouter:
         reasoning_result: Optional[Any] = None,
     ) -> List[Dict]:
         """
-        Recall memories only when requested by the reasoning engine
-        or when explicitly forced.
+        Recall memories only when requested by the reasoning engine.
         """
-        if reasoning_result is not None and not getattr(reasoning_result, "requires_memory", True):
-            return []
-
-        if not force and reasoning_result is None:
+        if (
+            reasoning_result is not None
+            and not getattr(reasoning_result, "requires_memory", True)
+        ):
             return []
 
         if self.memory_engine is None:
@@ -229,6 +228,9 @@ class MemoryRouter:
     # =====================================================
 
     async def answer(self, query: str, reasoning_result: Optional[Any] = None):
+        """
+        Answer query using search_everywhere with optional reasoning guard.
+        """
         result = await self.search_everywhere(query, reasoning_result=reasoning_result)
 
         if result["personal_memory"]:
