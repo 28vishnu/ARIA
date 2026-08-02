@@ -116,7 +116,12 @@ class MemoryRouter:
         if memories is None:
             return []
 
-        return memories
+        filtered = []
+        for memory in memories:
+            score = memory.get("retrieval_score", 0)
+            if score >= 12:
+                filtered.append(memory)
+        return filtered
 
     # =====================================================
     # Long-Term Continuous Learning & Reasoning Patterns
@@ -199,7 +204,13 @@ class MemoryRouter:
                     limit
                 )
             )
-            result["personal_memory"] = pm if pm is not None else []
+            filtered_pm = []
+            if pm:
+                for memory in pm:
+                    score = memory.get("retrieval_score", 0)
+                    if score >= 12:
+                        filtered_pm.append(memory)
+            result["personal_memory"] = filtered_pm
 
         # Knowledge Engine (respects reasoning flag for documents)
         should_recall_docs = True
