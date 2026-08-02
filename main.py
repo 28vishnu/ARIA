@@ -103,12 +103,21 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         "document_intelligence": registry.get("document_intelligence") if registry.has("document_intelligence") else None
     }
 
-    # Delegate core request processing entirely to CognitiveCore
+    conversation_manager = registry.get("conversation_manager")
+
+    resolved_text = user_text
+
+    if conversation_manager:
+        resolved_text = conversation_manager.resolve_reference(
+            session_id=session_id,
+            query=user_text,
+        )
+
     sys_res = await ctx.cognitive_core.process(
-        query=user_text,
+        query=resolved_text,
         session_id=session_id,
         user_id=session_id,
-        base_context=base_context
+        base_context=base_context,
     )
 
     # Preserve structured document actions for the transport layer.
@@ -121,7 +130,7 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
 
     return await ctx.personality_engine.apply_personality(
         session_id,
-        user_text,
+        resolved_text,
         sys_res
     )
 
