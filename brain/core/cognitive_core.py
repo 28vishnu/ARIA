@@ -148,30 +148,45 @@ class CognitiveCore:
         source = "llm_generated"
         confidence = 0.5
 
+        # -------------------------------------------------
+        # Resolve conversational references
+        # -------------------------------------------------
+
+        resolved_query = query
+
+        if self.conversation_manager:
+
+            if self.conversation_manager.is_followup(query):
+
+                resolved_query = self.conversation_manager.resolve_reference(
+                    session_id=session_id,
+                    query=query
+                )
+
         try:
-            # Parallel Retrieval across subsystems (using resolved query via context/parameters)
+            # Parallel Retrieval across subsystems (using resolved query)
             memory_task = (
-                self.memory_router.answer(query)
+                self.memory_router.answer(resolved_query)
                 if self.memory_router and hasattr(self.memory_router, "answer")
                 else asyncio.sleep(0)
             )
             doc_task = (
-                self.knowledge_manager.answer(session_id, query)
+                self.knowledge_manager.answer(session_id, resolved_query)
                 if self.knowledge_manager and hasattr(self.knowledge_manager, "answer")
                 else asyncio.sleep(0)
             )
             graph_task = (
-                self.knowledge_graph.search(query)
+                self.knowledge_graph.search(resolved_query)
                 if self.knowledge_graph and hasattr(self.knowledge_graph, "search")
                 else asyncio.sleep(0)
             )
             db_task = (
-                self.knowledge_database.search(query)
+                self.knowledge_database.search(resolved_query)
                 if self.knowledge_database and hasattr(self.knowledge_database, "search")
                 else asyncio.sleep(0)
             )
             world_task = (
-                asyncio.to_thread(self.world_model.search, query)
+                asyncio.to_thread(self.world_model.search, resolved_query)
                 if self.world_model and hasattr(self.world_model, "search")
                 else asyncio.sleep(0)
             )
@@ -217,14 +232,14 @@ class CognitiveCore:
                 source = "document"
                 confidence = 0.89
                 if self.world_model and hasattr(self.world_model, "set_active_document"):
-                    self.world_model.set_active_document(query)
+                    self.world_model.set_active_document(resolved_query)
                 if self.event_bus:
                     await self.event_bus.publish(
                         Event(
                             type=event_types.DOCUMENT_PROCESSED,
                             source="cognitive_core",
                             data={
-                                "query": query,
+                                "query": resolved_query,
                                 "answer": answer,
                             }
                         )
@@ -246,7 +261,7 @@ class CognitiveCore:
             if not answer and self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
                 try:
                     skill_result = await self.skill_manager.route_and_execute(
-                        query,
+                        resolved_query,
                         context,
                     )
                     if skill_result and skill_result.success:
@@ -263,11 +278,11 @@ class CognitiveCore:
             # Step 6 & 10 & 11: Web Search -> Learn -> LLM Fallback (Cache if found)
             if not answer:
                 self.brain_state["thinking"] = True
-                if self._looks_like_web_search_request(query) and self.action_manager and "web_search" in self.action_manager.actions:
+                if self._looks_like_web_search_request(resolved_query) and self.action_manager and "web_search" in self.action_manager.actions:
                     try:
                         web_result = await self.action_manager.execute_action(
                             action_name="web_search",
-                            params={"query": query},
+                            params={"query": resolved_query},
                         )
                         if web_result and web_result.success:
                             answer = (
@@ -287,7 +302,7 @@ class CognitiveCore:
                             context["reasoning"] = reasoning
 
                         if self.planner:
-                            plan = await self.planner.create_plan(query, context)
+                            plan = await self.planner.create_plan(resolved_query, context)
                             if plan and plan.tasks and self.executor:
                                 exec_result = await self.executor.execute_plan(plan, context)
                                 task_outputs = exec_result.get("task_outputs", {})
@@ -303,7 +318,7 @@ class CognitiveCore:
                                             type=event_types.PLAN_COMPLETED,
                                             source="planner",
                                             data={
-                                                "query": query,
+                                                "query": resolved_query,
                                             }
                                         )
                                     )
@@ -387,10 +402,20 @@ Relevant knowledge:
 
                             messages.append({
                                 "role": "user",
-                                "content": query
+                                "content": resolved_query
                             })
 
                             answer = await self.llm_router.chat(messages)
+
+                            if self.conversation_manager:
+                                entities = self._extract_entities(resolved_query)
+
+                                self.conversation_manager.update_turn(
+                                    session_id=session_id,
+                                    user_message=resolved_query,
+                                    assistant_message=answer,
+                                    entities=entities
+                                )
                     except Exception:
                         logger.exception("[CognitiveCore] LLM/Reasoning fallback failed.")
 
@@ -400,9 +425,9 @@ Relevant knowledge:
 
                 if source != "llm_generated" or confidence > 0.85:
                     if self.knowledge_database and hasattr(self.knowledge_database, "store"):
-                        await self.knowledge_database.store(title=query[:50], content=answer, source=source)
+                        await self.knowledge_database.store(title=resolved_query[:50], content=answer, source=source)
                     if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
-                        await self.knowledge_graph.learn(query, answer)
+                        await self.knowledge_graph.learn(resolved_query, answer)
 
         finally:
             self.brain_state["retrieving"] = False
@@ -427,7 +452,7 @@ Relevant knowledge:
                     type=event_types.RESPONSE_GENERATED,
                     source="cognitive_core",
                     data={
-                        "query": query,
+                        "query": resolved_query,
                         "answer": answer,
                         "confidence": confidence,
                         "knowledge_source": source,
@@ -1106,36 +1131,6 @@ Relevant knowledge:
         """
 
         try:
-            user_message = query
-
-            # Bug 2: Load history into ConversationManager FIRST before checking follow-ups
-            if self.state_manager and self.conversation_manager:
-                try:
-                    history = self.state_manager.get_conversation_history(session_id) or []
-                    for turn in history:
-                        if isinstance(turn, dict) and turn.get("user") and turn.get("assistant"):
-                            self.conversation_manager.update_turn(
-                                session_id=session_id,
-                                user_message=turn["user"],
-                                assistant_message=turn["assistant"],
-                                entities=self._extract_entities(turn["user"])
-                            )
-                except Exception:
-                    logger.exception("[CognitiveCore] Failed to load history into ConversationManager.")
-
-            # Step 2: Resolve reference if it's a follow-up after loading history
-            resolved_query = user_message
-            if self.conversation_manager and self.conversation_manager.is_followup(user_message):
-                resolved_query = self.conversation_manager.resolve_reference(
-                    session_id,
-                    user_message
-                )
-
-            # Debugging logs requested
-            logger.info("USER      : %s", user_message)
-            logger.info("FOLLOWUP? : %s", self.conversation_manager.is_followup(user_message) if self.conversation_manager else False)
-            logger.info("RESOLVED  : %s", resolved_query)
-
             # =================================================
             # 1. LOAD STATE
             # =================================================
@@ -1154,7 +1149,7 @@ Relevant knowledge:
 
             workflow_response = (
                 await self._handle_pending_workflow(
-                    query=resolved_query,
+                    query=query,
                     session_id=session_id,
                     base_context=base_context,
                     state=state,
@@ -1174,7 +1169,7 @@ Relevant knowledge:
             ):
 
                 normalized_query = (
-                    self._normalize_confirmation_text(resolved_query)
+                    self._normalize_confirmation_text(query)
                 )
 
                 # ---------------------------------------------
@@ -1301,7 +1296,7 @@ Relevant knowledge:
                 )
 
             # =================================================
-            # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER (using resolved_query)
+            # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER
             # =================================================
 
             memories = []
@@ -1310,7 +1305,7 @@ Relevant knowledge:
 
                 try:
                     memories = (
-                        await self.memory_router.recall(resolved_query)
+                        await self.memory_router.recall(query)
                     ) or []
 
                 except Exception:
@@ -1325,7 +1320,7 @@ Relevant knowledge:
             if self.context_builder:
 
                 ctx = await self.context_builder.build(
-                    query=resolved_query,
+                    query=query,
                     session_id=session_id,
                     user_id=user_id,
                     base_context=base_context,
@@ -1337,7 +1332,7 @@ Relevant knowledge:
 
                 ctx = dict(base_context or {})
 
-                ctx["query"] = resolved_query
+                ctx["query"] = query
                 ctx["session_id"] = session_id
                 ctx["user_id"] = user_id
                 ctx["state"] = state
@@ -1346,7 +1341,7 @@ Relevant knowledge:
             # Guarantee essential context exists even if the
             # ContextBuilder omitted one of these fields.
 
-            ctx.setdefault("query", resolved_query)
+            ctx.setdefault("query", query)
             ctx.setdefault("session_id", session_id)
             ctx.setdefault("user_id", user_id)
             ctx.setdefault("state", state)
@@ -1418,7 +1413,7 @@ Relevant knowledge:
             if self.state_manager:
                 self.state_manager.update_state(
                     session_id,
-                    last_query=resolved_query,
+                    last_query=query,
                 )
 
             # =================================================
@@ -1434,7 +1429,7 @@ Relevant knowledge:
 
                 try:
                     intent = (
-                        await self.intent_analyzer.analyze(resolved_query)
+                        await self.intent_analyzer.analyze(query)
                     )
 
                     ctx["intent"] = intent
@@ -1468,43 +1463,10 @@ Relevant knowledge:
 
                 reply = (
                     await self.memory_conversation_manager.handle(
-                        query=resolved_query,
+                        query=query,
                         context=ctx,
                     )
                 )
-
-                if self.conversation_manager:
-                    intent_name = getattr(intent, "name", None)
-                    entities = []
-
-                    if intent and hasattr(intent, "entities"):
-                        entities = intent.entities or []
-
-                    if not entities:
-                        entities = self._extract_entities(resolved_query)
-
-                    self.conversation_manager.update_turn(
-                        session_id=session_id,
-                        user_message=user_message,
-                        assistant_message=reply,
-                        intent=intent_name,
-                        entities=entities,
-                    )
-                    logger.info(
-                        "Conversation Context: %s",
-                        self.conversation_manager.get_context(session_id),
-                    )
-
-                # Bug 1: Use add_conversation_turn instead of append_conversation_history
-                if self.state_manager:
-                    try:
-                        self.state_manager.add_conversation_turn(
-                            session_id=session_id,
-                            user_message=user_message,
-                            assistant_message=str(reply),
-                        )
-                    except Exception:
-                        logger.exception("[CognitiveCore] Failed to store conversation history.")
 
                 return SystemResponse(
                     success=True,
@@ -1520,7 +1482,7 @@ Relevant knowledge:
                 )
 
             # =================================================
-            # 10. NATURAL MEMORY LEARNING VIA ROUTER (using resolved_query)
+            # 10. NATURAL MEMORY LEARNING VIA ROUTER
             # =================================================
 
             if self.memory_router:
@@ -1529,7 +1491,7 @@ Relevant knowledge:
 
                     memory_result = (
                         await self.memory_router
-                        .remember(resolved_query)
+                        .remember(query)
                     )
 
                     if (
@@ -1550,7 +1512,7 @@ Relevant knowledge:
                                     type=event_types.MEMORY_CREATED,
                                     source="memory",
                                     data={
-                                        "query": resolved_query,
+                                        "query": query,
                                     }
                                 )
                             )
@@ -1559,7 +1521,7 @@ Relevant knowledge:
 
                             refreshed = (
                                 await self.memory_router
-                                .recall(resolved_query)
+                                .recall(query)
                             )
 
                             if refreshed is not None:
@@ -1579,53 +1541,16 @@ Relevant knowledge:
                     )
 
             # =================================================
-            # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION (using resolved_query)
+            # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION
             # =================================================
 
             self.brain_state["thinking"] = True
             self.brain_state["reasoning"] = True
-            pipeline_response = await self.knowledge_first_pipeline(
+            return await self.knowledge_first_pipeline(
                 session_id,
-                resolved_query,
+                query,
                 ctx,
             )
-
-            if self.conversation_manager:
-                final_reply = pipeline_response.data.get("response") or pipeline_response.data.get("message") or ""
-                intent_name = getattr(intent, "name", None) if intent else None
-
-                entities = []
-
-                if intent and hasattr(intent, "entities"):
-                    entities = intent.entities or []
-
-                if not entities:
-                    entities = self._extract_entities(resolved_query)
-
-                self.conversation_manager.update_turn(
-                    session_id=session_id,
-                    user_message=user_message,
-                    assistant_message=str(final_reply),
-                    intent=intent_name,
-                    entities=entities,
-                )
-                logger.info(
-                    "Conversation Context: %s",
-                    self.conversation_manager.get_context(session_id),
-                )
-
-                # Bug 1: Use add_conversation_turn instead of append_conversation_history
-                if self.state_manager:
-                    try:
-                        self.state_manager.add_conversation_turn(
-                            session_id=session_id,
-                            user_message=user_message,
-                            assistant_message=str(final_reply),
-                        )
-                    except Exception:
-                        logger.exception("[CognitiveCore] Failed to store conversation history.")
-
-            return pipeline_response
 
         # =====================================================
         # GLOBAL ERROR HANDLER
