@@ -329,7 +329,6 @@ class CognitiveCore:
                             doc_str = str(document) if document else "None"
                             knowledge_str = str(knowledge) if knowledge else "None"
 
-                            # Bug 3 / Requirement 4: Get conversation context and inject into system prompt
                             conversation_context = {}
                             if self.conversation_manager:
                                 conversation_context = self.conversation_manager.get_context(session_id)
@@ -386,7 +385,6 @@ Relevant knowledge:
                                         "content": str(assistant_turn)
                                     })
 
-                            # Sending resolved_query to the LLM instead of raw user_message
                             messages.append({
                                 "role": "user",
                                 "content": query
@@ -546,7 +544,6 @@ Relevant knowledge:
 
         return has_freshness and has_information
 
-    # Bug 3: Robust entity extraction helper method
     def _extract_entities(self, text: str):
         COMMON_TOPICS = {
             "python",
@@ -1109,9 +1106,9 @@ Relevant knowledge:
         """
 
         try:
-            # Bug 2: Load history and update ConversationManager first before resolving follow-up references
             user_message = query
-            
+
+            # Bug 2: Load history into ConversationManager FIRST before checking follow-ups
             if self.state_manager and self.conversation_manager:
                 try:
                     history = self.state_manager.get_conversation_history(session_id) or []
@@ -1126,13 +1123,18 @@ Relevant knowledge:
                 except Exception:
                     logger.exception("[CognitiveCore] Failed to load history into ConversationManager.")
 
-            # Step 1 & Bug 2: Resolve reference if it's a follow-up after loading history
+            # Step 2: Resolve reference if it's a follow-up after loading history
             resolved_query = user_message
             if self.conversation_manager and self.conversation_manager.is_followup(user_message):
                 resolved_query = self.conversation_manager.resolve_reference(
                     session_id,
                     user_message
                 )
+
+            # Debugging logs requested
+            logger.info("USER      : %s", user_message)
+            logger.info("FOLLOWUP? : %s", self.conversation_manager.is_followup(user_message) if self.conversation_manager else False)
+            logger.info("RESOLVED  : %s", resolved_query)
 
             # =================================================
             # 1. LOAD STATE
@@ -1488,6 +1490,10 @@ Relevant knowledge:
                         intent=intent_name,
                         entities=entities,
                     )
+                    logger.info(
+                        "Conversation Context: %s",
+                        self.conversation_manager.get_context(session_id),
+                    )
 
                 # Bug 1: Use add_conversation_turn instead of append_conversation_history
                 if self.state_manager:
@@ -1602,6 +1608,10 @@ Relevant knowledge:
                     assistant_message=str(final_reply),
                     intent=intent_name,
                     entities=entities,
+                )
+                logger.info(
+                    "Conversation Context: %s",
+                    self.conversation_manager.get_context(session_id),
                 )
 
                 # Bug 1: Use add_conversation_turn instead of append_conversation_history
