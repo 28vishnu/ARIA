@@ -131,11 +131,11 @@ class CognitiveCore:
         ARIA's core knowledge-first intelligence pipeline.
         Executes parallel retrieval and strict prioritization:
         1. Personal Memory
-        2. World Model
+        2. Documents
         3. Knowledge Graph
-        4. Documents
-        5. Skills
-        6. Knowledge Database
+        4. Knowledge Database
+        5. World Model
+        6. Skills
         7. Web Search -> Learn -> LLM -> Summarize -> Store
         8. Automatic Learning & Reflection
         9. Personality Engine
@@ -152,9 +152,9 @@ class CognitiveCore:
                 if self.memory_router and hasattr(self.memory_router, "answer")
                 else asyncio.sleep(0)
             )
-            world_task = (
-                asyncio.to_thread(self.world_model.search, query)
-                if self.world_model and hasattr(self.world_model, "search")
+            doc_task = (
+                self.knowledge_manager.answer(session_id, query)
+                if self.knowledge_manager and hasattr(self.knowledge_manager, "answer")
                 else asyncio.sleep(0)
             )
             graph_task = (
@@ -162,46 +162,55 @@ class CognitiveCore:
                 if self.knowledge_graph and hasattr(self.knowledge_graph, "search")
                 else asyncio.sleep(0)
             )
-            doc_task = (
-                self.knowledge_manager.answer(session_id, query)
-                if self.knowledge_manager and hasattr(self.knowledge_manager, "answer")
-                else asyncio.sleep(0)
-            )
             db_task = (
                 self.knowledge_database.search(query)
                 if self.knowledge_database and hasattr(self.knowledge_database, "search")
                 else asyncio.sleep(0)
             )
+            world_task = (
+                asyncio.to_thread(self.world_model.search, query)
+                if self.world_model and hasattr(self.world_model, "search")
+                else asyncio.sleep(0)
+            )
 
             results = await asyncio.gather(
                 memory_task,
-                world_task,
-                graph_task,
                 doc_task,
+                graph_task,
                 db_task,
+                world_task,
                 return_exceptions=True,
             )
 
-            mem_res, world_res, graph_res, doc_res, db_res = [
+            mem_res, doc_res, graph_res, db_res, world_res = [
                 r if not isinstance(r, Exception) else None for r in results
             ]
 
-            # Confidence Ranking / Prioritization Selection
+            # Confidence Ranking / Prioritization Selection (Issue 5 Priority: Memory -> Documents -> Graph -> Database -> World Model)
             if mem_res:
                 if isinstance(mem_res, str):
                     answer = mem_res
                     source = "memory"
                     confidence = 0.94
                 elif isinstance(mem_res, list):
-                    context["memory"] = mem_res
+                    # Issue 3: Clean up Mongo raw documents for LLM readability
+                    cleaned_memories = []
+                    for m in mem_res:
+                        if isinstance(m, dict):
+                            k = m.get("key", "").replace("_", " ").title()
+                            v = m.get("value", "")
+                            if k and v:
+                                cleaned_memories.append(f"- {k}: {v}")
+                        elif isinstance(m, str):
+                            cleaned_memories.append(f"- {m}")
+                    context["memory"] = cleaned_memories
                 elif isinstance(mem_res, dict):
-                    context["memory"] = [mem_res]
+                    m = mem_res
+                    k = m.get("key", "").replace("_", " ").title()
+                    v = m.get("value", "")
+                    context["memory"] = [f"- {k}: {v}"] if k and v else [str(m)]
 
-            if not answer and world_res:
-                answer = str(world_res)
-                source = "world_model"
-                confidence = 0.91
-            elif not answer and doc_res:
+            if not answer and doc_res:
                 answer = doc_res
                 source = "document"
                 confidence = 0.89
@@ -226,6 +235,10 @@ class CognitiveCore:
                 answer = str(db_res)
                 source = "knowledge_database"
                 confidence = 0.75
+            elif not answer and world_res:
+                answer = str(world_res)
+                source = "world_model"
+                confidence = 0.91
 
             # Step 4 & 5: Skills Fallback if no knowledge/memory hit
             if not answer and self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
@@ -295,27 +308,37 @@ class CognitiveCore:
 
                         if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                             conversation = context.get("conversation", {})
-                            memory = context.get("memory", [])
+                            
+                            # Issue 2: Ensure history is populated safely
+                            conversation.setdefault("history", [])
+                            if not conversation["history"] and self.state_manager:
+                                try:
+                                    conversation["history"] = self.state_manager.get_conversation_history(session_id) or []
+                                except Exception:
+                                    pass
+
+                            memory_items = context.get("memory", [])
                             document = context.get("document", {})
                             knowledge = context.get("knowledge", {})
 
-                            system_prompt = f"""
-You are ARIA.
+                            # Issue 1: Format system prompt into a clean, readable structure instead of raw python objects
+                            memories_str = "\n".join(memory_items) if isinstance(memory_items, list) else str(memory_items)
+                            if not memories_str.strip():
+                                memories_str = "None recorded."
 
-Relevant memories:
-{memory}
+                            doc_str = str(document) if document else "None"
+                            knowledge_str = str(knowledge) if knowledge else "None"
 
-Previous query:
-{conversation.get("previous_query")}
+                            system_prompt = f"""You are ARIA, an advanced personal AI collaborator.
 
-Last assistant response:
-{conversation.get("last_assistant_response")}
+Relevant user memories:
+{memories_str}
 
 Active document:
-{document}
+{doc_str}
 
 Relevant knowledge:
-{knowledge}
+{knowledge_str}
 """
 
                             messages = [
@@ -325,20 +348,24 @@ Relevant knowledge:
                                 }
                             ]
 
+                            # Append clean conversation history turns
                             for turn in conversation.get("history", []):
                                 if not isinstance(turn, dict):
                                     continue
 
-                                if turn.get("user"):
+                                user_turn = turn.get("user")
+                                assistant_turn = turn.get("assistant")
+
+                                if user_turn:
                                     messages.append({
                                         "role": "user",
-                                        "content": turn["user"]
+                                        "content": str(user_turn)
                                     })
 
-                                if turn.get("assistant"):
+                                if assistant_turn:
                                     messages.append({
                                         "role": "assistant",
-                                        "content": turn["assistant"]
+                                        "content": str(assistant_turn)
                                     })
 
                             messages.append({
@@ -354,16 +381,30 @@ Relevant knowledge:
                     answer = "I couldn't find the information to answer your request."
                     confidence = 0.1
 
-                # Cache/Store newly generated/searched knowledge
-                if self.knowledge_database and hasattr(self.knowledge_database, "store"):
-                    await self.knowledge_database.store(title=query[:50], content=answer, source=source)
-                if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
-                    await self.knowledge_graph.learn(query, answer)
+                # Issue 4: Store only if source != "llm_generated" or confidence > 0.85 to avoid storing LLM hallucinations as knowledge
+                if source != "llm_generated" or confidence > 0.85:
+                    if self.knowledge_database and hasattr(self.knowledge_database, "store"):
+                        await self.knowledge_database.store(title=query[:50], content=answer, source=source)
+                    if self.knowledge_graph and hasattr(self.knowledge_graph, "learn"):
+                        await self.knowledge_graph.learn(query, answer)
 
         finally:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
+
+        # Issue 6: Store last_reasoning, last_source, and last_confidence inside state
+        if self.state_manager:
+            try:
+                self.state_manager.update_state(
+                    session_id,
+                    last_reasoning=context.get("reasoning"),
+                    last_source=source,
+                    last_confidence=confidence,
+                    last_assistant_response=answer,
+                )
+            except Exception:
+                logger.exception("[CognitiveCore] Failed to update state with execution metadata.")
 
         if self.event_bus:
             await self.event_bus.publish(
