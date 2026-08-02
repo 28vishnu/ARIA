@@ -675,6 +675,10 @@ class MemoryEngine:
                     }
                 )
 
+                if existing and existing.get("value") == item:
+                    stored.append(item)
+                    continue
+
                 version = 1
                 history = []
 
@@ -718,11 +722,19 @@ class MemoryEngine:
         if not self._validate_value(str(value)):
             return {"success": False}
 
-        record = self._build_memory_record(memory)
-
         existing = await self.memory_col.find_one(
             {"key": key}
         )
+
+        if existing and str(existing.get("value")) == str(value):
+            return {
+                "success": True,
+                "action": "already_exists",
+                "key": key,
+                "value": str(value),
+            }
+
+        record = self._build_memory_record(memory)
 
         action = "stored"
         version = 1
@@ -932,6 +944,9 @@ class MemoryEngine:
             0
         )
 
+        # Cap the influence of access_count to prevent domination
+        capped_accesses = min(accesses, 10)
+
         return (
 
             semantic_score
@@ -946,7 +961,7 @@ class MemoryEngine:
 
             +
 
-            accesses * 0.08
+            capped_accesses * 0.08
 
         )
 
@@ -977,7 +992,7 @@ class MemoryEngine:
             filter_query = None
 
             if re.search(
-                r"\b(?:what(?:'s| is) my name|who am i)\b",
+                r"\b(?:what(?:'s| is) my name|who am i|do you know my name|tell me my name|remember my name|what's my name again|say my name)\b",
                 lower
             ):
                 filter_query = {"key": "name"}
@@ -1522,10 +1537,10 @@ class MemoryEngine:
                 if len(final_memories) >= limit:
                     break
 
-            # Update access_count and last_accessed
+            # Update access_count and last_accessed only for the top utilized/returned memory or cap updates
             returned_keys = [
                 m["key"]
-                for m in final_memories
+                for m in final_memories[:1]  # Increment access count only for the top matching memory to prevent over-inflation
             ]
 
             if returned_keys:
