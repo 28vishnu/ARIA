@@ -186,14 +186,13 @@ class CognitiveCore:
                 r if not isinstance(r, Exception) else None for r in results
             ]
 
-            # Confidence Ranking / Prioritization Selection (Issue 5 Priority: Memory -> Documents -> Graph -> Database -> World Model)
+            # Confidence Ranking / Prioritization Selection (Priority: Memory -> Documents -> Graph -> Database -> World Model)
             if mem_res:
                 if isinstance(mem_res, str):
                     answer = mem_res
                     source = "memory"
                     confidence = 0.94
                 elif isinstance(mem_res, list):
-                    # Issue 3: Clean up Mongo raw documents for LLM readability
                     cleaned_memories = []
                     for m in mem_res:
                         if isinstance(m, dict):
@@ -309,7 +308,6 @@ class CognitiveCore:
                         if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                             conversation = context.get("conversation", {})
                             
-                            # Issue 2: Ensure history is populated safely
                             conversation.setdefault("history", [])
                             if not conversation["history"] and self.state_manager:
                                 try:
@@ -321,7 +319,6 @@ class CognitiveCore:
                             document = context.get("document", {})
                             knowledge = context.get("knowledge", {})
 
-                            # Issue 1: Format system prompt into a clean, readable structure instead of raw python objects
                             memories_str = "\n".join(memory_items) if isinstance(memory_items, list) else str(memory_items)
                             if not memories_str.strip():
                                 memories_str = "None recorded."
@@ -348,7 +345,6 @@ Relevant knowledge:
                                 }
                             ]
 
-                            # Append clean conversation history turns
                             for turn in conversation.get("history", []):
                                 if not isinstance(turn, dict):
                                     continue
@@ -381,7 +377,6 @@ Relevant knowledge:
                     answer = "I couldn't find the information to answer your request."
                     confidence = 0.1
 
-                # Issue 4: Store only if source != "llm_generated" or confidence > 0.85 to avoid storing LLM hallucinations as knowledge
                 if source != "llm_generated" or confidence > 0.85:
                     if self.knowledge_database and hasattr(self.knowledge_database, "store"):
                         await self.knowledge_database.store(title=query[:50], content=answer, source=source)
@@ -393,7 +388,6 @@ Relevant knowledge:
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
 
-        # Issue 6: Store last_reasoning, last_source, and last_confidence inside state
         if self.state_manager:
             try:
                 self.state_manager.update_state(
@@ -421,7 +415,6 @@ Relevant knowledge:
                 )
             )
 
-        # Step 9: Pass through PersonalityEngine
         return await self._format_response(answer, source, context, confidence)
 
     async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
@@ -1499,7 +1492,7 @@ Relevant knowledge:
             if self.event_bus:
                 await self.event_bus.publish(
                     Event(
-                        type=event_types.ERROR,
+                        type=event_types.ERROR_OCCURRED,
                         source="cognitive_core",
                         data={
                             "query": query,
