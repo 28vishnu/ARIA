@@ -1528,10 +1528,11 @@ class MemoryEngine:
 
             return final_memories
 
-        except Exception:
+        except Exception as e:
 
             logger.exception(
-                "[Memory Retrieval Error]"
+                "[Memory Retrieval Error]: %s",
+                e
             )
 
             return []
