@@ -43,6 +43,7 @@ class WorldModel:
         self.completed_goals: Dict[str, Any] = {}
         self.reasoning_history: List[Any] = []
         self.decision_history: List[Any] = []
+        self.execution_history: List[Any] = []
 
         self.workflow_state = {
             "goal": None,
@@ -136,6 +137,7 @@ class WorldModel:
         self.completed_goals = doc.get("completed_goals", {})
         self.reasoning_history = doc.get("reasoning_history", [])
         self.decision_history = doc.get("decision_history", [])
+        self.execution_history = doc.get("execution_history", [])
         self.workflow_state = doc.get("workflow_state", self.workflow_state)
         self.active = doc.get("active", self.active)
         self.routines = doc.get("routines", {})
@@ -152,7 +154,7 @@ class WorldModel:
         await self.load()
 
     # ---------------------------------------------------------
-    # REASONING & DECISION TRACKING (NEW METHODS)
+    # REASONING & DECISION TRACKING
     # ---------------------------------------------------------
 
     async def record_prediction(self, key: str, prediction_data: Any):
@@ -182,6 +184,43 @@ class WorldModel:
 
     def get_decision_history(self) -> List[Any]:
         return self.decision_history
+
+    # ---------------------------------------------------------
+    # EXECUTION TRACKING (NEW METHODS)
+    # ---------------------------------------------------------
+
+    async def record_execution(self, report):
+        self.execution_history.append(report)
+
+        if len(self.execution_history) > 1000:
+            self.execution_history.pop(0)
+
+        await self.save()
+
+    def execution_summary(self):
+        total = len(self.execution_history)
+
+        success = sum(
+            1
+            for r in self.execution_history
+            if r.get("success")
+        )
+
+        failures = total - success
+
+        avg = (
+            sum(r["duration"] for r in self.execution_history)
+            / total
+            if total
+            else 0
+        )
+
+        return {
+            "total_tasks": total,
+            "success_rate": success / total if total else 0,
+            "failures": failures,
+            "average_duration": avg,
+        }
 
     # ---------------------------------------------------------
     # WORKFLOW STATE MANAGEMENT
@@ -607,6 +646,7 @@ class WorldModel:
             "completed_goals": self.completed_goals,
             "reasoning_history": self.reasoning_history,
             "decision_history": self.decision_history,
+            "execution_history": self.execution_history,
             "workflow_state": self.workflow_state,
             "tasks": self.tasks,
             "habits": self.habits,
