@@ -289,3 +289,11 @@ class AutonomousLearning:
                 kwargs.get("query"),
                 kwargs.get("answer"),
             )
+
+    async def handle(self, event):
+        data = getattr(event, "data", {}) or {}
+
+        return await self.learn(
+            event.type,
+            **data,
+        )
