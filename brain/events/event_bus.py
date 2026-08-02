@@ -87,7 +87,7 @@ class EventBus:
                 self.statistics["errors"] += 1
 
                 logger.exception(
-                    "[EventBus] Listener failed."
+                    "[EventBus] Listener failed"
                 )
 
     ####################################################
