@@ -18,6 +18,7 @@ class ConversationManager:
             self._sessions[session_id] = {
                 "current_topic": None,
                 "previous_topic": None,
+                "last_subject": None,
                 "current_intent": None,
                 "last_user_message": None,
                 "last_assistant_message": None,
@@ -66,6 +67,7 @@ class ConversationManager:
             if new_topic != session.get("current_topic"):
                 session["previous_topic"] = session.get("current_topic")
                 session["current_topic"] = new_topic
+            session["last_subject"] = new_topic
 
     def get_context(self, session_id: str) -> Dict[str, Any]:
         """
@@ -75,6 +77,7 @@ class ConversationManager:
         return {
             "topic": session.get("current_topic"),
             "previous_topic": session.get("previous_topic"),
+            "last_subject": session.get("last_subject"),
             "intent": session.get("current_intent"),
             "entities": session.get("entities"),
             "last_user": session.get("last_user_message"),
@@ -123,42 +126,48 @@ class ConversationManager:
 
     def resolve_reference(self, session_id: str, query: str) -> str:
         """
-        Resolve simple contextual references (like 'Continue', 'Compare it', etc.)
-        using the current topic of the session.
+        Resolve simple contextual references using the last subject or current topic of the session.
         """
         if not query:
             return query
 
         session = self.get_session(session_id)
-        current_topic = session.get("current_topic")
+        subject = session.get("last_subject") or session.get("current_topic")
         cleaned = query.strip()
-        lower_cleaned = cleaned.lower()
 
-        if not current_topic:
+        if not subject:
             return cleaned
 
-        # Example 1: "Continue" -> "Continue explaining Python."
-        if lower_cleaned == "continue":
-            return f"Continue explaining {current_topic}."
+        lower = cleaned.lower()
 
-        # Example 2: "Explain the second point." (Contains ordinal/reference)
-        # We append "about [current_topic]" if not already present
-        if "it" in lower_cleaned.split() or "that" in lower_cleaned.split():
-            resolved = cleaned
-            for pronoun in [" it", " that"]:
-                if pronoun in resolved.lower():
-                    # Replace reference pronoun with topic mention smoothly
-                    resolved = resolved.replace(pronoun, f" {current_topic}")
-                    resolved = resolved.replace(pronoun.upper(), f" {current_topic}")
-            return resolved
+        if lower.startswith("compare it with "):
+            other = cleaned[len("Compare it with "):]
+            return f"Compare {subject} with {other}"
 
-        if lower_cleaned.startswith("compare it"):
-            return cleaned.lower().replace("compare it", f"Compare {current_topic}", 1)
+        if lower.startswith("compare it to "):
+            other = cleaned[len("Compare it to "):]
+            return f"Compare {subject} to {other}"
 
-        if lower_cleaned == "more" or lower_cleaned == "go on":
-            return f"Tell me more about {current_topic}."
+        if lower == "why":
+            return f"Why {session.get('last_user_message')}"
 
-        return cleaned
+        if lower.startswith("why "):
+            return f"Why {subject} {cleaned[4:]}"
+
+        if lower == "continue":
+            return f"Continue explaining {subject}"
+
+        if lower == "more":
+            return f"Tell me more about {subject}"
+
+        words = cleaned.split()
+
+        words = [
+            subject if w.lower() in ("it", "this", "that") else w
+            for w in words
+        ]
+
+        return " ".join(words)
 
     def set_active_document(self, session_id: str, document: Any) -> None:
         """
