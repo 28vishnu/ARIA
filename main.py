@@ -892,6 +892,19 @@ async def telegram_webhook(req: Request):
                 chat_id
             )
 
+        conversation_manager = req.app.state.registry.get("conversation_manager")
+
+        if conversation_manager:
+            # Simple entity extraction fallback based on common words or capitalized words in text
+            extracted_entities = [word for word in text.split() if word and word[0].isupper()]
+            conversation_manager.update_turn(
+                session_id=str(chat_id),
+                user_message=text,
+                assistant_message=reply_text,
+                intent=None,
+                entities=extracted_entities
+            )
+
     return {
         "status": "ok"
     }
