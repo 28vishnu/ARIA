@@ -202,7 +202,7 @@ class CognitiveCore:
                 if self.event_bus:
                     await self.event_bus.publish(
                         Event(
-                            type=event_types.DOCUMENT_ANSWERED,
+                            type=event_types.DOCUMENT_PROCESSED,
                             source="cognitive_core",
                             data={
                                 "query": query,
@@ -288,7 +288,7 @@ class CognitiveCore:
                                 if self.event_bus:
                                     await self.event_bus.publish(
                                         Event(
-                                            type=event_types.PLAN_FINISHED,
+                                            type=event_types.PLAN_COMPLETED,
                                             source="planner",
                                             data={
                                                 "query": query,
@@ -323,7 +323,7 @@ class CognitiveCore:
         if self.event_bus:
             await self.event_bus.publish(
                 Event(
-                    type=event_types.CHAT_RESPONSE,
+                    type=event_types.RESPONSE_GENERATED,
                     source="cognitive_core",
                     data={
                         "query": query,
