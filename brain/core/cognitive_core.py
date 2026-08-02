@@ -160,7 +160,7 @@ class CognitiveCore:
         context: Dict[str, Any],
     ) -> SystemResponse:
         """
-        ARIA's core knowledge-first intelligence pipeline orchestrated via ReasoningResult.
+        ARIA's core knowledge-first intelligence pipeline orchestrated via advanced ReasoningResult.
         """
         self.brain_state["retrieving"] = True
         answer = None
@@ -168,7 +168,28 @@ class CognitiveCore:
         confidence = 0.5
 
         resolved_query = await self._resolve_query(session_id, query)
-        reasoning = context.get("reasoning")
+        
+        # Advanced Reasoning Flow calls as requested
+        reasoning = None
+        hypotheses = []
+        best = None
+        reflection = {}
+
+        if self.reasoning_engine:
+            try:
+                reasoning = await self.reasoning_engine.reason(context)
+                context["reasoning"] = reasoning
+
+                if hasattr(self.reasoning_engine, "generate_hypotheses"):
+                    hypotheses = await self.reasoning_engine.generate_hypotheses(resolved_query, reasoning.evidence)
+
+                if hasattr(self.reasoning_engine, "choose_best_reasoning"):
+                    best = await self.reasoning_engine.choose_best_reasoning(hypotheses, reasoning.simulations)
+
+                if hasattr(self.reasoning_engine, "self_critique"):
+                    reflection = await self.reasoning_engine.self_critique(hypotheses, reasoning.evidence)
+            except Exception:
+                logger.exception("[CognitiveCore] Advanced ReasoningEngine pipeline invocation failed.")
 
         try:
             # 1. Memory Subsystem Control via ReasoningResult
@@ -470,6 +491,17 @@ Relevant knowledge:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
+
+        # Store the reflection safely in knowledge database or memory if available
+        if reflection and self.knowledge_database and hasattr(self.knowledge_database, "store"):
+            try:
+                await self.knowledge_database.store(
+                    title=f"Reflection: {resolved_query[:35]}",
+                    content=str(reflection),
+                    source="self_critique"
+                )
+            except Exception:
+                logger.exception("[CognitiveCore] Failed to store reflection in knowledge database.")
 
         # Learning & Reflection Subsystem hooks
         if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
