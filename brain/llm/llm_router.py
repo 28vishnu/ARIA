@@ -813,6 +813,11 @@ class LLMRouter:
         hundreds of hard-coded regex patterns.
         """
 
+        logger.info(
+            "[Memory] Extracting from: %r",
+            user_text
+        )
+
         if not user_text or not user_text.strip():
             return []
 
