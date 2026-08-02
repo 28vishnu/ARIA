@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from uuid import uuid4
 
@@ -37,6 +37,16 @@ class WorldModel:
         self.preferences: Dict[str, Any] = {}
         self.relationships: Dict[str, Any] = {}
         self.timeline = []
+
+        self.workflow_state = {
+            "goal": None,
+            "completed_tasks": [],
+            "running_tasks": [],
+            "failed_tasks": [],
+            "remaining_tasks": [],
+            "progress": 0,
+            "eta": None,
+        }
 
         self.active = {
             "project": None,
@@ -115,6 +125,7 @@ class WorldModel:
         self.preferences = doc.get("preferences", {})
         self.relationships = doc.get("relationships", {})
         self.timeline = doc.get("timeline", [])
+        self.workflow_state = doc.get("workflow_state", self.workflow_state)
         self.active = doc.get("active", self.active)
         self.routines = doc.get("routines", {})
         self.habits = doc.get("habits", {})
@@ -128,6 +139,40 @@ class WorldModel:
     async def rebuild(self):
         self.__init__(mongodb=self.mongodb)
         await self.load()
+
+    # ---------------------------------------------------------
+    # WORKFLOW STATE MANAGEMENT
+    # ---------------------------------------------------------
+
+    async def update_workflow_state(
+        self,
+        goal: Optional[str] = None,
+        completed_tasks: Optional[List[str]] = None,
+        running_tasks: Optional[List[str]] = None,
+        failed_tasks: Optional[List[str]] = None,
+        remaining_tasks: Optional[List[str]] = None,
+        progress: Optional[int] = None,
+        eta: Optional[Any] = None,
+    ):
+        if goal is not None:
+            self.workflow_state["goal"] = goal
+        if completed_tasks is not None:
+            self.workflow_state["completed_tasks"] = completed_tasks
+        if running_tasks is not None:
+            self.workflow_state["running_tasks"] = running_tasks
+        if failed_tasks is not None:
+            self.workflow_state["failed_tasks"] = failed_tasks
+        if remaining_tasks is not None:
+            self.workflow_state["remaining_tasks"] = remaining_tasks
+        if progress is not None:
+            self.workflow_state["progress"] = progress
+        if eta is not None:
+            self.workflow_state["eta"] = eta
+
+        await self.save()
+
+    def get_workflow_state(self) -> Dict[str, Any]:
+        return self.workflow_state
 
     # ---------------------------------------------------------
     # RELATIONSHIPS
@@ -514,6 +559,7 @@ class WorldModel:
             "goals": self.goals,
             "preferences": self.preferences,
             "relationships": self.relationships,
+            "workflow_state": self.workflow_state,
             "tasks": self.tasks,
             "habits": self.habits,
             "routines": self.routines,
