@@ -12,6 +12,18 @@ class ContextBuilder:
     generation all operate from the same understanding.
     """
 
+    def __init__(
+        self,
+        state_manager=None,
+        world_model=None,
+        memory_router=None,
+        knowledge_graph=None,
+    ):
+        self.state_manager = state_manager
+        self.world_model = world_model
+        self.memory_router = memory_router
+        self.knowledge_graph = knowledge_graph
+
     async def build(
         self,
         query: str,
