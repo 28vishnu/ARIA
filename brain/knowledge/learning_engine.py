@@ -24,6 +24,7 @@ class LearningEngine:
         knowledge_graph,
         graph_builder,
         llm_router=None,
+        event_bus=None,
     ):
 
         self.database = knowledge_database
@@ -31,6 +32,7 @@ class LearningEngine:
         self.graph = knowledge_graph
         self.builder = graph_builder
         self.llm_router = llm_router
+        self.event_bus = event_bus
         self.learned_count = 0
 
     ############################################################
