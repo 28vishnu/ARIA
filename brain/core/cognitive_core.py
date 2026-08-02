@@ -236,10 +236,14 @@ class CognitiveCore:
                 # Knowledge Subsystem
                 if not answer:
                     doc_res = None
-                    if reasoning and getattr(reasoning, "retrieved_knowledge", None) and self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-                        doc_res = await self.knowledge_manager.answer(session_id=session_id, question=resolved_query)
-                    elif self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-                        doc_res = await self.knowledge_manager.answer(session_id=session_id, question=resolved_query)
+                    try:
+                        doc_res = await self.knowledge_manager.answer(
+                            session_id=session_id,
+                            question=resolved_query,
+                        )
+                    except Exception:
+                        logger.exception("[CognitiveCore] KnowledgeManager failed.")
+                        doc_res = None
 
                     if doc_res:
                         answer = doc_res
