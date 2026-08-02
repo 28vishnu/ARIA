@@ -1,5 +1,6 @@
 import re
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
@@ -1526,12 +1527,11 @@ class MemoryEngine:
 
             return final_memories
 
-        except Exception as e:
+        except Exception:
 
-            logger.exception(
-                "[Memory Retrieval Error]: %s",
-                e
-            )
+            logger.exception("[Memory Retrieval Error]")
+
+            traceback.print_exc()
 
             return []
 
