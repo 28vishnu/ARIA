@@ -41,7 +41,7 @@ class ReasoningResult:
     resolved_query: str = ""
     topic: str = ""
     working_memory: Dict[str, Any] = field(default_factory=dict)
-    response_strategy: str = ""
+    response_strategy: Dict[str, Any] = field(default_factory=dict)
     reasoning_mode: str = ""
     topic_changed: bool = False
     reasoning_trace: str = ""
@@ -239,7 +239,16 @@ class ReasoningEngine:
 
     async def action_prediction(self, goal: str, context: Dict[str, Any]) -> List[str]:
         """Predict likely follow-up actions or subsequent user needs."""
-        return [f"Provide deep breakdown of {goal}", "Suggest related follow-up workflow"]
+        predictions = []
+        if goal == "answer":
+            predictions.append("Offer related explanation")
+        if goal == "plan":
+            predictions.append("Offer execution")
+        if goal == "search":
+            predictions.append("Offer comparison")
+        if goal == "remember":
+            predictions.append("Confirm memory")
+        return predictions
 
     async def choose_best_reasoning(self, hypotheses: List[str], simulations: List[Dict[str, Any]]) -> str:
         """Choose the optimal reasoning path among multi-path alternatives."""
@@ -248,10 +257,20 @@ class ReasoningEngine:
             return best.get("path", "primary")
         return hypotheses[0] if hypotheses else "default"
 
-    async def decide_response_strategy(self, goal: str, context: Dict[str, Any]) -> str:
+    async def decide_response_strategy(self, goal: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Decide the high-level response strategy based on goal and response depth hints."""
         depth = context.get("response", {}).get("depth", "normal")
-        return f"{goal}_strategy_{depth}"
+        return {
+            "depth": depth,
+            "be_proactive": True,
+            "personalize": True,
+            "predict_followup": True,
+            "avoid_encyclopedia": True,
+            "offer_next_step": goal not in (
+                "remember",
+                "delete",
+            ),
+        }
 
     async def choose_reasoning_mode(self, context: Dict[str, Any]) -> str:
         """Dynamically choose reasoning mode based on query characteristics."""
