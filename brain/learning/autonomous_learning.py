@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from typing import Any, Dict
 
 logger = logging.getLogger("aria")
 
@@ -45,7 +46,94 @@ class AutonomousLearning:
 
             "success": 0,
 
+            "reasoning_learned": 0,
+
+            "reflections_learned": 0,
+
+            "executions_learned": 0,
+
         }
+
+    # =========================================================
+    # ADVANCED LEARNING METHODS (NEW)
+    # =========================================================
+
+    async def learn_from_reasoning(self, reasoning_result: Any):
+        """
+        Analyze reasoning traces and evidence patterns to optimize future reasoning behavior.
+        """
+        try:
+            trace = getattr(reasoning_result, "reasoning_trace", str(reasoning_result))
+            await self.database.store(
+                title="Reasoning Pattern Learned",
+                content=trace,
+                source="reasoning_engine",
+            )
+            self.statistics["reasoning_learned"] += 1
+        except Exception:
+            logger.exception("[AutonomousLearning] learn_from_reasoning failed.")
+
+    async def learn_from_reflection(self, reflection_data: Any):
+        """
+        Absorb self-critique and reflections to prevent repeating errors.
+        """
+        try:
+            content = str(reflection_data)
+            await self.database.store(
+                title="Self-Critique Reflection",
+                content=content,
+                source="self_reflection",
+            )
+            if hasattr(self.world, "record_reflection"):
+                await self.world.record_reflection(content)
+            self.statistics["reflections_learned"] += 1
+        except Exception:
+            logger.exception("[AutonomousLearning] learn_from_reflection failed.")
+
+    async def learn_from_execution(self, execution_result: Dict[str, Any]):
+        """
+        Learn from workflow execution successes or failures to refine timing, retries, and parameters.
+        """
+        try:
+            success = execution_result.get("success", False)
+            content = str(execution_result)
+            source_type = "execution_success" if success else "execution_failure"
+            await self.database.store(
+                title=f"Execution Outcome: {source_type}",
+                content=content,
+                source=source_type,
+            )
+            self.statistics["executions_learned"] += 1
+        except Exception:
+            logger.exception("[AutonomousLearning] learn_from_execution failed.")
+
+    async def improve_planner(self, plan: Any, feedback: str):
+        """
+        Fine-tune future planning strategies based on plan performance feedback.
+        """
+        try:
+            content = f"Plan Feedback: {feedback}\nPlan: {str(plan)}"
+            await self.database.store(
+                title="Planner Optimization",
+                content=content,
+                source="planner_improvement",
+            )
+        except Exception:
+            logger.exception("[AutonomousLearning] improve_planner failed.")
+
+    async def improve_reasoning(self, query: str, correction: str):
+        """
+        Enhance reasoning logic and prompt structures based on corrections.
+        """
+        try:
+            content = f"Query: {query}\nCorrection: {correction}"
+            await self.database.store(
+                title="Reasoning Optimization",
+                content=content,
+                source="reasoning_improvement",
+            )
+        except Exception:
+            logger.exception("[AutonomousLearning] improve_reasoning failed.")
 
     # =========================================================
     # INDIVIDUAL PROCESSING METHODS
@@ -289,6 +377,15 @@ class AutonomousLearning:
                 kwargs.get("query"),
                 kwargs.get("answer"),
             )
+
+        elif source == "reasoning":
+            await self.learn_from_reasoning(kwargs.get("reasoning"))
+
+        elif source == "reflection":
+            await self.learn_from_reflection(kwargs.get("reflection"))
+
+        elif source == "execution":
+            await self.learn_from_execution(kwargs.get("execution"))
 
     async def handle(self, event):
         data = getattr(event, "data", {}) or {}
