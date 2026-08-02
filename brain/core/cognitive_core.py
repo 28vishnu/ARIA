@@ -83,6 +83,7 @@ class CognitiveCore:
         self_reflection=None,
         autonomous_learning=None,
         event_bus=None,
+        llm_router=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -104,6 +105,7 @@ class CognitiveCore:
         self.self_reflection = self_reflection
         self.autonomous_learning = autonomous_learning
         self.event_bus = event_bus
+        self.llm_router = llm_router
 
         self.brain_state = {
             "thinking": False,
@@ -324,14 +326,20 @@ Relevant knowledge:
                             ]
 
                             for turn in conversation.get("history", []):
-                                messages.append({
-                                    "role": "user",
-                                    "content": turn["user"]
-                                })
-                                messages.append({
-                                    "role": "assistant",
-                                    "content": turn["assistant"]
-                                })
+                                if not isinstance(turn, dict):
+                                    continue
+
+                                if turn.get("user"):
+                                    messages.append({
+                                        "role": "user",
+                                        "content": turn["user"]
+                                    })
+
+                                if turn.get("assistant"):
+                                    messages.append({
+                                        "role": "assistant",
+                                        "content": turn["assistant"]
+                                    })
 
                             messages.append({
                                 "role": "user",
