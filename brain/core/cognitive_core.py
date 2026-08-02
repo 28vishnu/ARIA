@@ -290,11 +290,31 @@ class CognitiveCore:
 
                 if not answer:
                     try:
-                        # Planner Execution (if needed)
+                        # Planner Execution with Autonomous Monitoring and Dynamic Replanning Loop
                         if reasoning and reasoning.plan and self.executor:
-                            exec_result = await self.executor.execute_plan(reasoning.plan, context)
+                            plan = reasoning.plan
+                            exec_result = await self.executor.execute_plan(plan, context)
+                            
+                            goal_finished = await self.planner.monitor_goal_progress(
+                                plan,
+                                exec_result,
+                            )
+
+                            if not goal_finished and self.planner and hasattr(self.planner, "dynamic_replan"):
+                                plan = await self.planner.dynamic_replan(
+                                    plan.goal,
+                                    exec_result.get("completed", []),
+                                    exec_result.get("failed", []),
+                                    context,
+                                )
+                                if plan:
+                                    exec_result = await self.executor.execute_plan(
+                                        plan,
+                                        context,
+                                    )
+
                             task_outputs = exec_result.get("task_outputs", {})
-                            for task in reversed(reasoning.plan):
+                            for task in reversed(plan.tasks):
                                 out = task_outputs.get(task.id, {})
                                 if isinstance(out, dict):
                                     answer = out.get("response") or out.get("content") or out.get("message")
@@ -314,6 +334,25 @@ class CognitiveCore:
                             plan = await self.planner.create_plan(resolved_query, context)
                             if plan and plan.tasks and self.executor:
                                 exec_result = await self.executor.execute_plan(plan, context)
+                                
+                                goal_finished = await self.planner.monitor_goal_progress(
+                                    plan,
+                                    exec_result,
+                                )
+
+                                if not goal_finished and hasattr(self.planner, "dynamic_replan"):
+                                    plan = await self.planner.dynamic_replan(
+                                        plan.goal,
+                                        exec_result.get("completed", []),
+                                        exec_result.get("failed", []),
+                                        context,
+                                    )
+                                    if plan:
+                                        exec_result = await self.executor.execute_plan(
+                                            plan,
+                                            context,
+                                        )
+
                                 task_outputs = exec_result.get("task_outputs", {})
                                 for task in reversed(plan.tasks):
                                     out = task_outputs.get(task.id, {})
