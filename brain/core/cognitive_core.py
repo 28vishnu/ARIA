@@ -124,7 +124,10 @@ class CognitiveCore:
         history = []
 
         if self.state_manager:
-            history = self.state_manager.get_conversation_history(session_id)
+            try:
+                history = self.state_manager.get_conversation_history(session_id)
+            except Exception as e:
+                logger.warning("State manager conversation history retrieval skipped: %s", e)
 
         if not history:
             return query
@@ -145,7 +148,12 @@ class CognitiveCore:
 
         messages.append({"role": "user", "content": query})
 
-        resolved = await self.llm_router.chat(messages)
+        resolved = None
+        if self.llm_router and hasattr(self.llm_router, "chat"):
+            try:
+                resolved = await self.llm_router.chat(messages)
+            except Exception as e:
+                logger.warning("LLM router chat for resolution skipped: %s", e)
 
         return resolved.strip() if resolved else query
 
@@ -171,12 +179,17 @@ class CognitiveCore:
 
         # Step 1: Build context first via context_builder if available
         if self.context_builder:
-            context = await self.context_builder.build(
-                query=resolved_query,
-                session_id=session_id,
-                user_id=context.get("user_id", session_id),
-                base_context=context,
-            )
+            try:
+                context = await self.context_builder.build(
+                    query=resolved_query,
+                    session_id=session_id,
+                    user_id=context.get("user_id", session_id),
+                    base_context=context,
+                )
+            except Exception as e:
+                logger.warning("Context builder skipped: %s", e)
+                context.setdefault("query", resolved_query)
+                context.setdefault("session_id", session_id)
         else:
             context.setdefault("query", resolved_query)
             context.setdefault("session_id", session_id)
@@ -187,8 +200,8 @@ class CognitiveCore:
             try:
                 reasoning = await self.reasoning_engine.reason(context)
                 context["reasoning"] = reasoning
-            except Exception:
-                logger.exception("[CognitiveCore] ReasoningEngine invocation failed.")
+            except Exception as e:
+                logger.warning("ReasoningEngine invocation skipped: %s", e)
 
         try:
             # Step 3: If reasoning already contains an answer
@@ -209,8 +222,8 @@ class CognitiveCore:
                         if answer:
                             source = "planner_executor"
                             confidence = getattr(reasoning, "plan", {}).get("confidence", 0.92)
-                except Exception:
-                    logger.exception("[CognitiveCore] Executor plan execution failed.")
+                except Exception as e:
+                    logger.warning("Executor plan execution skipped: %s", e)
 
             # Step 5: Only if there is still no answer, fallback to Memory -> Knowledge -> World -> LLM
             if not answer:
@@ -221,7 +234,10 @@ class CognitiveCore:
                 if reasoning and getattr(reasoning, "retrieved_memory", None):
                     mem_res = reasoning.retrieved_memory
                 elif self.memory_router and hasattr(self.memory_router, "answer"):
-                    mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
+                    try:
+                        mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
+                    except Exception as e:
+                        logger.warning("Memory router answer search skipped: %s", e)
 
                 if mem_res:
                     if isinstance(mem_res, str):
@@ -237,12 +253,13 @@ class CognitiveCore:
                 if not answer:
                     doc_res = None
                     try:
-                        doc_res = await self.knowledge_manager.answer(
-                            session_id=session_id,
-                            question=resolved_query,
-                        )
-                    except Exception:
-                        logger.exception("[CognitiveCore] KnowledgeManager failed.")
+                        if self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+                            doc_res = await self.knowledge_manager.answer(
+                                session_id=session_id,
+                                question=resolved_query,
+                            )
+                    except Exception as e:
+                        logger.warning("KnowledgeManager skipped: %s", e)
                         doc_res = None
 
                     if doc_res:
@@ -254,15 +271,25 @@ class CognitiveCore:
                         source = "knowledge_graph"
                         confidence = 0.81
                     elif self.knowledge_database and hasattr(self.knowledge_database, "search"):
-                        db_res = await self.knowledge_database.search(resolved_query)
-                        if db_res:
-                            answer = str(db_res)
-                            source = "knowledge_database"
-                            confidence = 0.75
+                        try:
+                            db_res = await self.knowledge_database.search(resolved_query)
+                            if db_res:
+                                answer = str(db_res)
+                                source = "knowledge_database"
+                                confidence = 0.75
+                        except Exception as e:
+                            logger.warning("Knowledge database search skipped: %s", e)
 
                 # World Model Subsystem
                 if not answer:
-                    world_res = reasoning.world_state if reasoning and hasattr(reasoning, "world_state") else (asyncio.to_thread(self.world_model.search, resolved_query) if self.world_model and hasattr(self.world_model, "search") else None)
+                    world_res = None
+                    if reasoning and hasattr(reasoning, "world_state"):
+                        world_res = reasoning.world_state
+                    elif self.world_model and hasattr(self.world_model, "search"):
+                        try:
+                            world_res = await asyncio.to_thread(self.world_model.search, resolved_query)
+                        except Exception as e:
+                            logger.warning("World model search skipped: %s", e)
                     if world_res:
                         answer = str(world_res)
                         source = "world_model"
@@ -294,8 +321,8 @@ class CognitiveCore:
                         answer = await self.llm_router.chat(messages)
                         source = "llm_generated"
                         confidence = 0.70
-                    except Exception:
-                        logger.exception("[CognitiveCore] LLM fallback generation failed.")
+                    except Exception as e:
+                        logger.warning("LLM fallback generation skipped: %s", e)
 
                 if not answer:
                     answer = "I couldn't find the information to answer your request."
@@ -314,8 +341,8 @@ class CognitiveCore:
                     resolved_query,
                     answer,
                 )
-            except Exception:
-                logger.exception("[CognitiveCore] Self reflection hook failed.")
+            except Exception as e:
+                logger.warning("Self reflection skipped: %s", e)
 
         if self.autonomous_learning:
             try:
@@ -324,8 +351,8 @@ class CognitiveCore:
                     resolved_query,
                     answer,
                 )
-            except Exception:
-                logger.exception("[CognitiveCore] Autonomous learning hook failed.")
+            except Exception as e:
+                logger.warning("Autonomous learning skipped: %s", e)
 
         if self.state_manager:
             try:
@@ -336,23 +363,26 @@ class CognitiveCore:
                     last_confidence=confidence,
                     last_assistant_response=answer,
                 )
-            except Exception:
-                logger.exception("[CognitiveCore] Failed to update state with execution metadata.")
+            except Exception as e:
+                logger.warning("State manager update skipped: %s", e)
 
         if self.event_bus:
-            await self.event_bus.publish(
-                Event(
-                    type=event_types.RESPONSE_GENERATED,
-                    source="cognitive_core",
-                    data={
-                        "query": resolved_query,
-                        "answer": answer,
-                        "confidence": confidence,
-                        "knowledge_source": source,
-                        "session_id": session_id,
-                    }
+            try:
+                await self.event_bus.publish(
+                    Event(
+                        type=event_types.RESPONSE_GENERATED,
+                        source="cognitive_core",
+                        data={
+                            "query": resolved_query,
+                            "answer": answer,
+                            "confidence": confidence,
+                            "knowledge_source": source,
+                            "session_id": session_id,
+                        }
+                    )
                 )
-            )
+            except Exception as e:
+                logger.warning("Event bus publish skipped: %s", e)
 
         return await self._format_response(answer, source, context, confidence)
 
@@ -361,8 +391,8 @@ class CognitiveCore:
         if self.personality_engine and hasattr(self.personality_engine, "format"):
             try:
                 formatted_answer = await self.personality_engine.format(answer, context)
-            except Exception:
-                logger.exception("[CognitiveCore] PersonalityEngine formatting failed.")
+            except Exception as e:
+                logger.warning("Personality engine formatting skipped: %s", e)
 
         return SystemResponse(
             success=True,
@@ -1015,11 +1045,14 @@ class CognitiveCore:
             # =================================================
 
             if self.conversation_manager:
-                if self.conversation_manager.is_followup(query):
-                    query = self.conversation_manager.resolve_reference(
-                        session_id,
-                        query,
-                    )
+                try:
+                    if self.conversation_manager.is_followup(query):
+                        query = self.conversation_manager.resolve_reference(
+                            session_id,
+                            query,
+                        )
+                except Exception as e:
+                    logger.warning("Conversation manager resolution skipped: %s", e)
 
             # =================================================
             # 3. RESUME / CANCEL PENDING WORKFLOW
@@ -1272,10 +1305,13 @@ class CognitiveCore:
             # =================================================
 
             if self.state_manager:
-                self.state_manager.update_state(
-                    session_id,
-                    last_query=resolved_query,
-                )
+                try:
+                    self.state_manager.update_state(
+                        session_id,
+                        last_query=resolved_query,
+                    )
+                except Exception as e:
+                    logger.warning("State manager update skipped: %s", e)
 
             # =================================================
             # 10. INTENT ANALYSIS
@@ -1355,15 +1391,18 @@ class CognitiveCore:
                     ):
 
                         if self.event_bus:
-                            await self.event_bus.publish(
-                                Event(
-                                    type=event_types.MEMORY_CREATED,
-                                    source="memory",
-                                    data={
-                                        "query": resolved_query,
-                                    }
+                            try:
+                                await self.event_bus.publish(
+                                    Event(
+                                        type=event_types.MEMORY_CREATED,
+                                        source="memory",
+                                        data={
+                                            "query": resolved_query,
+                                        }
+                                    )
                                 )
-                            )
+                            except Exception as e:
+                                logger.warning("Event bus publish skipped: %s", e)
 
                         try:
 
@@ -1412,16 +1451,19 @@ class CognitiveCore:
             )
 
             if self.event_bus:
-                await self.event_bus.publish(
-                    Event(
-                        type=event_types.ERROR_OCCURRED,
-                        source="cognitive_core",
-                        data={
-                            "query": query,
-                            "error": str(exc),
-                        }
+                try:
+                    await self.event_bus.publish(
+                        Event(
+                            type=event_types.ERROR_OCCURRED,
+                            source="cognitive_core",
+                            data={
+                                "query": query,
+                                "error": str(exc),
+                            }
+                        )
                     )
-                )
+                except Exception as e:
+                    logger.warning("Event bus error publish skipped: %s", e)
 
             return SystemResponse(
                 success=False,
