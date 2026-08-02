@@ -221,7 +221,7 @@ class CognitiveCore:
                 if reasoning and getattr(reasoning, "retrieved_memory", None):
                     mem_res = reasoning.retrieved_memory
                 elif self.memory_router and hasattr(self.memory_router, "answer"):
-                    mem_res = await self.memory_router.answer(resolved_query)
+                    mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
 
                 if mem_res:
                     if isinstance(mem_res, str):
@@ -237,9 +237,9 @@ class CognitiveCore:
                 if not answer:
                     doc_res = None
                     if reasoning and getattr(reasoning, "retrieved_knowledge", None) and self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-                        doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
+                        doc_res = await self.knowledge_manager.answer(session_id=session_id, question=resolved_query)
                     elif self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
-                        doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
+                        doc_res = await self.knowledge_manager.answer(session_id=session_id, question=resolved_query)
 
                     if doc_res:
                         answer = doc_res
