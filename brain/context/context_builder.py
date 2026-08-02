@@ -93,9 +93,16 @@ class ContextBuilder:
 
         continuation_phrases = {
             "continue",
+            "continue please",
             "go on",
+            "go ahead",
             "next",
+            "carry on",
+            "keep going",
             "tell me more",
+            "more",
+            "explain further",
+            "continue that",
             "explain more",
             "what about that",
             "what about it",
