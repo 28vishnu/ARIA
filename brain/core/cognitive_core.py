@@ -303,9 +303,6 @@ You are ARIA.
 Relevant memories:
 {memory}
 
-Conversation history:
-{conversation.get("history", [])}
-
 Previous query:
 {conversation.get("previous_query")}
 
@@ -323,12 +320,23 @@ Relevant knowledge:
                                 {
                                     "role": "system",
                                     "content": system_prompt
-                                },
-                                {
-                                    "role": "user",
-                                    "content": query
                                 }
                             ]
+
+                            for turn in conversation.get("history", []):
+                                messages.append({
+                                    "role": "user",
+                                    "content": turn["user"]
+                                })
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": turn["assistant"]
+                                })
+
+                            messages.append({
+                                "role": "user",
+                                "content": query
+                            })
 
                             answer = await self.llm_router.chat(messages)
                     except Exception:
