@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+import time
 
 from brain.memory.working_memory import WorkingMemory
 
@@ -31,6 +32,11 @@ class MemoryRouter:
         self.knowledge_engine = knowledge_engine
         self.knowledge_graph = knowledge_graph
         self.document_repository = document_repository
+
+        # Duplicate guard cache for remember()
+        self._last_remembered_text = None
+        self._last_remembered_time = 0.0
+        self._duplicate_window = 5.0  # seconds
 
     # =====================================================
     # Working Memory
@@ -65,6 +71,20 @@ class MemoryRouter:
 
         if self.memory_engine is None:
             return
+
+        cleaned_text = str(user_text or "").strip()
+        if not cleaned_text:
+            return
+
+        now = time.monotonic()
+        if (
+            self._last_remembered_text == cleaned_text
+            and (now - self._last_remembered_time) < self._duplicate_window
+        ):
+            return {"success": False, "reason": "duplicate_suppressed"}
+
+        self._last_remembered_text = cleaned_text
+        self._last_remembered_time = now
 
         return await self.memory_engine.process_and_store(
             user_text
