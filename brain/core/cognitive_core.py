@@ -160,17 +160,7 @@ class CognitiveCore:
         context: Dict[str, Any],
     ) -> SystemResponse:
         """
-        ARIA's core knowledge-first intelligence pipeline.
-        Executes parallel retrieval and strict prioritization:
-        1. Personal Memory
-        2. Documents
-        3. Knowledge Graph
-        4. Knowledge Database
-        5. World Model
-        6. Skills
-        7. Web Search -> Learn -> LLM -> Summarize -> Store
-        8. Automatic Learning & Reflection
-        9. Personality Engine
+        ARIA's core knowledge-first intelligence pipeline orchestrated via ReasoningResult.
         """
         self.brain_state["retrieving"] = True
         answer = None
@@ -178,49 +168,32 @@ class CognitiveCore:
         confidence = 0.5
 
         resolved_query = await self._resolve_query(session_id, query)
+        reasoning = context.get("reasoning")
 
         try:
-            # Parallel Retrieval across subsystems (using resolved_query)
-            memory_task = (
-                self.memory_router.answer(resolved_query)
-                if self.memory_router and hasattr(self.memory_router, "answer")
-                else asyncio.sleep(0)
-            )
-            doc_task = (
-                self.knowledge_manager.answer(session_id, resolved_query)
-                if self.knowledge_manager and hasattr(self.knowledge_manager, "answer")
-                else asyncio.sleep(0)
-            )
-            graph_task = (
-                self.knowledge_graph.search(resolved_query)
-                if self.knowledge_graph and hasattr(self.knowledge_graph, "search")
-                else asyncio.sleep(0)
-            )
-            db_task = (
-                self.knowledge_database.search(resolved_query)
-                if self.knowledge_database and hasattr(self.knowledge_database, "search")
-                else asyncio.sleep(0)
-            )
-            world_task = (
-                asyncio.to_thread(self.world_model.search, resolved_query)
-                if self.world_model and hasattr(self.world_model, "search")
-                else asyncio.sleep(0)
-            )
+            # 1. Memory Subsystem Control via ReasoningResult
+            mem_res = None
+            if reasoning and getattr(reasoning, "retrieved_memory", None):
+                mem_res = reasoning.retrieved_memory
+            elif self.memory_router and hasattr(self.memory_router, "answer"):
+                mem_res = await self.memory_router.answer(resolved_query)
 
-            results = await asyncio.gather(
-                memory_task,
-                doc_task,
-                graph_task,
-                db_task,
-                world_task,
-                return_exceptions=True,
-            )
+            # 2. Document Subsystem Control via ReasoningResult
+            doc_res = None
+            if reasoning and getattr(reasoning, "retrieved_knowledge", None) and self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+                doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
+            elif self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+                doc_res = await self.knowledge_manager.answer(session_id, resolved_query)
 
-            mem_res, doc_res, graph_res, db_res, world_res = [
-                r if not isinstance(r, Exception) else None for r in results
-            ]
+            # 3. Knowledge Graph & Database Search
+            graph_res = reasoning.graph_results if reasoning and hasattr(reasoning, "graph_results") else (await self.knowledge_graph.search(resolved_query) if self.knowledge_graph and hasattr(self.knowledge_graph, "search") else None)
+            db_res = None
+            if self.knowledge_database and hasattr(self.knowledge_database, "search"):
+                db_res = await self.knowledge_database.search(resolved_query)
 
-            # Confidence Ranking / Prioritization Selection (Priority: Memory -> Documents -> Graph -> Database -> World Model)
+            world_res = reasoning.world_state if reasoning and hasattr(reasoning, "world_state") else (asyncio.to_thread(self.world_model.search, resolved_query) if self.world_model and hasattr(self.world_model, "search") else None)
+
+            # Confidence Ranking / Prioritization Selection
             if mem_res:
                 if isinstance(mem_res, str):
                     answer = mem_res
@@ -276,7 +249,7 @@ class CognitiveCore:
                 source = "world_model"
                 confidence = 0.91
 
-            # Step 4 & 5: Skills Fallback if no knowledge/memory hit
+            # Skills Fallback if no knowledge/memory hit
             if not answer and self.skill_manager and hasattr(self.skill_manager, "route_and_execute"):
                 try:
                     skill_result = await self.skill_manager.route_and_execute(
@@ -294,10 +267,11 @@ class CognitiveCore:
                 except Exception:
                     logger.exception("[CognitiveCore] Skills execution failed.")
 
-            # Step 6 & 10 & 11: Web Search -> Learn -> LLM Fallback (Cache if found)
+            # Web Search & Planner & Agents Control via ReasoningResult
             if not answer:
                 self.brain_state["thinking"] = True
-                if self._looks_like_web_search_request(resolved_query) and self.action_manager and "web_search" in self.action_manager.actions:
+                should_web = reasoning and hasattr(reasoning, "metadata") and reasoning.metadata.get("should_use_web") or self._looks_like_web_search_request(resolved_query)
+                if should_web and self.action_manager and "web_search" in self.action_manager.actions:
                     try:
                         web_result = await self.action_manager.execute_action(
                             action_name="web_search",
@@ -316,11 +290,27 @@ class CognitiveCore:
 
                 if not answer:
                     try:
-                        if self.reasoning_engine:
-                            reasoning = await self.reasoning_engine.reason(context)
-                            context["reasoning"] = reasoning
-
-                        if self.planner:
+                        # Planner Execution (if needed)
+                        if reasoning and reasoning.plan and self.executor:
+                            exec_result = await self.executor.execute_plan(reasoning.plan, context)
+                            task_outputs = exec_result.get("task_outputs", {})
+                            for task in reversed(reasoning.plan):
+                                out = task_outputs.get(task.id, {})
+                                if isinstance(out, dict):
+                                    answer = out.get("response") or out.get("content") or out.get("message")
+                                    if answer:
+                                        break
+                            if self.event_bus:
+                                await self.event_bus.publish(
+                                    Event(
+                                        type=event_types.PLAN_COMPLETED,
+                                        source="planner",
+                                        data={
+                                            "query": resolved_query,
+                                        }
+                                    )
+                                )
+                        elif self.planner and reasoning and getattr(reasoning, "goal", "") == "plan":
                             plan = await self.planner.create_plan(resolved_query, context)
                             if plan and plan.tasks and self.executor:
                                 exec_result = await self.executor.execute_plan(plan, context)
@@ -331,17 +321,17 @@ class CognitiveCore:
                                         answer = out.get("response") or out.get("content") or out.get("message")
                                         if answer:
                                             break
-                                if self.event_bus:
-                                    await self.event_bus.publish(
-                                        Event(
-                                            type=event_types.PLAN_COMPLETED,
-                                            source="planner",
-                                            data={
-                                                "query": resolved_query,
-                                            }
-                                        )
-                                    )
 
+                        # Agents Execution (if needed)
+                        if not answer and reasoning and reasoning.selected_agents:
+                            for agent in reasoning.selected_agents:
+                                if hasattr(agent, "execute"):
+                                    res = await agent.execute(resolved_query, context)
+                                    if res:
+                                        answer = str(res)
+                                        break
+
+                        # LLM Fallback
                         if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                             conversation = context.get("conversation", {})
                             
@@ -442,6 +432,19 @@ Relevant knowledge:
             self.brain_state["retrieving"] = False
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
+
+        # Learning & Reflection Subsystem hooks
+        if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
+            try:
+                await self.autonomous_learning.learn(session_id, resolved_query, answer)
+            except Exception:
+                logger.exception("[CognitiveCore] Autonomous learning failed.")
+
+        if self.self_reflection and hasattr(self.self_reflection, "reflect"):
+            try:
+                await self.self_reflection.reflect(session_id, resolved_query, answer)
+            except Exception:
+                logger.exception("[CognitiveCore] Self reflection failed.")
 
         if self.state_manager:
             try:
@@ -1110,33 +1113,7 @@ Relevant knowledge:
         base_context: Optional[Dict[str, Any]] = None,
     ) -> SystemResponse:
         """
-        Main cognitive orchestration pipeline.
-
-        CognitiveCore should coordinate ARIA's subsystems rather
-        than trying to understand every possible user command
-        through hard-coded keyword rules.
-
-        Pipeline:
-
-            State
-              ↓
-            Pending confirmations
-              ↓
-            Memory retrieval
-              ↓
-            Context construction
-              ↓
-            Intent hint
-              ↓
-            Reasoning
-              ↓
-            Decision
-              ↓
-            Planner when necessary
-              ↓
-            Executor
-              ↓
-            Response
+        Main cognitive orchestration pipeline guided by ReasoningEngine.
         """
 
         try:
@@ -1181,10 +1158,6 @@ Relevant knowledge:
                     self._normalize_confirmation_text(query)
                 )
 
-                # ---------------------------------------------
-                # CONFIRM
-                # ---------------------------------------------
-
                 if self._is_confirm(normalized_query):
 
                     action_name = state.get(
@@ -1199,7 +1172,6 @@ Relevant knowledge:
                         or {}
                     )
 
-                    # Clear before execution to prevent replay.
                     self.state_manager.clear_pending_action(
                         session_id
                     )
@@ -1220,12 +1192,6 @@ Relevant knowledge:
                             ),
                         )
 
-                    logger.info(
-                        "[CognitiveCore] Executing confirmed "
-                        "action: %s",
-                        action_name,
-                    )
-
                     action_result = (
                         await self.action_manager.execute_action(
                             action_name=action_name,
@@ -1239,7 +1205,6 @@ Relevant knowledge:
                         "result": action_result.data,
                     }
 
-                    # Preserve readable file contents.
                     if (
                         action_result.success
                         and action_name == "file_action"
@@ -1260,10 +1225,6 @@ Relevant knowledge:
                         error=action_result.error,
                     )
 
-                # ---------------------------------------------
-                # REJECT
-                # ---------------------------------------------
-
                 if self._is_reject(normalized_query):
 
                     action_name = state.get(
@@ -1272,12 +1233,6 @@ Relevant knowledge:
 
                     self.state_manager.clear_pending_action(
                         session_id
-                    )
-
-                    logger.info(
-                        "[CognitiveCore] User cancelled "
-                        "action: %s",
-                        action_name,
                     )
 
                     return SystemResponse(
@@ -1289,8 +1244,6 @@ Relevant knowledge:
                         },
                     )
 
-                # User said something unrelated while a direct
-                # action is waiting for confirmation.
                 return SystemResponse(
                     success=True,
                     confidence=1.0,
@@ -1349,9 +1302,6 @@ Relevant knowledge:
                 ctx["state"] = state
                 ctx["memory"] = memories
 
-            # Guarantee essential context exists even if the
-            # ContextBuilder omitted one of these fields.
-
             ctx.setdefault("query", resolved_query)
             ctx.setdefault("session_id", session_id)
             ctx.setdefault("user_id", user_id)
@@ -1359,7 +1309,18 @@ Relevant knowledge:
             ctx.setdefault("memory", memories)
 
             # =================================================
-            # 6. ATTACH REGISTERED CAPABILITIES
+            # 6. REASONING ENGINE INTEGRATION (Central Control)
+            # =================================================
+
+            if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
+                try:
+                    reasoning = await self.reasoning_engine.reason(ctx)
+                    ctx["reasoning"] = reasoning
+                except Exception:
+                    logger.exception("[CognitiveCore] ReasoningEngine invocation failed.")
+
+            # =================================================
+            # 7. ATTACH REGISTERED CAPABILITIES
             # =================================================
 
             app_state = None
@@ -1403,9 +1364,6 @@ Relevant knowledge:
             ctx["document_intelligence"] = document_ai
             ctx["document_repository"] = document_repository
 
-            # Expose managers as capabilities to later reasoning
-            # and planning layers.
-
             ctx["capabilities"] = {
                 "memory": self.memory_router is not None,
                 "documents": document_ai is not None,
@@ -1418,7 +1376,7 @@ Relevant knowledge:
             }
 
             # =================================================
-            # 7. SAVE CURRENT QUERY
+            # 8. SAVE CURRENT QUERY
             # =================================================
 
             if self.state_manager:
@@ -1428,10 +1386,7 @@ Relevant knowledge:
                 )
 
             # =================================================
-            # 8. INTENT ANALYSIS
-            #
-            # Intent is now a HINT.
-            # It must not control the whole architecture.
+            # 9. INTENT ANALYSIS
             # =================================================
 
             intent = None
@@ -1451,10 +1406,7 @@ Relevant knowledge:
                     )
 
             # =================================================
-            # 9. EXPLICIT MEMORY MANAGEMENT
-            #
-            # Memory write/delete operations remain deterministic
-            # because they change persistent user data.
+            # 10. EXPLICIT MEMORY MANAGEMENT
             # =================================================
 
             if (
@@ -1493,7 +1445,7 @@ Relevant knowledge:
                 )
 
             # =================================================
-            # 10. NATURAL MEMORY LEARNING VIA ROUTER
+            # 11. NATURAL MEMORY LEARNING VIA ROUTER
             # =================================================
 
             if self.memory_router:
@@ -1509,13 +1461,6 @@ Relevant knowledge:
                         memory_result
                         and memory_result.get("success")
                     ):
-
-                        logger.info(
-                            "[CognitiveCore] Natural memory "
-                            "learning via router: key=%s action=%s",
-                            memory_result.get("key"),
-                            memory_result.get("action"),
-                        )
 
                         if self.event_bus:
                             await self.event_bus.publish(
@@ -1552,7 +1497,7 @@ Relevant knowledge:
                     )
 
             # =================================================
-            # 11. KNOWLEDGE-FIRST PIPELINE EXECUTION
+            # 12. KNOWLEDGE-FIRST PIPELINE EXECUTION
             # =================================================
 
             self.brain_state["thinking"] = True
