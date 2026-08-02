@@ -874,12 +874,10 @@ async def telegram_webhook(req: Request):
 
         if state_manager:
 
-            await state_manager.update_state(
+            state_manager.update_state(
                 str(chat_id),
-                {
-                    "last_query": text,
-                    "last_assistant_response": reply_text,
-                }
+                last_query=text,
+                last_assistant_response=reply_text,
             )
 
             state_manager.add_conversation_turn(
