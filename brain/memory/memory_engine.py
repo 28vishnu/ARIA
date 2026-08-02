@@ -684,8 +684,7 @@ class MemoryEngine:
                     {
                         "$set": record,
                         "$setOnInsert": {
-                            "expires_at": None,
-                            "is_permanent": memory["is_permanent"]
+                            "expires_at": None
                         }
                     },
                     upsert=True
@@ -734,8 +733,7 @@ class MemoryEngine:
             {
                 "$set": record,
                 "$setOnInsert": {
-                    "expires_at": None,
-                    "is_permanent": memory["is_permanent"]
+                    "expires_at": None
                 }
             },
             upsert=True
