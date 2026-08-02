@@ -329,7 +329,7 @@ class CognitiveCore:
                             doc_str = str(document) if document else "None"
                             knowledge_str = str(knowledge) if knowledge else "None"
 
-                            # Requirement 4: Get conversation context and inject into system prompt
+                            # Bug 3 / Requirement 4: Get conversation context and inject into system prompt
                             conversation_context = {}
                             if self.conversation_manager:
                                 conversation_context = self.conversation_manager.get_context(session_id)
@@ -546,13 +546,29 @@ Relevant knowledge:
 
         return has_freshness and has_information
 
-    # Requirement 1: Automatic entity extraction helper method
+    # Bug 3: Robust entity extraction helper method
     def _extract_entities(self, text: str):
-        """
-        Simple fallback entity extractor.
-        Later this can be replaced with spaCy or LLM extraction.
-        """
+        COMMON_TOPICS = {
+            "python",
+            "java",
+            "javascript",
+            "c++",
+            "linux",
+            "docker",
+            "mongodb",
+            "postgres",
+            "redis",
+            "fastapi",
+            "django",
+            "flask",
+        }
+
         entities = []
+
+        for word in text.lower().split():
+            cleaned = word.strip(".,?!")
+            if cleaned in COMMON_TOPICS:
+                entities.append(cleaned.title())
 
         for match in re.findall(r"\b[A-Z][a-zA-Z0-9_]+\b", text):
             if match not in entities:
@@ -1093,11 +1109,24 @@ Relevant knowledge:
         """
 
         try:
-            # Step 1: Initialize session and obtain user message & session ID
+            # Bug 2: Load history and update ConversationManager first before resolving follow-up references
             user_message = query
-            session = self.conversation_manager.get_session(session_id) if self.conversation_manager else {}
+            
+            if self.state_manager and self.conversation_manager:
+                try:
+                    history = self.state_manager.get_conversation_history(session_id) or []
+                    for turn in history:
+                        if isinstance(turn, dict) and turn.get("user") and turn.get("assistant"):
+                            self.conversation_manager.update_turn(
+                                session_id=session_id,
+                                user_message=turn["user"],
+                                assistant_message=turn["assistant"],
+                                entities=self._extract_entities(turn["user"])
+                            )
+                except Exception:
+                    logger.exception("[CognitiveCore] Failed to load history into ConversationManager.")
 
-            # Step 2: Resolve reference if it's a follow-up
+            # Step 1 & Bug 2: Resolve reference if it's a follow-up after loading history
             resolved_query = user_message
             if self.conversation_manager and self.conversation_manager.is_followup(user_message):
                 resolved_query = self.conversation_manager.resolve_reference(
@@ -1442,7 +1471,6 @@ Relevant knowledge:
                     )
                 )
 
-                # Requirement 2: Replace entities=[] with robust entity building
                 if self.conversation_manager:
                     intent_name = getattr(intent, "name", None)
                     entities = []
@@ -1460,6 +1488,17 @@ Relevant knowledge:
                         intent=intent_name,
                         entities=entities,
                     )
+
+                # Bug 1: Use add_conversation_turn instead of append_conversation_history
+                if self.state_manager:
+                    try:
+                        self.state_manager.add_conversation_turn(
+                            session_id=session_id,
+                            user_message=user_message,
+                            assistant_message=str(reply),
+                        )
+                    except Exception:
+                        logger.exception("[CognitiveCore] Failed to store conversation history.")
 
                 return SystemResponse(
                     success=True,
@@ -1545,7 +1584,6 @@ Relevant knowledge:
                 ctx,
             )
 
-            # Requirement 2 & 3: Robust entity building, update_turn call, and conversation history storage
             if self.conversation_manager:
                 final_reply = pipeline_response.data.get("response") or pipeline_response.data.get("message") or ""
                 intent_name = getattr(intent, "name", None) if intent else None
@@ -1566,12 +1604,13 @@ Relevant knowledge:
                     entities=entities,
                 )
 
+                # Bug 1: Use add_conversation_turn instead of append_conversation_history
                 if self.state_manager:
                     try:
-                        self.state_manager.append_conversation_history(
+                        self.state_manager.add_conversation_turn(
                             session_id=session_id,
-                            user=user_message,
-                            assistant=str(final_reply),
+                            user_message=user_message,
+                            assistant_message=str(final_reply),
                         )
                     except Exception:
                         logger.exception("[CognitiveCore] Failed to store conversation history.")
