@@ -1,4 +1,7 @@
 from typing import Optional, Dict, Any, List
+import logging
+
+logger = logging.getLogger("aria")
 
 
 class KnowledgeManager:
@@ -102,7 +105,9 @@ class KnowledgeManager:
 
     async def search_world(self, question: str) -> List[Dict[str, Any]]:
         if self.world_model and hasattr(self.world_model, "search"):
-            w_res = self.world_model.search(question)
+            w_res = await self.world_model.search(question)
+            if asyncio.iscoroutine(w_res):
+                w_res = await w_res
             if w_res:
                 normalized = []
                 for k, v in w_res.items():
@@ -208,13 +213,47 @@ class KnowledgeManager:
         session_id: str,
         question: str,
     ) -> List[Dict[str, Any]]:
-        working = await self.search_working_memory(question)
-        memory = await self.search_memory(question)
-        knowledge = await self.search_database(question)
-        graph = await self.search_graph(question)
-        world = await self.search_world(question)
-        documents = await self.search_documents(session_id, question)
-        skills = await self.search_skills(question)
+        try:
+            working = await self.search_working_memory(question)
+        except Exception:
+            logger.exception("Working memory search failed")
+            working = []
+
+        try:
+            memory = await self.search_memory(question)
+        except Exception:
+            logger.exception("Memory search failed")
+            memory = []
+
+        try:
+            knowledge = await self.search_database(question)
+        except Exception:
+            logger.exception("Database search failed")
+            knowledge = []
+
+        try:
+            graph = await self.search_graph(question)
+        except Exception:
+            logger.exception("Graph search failed")
+            graph = []
+
+        try:
+            world = await self.search_world(question)
+        except Exception:
+            logger.exception("World model search failed")
+            world = []
+
+        try:
+            documents = await self.search_documents(session_id, question)
+        except Exception:
+            logger.exception("Document search failed")
+            documents = []
+
+        try:
+            skills = await self.search_skills(question)
+        except Exception:
+            logger.exception("Skills search failed")
+            skills = []
 
         merged = await self.merge_results(
             working,
