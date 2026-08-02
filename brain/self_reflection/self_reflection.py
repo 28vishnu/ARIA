@@ -200,3 +200,11 @@ class SelfReflection:
             return await self.detect_duplicates()
         elif event == "graph":
             return await self.improve_graph()
+
+    async def handle(self, event):
+        data = getattr(event, "data", {}) or {}
+
+        return await self.reflect(
+            event.type,
+            **data,
+        )
