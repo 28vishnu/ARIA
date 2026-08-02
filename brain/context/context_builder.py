@@ -18,11 +18,13 @@ class ContextBuilder:
         world_model=None,
         memory_router=None,
         knowledge_graph=None,
+        conversation_manager=None,
     ):
         self.state_manager = state_manager
         self.world_model = world_model
         self.memory_router = memory_router
         self.knowledge_graph = knowledge_graph
+        self.conversation_manager = conversation_manager
 
     async def build(
         self,
@@ -43,6 +45,14 @@ class ContextBuilder:
 
         memory_items = memory if isinstance(memory, list) else []
         state_data = state if isinstance(state, dict) else {}
+
+        conversation_context = {}
+
+        if self.conversation_manager:
+            try:
+                conversation_context = self.conversation_manager.get_context(session_id)
+            except Exception:
+                conversation_context = {}
 
         # -----------------------------------------------------
         # Conversation state
@@ -274,6 +284,10 @@ class ContextBuilder:
                 "previous_query": previous_query,
                 "last_assistant_response": last_assistant_response,
                 "history": recent_conversation,
+
+                "topic": conversation_context.get("topic"),
+                "previous_topic": conversation_context.get("previous_topic"),
+                "entities": conversation_context.get("entities", []),
 
                 "is_short_query": is_short_query,
                 "is_continuation": is_continuation,
