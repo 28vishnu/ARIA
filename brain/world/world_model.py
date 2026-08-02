@@ -38,6 +38,12 @@ class WorldModel:
         self.relationships: Dict[str, Any] = {}
         self.timeline = []
 
+        self.predictions: Dict[str, Any] = {}
+        self.active_goals: Dict[str, Any] = {}
+        self.completed_goals: Dict[str, Any] = {}
+        self.reasoning_history: List[Any] = []
+        self.decision_history: List[Any] = []
+
         self.workflow_state = {
             "goal": None,
             "completed_tasks": [],
@@ -125,6 +131,11 @@ class WorldModel:
         self.preferences = doc.get("preferences", {})
         self.relationships = doc.get("relationships", {})
         self.timeline = doc.get("timeline", [])
+        self.predictions = doc.get("predictions", {})
+        self.active_goals = doc.get("active_goals", {})
+        self.completed_goals = doc.get("completed_goals", {})
+        self.reasoning_history = doc.get("reasoning_history", [])
+        self.decision_history = doc.get("decision_history", [])
         self.workflow_state = doc.get("workflow_state", self.workflow_state)
         self.active = doc.get("active", self.active)
         self.routines = doc.get("routines", {})
@@ -139,6 +150,38 @@ class WorldModel:
     async def rebuild(self):
         self.__init__(mongodb=self.mongodb)
         await self.load()
+
+    # ---------------------------------------------------------
+    # REASONING & DECISION TRACKING (NEW METHODS)
+    # ---------------------------------------------------------
+
+    async def record_prediction(self, key: str, prediction_data: Any):
+        self.predictions[key] = {
+            "data": prediction_data,
+            "timestamp": datetime.utcnow(),
+        }
+        await self.save()
+
+    async def record_decision(self, decision_data: Any):
+        entry = {
+            "id": str(uuid4()),
+            "decision": decision_data,
+            "timestamp": datetime.utcnow(),
+        }
+        self.decision_history.append(entry)
+        await self.save()
+
+    async def record_reflection(self, reflection_data: Any):
+        entry = {
+            "id": str(uuid4()),
+            "reflection": reflection_data,
+            "timestamp": datetime.utcnow(),
+        }
+        self.reasoning_history.append(entry)
+        await self.save()
+
+    def get_decision_history(self) -> List[Any]:
+        return self.decision_history
 
     # ---------------------------------------------------------
     # WORKFLOW STATE MANAGEMENT
@@ -559,6 +602,11 @@ class WorldModel:
             "goals": self.goals,
             "preferences": self.preferences,
             "relationships": self.relationships,
+            "predictions": self.predictions,
+            "active_goals": self.active_goals,
+            "completed_goals": self.completed_goals,
+            "reasoning_history": self.reasoning_history,
+            "decision_history": self.decision_history,
             "workflow_state": self.workflow_state,
             "tasks": self.tasks,
             "habits": self.habits,
