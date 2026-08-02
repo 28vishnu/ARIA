@@ -120,6 +120,35 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
+    async def _resolve_query(self, session_id: str, query: str) -> str:
+        history = []
+
+        if self.state_manager:
+            history = self.state_manager.get_conversation_history(session_id)
+
+        if not history:
+            return query
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Rewrite follow-up questions into standalone questions. "
+                    "Return ONLY the rewritten question."
+                ),
+            }
+        ]
+
+        for turn in history[-5:]:
+            messages.append({"role": "user", "content": turn["user"]})
+            messages.append({"role": "assistant", "content": turn["assistant"]})
+
+        messages.append({"role": "user", "content": query})
+
+        resolved = await self.llm_router.chat(messages)
+
+        return resolved.strip() if resolved else query
+
     # =========================================================
     # KNOWLEDGE FIRST PIPELINE
     # =========================================================
@@ -148,23 +177,10 @@ class CognitiveCore:
         source = "llm_generated"
         confidence = 0.5
 
-        # -------------------------------------------------
-        # Resolve conversational references
-        # -------------------------------------------------
-
-        resolved_query = query
-
-        if self.conversation_manager:
-
-            if self.conversation_manager.is_followup(query):
-
-                resolved_query = self.conversation_manager.resolve_reference(
-                    session_id=session_id,
-                    query=query
-                )
+        resolved_query = await self._resolve_query(session_id, query)
 
         try:
-            # Parallel Retrieval across subsystems (using resolved query)
+            # Parallel Retrieval across subsystems (using resolved_query)
             memory_task = (
                 self.memory_router.answer(resolved_query)
                 if self.memory_router and hasattr(self.memory_router, "answer")
@@ -406,16 +422,6 @@ Relevant knowledge:
                             })
 
                             answer = await self.llm_router.chat(messages)
-
-                            if self.conversation_manager:
-                                entities = self._extract_entities(resolved_query)
-
-                                self.conversation_manager.update_turn(
-                                    session_id=session_id,
-                                    user_message=resolved_query,
-                                    assistant_message=answer,
-                                    entities=entities
-                                )
                     except Exception:
                         logger.exception("[CognitiveCore] LLM/Reasoning fallback failed.")
 
