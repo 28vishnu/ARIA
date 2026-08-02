@@ -186,14 +186,20 @@ class CognitiveCore:
 
             # Confidence Ranking / Prioritization Selection
             if mem_res:
-                answer = mem_res
-                source = "memory"
-                confidence = 0.94
-            elif world_res:
+                if isinstance(mem_res, str):
+                    answer = mem_res
+                    source = "memory"
+                    confidence = 0.94
+                elif isinstance(mem_res, list):
+                    context["memory"] = mem_res
+                elif isinstance(mem_res, dict):
+                    context["memory"] = [mem_res]
+
+            if not answer and world_res:
                 answer = str(world_res)
                 source = "world_model"
                 confidence = 0.91
-            elif doc_res:
+            elif not answer and doc_res:
                 answer = doc_res
                 source = "document"
                 confidence = 0.89
@@ -210,11 +216,11 @@ class CognitiveCore:
                             }
                         )
                     )
-            elif graph_res:
+            elif not answer and graph_res:
                 answer = str(graph_res)
                 source = "knowledge_graph"
                 confidence = 0.81
-            elif db_res:
+            elif not answer and db_res:
                 answer = str(db_res)
                 source = "knowledge_database"
                 confidence = 0.75
@@ -254,17 +260,6 @@ class CognitiveCore:
                             )
                             source = "web_search"
                             confidence = 0.70
-                            if self.event_bus:
-                                await self.event_bus.publish(
-                                    Event(
-                                        type=event_types.WEB_SEARCH_FINISHED,
-                                        source="cognitive_core",
-                                        data={
-                                            "query": query,
-                                            "answer": answer,
-                                        }
-                                    )
-                                )
                     except Exception:
                         logger.exception("[CognitiveCore] Web Search failed.")
 
@@ -297,10 +292,44 @@ class CognitiveCore:
                                     )
 
                         if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
+                            conversation = context.get("conversation", {})
+                            memory = context.get("memory", [])
+                            document = context.get("document", {})
+                            knowledge = context.get("knowledge", {})
+
+                            system_prompt = f"""
+You are ARIA.
+
+Relevant memories:
+{memory}
+
+Conversation history:
+{conversation.get("history", [])}
+
+Previous query:
+{conversation.get("previous_query")}
+
+Last assistant response:
+{conversation.get("last_assistant_response")}
+
+Active document:
+{document}
+
+Relevant knowledge:
+{knowledge}
+"""
+
                             messages = [
-                                {"role": "system", "content": "You are ARIA, a helpful AI assistant."},
-                                {"role": "user", "content": query}
+                                {
+                                    "role": "system",
+                                    "content": system_prompt
+                                },
+                                {
+                                    "role": "user",
+                                    "content": query
+                                }
                             ]
+
                             answer = await self.llm_router.chat(messages)
                     except Exception:
                         logger.exception("[CognitiveCore] LLM/Reasoning fallback failed.")
