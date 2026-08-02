@@ -11,12 +11,7 @@ class MemoryRouter:
     Nothing outside the memory package should directly talk to
     MemoryEngine.
 
-    Future sources:
-        • Working Memory
-        • Personal Memory
-        • Document Memory
-        • Knowledge Graph
-        • World Knowledge
+    Searches memory only when explicitly requested by the reasoning engine.
     """
 
     def __init__(
@@ -91,14 +86,25 @@ class MemoryRouter:
         )
 
     # =====================================================
-    # Memory Recall
+    # Memory Recall (Conditional / On-Demand)
     # =====================================================
 
     async def recall(
         self,
         query: str,
-        limit: int = 10
+        limit: int = 10,
+        force: bool = False,
+        reasoning_result: Optional[Any] = None,
     ) -> List[Dict]:
+        """
+        Recall memories only when requested by the reasoning engine
+        or when explicitly forced.
+        """
+        if reasoning_result is not None and not getattr(reasoning_result, "requires_memory", True):
+            return []
+
+        if not force and reasoning_result is None:
+            return []
 
         if self.memory_engine is None:
             return []
@@ -168,7 +174,8 @@ class MemoryRouter:
     async def search_everywhere(
         self,
         query: str,
-        limit: int = 10
+        limit: int = 10,
+        reasoning_result: Optional[Any] = None,
     ) -> Dict[str, Any]:
 
         result = {
@@ -181,9 +188,12 @@ class MemoryRouter:
         # Working Memory
         result["working_memory"] = self.snapshot()
 
-        # Personal Memory
-        if self.memory_engine:
+        # Personal Memory (respects reasoning flag)
+        should_recall_memory = True
+        if reasoning_result is not None:
+            should_recall_memory = getattr(reasoning_result, "requires_memory", True)
 
+        if self.memory_engine and should_recall_memory:
             pm = (
                 await self.memory_engine.get_relevant_memories(
                     query,
@@ -192,9 +202,12 @@ class MemoryRouter:
             )
             result["personal_memory"] = pm if pm is not None else []
 
-        # Knowledge Engine
-        if self.knowledge_engine:
+        # Knowledge Engine (respects reasoning flag for documents)
+        should_recall_docs = True
+        if reasoning_result is not None:
+            should_recall_docs = getattr(reasoning_result, "requires_documents", False)
 
+        if self.knowledge_engine and should_recall_docs:
             result["knowledge"] = (
                 await self.knowledge_engine.search(
                     query
@@ -203,7 +216,6 @@ class MemoryRouter:
 
         # Knowledge Graph
         if self.knowledge_graph:
-
             result["graph"] = (
                 await self.knowledge_graph.search(
                     query
@@ -216,9 +228,8 @@ class MemoryRouter:
     # Answer API
     # =====================================================
 
-    async def answer(self, query: str):
-
-        result = await self.search_everywhere(query)
+    async def answer(self, query: str, reasoning_result: Optional[Any] = None):
+        result = await self.search_everywhere(query, reasoning_result=reasoning_result)
 
         if result["personal_memory"]:
             return result["personal_memory"]
