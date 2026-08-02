@@ -84,6 +84,7 @@ class Executor:
 
         self.paused_workflows: Dict[str, Dict[str, Any]] = {}
         self.execution_history: List[Dict[str, Any]] = []
+        self.max_execution_history = 1000
 
         self.task_queue: asyncio.Queue = asyncio.Queue()
         self._resource_locks: Dict[str, asyncio.Lock] = {}
@@ -744,6 +745,7 @@ class Executor:
                             )
                         )
 
+                    task_start = time.time()
                     start_time = time.perf_counter()
                     task_timeout = getattr(task, "timeout", 30)
 
@@ -893,6 +895,36 @@ class Executor:
                             replan_res = await self.replan_if_needed(plan, failed, completed, base_context)
                             if replan_res:
                                 return replan_res
+
+                    task_end = time.time()
+
+                    execution_report = {
+                        "workflow": workflow_id,
+                        "task_id": task.id,
+                        "task_name": task.name,
+                        "status": task.status,
+                        "started_at": task_start,
+                        "finished_at": task_end,
+                        "duration": round(task_end - task_start, 3),
+                        "output": task_outputs.get(task.id),
+                        "success": task.status == "completed",
+                    }
+                    self.execution_history.append(execution_report)
+
+                    if len(self.execution_history) > self.max_execution_history:
+                        self.execution_history.pop(0)
+
+                    if hasattr(self, "world_model"):
+                        await self.world_model.record_execution(execution_report)
+
+                    if self.event_bus:
+                        await self.event_bus.publish(
+                            Event(
+                                type=event_types.TASK_FINISHED,
+                                source="executor",
+                                data=execution_report,
+                            )
+                        )
 
                     executed.add(task.id)
                     return "done"
