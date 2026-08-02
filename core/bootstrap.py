@@ -347,6 +347,7 @@ async def bootstrap_application() -> ServiceRegistry:
         world_model=world_model,
         memory_router=memory_router,
         knowledge_graph=knowledge_graph,
+        conversation_manager=conversation_manager,
     )
 
     # Group registrations
