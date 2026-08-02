@@ -503,18 +503,33 @@ Relevant knowledge:
             except Exception:
                 logger.exception("[CognitiveCore] Failed to store reflection in knowledge database.")
 
-        # Learning & Reflection Subsystem hooks
-        if self.autonomous_learning and hasattr(self.autonomous_learning, "learn"):
-            try:
-                await self.autonomous_learning.learn(session_id, resolved_query, answer)
-            except Exception:
-                logger.exception("[CognitiveCore] Autonomous learning failed.")
+        # Execution Report generation and recording via WorldModel, SelfReflection, and AutonomousLearning
+        execution_report = {
+            "query": resolved_query,
+            "response_source": source,
+            "confidence": confidence,
+            "success": bool(answer),
+        }
 
-        if self.self_reflection and hasattr(self.self_reflection, "reflect"):
-            try:
-                await self.self_reflection.reflect(session_id, resolved_query, answer)
-            except Exception:
-                logger.exception("[CognitiveCore] Self reflection failed.")
+        if self.world_model:
+            await self.world_model.record_execution(
+                execution_report
+            )
+
+        if self.self_reflection:
+            await self.self_reflection.reflect(
+                session_id,
+                resolved_query,
+                answer,
+            )
+
+        if self.autonomous_learning:
+            if answer:
+                await self.autonomous_learning.learn(
+                    session_id,
+                    resolved_query,
+                    answer,
+                )
 
         if self.state_manager:
             try:
