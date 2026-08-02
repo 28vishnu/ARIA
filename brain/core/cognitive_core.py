@@ -121,42 +121,6 @@ class CognitiveCore:
         self.response_fusion = ResponseFusion()
 
     # =========================================================
-    # ENTITY EXTRACTION HELPER (Bug #5)
-    # =========================================================
-
-    def _extract_entities(self, text: str) -> List[str]:
-        """
-        Automatically detects key entities (technologies, proper nouns, important terms)
-        to track conversation topics.
-        """
-        if not text:
-            return []
-
-        # Common capitalized technical terms, proper nouns, or domain keywords
-        known_keywords = {
-            "python", "java", "javascript", "typescript", "c", "c++", "c#", "rust", "go",
-            "react", "node", "mongodb", "supabase", "sql", "kubernetes", "devops", "aws",
-            "tony stark", "iron man", "nasa", "openai", "claude", "groq", "aria"
-        }
-
-        found = []
-        lower_text = text.lower()
-        
-        # Check known dictionary keywords
-        for kw in known_keywords:
-            if kw in lower_text:
-                found.append(kw.title() if len(kw) > 3 else kw.upper())
-
-        # Extract capitalized words/phrases as potential entities
-        caps = re.findall(r'\b[A-Z][a-zA-Z0-9\+#._-]+\b', text)
-        for cap in caps:
-            if cap.lower() not in {"i", "aria", "a", "an", "the", "and", "or", "to", "in", "on"}:
-                if cap not in found:
-                    found.append(cap)
-
-        return found
-
-    # =========================================================
     # KNOWLEDGE FIRST PIPELINE
     # =========================================================
 
@@ -365,20 +329,26 @@ class CognitiveCore:
                             doc_str = str(document) if document else "None"
                             knowledge_str = str(knowledge) if knowledge else "None"
 
-                            # Bug #3 Injection of Conversation Context into System Prompt
-                            conv_ctx = context.get("conv_context", {})
-                            current_topic_str = conv_ctx.get("topic") or "None"
-                            prev_topic_str = conv_ctx.get("previous_topic") or "None"
-                            last_user_str = conv_ctx.get("last_user") or "None"
-                            last_assistant_str = conv_ctx.get("last_assistant") or "None"
+                            # Requirement 4: Get conversation context and inject into system prompt
+                            conversation_context = {}
+                            if self.conversation_manager:
+                                conversation_context = self.conversation_manager.get_context(session_id)
 
                             system_prompt = f"""You are ARIA, an advanced personal AI collaborator.
 
-Conversation State:
-- Current Topic: {current_topic_str}
-- Previous Topic: {prev_topic_str}
-- Last User Message: {last_user_str}
-- Last Assistant Response: {last_assistant_str}
+Conversation Context:
+
+Current Topic:
+{conversation_context.get("topic")}
+
+Previous Topic:
+{conversation_context.get("previous_topic")}
+
+Last User Message:
+{conversation_context.get("last_user")}
+
+Last Assistant Message:
+{conversation_context.get("last_assistant")}
 
 Relevant user memories:
 {memories_str}
@@ -575,6 +545,20 @@ Relevant knowledge:
         )
 
         return has_freshness and has_information
+
+    # Requirement 1: Automatic entity extraction helper method
+    def _extract_entities(self, text: str):
+        """
+        Simple fallback entity extractor.
+        Later this can be replaced with spaCy or LLM extraction.
+        """
+        entities = []
+
+        for match in re.findall(r"\b[A-Z][a-zA-Z0-9_]+\b", text):
+            if match not in entities:
+                entities.append(match)
+
+        return entities
 
     def _build_confirmation_message(
         self,
@@ -1112,9 +1096,8 @@ Relevant knowledge:
             # Step 1: Initialize session and obtain user message & session ID
             user_message = query
             session = self.conversation_manager.get_session(session_id) if self.conversation_manager else {}
-            conv_context = self.conversation_manager.get_context(session_id) if self.conversation_manager else {}
 
-            # Step 2: Resolve reference if it's a follow-up (Bug #4 enhanced reference words are handled via ConversationManager)
+            # Step 2: Resolve reference if it's a follow-up
             resolved_query = user_message
             if self.conversation_manager and self.conversation_manager.is_followup(user_message):
                 resolved_query = self.conversation_manager.resolve_reference(
@@ -1133,19 +1116,6 @@ Relevant knowledge:
                     self.state_manager.get_state(session_id)
                     or {}
                 )
-
-            # Pass conversation context down into base_context / state for context builder
-            if base_context is None:
-                base_context = {}
-            base_context["conv_context"] = conv_context
-
-            # Bug #2: Save/append history into StateManager so history persists and isn't empty
-            if self.state_manager:
-                history = state.get("conversation_history", [])
-                if not isinstance(history, list):
-                    history = []
-                # Append current turn skeleton if not already tracked
-                state["conversation_history"] = history
 
             # =================================================
             # 2. RESUME / CANCEL PENDING WORKFLOW
@@ -1350,7 +1320,6 @@ Relevant knowledge:
             ctx.setdefault("user_id", user_id)
             ctx.setdefault("state", state)
             ctx.setdefault("memory", memories)
-            ctx["conv_context"] = conv_context
 
             # =================================================
             # 6. ATTACH REGISTERED CAPABILITIES
@@ -1473,12 +1442,14 @@ Relevant knowledge:
                     )
                 )
 
-                # Bug #1 & #5: Build entities properly and update conversation turn
+                # Requirement 2: Replace entities=[] with robust entity building
                 if self.conversation_manager:
                     intent_name = getattr(intent, "name", None)
                     entities = []
-                    if intent and hasattr(intent, "entities") and intent.entities:
-                        entities = intent.entities
+
+                    if intent and hasattr(intent, "entities"):
+                        entities = intent.entities or []
+
                     if not entities:
                         entities = self._extract_entities(resolved_query)
 
@@ -1487,14 +1458,8 @@ Relevant knowledge:
                         user_message=user_message,
                         assistant_message=reply,
                         intent=intent_name,
-                        entities=entities
+                        entities=entities,
                     )
-
-                    # Bug #2: Save turn into StateManager history
-                    if self.state_manager:
-                        hist = state.get("conversation_history", [])
-                        hist.append({"user": user_message, "assistant": reply})
-                        self.state_manager.update_state(session_id, conversation_history=hist)
 
                 return SystemResponse(
                     success=True,
@@ -1580,14 +1545,16 @@ Relevant knowledge:
                 ctx,
             )
 
-            # Bug #1, #2, #5: Update conversation turn and state history after final response
+            # Requirement 2 & 3: Robust entity building, update_turn call, and conversation history storage
             if self.conversation_manager:
                 final_reply = pipeline_response.data.get("response") or pipeline_response.data.get("message") or ""
                 intent_name = getattr(intent, "name", None) if intent else None
-                
+
                 entities = []
-                if intent and hasattr(intent, "entities") and intent.entities:
-                    entities = intent.entities
+
+                if intent and hasattr(intent, "entities"):
+                    entities = intent.entities or []
+
                 if not entities:
                     entities = self._extract_entities(resolved_query)
 
@@ -1596,13 +1563,18 @@ Relevant knowledge:
                     user_message=user_message,
                     assistant_message=str(final_reply),
                     intent=intent_name,
-                    entities=entities
+                    entities=entities,
                 )
 
                 if self.state_manager:
-                    hist = state.get("conversation_history", [])
-                    hist.append({"user": user_message, "assistant": str(final_reply)})
-                    self.state_manager.update_state(session_id, conversation_history=hist)
+                    try:
+                        self.state_manager.append_conversation_history(
+                            session_id=session_id,
+                            user=user_message,
+                            assistant=str(final_reply),
+                        )
+                    except Exception:
+                        logger.exception("[CognitiveCore] Failed to store conversation history.")
 
             return pipeline_response
 
