@@ -65,7 +65,7 @@ class StateManager:
         session_id: str,
         user_message: str,
         assistant_message: str,
-        max_turns: int = 8
+        max_turns: int = 20
     ):
         """
         Store a short rolling conversation history.
@@ -109,10 +109,26 @@ class StateManager:
             ).strip()
         )
 
+    def append_conversation_history(
+        self,
+        session_id: str,
+        user: str,
+        assistant: str,
+    ):
+        """
+        Compatibility wrapper used by CognitiveCore.
+        """
+
+        self.add_conversation_turn(
+            session_id=session_id,
+            user_message=user,
+            assistant_message=assistant,
+        )
+
     def get_conversation_history(
         self,
         session_id: str,
-        limit: int = 8
+        limit: int = 20
     ) -> List[Dict[str, str]]:
         """
         Return recent conversation turns.
