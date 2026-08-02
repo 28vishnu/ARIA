@@ -1011,7 +1011,18 @@ class CognitiveCore:
                 )
 
             # =================================================
-            # 2. RESUME / CANCEL PENDING WORKFLOW
+            # 2. RESOLVE FOLLOW-UP REFERENCES
+            # =================================================
+
+            if self.conversation_manager:
+                if self.conversation_manager.is_followup(query):
+                    query = self.conversation_manager.resolve_reference(
+                        session_id,
+                        query,
+                    )
+
+            # =================================================
+            # 3. RESUME / CANCEL PENDING WORKFLOW
             # =================================================
 
             workflow_response = (
@@ -1027,7 +1038,7 @@ class CognitiveCore:
                 return workflow_response
 
             # =================================================
-            # 3. HANDLE PENDING DIRECT ACTION
+            # 4. HANDLE PENDING DIRECT ACTION
             # =================================================
 
             if (
@@ -1141,7 +1152,7 @@ class CognitiveCore:
             resolved_query = await self._resolve_query(session_id, query)
 
             # =================================================
-            # 4. RETRIEVE RELEVANT MEMORY VIA ROUTER
+            # 5. RETRIEVE RELEVANT MEMORY VIA ROUTER
             # =================================================
 
             memories = []
@@ -1159,7 +1170,7 @@ class CognitiveCore:
                     )
 
             # =================================================
-            # 5. BUILD COMPLETE CONTEXT
+            # 6. BUILD COMPLETE CONTEXT
             # =================================================
 
             if self.context_builder:
@@ -1190,7 +1201,7 @@ class CognitiveCore:
             ctx.setdefault("memory", memories)
 
             # =================================================
-            # 6. REASONING ENGINE INTEGRATION (Central Control)
+            # 7. REASONING ENGINE INTEGRATION (Central Control)
             # =================================================
 
             if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
@@ -1201,7 +1212,7 @@ class CognitiveCore:
                     logger.exception("[CognitiveCore] ReasoningEngine invocation failed.")
 
             # =================================================
-            # 7. ATTACH REGISTERED CAPABILITIES
+            # 8. ATTACH REGISTERED CAPABILITIES
             # =================================================
 
             app_state = None
@@ -1257,7 +1268,7 @@ class CognitiveCore:
             }
 
             # =================================================
-            # 8. SAVE CURRENT QUERY
+            # 9. SAVE CURRENT QUERY
             # =================================================
 
             if self.state_manager:
@@ -1267,7 +1278,7 @@ class CognitiveCore:
                 )
 
             # =================================================
-            # 9. INTENT ANALYSIS
+            # 10. INTENT ANALYSIS
             # =================================================
 
             intent = None
@@ -1287,7 +1298,7 @@ class CognitiveCore:
                     )
 
             # =================================================
-            # 10. EXPLICIT MEMORY MANAGEMENT
+            # 11. EXPLICIT MEMORY MANAGEMENT
             # =================================================
 
             if (
@@ -1326,7 +1337,7 @@ class CognitiveCore:
                 )
 
             # =================================================
-            # 11. NATURAL MEMORY LEARNING VIA ROUTER
+            # 12. NATURAL MEMORY LEARNING VIA ROUTER
             # =================================================
 
             if self.memory_router:
@@ -1378,7 +1389,7 @@ class CognitiveCore:
                     )
 
             # =================================================
-            # 12. KNOWLEDGE-FIRST PIPELINE EXECUTION
+            # 13. KNOWLEDGE-FIRST PIPELINE EXECUTION
             # =================================================
 
             self.brain_state["thinking"] = True
