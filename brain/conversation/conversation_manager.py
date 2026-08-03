@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 
 class ConversationManager:
@@ -29,6 +29,12 @@ class ConversationManager:
                 "user_goal": None,
                 "pending_followup": None,
                 "conversation_summary": "",
+                "last_compared_entities": [],
+                "last_question": None,
+                "last_answer": None,
+                "active_task": None,
+                "active_code": None,
+                "pending_reference": None,
             }
         return self._sessions[session_id]
 
@@ -53,6 +59,8 @@ class ConversationManager:
 
         session["last_user_message"] = user_message
         session["last_assistant_message"] = assistant_message
+        session["last_question"] = user_message
+        session["last_answer"] = assistant_message
         session["turn_count"] = session.get("turn_count", 0) + 1
 
         if intent is not None:
@@ -65,6 +73,11 @@ class ConversationManager:
             entities = []
             session["entities"] = entities
             new_topic = self.extract_topic(user_message)
+
+        if "compare" in user_message.lower():
+            extracted = self.extract_entities(user_message)
+            if len(extracted) >= 2:
+                session["last_compared_entities"] = extracted
 
         if new_topic:
             if new_topic != session.get("current_topic"):
@@ -118,9 +131,12 @@ class ConversationManager:
             "expand",
             "elaborate",
             "compare",
+            "give example",
+            "python example",
+            "java example",
+            "which is easier",
         )
 
-        # Check if exact match or starts with any of the followup starters
         if cleaned in followup_starters:
             return True
 
@@ -140,22 +156,43 @@ class ConversationManager:
         session = self.get_session(session_id)
         subject = session.get("last_subject") or session.get("current_topic")
         cleaned = query.strip()
+        lower = cleaned.lower()
+
+        if lower == "give example":
+            compared = session.get("last_compared_entities", [])
+            if len(compared) >= 2:
+                a, b = compared[0], compared[1]
+                return f"Give an example comparing {a} and {b}."
+            if subject:
+                return f"Give an example of {subject}."
+
+        if lower == "python example":
+            return "Give a Python example."
+
+        if lower == "java example":
+            return "Give a Java example."
+
+        if lower == "which is easier":
+            compared = session.get("last_compared_entities", [])
+            if len(compared) >= 2:
+                a, b = compared[0], compared[1]
+                return f"Which is easier between {a} and {b}?"
+            if subject:
+                return f"Which is easier involving {subject}?"
 
         if not subject:
             return cleaned
 
-        lower = cleaned.lower()
-
         if lower.startswith("compare it with "):
-            other = cleaned[len("Compare it with "):]
+            other = cleaned[len("compare it with "):]
             return f"Compare {subject} with {other}"
 
         if lower.startswith("compare it to "):
-            other = cleaned[len("Compare it to "):]
+            other = cleaned[len("compare it to "):]
             return f"Compare {subject} to {other}"
 
         if lower == "why":
-            return f"Why {session.get('last_user_message')}"
+            return f"Why is {subject} better?"
 
         if lower.startswith("why "):
             return f"Why {subject} {cleaned[4:]}"
@@ -167,7 +204,6 @@ class ConversationManager:
             return f"Tell me more about {subject}"
 
         words = cleaned.split()
-
         words = [
             subject if w.lower() in ("it", "this", "that") else w
             for w in words
@@ -231,7 +267,6 @@ class ConversationManager:
         Lightweight topic extractor.
         Used only when no entities are supplied.
         """
-
         if not text:
             return None
 
@@ -258,3 +293,21 @@ class ConversationManager:
                 return word.title()
 
         return None
+
+    def extract_entities(self, text: str) -> List[str]:
+        known = []
+        TOPICS = {
+            "python",
+            "java",
+            "javascript",
+            "c++",
+            "docker",
+            "linux"
+        }
+
+        for word in text.lower().split():
+            word = word.strip(".,?!")
+            if word in TOPICS:
+                known.append(word.title())
+
+        return known
