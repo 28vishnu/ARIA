@@ -49,6 +49,10 @@ class LLMRouter:
         # Shorter cooldown for temporary server/network failures.
         self._temporary_failure_cooldown = 10.0
 
+        # Response cache for optimization (30-second TTL)
+        self._cache: Dict[str, tuple[str, float]] = {}
+        self._cache_ttl = 30.0
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -68,6 +72,20 @@ class LLMRouter:
         - Provider in cooldown: skip immediately.
         - Permanent failure: move to next provider.
         """
+
+        # -------------------------------------------------
+        # CACHE CHECK
+        # -------------------------------------------------
+        cache_key = json.dumps(messages, sort_keys=True) + f"_{temperature}_{max_tokens}_{task}"
+        now = time.monotonic()
+
+        if cache_key in self._cache:
+            cached_response, timestamp = self._cache[cache_key]
+            if (now - timestamp) < self._cache_ttl:
+                logger.info("[LLMRouter] Serving response from cache.")
+                return cached_response
+            else:
+                del self._cache[cache_key]
 
         logger.info(
             "[LLMRouter] Messages being sent:\n%s",
@@ -225,6 +243,9 @@ class LLMRouter:
                         "using %s.",
                         provider_name
                     )
+
+                    # Save to cache
+                    self._cache[cache_key] = (result, time.monotonic())
 
                     return result
 
