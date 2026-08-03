@@ -76,6 +76,26 @@ class TaskManager:
 
         return None
 
+    def find_task(self, query: str):
+
+        query = query.lower()
+
+        for task in reversed(self.tasks):
+
+            if task.title.lower() in query:
+                return task
+
+        return None
+
+    def switch_task(self, query: str):
+
+        task = self.find_task(query)
+
+        if task:
+            return task
+
+        return self.current_task()
+
     def pause_task(self, task_id):
 
         for task in self.tasks:
