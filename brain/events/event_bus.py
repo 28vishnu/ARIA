@@ -5,6 +5,27 @@ from collections import defaultdict
 logger = logging.getLogger("aria")
 
 
+# =========================================================
+# EVENT NAME CONSTANTS
+# =========================================================
+
+GOAL_CREATED = "goal_created"
+PLAN_CREATED = "plan_created"
+AGENT_SELECTED = "agent_selected"
+TASK_STARTED = "TASK_STARTED"
+TASK_COMPLETED = "TASK_COMPLETED"
+TASK_FAILED = "TASK_FAILED"
+TASK_RETRY = "TASK_RETRY"
+GOAL_COMPLETED = "GOAL_COMPLETED"
+
+TASK_FINISHED = "TASK_FINISHED"
+WORKFLOW_PROGRESS = "WORKFLOW_PROGRESS"
+PLAN_UPDATED = "PLAN_UPDATED"
+GOAL_FAILED = "GOAL_FAILED"
+REPLAN_STARTED = "REPLAN_STARTED"
+REPLAN_FINISHED = "REPLAN_FINISHED"
+
+
 class EventBus:
     """
     Central communication system.
@@ -17,6 +38,7 @@ class EventBus:
     def __init__(self):
 
         self.listeners = defaultdict(list)
+        self._subscribers = defaultdict(list)
 
         self.history = []
         self.max_history = 1000
@@ -67,6 +89,31 @@ class EventBus:
 
     ####################################################
 
+    def publish_safe(self, event_name: str, payload=None):
+        """
+        Safe synchronous publish method for dictionary payloads and simple handlers.
+        """
+        payload = payload or {}
+
+        logger.info(
+            "[EventBus] %s",
+            event_name
+        )
+
+        handlers = self._subscribers.get(event_name, [])
+
+        for handler in handlers:
+            try:
+                handler(payload)
+            except Exception as e:
+                logger.exception(
+                    "Event handler failed for %s: %s",
+                    event_name,
+                    e
+                )
+
+    ####################################################
+
     async def publish(
         self,
         event,
@@ -77,6 +124,11 @@ class EventBus:
             self.history.pop(0)
 
         self.statistics["events"] += 1
+
+        logger.info(
+            "[EventBus] %s",
+            getattr(event, "type", str(event))
+        )
 
         listeners = self.listeners.get(
             event.type,
@@ -116,6 +168,11 @@ class EventBus:
             self.history.pop(0)
 
         self.statistics["events"] += 1
+
+        logger.info(
+            "[EventBus] %s",
+            getattr(event, "type", str(event))
+        )
 
         listeners = self.listeners.get(
             event.type,
@@ -164,6 +221,7 @@ class EventBus:
     def clear(self):
 
         self.listeners.clear()
+        self._subscribers.clear()
         self.history.clear()
 
         self.statistics["listeners"] = 0
@@ -176,25 +234,3 @@ class EventBus:
             **self.statistics,
             "history_size": len(self.history),
         }
-
-
-# =========================================================
-# WORKFLOW & REPLAN EVENT CONSTANTS
-# =========================================================
-
-TASK_STARTED = "TASK_STARTED"
-TASK_FINISHED = "TASK_FINISHED"
-TASK_RETRY = "TASK_RETRY"
-TASK_FAILED = "TASK_FAILED"
-
-WORKFLOW_PROGRESS = "WORKFLOW_PROGRESS"
-
-PLAN_UPDATED = "PLAN_UPDATED"
-
-GOAL_COMPLETED = "GOAL_COMPLETED"
-
-GOAL_FAILED = "GOAL_FAILED"
-
-REPLAN_STARTED = "REPLAN_STARTED"
-
-REPLAN_FINISHED = "REPLAN_FINISHED"
