@@ -102,81 +102,6 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
 
-    async def select_agents(self, query: str, context: dict) -> List[str]:
-
-        query_lower = query.lower()
-
-        agents = set()
-
-        # Coding
-        if any(word in query_lower for word in [
-            "code", "python", "fastapi", "api",
-            "program", "bug", "fix", "class",
-            "function", "script"
-        ]):
-            agents.add("coding")
-
-        # Research
-        if any(word in query_lower for word in [
-            "research", "find", "best",
-            "libraries", "compare",
-            "latest", "information"
-        ]):
-            agents.add("research")
-
-        # Planning
-        if any(word in query_lower for word in [
-            "plan", "roadmap",
-            "design", "architecture",
-            "build", "project"
-        ]):
-            agents.add("planning")
-
-        # Writing
-        if any(word in query_lower for word in [
-            "write", "email",
-            "article", "blog",
-            "documentation",
-            "summary"
-        ]):
-            agents.add("writing")
-
-        # Math
-        if any(word in query_lower for word in [
-            "calculate",
-            "equation",
-            "math",
-            "statistics"
-        ]):
-            agents.add("math")
-
-        selected_agents = list(agents)
-
-        active_goal = context.get("active_goal")
-
-        if active_goal:
-
-            goal_lower = active_goal.lower()
-
-            if "app" in goal_lower:
-                selected_agents.extend(
-                    ["planning", "coding"]
-                )
-
-            if "research" in goal_lower:
-                selected_agents.append("research")
-
-        selected_agents = list(
-            dict.fromkeys(selected_agents)
-        )
-
-        logger.info(
-            "[ReasoningEngine] Dynamically selected agents: %s",
-            selected_agents,
-        )
-
-        return selected_agents
-
     def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
         """
         Decide which specialist agents should handle the request.
@@ -437,24 +362,6 @@ class ReasoningEngine:
             ),
         }
 
-    async def choose_reasoning_mode(self, context: Dict[str, Any]) -> str:
-        """Dynamically choose reasoning mode based on query characteristics."""
-        query = str(context.get("query", "")).strip().lower()
-        conv = context.get("conversation", {})
-
-        if conv.get("is_continuation") or conv.get("is_acknowledgement") or query in ["hi", "hello", "thanks"]:
-            return "conversational"
-        if any(w in query for w in ["compare", "analys", "analyze", "why", "how", "difference"]):
-            return "analytical"
-        if any(w in query for w in ["plan", "roadmap", "steps", "build", "create"]):
-            return "planning"
-        if any(w in query for w in ["remember", "profile", "my ", "save"]):
-            return "memory"
-        if any(w in query for w in ["latest", "current", "news", "today", "recent"]):
-            return "web"
-
-        return "knowledge_first"
-
     async def needs_clarification(self, query: str, context: Dict[str, Any]) -> bool:
         """Determine if the user query is excessively vague or ambiguous."""
         clean = query.strip()
@@ -464,27 +371,6 @@ class ReasoningEngine:
                 return False
             return True
         return False
-
-    async def should_use_planner(self, goal: str, context: Dict[str, Any]) -> bool:
-        query = str(context.get("query", ""))
-        mode = await self.choose_reasoning_mode(context)
-        return goal == "plan" or mode == "planning" or len(query.split()) > 10
-
-    async def should_use_agents(self, goal: str, context: Dict[str, Any]) -> bool:
-        mode = await self.choose_reasoning_mode(context)
-        return goal in ("plan", "search", "execute") or mode in ("analytical", "planning")
-
-    async def should_use_memory(self, context: Dict[str, Any]) -> bool:
-        return True
-
-    async def should_use_documents(self, context: Dict[str, Any]) -> bool:
-        doc = context.get("document", {})
-        return bool(doc.get("active") or doc.get("name"))
-
-    async def should_use_web(self, query: str, context: Dict[str, Any]) -> bool:
-        mode = await self.choose_reasoning_mode(context)
-        q = query.lower()
-        return mode == "web" or any(term in q for term in ["latest", "current", "news", "today", "search web"])
 
     async def build_reasoning_trace(self, steps: List[str]) -> str:
         return " -> ".join(steps)
@@ -694,21 +580,24 @@ class ReasoningEngine:
         working_memory = await self.build_working_memory(context)
         reasoning_steps.append("Built working memory context")
 
-        response_strategy = await self.decide_response_strategy(goal, context)
-        reasoning_mode = await self.choose_reasoning_mode(context)
-        reasoning_steps.append(f"Chosen reasoning mode: {reasoning_mode}")
+        decision = context.get("decision")
+        if decision:
+            mode = decision.reasoning_mode
+        else:
+            mode = "knowledge_first"
+        reasoning_steps.append(f"Chosen reasoning mode: {mode}")
 
-        selected_agents = await self.select_agents(
-            query,
-            context,
-        )
+        selected_agents = []
+        if decision:
+            selected_agents = decision.selected_agents
+
         reasoning_steps.append(f"Selected best agents: {selected_agents}")
 
-        requires_planning = await self.should_use_planner(goal, context)
-        requires_tools = await self.should_use_agents(goal, context)
-        requires_memory = await self.should_use_memory(context)
-        requires_documents = await self.should_use_documents(context)
-        requires_web = await self.should_use_web(query, context)
+        requires_planning = decision.use_planner if decision else False
+        requires_tools = decision.use_tools if decision else False
+        requires_memory = decision.use_memory if decision else True
+        requires_documents = decision.use_documents if decision else False
+        requires_web = False
 
         retrieval = await self.retrieve_context(query)
         raw_memories = retrieval["memories"] if requires_memory else []
@@ -828,15 +717,7 @@ class ReasoningEngine:
             if self.goal_manager:
                 goal_obj = self.goal_manager.current_goal()
 
-            use_memory = any(
-                phrase in query.lower()
-                for phrase in [
-                    "about me",
-                    "my profile",
-                    "everything you know",
-                    "my memories",
-                ]
-            )
+            use_memory = decision.use_memory if decision else False
 
             summary_memories = []
             if use_memory and hasattr(self, "memory_engine") and self.memory_engine:
@@ -905,13 +786,11 @@ class ReasoningEngine:
         trace = await self.build_reasoning_trace(reasoning_steps)
 
         logger.info(
-            "[ReasoningEngine] Goal=%s Mode=%s Action=%s Confidence=%.2f Time=%.3fs Trace=%s",
-            goal,
-            reasoning_mode,
-            action,
-            confidence,
-            reasoning_time,
-            trace
+            "[ReasoningEngine] Mode=%s Agents=%s Memory=%s Planner=%s",
+            mode,
+            decision.selected_agents if decision else [],
+            decision.use_memory if decision else False,
+            decision.use_planner if decision else False,
         )
 
         response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
@@ -958,7 +837,7 @@ class ReasoningEngine:
             topic=conv_tracking.get("topic", ""),
             working_memory=working_memory,
             response_strategy=response_strategy,
-            reasoning_mode=reasoning_mode,
+            reasoning_mode=mode,
             topic_changed=topic_changed,
             reasoning_trace=trace,
             hypotheses=hypotheses,
@@ -966,7 +845,7 @@ class ReasoningEngine:
             critique=critique,
             action_predictions=action_predictions,
             primary_action=action,
-            reasoning=f"Advanced resolution of objective '{goal}' under mode '{reasoning_mode}' with confidence {confidence:.2f}.",
+            reasoning=f"Advanced resolution of objective '{goal}' under mode '{mode}' with confidence {confidence:.2f}.",
             workflow=workflow,
             agent_outputs=agent_outputs
         )
