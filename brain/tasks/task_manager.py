@@ -25,6 +25,8 @@ class Task:
 
     progress: float = 0.0
 
+    priority: int = 1
+
     milestones: list = field(default_factory=list)
 
     completed_steps: list = field(default_factory=list)
@@ -47,6 +49,7 @@ class TaskManager:
         title,
         description="",
         goal_id=None,
+        priority=1,
         metadata=None,
     ):
 
@@ -54,6 +57,7 @@ class TaskManager:
             title=title,
             description=description,
             goal_id=goal_id,
+            priority=priority,
             metadata=metadata or {}
         )
 
@@ -95,6 +99,48 @@ class TaskManager:
             return task
 
         return self.current_task()
+
+    def set_priority(self, task_id, priority):
+
+        for task in self.tasks:
+
+            if task.id == task_id:
+
+                task.priority = priority
+
+                task.updated_at = datetime.utcnow()
+
+                logger.info(
+                    "[TaskManager] Updated priority for '%s' to %d",
+                    task.title,
+                    priority,
+                )
+
+                return task
+
+    def highest_priority_task(self):
+
+        active = [
+
+            task
+
+            for task in self.tasks
+
+            if task.status == "active"
+
+        ]
+
+        if not active:
+            return None
+
+        return sorted(
+            active,
+            key=lambda t: (
+                -t.priority,
+                -t.progress,
+                t.created_at,
+            ),
+        )[0]
 
     def pause_task(self, task_id):
 
