@@ -90,6 +90,8 @@ class CognitiveCore:
         memory_engine=None,
         goal_manager=None,
         project_manager=None,
+        agent_coordinator=None,
+        lead_agent=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -117,6 +119,8 @@ class CognitiveCore:
         self.memory_engine = memory_engine
         self.goal_manager = goal_manager
         self.project_manager = project_manager
+        self.agent_coordinator = agent_coordinator
+        self.lead_agent = lead_agent
 
         self.brain_state = {
             "thinking": False,
