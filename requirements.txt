@@ -18,3 +18,4 @@ aiofiles
 pymupdf
 python-docx
 pillow
+rapidocr-onnxruntime
