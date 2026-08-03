@@ -71,6 +71,7 @@ class Executor:
         action_manager=None,
         mongodb=None,
         agent_manager=None,
+        agent_coordinator=None,
     ):
         self.planner = planner
         self.event_bus = event_bus
@@ -78,6 +79,7 @@ class Executor:
         self.skill_manager = skill_manager
         self.action_manager = action_manager
         self.agent_manager = agent_manager
+        self.agent_coordinator = agent_coordinator
 
         self.mongodb = mongodb
         if mongodb is not None:
@@ -513,6 +515,29 @@ class Executor:
             }
 
     async def execute_plan(self, tasks, context=None):
+        context = context or {}
+        decision = context.get("decision")
+
+        if (
+            decision
+            and decision.use_multi_agent
+            and self.agent_coordinator
+        ):
+            try:
+                logger.info(
+                    "[Executor] Executing multi-agent workflow: %s",
+                    decision.selected_agents if decision else [],
+                )
+                return await self.agent_coordinator.coordinate(
+                    decision=decision,
+                    query=context.get("query", ""),
+                    context=context,
+                )
+            except Exception:
+                logger.exception(
+                    "[Executor] Coordinator failed"
+                )
+
         if isinstance(tasks, ExecutionPlan):
             tasks_list = getattr(tasks, "tasks", [])
             # Check metadata for structured task_graph if plan tasks are empty/generic
@@ -566,6 +591,27 @@ class Executor:
     ) -> Dict[str, Any]:
         base_context = base_context or {}
         resume_state = resume_state or {}
+
+        decision = base_context.get("decision")
+        if (
+            decision
+            and decision.use_multi_agent
+            and self.agent_coordinator
+        ):
+            try:
+                logger.info(
+                    "[Executor] Executing multi-agent workflow: %s",
+                    decision.selected_agents if decision else [],
+                )
+                return await self.agent_coordinator.coordinate(
+                    decision=decision,
+                    query=base_context.get("query", plan.goal),
+                    context=base_context,
+                )
+            except Exception:
+                logger.exception(
+                    "[Executor] Coordinator failed"
+                )
 
         workflow_id = getattr(plan, "id", f"wf_{int(time.time())}")
         self._active_workflows.add(workflow_id)
