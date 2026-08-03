@@ -134,12 +134,12 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
-    def _get_active_task_context(self):
+    def _get_active_task_context(self, query: str = ""):
 
         if not self.task_manager:
             return ""
 
-        task = self.task_manager.current_task()
+        task = self.task_manager.switch_task(query)
 
         if not task:
             return ""
@@ -174,7 +174,7 @@ class CognitiveCore:
                 subject = query_lower.split(phrase, 1)[1].strip()
 
                 if subject:
-                    existing = self.task_manager.current_task()
+                    existing = self.task_manager.switch_task(query)
 
                     if existing and existing.title.lower() == subject.lower():
                         return
@@ -189,7 +189,7 @@ class CognitiveCore:
         if not self.task_manager:
             return
 
-        task = self.task_manager.current_task()
+        task = self.task_manager.switch_task(query)
 
         if not task:
             return
@@ -530,7 +530,7 @@ class CognitiveCore:
                             "Never pad the answer."
                         )
 
-                        task_context = self._get_active_task_context()
+                        task_context = self._get_active_task_context(resolved_query)
 
                         if task_context:
                             system_context += "\n\n" + task_context
