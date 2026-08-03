@@ -678,13 +678,15 @@ class ReasoningEngine:
             self.agent_coordinator
             and selected_agents
         ):
-            agent_results = await self.agent_coordinator.execute(
+            coordination = await self.agent_coordinator.execute(
                 selected_agents,
                 query,
                 context,
             )
 
-        context["agent_results"] = agent_results
+            agent_results = coordination["outputs"]
+
+            context.update(coordination["shared_context"])
 
         logger.info(
             "[ReasoningEngine] %d agents completed",
@@ -694,7 +696,7 @@ class ReasoningEngine:
         workflow = AgentWorkflow()
 
         agent_outputs = {res.get("agent"): res.get("result") for res in agent_results if isinstance(res, dict)}
-        reasoning_steps.append(f"Executed {len(agent_results)} specialist agent(s) concurrently via coordinator")
+        reasoning_steps.append(f"Executed {len(agent_results)} specialist agent(s) sequentially via coordinator")
 
         plan = []
         if requires_planning:
