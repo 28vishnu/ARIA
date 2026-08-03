@@ -179,10 +179,20 @@ class CognitiveCore:
         query: str,
         context: Dict[str, Any],
         precomputed_reasoning: Optional[Any] = None,
+        completed_goal: Optional[Any] = None,
     ) -> SystemResponse:
         """
         ARIA's core unified cognitive intelligence pipeline orchestrated via Reasoning, Planner, Executor, Memory, WorldModel, Reflection, and Learning.
         """
+        if completed_goal:
+            response_text = (
+                f"Excellent. I've marked "
+                f"'{completed_goal.title}' "
+                "as completed.\n\n"
+                "What would you like to build next?"
+            )
+            return await self._format_response(response_text, "goal_manager", context, 1.0)
+
         self.brain_state["retrieving"] = True
         answer = None
         source = "llm_generated"
@@ -1388,9 +1398,18 @@ Execution Results:
             # PHASE 9: GOAL MANAGER & PROJECT MANAGER HOOKS
             # =================================================
 
+            completed_goal = None
+
             if self.goal_manager:
                 try:
+                    active_before = self.goal_manager.current_goal()
+
                     await self.goal_manager.observe(query, pre_ctx)
+
+                    active_after = self.goal_manager.current_goal()
+
+                    if active_before and active_after is None:
+                        completed_goal = active_before
                 except Exception:
                     logger.exception("[CognitiveCore] GoalManager observation failed.")
 
@@ -1630,6 +1649,7 @@ Execution Results:
                 query,
                 ctx,
                 precomputed_reasoning=reasoning,
+                completed_goal=completed_goal,
             )
 
         # =====================================================
