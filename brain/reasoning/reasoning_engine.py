@@ -84,6 +84,7 @@ class ReasoningEngine:
         event_bus=None,
         working_memory=None,
         goal_manager=None,
+        agent_coordinator=None,
     ):
         self.agent_manager = agent_manager
         self.planner = planner
@@ -97,6 +98,7 @@ class ReasoningEngine:
         self.event_bus = event_bus
         self.working_memory = working_memory
         self.goal_manager = goal_manager
+        self.agent_coordinator = agent_coordinator
 
     def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
         """
@@ -670,15 +672,29 @@ class ReasoningEngine:
 
         conflicts = await self.detect_conflicts(ranked_evidence)
 
-        selected_manager_agents = await self.choose_agents(query, context) if requires_tools else []
-        workflow = AgentWorkflow()
-        for agent in selected_manager_agents:
-            workflow.add(agent)
+        agent_results = []
 
-        agent_outputs = {}
-        if selected_manager_agents:
-            agent_outputs = await self.execute_agents(selected_manager_agents, query, context)
-        reasoning_steps.append(f"Executed {len(selected_manager_agents)} specialist agent(s)")
+        if (
+            self.agent_coordinator
+            and selected_agents
+        ):
+            agent_results = await self.agent_coordinator.execute(
+                selected_agents,
+                query,
+                context,
+            )
+
+        context["agent_results"] = agent_results
+
+        logger.info(
+            "[ReasoningEngine] %d agents completed",
+            len(agent_results),
+        )
+
+        workflow = AgentWorkflow()
+
+        agent_outputs = {res.get("agent"): res.get("result") for res in agent_results if isinstance(res, dict)}
+        reasoning_steps.append(f"Executed {len(agent_results)} specialist agent(s) concurrently via coordinator")
 
         plan = []
         if requires_planning:
@@ -709,7 +725,7 @@ class ReasoningEngine:
         world_used = bool(world_state)
         web_used = requires_web
         planner_used = bool(plan)
-        tool_used = bool(agent_outputs or selected_manager_agents)
+        tool_used = bool(agent_results)
 
         mem_conf = max([m.get("confidence", 0.5) for m in memories], default=0.5) if memories else 0.5
         know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
