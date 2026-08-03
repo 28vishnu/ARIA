@@ -102,6 +102,67 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
 
+    def _select_reasoning_strategy(
+        self,
+        query: str,
+        context: dict,
+    ):
+        """
+        Choose the best reasoning strategy.
+        """
+
+        q = query.lower()
+
+        if context.get("document"):
+            return "document_first"
+
+        if any(x in q for x in [
+            "remember",
+            "recall",
+            "my",
+            "previous",
+        ]):
+            return "memory_first"
+
+        if any(x in q for x in [
+            "build",
+            "design",
+            "implement",
+            "roadmap",
+            "plan",
+            "create",
+        ]):
+            return "planning_first"
+
+        if any(x in q for x in [
+            "code",
+            "python",
+            "fastapi",
+            "java",
+            "bug",
+            "fix",
+        ]):
+            return "coding_first"
+
+        if any(x in q for x in [
+            "research",
+            "compare",
+            "latest",
+            "news",
+        ]):
+            return "research_first"
+
+        if any(x in q for x in [
+            "continue",
+            "that",
+            "it",
+            "he",
+            "she",
+        ]):
+            return "context_first"
+
+        return "knowledge_first"
+
     def _analyze_execution_feedback(self, execution_result):
         """
         Analyze the previous execution to improve future reasoning.
@@ -351,7 +412,7 @@ class ReasoningEngine:
     async def confidence_score(self, evidence: List[Dict[str, Any]], critique: Dict[str, Any]) -> float:
         """Calculate robust confidence score combining evidence metrics and critique results."""
         base = 0.75 if not evidence else sum(item.get("confidence", 0.5) for item in evidence) / len(evidence)
-        return min(1.0, base + (0.15 if critique.get("valid") else 0.0))
+        return min(1.0, base + (0.15 if critique.get("valid"] else 0.0))
 
     async def action_prediction(self, goal: str, context: Dict[str, Any]) -> List[str]:
         """Predict likely follow-up actions or subsequent user needs."""
@@ -526,6 +587,18 @@ class ReasoningEngine:
         and returning a comprehensive ReasoningResult object.
         """
         user_query = str(context.get("query", "")).strip()
+
+        strategy = self._select_reasoning_strategy(
+            user_query,
+            context,
+        )
+
+        context["reasoning_strategy"] = strategy
+
+        logger.info(
+            "[Reasoning] Strategy selected: %s",
+            strategy,
+        )
 
         feedback = self._analyze_execution_feedback(
             context.get("execution_result")
@@ -817,6 +890,7 @@ class ReasoningEngine:
             "conflicts": conflicts,
             "reasoning_steps": reasoning_steps,
             "best_path": best_path,
+            "strategy": strategy,
         }
 
         if feedback["needs_replanning"]:
