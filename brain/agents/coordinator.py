@@ -9,8 +9,8 @@ class AgentCoordinator:
     """
     Coordinates the execution of multiple specialist agents,
     passing shared context and cumulative agent outputs sequentially,
-    scoring results, sorting by confidence, and returning a structured
-    merged dictionary response.
+    scoring results, sorting by confidence, returning a structured
+    merged dictionary response, and producing agent consensus.
     """
 
     def __init__(self, agent_manager):
@@ -42,6 +42,32 @@ class AgentCoordinator:
 
         return max(0.0, min(score, 1.0))
 
+    async def consensus(
+        self,
+        query,
+        agent_results,
+    ):
+        """
+        Produce a consensus from multiple agent outputs.
+        """
+
+        if not agent_results:
+            return None
+
+        successful = [
+            r
+            for r in agent_results
+            if r.get("success") or (r.get("result") is not None and "error" not in str(r.get("result")).lower())
+        ]
+
+        if not successful:
+            return None
+
+        return {
+            "answer": successful[0].get("result") or successful[0].get("output"),
+            "agreement": len(successful) / len(agent_results),
+        }
+
     async def coordinate(
         self,
         decision,
@@ -52,7 +78,7 @@ class AgentCoordinator:
         Main entry point for multi-agent coordination.
         Executes agents sequentially based on the decision's selected agents,
         never stopping on failures, scoring/sorting results, and returning
-        structured merged outputs.
+        structured merged outputs along with a consensus evaluation.
         """
         selected_agents = getattr(decision, "selected_agents", []) if decision else []
         execution_plan = []
@@ -113,6 +139,7 @@ class AgentCoordinator:
                     "result": output,
                     "output": output,
                     "confidence": confidence,
+                    "success": True,
                 }
 
                 outputs.append(res_item)
@@ -129,6 +156,7 @@ class AgentCoordinator:
                     "agent": agent_name,
                     "error": str(e),
                     "confidence": 0.0,
+                    "success": False,
                 }
                 outputs.append(err_item)
                 merged[agent_name] = err_item
@@ -146,9 +174,17 @@ class AgentCoordinator:
                     output["confidence"],
                 )
 
+        consensus_result = await self.consensus(
+            query,
+            outputs,
+        )
+
+        shared_context["agent_consensus"] = consensus_result
+
         logger.info(
-            "[AgentCoordinator] Executed agents: %s",
+            "[AgentCoordinator] Executed agents: %s. Agreement: %.0f%%",
             execution_plan,
+            (consensus_result.get("agreement", 0.0) * 100) if consensus_result else 0.0,
         )
 
         return {
@@ -156,6 +192,7 @@ class AgentCoordinator:
             "results": merged,
             "outputs": outputs,
             "shared_context": shared_context,
+            "consensus": consensus_result,
         }
 
     async def execute(
