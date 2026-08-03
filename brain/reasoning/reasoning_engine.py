@@ -218,6 +218,33 @@ class ReasoningEngine:
             "needs_replanning": len(failed) > 0,
         }
 
+    def _calculate_final_confidence(
+        self,
+        reasoning_confidence,
+        execution_feedback,
+        critique,
+    ):
+        """
+        Combine multiple confidence sources into one score.
+        """
+
+        confidence = reasoning_confidence
+
+        confidence *= execution_feedback.get(
+            "success_rate",
+            1.0,
+        )
+
+        confidence *= critique.get(
+            "score",
+            1.0,
+        )
+
+        return round(
+            max(0.0, min(confidence, 1.0)),
+            2,
+        )
+
     def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
         """
         Decide which specialist agents should handle the request.
@@ -901,7 +928,7 @@ class ReasoningEngine:
         know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
         world_conf = 0.90 if world_state else 0.5
 
-        response_to_store = answer or (ranked_evidence[0].get("content" ) if ranked_evidence else "Done.")
+        response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
 
         if (
             next_task
@@ -929,6 +956,19 @@ class ReasoningEngine:
                 "[Reasoning] Low quality answer detected."
             )
 
+        final_confidence = self._calculate_final_confidence(
+            confidence,
+            feedback,
+            critique_result,
+        )
+
+        confidence = final_confidence
+
+        logger.info(
+            "[Reasoning] Final confidence: %.2f",
+            final_confidence,
+        )
+
         metadata = {
             "reasoning_time": reasoning_time,
             "planner_used": planner_used,
@@ -949,6 +989,7 @@ class ReasoningEngine:
             "best_path": best_path,
             "strategy": strategy,
             "self_critique": critique_result,
+            "final_confidence": final_confidence,
         }
 
         if feedback["needs_replanning"]:
