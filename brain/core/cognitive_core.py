@@ -211,6 +211,48 @@ class CognitiveCore:
             except Exception as e:
                 logger.warning("ReasoningEngine invocation skipped: %s", e)
 
+        # =========================================================
+        # REASONING -> AGENTS -> PLANNER -> EXECUTOR FLOW
+        # =========================================================
+        selected_agents = []
+        needs_execution = False
+        execution_result = None
+        plan = None
+
+        if reasoning:
+            selected_agents = getattr(reasoning, "selected_agents", []) or []
+
+        needs_execution = any(
+            agent != "chat"
+            for agent in selected_agents
+        )
+
+        logger.info(
+            "[CognitiveCore] Selected agents: %s",
+            selected_agents
+        )
+
+        logger.info(
+            "[CognitiveCore] Execution required: %s",
+            needs_execution
+        )
+
+        if needs_execution and self.planner and self.executor:
+            try:
+                plan = self.planner.create_task_graph(resolved_query)
+                execution_result = await self.executor.execute_plan(
+                    plan,
+                    context=context
+                )
+                if isinstance(reasoning, dict):
+                    reasoning["execution_result"] = execution_result
+                    reasoning["task_plan"] = plan
+                elif reasoning is not None:
+                    setattr(reasoning, "execution_result", execution_result)
+                    setattr(reasoning, "task_plan", plan)
+            except Exception as e:
+                logger.warning("Planner/Executor execution failed: %s", e)
+
         try:
             # Step 3: If reasoning already contains an answer
             if reasoning and getattr(reasoning, "answer", None):
@@ -306,20 +348,31 @@ class CognitiveCore:
                 # LLM Fallback (only if required)
                 if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                     try:
+                        system_context = (
+                            "You are ARIA.\n\n"
+                            "Behave like a trusted AI assistant.\n"
+                            "Understand what the user is trying to achieve, not only what they asked.\n"
+                            "Answer naturally.\n"
+                            "Be concise.\n"
+                            "Avoid sounding like an encyclopedia.\n"
+                            "Use conversation history when relevant.\n"
+                            "If a useful next step exists, suggest it naturally.\n"
+                            "Never pad the answer."
+                        )
+
+                        if execution_result:
+                            system_context += f"""
+
+Execution Results:
+
+{execution_result}
+
+"""
+
                         messages = [
                             {
                                 "role": "system",
-                                "content": (
-                                    "You are ARIA.\n\n"
-                                    "Behave like a trusted AI assistant.\n"
-                                    "Understand what the user is trying to achieve, not only what they asked.\n"
-                                    "Answer naturally.\n"
-                                    "Be concise.\n"
-                                    "Avoid sounding like an encyclopedia.\n"
-                                    "Use conversation history when relevant.\n"
-                                    "If a useful next step exists, suggest it naturally.\n"
-                                    "Never pad the answer."
-                                )
+                                "content": system_context
                             },
                             {
                                 "role": "user",
