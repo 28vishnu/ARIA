@@ -2,8 +2,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import uuid
 import logging
+from typing import List
 
 logger = logging.getLogger("aria")
+
+
+@dataclass
+class SubGoal:
+    title: str
+    status: str = "pending"
 
 
 @dataclass
@@ -19,12 +26,39 @@ class Goal:
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
     metadata: dict = field(default_factory=dict)
+    subgoals: List[SubGoal] = field(default_factory=list)
 
 
 class GoalManager:
 
     def __init__(self):
         self.goals = []
+
+    def generate_subgoals(self, title: str):
+
+        title_lower = title.lower()
+
+        if "weather app" in title_lower:
+            return [
+                SubGoal("Research libraries"),
+                SubGoal("Design roadmap"),
+                SubGoal("Create backend"),
+                SubGoal("Create frontend"),
+                SubGoal("Deploy application"),
+                SubGoal("Testing"),
+            ]
+
+        if "telegram ai" in title_lower:
+            return [
+                SubGoal("Research architecture"),
+                SubGoal("Memory system"),
+                SubGoal("Reasoning engine"),
+                SubGoal("Planner"),
+                SubGoal("Deployment"),
+                SubGoal("Optimization"),
+            ]
+
+        return []
 
     def add_goal(self, title, metadata=None):
         active = self.current_goal()
@@ -34,7 +68,8 @@ class GoalManager:
 
         goal = Goal(
             title=title,
-            metadata=metadata or {}
+            metadata=metadata or {},
+            subgoals=self.generate_subgoals(title),
         )
 
         self.goals.append(goal)
@@ -78,6 +113,30 @@ class GoalManager:
                 logger.info("[GoalManager] Updated goal '%s' progress to %.1f%%", goal.title, progress)
 
                 return goal
+
+    def complete_subgoal(self, goal, title):
+
+        for sg in goal.subgoals:
+
+            if sg.title.lower() == title.lower():
+
+                sg.status = "completed"
+
+                completed = sum(
+                    1
+                    for s in goal.subgoals
+                    if s.status == "completed"
+                )
+
+                if goal.subgoals:
+                    goal.progress = (
+                        completed / len(goal.subgoals)
+                    ) * 100
+                
+                goal.updated_at = datetime.utcnow()
+
+                if goal.progress >= 100.0:
+                    self.complete_goal(goal.id)
 
     async def observe(
         self,
@@ -125,12 +184,39 @@ class GoalManager:
         if matched_title:
             self.add_goal(matched_title)
         else:
-            # Simple heuristic goal matching or progress incremental update for active goals
             active = self.current_goal()
+
             if active:
-                # Increment progress slightly or keep tracking
-                new_progress = min(90.0, active.progress + 25.0)
-                self.update_progress(active.id, new_progress)
+
+                mapping = {
+                    "roadmap": "Design roadmap",
+                    "library": "Research libraries",
+                    "libraries": "Research libraries",
+                    "backend": "Create backend",
+                    "frontend": "Create frontend",
+                    "deploy": "Deploy application",
+                    "test": "Testing",
+                }
+
+                for keyword, task in mapping.items():
+
+                    if keyword in query_lower:
+
+                        self.complete_subgoal(active, task)
+
+    def next_subgoal(self):
+
+        active = self.current_goal()
+
+        if not active:
+            return None
+
+        for sg in active.subgoals:
+
+            if sg.status == "pending":
+                return sg
+
+        return None
 
     def list_active_goals(self):
 
