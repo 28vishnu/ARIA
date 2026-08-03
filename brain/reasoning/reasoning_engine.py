@@ -82,6 +82,7 @@ class ReasoningEngine:
         llm_router=None,
         action_manager=None,
         event_bus=None,
+        working_memory=None,
     ):
         self.agent_manager = agent_manager
         self.planner = planner
@@ -93,6 +94,7 @@ class ReasoningEngine:
         self.llm_router = llm_router
         self.action_manager = action_manager
         self.event_bus = event_bus
+        self.working_memory = working_memory
 
     async def track_conversation(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Track conversation turns, history, active topic, previous topic, entities, and dialogue stage."""
@@ -449,13 +451,38 @@ class ReasoningEngine:
         raw_query = str(context.get("query", "")).strip()
         reasoning_steps = []
 
+        active_context = context.get("active_context", {})
+        working = context.get("working_memory", {})
+
+        topic = active_context.get("topic")
+        goal = active_context.get("goal")
+        entities = active_context.get("entities", [])
+
+        last_question = working.get("last_question")
+        last_answer = working.get("last_answer")
+
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
 
-        resolved_query = await self.resolve_references(raw_query, context)
+        query = await self.resolve_references(raw_query, context)
         reasoning_steps.append("Resolved conversational references")
 
-        requires_clarification = await self.needs_clarification(resolved_query, context)
+        query_lower = query.lower().strip()
+
+        if query_lower in {
+            "continue",
+            "go on",
+            "tell me more",
+            "why",
+            "give example",
+            "example",
+            "which one",
+            "compare again",
+        }:
+            if topic:
+                query = f"{query} about {topic}"
+
+        requires_clarification = await self.needs_clarification(query, context)
         if requires_clarification:
             reasoning_steps.append("Flagged need for clarification")
 
@@ -477,9 +504,9 @@ class ReasoningEngine:
         requires_tools = await self.should_use_agents(goal, context)
         requires_memory = await self.should_use_memory(context)
         requires_documents = await self.should_use_documents(context)
-        requires_web = await self.should_use_web(resolved_query, context)
+        requires_web = await self.should_use_web(query, context)
 
-        retrieval = await self.retrieve_context(resolved_query)
+        retrieval = await self.retrieve_context(query)
         memories = retrieval["memories"] if requires_memory else []
         knowledge = retrieval["knowledge"] if requires_documents else []
         graph_results = retrieval["graph"]
@@ -487,11 +514,11 @@ class ReasoningEngine:
         reasoning_steps.append("Retrieved context evidence")
 
         merged_evidence = await self.merge_evidence(memories, knowledge, graph_results, world_state)
-        evidence = await self.multi_hop_reasoning(resolved_query, merged_evidence)
+        evidence = await self.multi_hop_reasoning(query, merged_evidence)
         ranked_evidence = await self.rank_evidence(evidence)
 
         # Advanced Reasoning Steps
-        hypotheses = await self.generate_hypotheses(resolved_query, ranked_evidence)
+        hypotheses = await self.generate_hypotheses(query, ranked_evidence)
         reasoning_steps.append(f"Generated {len(hypotheses)} hypotheses")
 
         simulations = await self.simulate_future([], goal)
@@ -511,21 +538,21 @@ class ReasoningEngine:
 
         conflicts = await self.detect_conflicts(ranked_evidence)
 
-        selected_agents = await self.choose_agents(resolved_query, context) if requires_tools else []
+        selected_agents = await self.choose_agents(query, context) if requires_tools else []
         workflow = AgentWorkflow()
         for agent in selected_agents:
             workflow.add(agent)
 
         agent_outputs = {}
         if selected_agents:
-            agent_outputs = await self.execute_agents(selected_agents, resolved_query, context)
+            agent_outputs = await self.execute_agents(selected_agents, query, context)
         reasoning_steps.append(f"Executed {len(selected_agents)} specialist agent(s)")
 
         plan = []
         if requires_planning:
             if self.planner and hasattr(self.planner, "create_plan"):
                 try:
-                    task_plan = await self.planner.create_plan(resolved_query, context)
+                    task_plan = await self.planner.create_plan(query, context)
                     if task_plan and hasattr(task_plan, "tasks"):
                         plan = task_plan.tasks
                         reasoning_steps.append("Generated structured plan")
@@ -588,6 +615,15 @@ class ReasoningEngine:
             trace
         )
 
+        response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
+
+        if self.working_memory:
+            self.working_memory.set_topic(topic)
+            self.working_memory.remember_exchange(
+                query,
+                response_to_store
+            )
+
         return ReasoningResult(
             goal=goal,
             action=action,
@@ -607,7 +643,7 @@ class ReasoningEngine:
             requires_web=requires_web,
             requires_planning=requires_planning,
             requires_clarification=requires_clarification,
-            resolved_query=resolved_query,
+            resolved_query=query,
             topic=conv_tracking.get("topic", ""),
             working_memory=working_memory,
             response_strategy=response_strategy,
