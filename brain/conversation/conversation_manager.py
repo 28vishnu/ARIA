@@ -35,6 +35,7 @@ class ConversationManager:
                 "active_task": None,
                 "active_code": None,
                 "pending_reference": None,
+                "last_entity": None,
             }
         return self._sessions[session_id]
 
@@ -70,9 +71,18 @@ class ConversationManager:
             session["entities"] = entities
             new_topic = str(entities[0]) if isinstance(entities, list) and entities else str(entities)
         else:
-            entities = []
-            session["entities"] = entities
-            new_topic = self.extract_topic(user_message)
+            extracted_ents = self.extract_entities(user_message)
+            if extracted_ents:
+                session["entities"] = extracted_ents
+                new_topic = extracted_ents[0]
+            else:
+                session["entities"] = []
+                new_topic = self.extract_topic(user_message)
+
+        if not new_topic:
+            new_topic = session.get("current_topic")
+
+        session["last_entity"] = new_topic
 
         if "compare" in user_message.lower():
             extracted = self.extract_entities(user_message)
@@ -292,6 +302,11 @@ class ConversationManager:
             if word in COMMON_TOPICS:
                 return word.title()
 
+        # Fallback for generic capitalization or single entity naming
+        stripped = text.strip()
+        if stripped and len(stripped.split()) <= 3:
+            return stripped.title()
+
         return None
 
     def extract_entities(self, text: str) -> List[str]:
@@ -302,12 +317,22 @@ class ConversationManager:
             "javascript",
             "c++",
             "docker",
-            "linux"
+            "linux",
+            "tesla",
+            "spider-man",
+            "italy"
         }
 
         for word in text.lower().split():
             word = word.strip(".,?!")
             if word in TOPICS:
                 known.append(word.title())
+
+        if not known:
+            # Capitalized word extraction fallback
+            for match in text.split():
+                cleaned_match = match.strip(".,?!")
+                if cleaned_match and cleaned_match[0].isupper() and cleaned_match.lower() not in {"what", "who", "where", "when", "why", "how", "is", "the", "a", "an"}:
+                    known.append(cleaned_match)
 
         return known
