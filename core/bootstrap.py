@@ -36,6 +36,25 @@ from brain.conversation.conversation_manager import ConversationManager
 from brain.goals.goal_manager import GoalManager
 from brain.tasks.task_manager import TaskManager
 
+from brain.documents.manager import DocumentManager
+from brain.documents.pipeline import DocumentPipeline
+from brain.documents.indexing.chunker import Chunker
+from brain.documents.indexing.concept_extractor import ConceptExtractor
+from brain.documents.indexing.semantic_search import SemanticSearch
+from brain.documents.memory.document_memory import DocumentMemory
+from brain.documents.study.study_engine import StudyEngine
+from brain.documents.study.flashcard_generator import FlashcardGenerator
+from brain.documents.study.mcq_generator import MCQGenerator
+from brain.documents.study.revision_engine import RevisionEngine
+from brain.documents.parsers.pdf_parser import PDFParser
+from brain.documents.parsers.docx_parser import DOCXParser
+from brain.documents.parsers.image_parser import ImageParser
+from brain.documents.parsers.zip_parser import ZIPParser
+from brain.documents.repository.repo_analyzer import RepositoryAnalyzer
+from brain.documents.repository.code_parser import CodeParser
+from brain.documents.repository.dependency_graph import DependencyGraph
+from brain.documents.repository.repository_memory import RepositoryMemory
+
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
 from skills.document import DocumentSkill
@@ -391,6 +410,81 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Knowledge & Learning Engine
+    # ---------------------------------------------------------
+    document_manager = DocumentManager()
+    chunker = Chunker()
+    concept_extractor = ConceptExtractor()
+    document_memory = DocumentMemory()
+    semantic_search = SemanticSearch(
+        document_memory,
+    )
+    study_engine = StudyEngine(
+        semantic_search,
+        document_memory,
+    )
+    flashcard_generator = FlashcardGenerator(
+        document_memory,
+    )
+    mcq_generator = MCQGenerator(
+        document_memory,
+    )
+    revision_engine = RevisionEngine(
+        document_memory,
+    )
+    repo_analyzer = RepositoryAnalyzer()
+    code_parser = CodeParser()
+    dependency_graph = DependencyGraph()
+    repository_memory = RepositoryMemory()
+    pipeline = DocumentPipeline(
+        document_manager=document_manager,
+        chunker=chunker,
+        concept_extractor=concept_extractor,
+        document_memory=document_memory,
+        semantic_search=semantic_search,
+    )
+
+    document_manager.register_parser(
+        ".pdf",
+        PDFParser(),
+    )
+    document_manager.register_parser(
+        ".docx",
+        DOCXParser(),
+    )
+    document_manager.register_parser(
+        ".jpg",
+        ImageParser(),
+    )
+    document_manager.register_parser(
+        ".jpeg",
+        ImageParser(),
+    )
+    document_manager.register_parser(
+        ".png",
+        ImageParser(),
+    )
+    document_manager.register_parser(
+        ".zip",
+        ZIPParser(),
+    )
+
+    registry.register("document_manager", document_manager)
+    registry.register("document_pipeline", pipeline)
+    registry.register("chunker", chunker)
+    registry.register("concept_extractor", concept_extractor)
+    registry.register("document_memory", document_memory)
+    registry.register("semantic_search", semantic_search)
+    registry.register("study_engine", study_engine)
+    registry.register("flashcard_generator", flashcard_generator)
+    registry.register("mcq_generator", mcq_generator)
+    registry.register("revision_engine", revision_engine)
+    registry.register("repo_analyzer", repo_analyzer)
+    registry.register("code_parser", code_parser)
+    registry.register("dependency_graph", dependency_graph)
+    registry.register("repository_memory", repository_memory)
+
+    # ---------------------------------------------------------
     # Agents, Coordinator & Lead Agent
     # ---------------------------------------------------------
     logger.info(
@@ -542,6 +636,9 @@ async def bootstrap_application() -> ServiceRegistry:
         task_manager=task_manager,
         agent_coordinator=agent_coordinator,
         lead_agent=lead_agent,
+        document_pipeline=pipeline,
+        study_engine=study_engine,
+        repository_memory=repository_memory,
     )
 
     registry.register(
