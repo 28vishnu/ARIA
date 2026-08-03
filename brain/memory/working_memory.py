@@ -15,6 +15,12 @@ class WorkingMemory:
         self._active_entities: List[Any] = []
         self._last_question: Optional[str] = None
         self._last_answer: Optional[str] = None
+        self._active_person: Optional[str] = None
+        self._active_company: Optional[str] = None
+        self._active_place: Optional[str] = None
+        self._active_language: Optional[str] = None
+        self._reasoning_cache: Dict[str, Any] = {}
+        self._answer_cache: Dict[str, Any] = {}
 
     def set(self, key: str, value: Any) -> None:
         """Stores or updates a key-value pair in working memory."""
@@ -60,6 +66,12 @@ class WorkingMemory:
         self._active_entities = []
         self._last_question = None
         self._last_answer = None
+        self._active_person = None
+        self._active_company = None
+        self._active_place = None
+        self._active_language = None
+        self._reasoning_cache.clear()
+        self._answer_cache.clear()
 
     def snapshot(self) -> Dict[str, Any]:
         """Returns a copy of the current working memory store."""
@@ -98,3 +110,39 @@ class WorkingMemory:
 
     def last_answer(self) -> Optional[str]:
         return self._last_answer
+
+    def set_active_person(self, person: Optional[str]) -> None:
+        self._active_person = person
+
+    def get_active_person(self) -> Optional[str]:
+        return self._active_person
+
+    def set_active_company(self, company: Optional[str]) -> None:
+        self._active_company = company
+
+    def get_active_company(self) -> Optional[str]:
+        return self._active_company
+
+    def set_active_place(self, place: Optional[str]) -> None:
+        self._active_place = place
+
+    def get_active_place(self) -> Optional[str]:
+        return self._active_place
+
+    def set_active_language(self, language: Optional[str]) -> None:
+        self._active_language = language
+
+    def get_active_language(self) -> Optional[str]:
+        return self._active_language
+
+    def cache_answer(self, key: str, answer: Any) -> None:
+        self._answer_cache[key] = answer
+
+    def get_cached_answer(self, key: str) -> Any:
+        return self._answer_cache.get(key)
+
+    def cache_reasoning(self, key: str, reasoning: Any) -> None:
+        self._reasoning_cache[key] = reasoning
+
+    def get_cached_reasoning(self, key: str) -> Any:
+        return self._reasoning_cache.get(key)
