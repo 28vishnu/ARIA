@@ -85,6 +85,7 @@ class ReasoningEngine:
         working_memory=None,
         goal_manager=None,
         agent_coordinator=None,
+        lead_agent=None,
     ):
         self.agent_manager = agent_manager
         self.planner = planner
@@ -99,6 +100,7 @@ class ReasoningEngine:
         self.working_memory = working_memory
         self.goal_manager = goal_manager
         self.agent_coordinator = agent_coordinator
+        self.lead_agent = lead_agent
 
     async def select_agents(self, query: str, context: dict) -> List[str]:
 
@@ -751,14 +753,29 @@ class ReasoningEngine:
 
         agent_results = []
 
-        if (
-            self.agent_coordinator
-            and selected_agents
-        ):
+        if self.agent_coordinator and selected_agents:
+            execution_plan = {
+                "agents": selected_agents,
+                "query": query,
+                "context": context,
+            }
+
+            if self.lead_agent:
+                execution_plan = await self.lead_agent.create_execution_plan(
+                    query,
+                    context,
+                    selected_agents,
+                )
+
+            logger.info(
+                "[ReasoningEngine] Lead Agent assigned %d agents.",
+                len(execution_plan["agents"]),
+            )
+
             coordination = await self.agent_coordinator.execute(
-                selected_agents,
-                query,
-                context,
+                execution_plan["agents"],
+                execution_plan["query"],
+                execution_plan["context"],
             )
 
             agent_results = coordination["outputs"]
