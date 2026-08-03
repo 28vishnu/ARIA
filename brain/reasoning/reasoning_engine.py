@@ -547,6 +547,11 @@ class ReasoningEngine:
         if self.goal_manager:
             active_goal = self.goal_manager.current_goal()
 
+        next_task = None
+
+        if self.goal_manager:
+            next_task = self.goal_manager.next_subgoal()
+
         context["active_goal"] = (
             active_goal.title
             if active_goal
@@ -557,12 +562,23 @@ class ReasoningEngine:
             if active_goal
             else 0.0
         )
+        context["next_goal"] = (
+            next_task.title
+            if next_task
+            else None
+        )
 
         if active_goal:
             logger.info(
                 "[ReasoningEngine] Active goal: %s (%.0f%%)",
                 active_goal.title,
                 active_goal.progress,
+            )
+
+        if next_task:
+            logger.info(
+                "[ReasoningEngine] Next suggested task: %s",
+                next_task.title,
             )
 
         start_time = time.time()
@@ -733,6 +749,17 @@ class ReasoningEngine:
 
         response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
 
+        if (
+            next_task
+            and active_goal
+            and response_to_store
+            and len(response_to_store) < 800
+        ):
+            response_to_store += (
+                f"\n\nA good next step would be to "
+                f"{next_task.title.lower()}."
+            )
+
         if self.working_memory:
             if topic and confidence > 0.7:
                 self.working_memory.set_topic(topic)
@@ -753,7 +780,7 @@ class ReasoningEngine:
             graph_results=graph_results,
             world_state=world_state,
             metadata=metadata,
-            answer=answer,
+            answer=response_to_store if answer else answer,
             requires_memory=requires_memory,
             requires_documents=requires_documents,
             requires_tools=requires_tools,
