@@ -90,6 +90,7 @@ class CognitiveCore:
         memory_engine=None,
         goal_manager=None,
         project_manager=None,
+        task_manager=None,
         agent_coordinator=None,
         lead_agent=None,
     ):
@@ -119,6 +120,7 @@ class CognitiveCore:
         self.memory_engine = memory_engine
         self.goal_manager = goal_manager
         self.project_manager = project_manager
+        self.task_manager = task_manager
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
 
@@ -131,6 +133,40 @@ class CognitiveCore:
 
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
+
+    def _observe_tasks(self, query: str):
+        if not self.task_manager:
+            return
+
+        query_lower = query.lower()
+
+        project_phrases = [
+            "i'm building",
+            "i am building",
+            "i'm creating",
+            "i am creating",
+            "i'm making",
+            "working on",
+            "developing",
+            "writing",
+            "designing",
+        ]
+
+        for phrase in project_phrases:
+            if phrase in query_lower:
+                subject = query_lower.split(phrase, 1)[1].strip()
+
+                if subject:
+                    existing = self.task_manager.current_task()
+
+                    if existing and existing.title.lower() == subject.lower():
+                        return
+
+                    self.task_manager.create_task(
+                        title=subject.title(),
+                        description=f"Long-term task: {subject}"
+                    )
+                return
 
     async def _resolve_query(self, session_id: str, query: str) -> str:
         history = []
@@ -1383,6 +1419,11 @@ Execution Results:
                         ),
                     },
                 )
+
+            # =================================================
+            # 4.5 OBSERVE TASKS
+            # =================================================
+            self._observe_tasks(query)
 
             # =================================================
             # 5. INTENT ANALYSIS
