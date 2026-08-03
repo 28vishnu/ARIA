@@ -534,20 +534,39 @@ class ReasoningEngine:
         Core decision pipeline determining precisely what sub-pipelines are required
         and returning a comprehensive ReasoningResult object.
         """
+        user_query = str(context.get("query", "")).strip()
+
+        if self.goal_manager:
+            await self.goal_manager.observe(
+                query=user_query,
+                context=context,
+            )
+
         active_goal = None
+
         if self.goal_manager:
             active_goal = self.goal_manager.current_goal()
 
-        context["active_goal"] = active_goal
+        context["active_goal"] = (
+            active_goal.title
+            if active_goal
+            else None
+        )
+        context["goal_progress"] = (
+            active_goal.progress
+            if active_goal
+            else 0.0
+        )
 
         if active_goal:
             logger.info(
-                "[ReasoningEngine] Active Goal: %s",
+                "[ReasoningEngine] Active goal: %s (%.0f%%)",
                 active_goal.title,
+                active_goal.progress,
             )
 
         start_time = time.time()
-        raw_query = str(context.get("query", "")).strip()
+        raw_query = user_query
         reasoning_steps = []
 
         active_context = context.get("active_context", {})
