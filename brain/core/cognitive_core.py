@@ -202,6 +202,29 @@ class CognitiveCore:
             context.setdefault("query", resolved_query)
             context.setdefault("session_id", session_id)
 
+        # Build working memory context with updated priority ordering
+        working_memory_context = {}
+        if self.working_memory:
+            working_memory_context = {
+                "topic": self.working_memory.get_topic(),
+                "goal": self.working_memory.get_goal(),
+                "entities": self.working_memory.get_entities(),
+                "recent_results": getattr(self.working_memory, "get_recent_results", lambda: [])(),
+            }
+
+        conversation_context = context.get("conversation", {})
+        memory_context = context.get("memory", [])
+        world_state = context.get("world", {})
+
+        # Re-prioritize context fields according to new hierarchy
+        context = {
+            "query": resolved_query,
+            "working_memory": working_memory_context,
+            "conversation": conversation_context,
+            "memory": memory_context,
+            "world": world_state,
+        }
+
         # Step 2: Call the reasoning engine immediately
         reasoning = None
         if self.reasoning_engine:
