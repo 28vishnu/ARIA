@@ -86,6 +86,7 @@ class CognitiveCore:
         event_bus=None,
         llm_router=None,
         conversation_manager=None,
+        working_memory=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -109,6 +110,7 @@ class CognitiveCore:
         self.event_bus = event_bus
         self.llm_router = llm_router
         self.conversation_manager = conversation_manager
+        self.working_memory = working_memory
 
         self.brain_state = {
             "thinking": False,
@@ -384,7 +386,56 @@ class CognitiveCore:
             except Exception as e:
                 logger.warning("Event bus publish skipped: %s", e)
 
-        return await self._format_response(answer, source, context, confidence)
+        # Synchronization steps after response generation
+        formatted_response = await self._format_response(answer, source, context, confidence)
+        response_text = formatted_response.data.get("response", answer)
+
+        if self.working_memory and context.get("active_context", {}).get("topic"):
+            self.working_memory.set_topic(
+                context["active_context"]["topic"]
+            )
+
+        if self.working_memory:
+            self.working_memory.remember_exchange(
+                resolved_query,
+                response_text
+            )
+
+        if self.conversation_manager:
+            try:
+                self.conversation_manager.update_turn(
+                    session_id=session_id,
+                    user_message=resolved_query,
+                    assistant_message=response_text,
+                )
+            except Exception as e:
+                logger.warning("Conversation manager update_turn skipped: %s", e)
+
+        if self.state_manager:
+            try:
+                self.state_manager.add_conversation_turn(
+                    session_id=session_id,
+                    user_message=resolved_query,
+                    assistant_message=response_text,
+                )
+            except Exception as e:
+                logger.warning("State manager add_conversation_turn skipped: %s", e)
+
+        topic = context.get("active_context", {}).get("topic")
+        if topic and self.world_model:
+            try:
+                if hasattr(self.world_model, "set_active_topic"):
+                    res = self.world_model.set_active_topic(topic)
+                    if asyncio.iscoroutine(res):
+                        await res
+            except Exception as e:
+                logger.warning("WorldModel set_active_topic skipped: %s", e)
+
+        entities = context.get("active_context", {}).get("entities", [])
+        if self.working_memory and entities:
+            self.working_memory.set_entities(entities)
+
+        return formatted_response
 
     async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
         formatted_answer = answer
