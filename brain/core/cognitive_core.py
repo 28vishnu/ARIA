@@ -154,6 +154,24 @@ class CognitiveCore:
             f"Status: {task.status}\n"
         )
 
+    def _task_reminder(self) -> str:
+        if not self.task_manager:
+            return ""
+
+        task = self.task_manager.highest_priority_task()
+
+        if not task:
+            return ""
+
+        if task.progress >= 100:
+            return ""
+
+        return (
+            f"\nCurrent unfinished task:\n"
+            f"- {task.title}\n"
+            f"- Progress: {task.progress:.0f}%\n"
+        )
+
     def _observe_tasks(self, query: str):
         if not self.task_manager:
             return
@@ -541,6 +559,26 @@ class CognitiveCore:
 
                         if task_context:
                             system_context += "\n\n" + task_context
+
+                        planning_keywords = [
+                            "continue",
+                            "next",
+                            "roadmap",
+                            "plan",
+                            "what now",
+                            "what next",
+                            "resume",
+                        ]
+
+                        should_remind = any(
+                            word in resolved_query.lower()
+                            for word in planning_keywords
+                        )
+
+                        if should_remind:
+                            reminder = self._task_reminder()
+                            if reminder:
+                                system_context += "\n" + reminder
 
                         if execution_result:
                             system_context += f"""
