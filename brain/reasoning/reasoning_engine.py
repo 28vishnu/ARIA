@@ -119,23 +119,44 @@ class ReasoningEngine:
 
     async def resolve_references(self, query: str, context: Dict[str, Any]) -> str:
         """
-        Rewrite follow-up questions into standalone queries using conversation history and LLM or context.
+        Rewrite follow-up questions into standalone queries using conversation history, topic stack, and references.
         """
         conv_state = await self.track_conversation(context)
         history = conv_state["history"]
         topic = conv_state["topic"]
+        conv_dict = context.get("conversation", {})
+        last_subject = conv_dict.get("last_subject") or topic
+        last_compared = conv_dict.get("last_compared_entities", [])
 
         clean_q = query.strip()
         lower_q = clean_q.lower()
 
-        if topic:
+        # Handle explicit pronoun replacements using topic stack / last_subject / compared entities
+        pronouns = ["it", "he", "she", "they", "those", "this", "that", "him", "her", "there", "same"]
+        words = clean_q.split()
+        replaced = False
+        new_words = []
+        for w in words:
+            w_lower = w.strip(".,?!").lower()
+            if w_lower in pronouns and last_subject:
+                new_words.append(last_subject)
+                replaced = True
+            else:
+                new_words.append(w)
+        if replaced:
+            clean_q = " ".join(new_words)
+            lower_q = clean_q.lower()
+
+        if last_subject:
             if lower_q == "continue":
-                return f"Continue explaining {topic}."
+                return f"Continue your previous explanation about {last_subject} and expand with new information."
             if lower_q == "why":
-                last_u = conv_state.get("last_user")
-                return f"Why {last_u}" if last_u else f"Why is {topic} significant?"
-            if lower_q.startswith("compare it"):
-                return clean_q.lower().replace("compare it", f"Compare {topic}", 1)
+                last_u = working = context.get("working_memory", {}).get("last_question") or conv_state.get("last_user")
+                return f"Why is {last_subject} better/significant?" if not last_u else f"Why {last_u}"
+            if lower_q in ("give example", "example"):
+                if len(last_compared) >= 2:
+                    return f"Give an example comparing {last_compared[0]} and {last_compared[1]}."
+                return f"Give an example of {last_subject}."
 
         if not history:
             return clean_q
@@ -296,6 +317,9 @@ class ReasoningEngine:
         """Determine if the user query is excessively vague or ambiguous."""
         clean = query.strip()
         if len(clean.split()) <= 1 and clean.lower() not in ["hi", "hello", "help", "status"]:
+            conv = context.get("conversation", {})
+            if conv.get("topic") or conv.get("history"):
+                return False
             return True
         return False
 
@@ -507,11 +531,20 @@ class ReasoningEngine:
         requires_web = await self.should_use_web(query, context)
 
         retrieval = await self.retrieve_context(query)
-        memories = retrieval["memories"] if requires_memory else []
+        raw_memories = retrieval["memories"] if requires_memory else []
         knowledge = retrieval["knowledge"] if requires_documents else []
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
         reasoning_steps.append("Retrieved context evidence")
+
+        # Convert retrieved raw memories into memory_summary string representation for clean prompt integration
+        memory_summary_parts = []
+        for m in raw_memories:
+            content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
+            memory_summary_parts.append(content)
+        memory_summary = ". ".join(memory_summary_parts)
+
+        memories = [{"source": "memory", "confidence": 0.95, "importance": 85, "content": memory_summary}] if memory_summary else []
 
         merged_evidence = await self.merge_evidence(memories, knowledge, graph_results, world_state)
         evidence = await self.multi_hop_reasoning(query, merged_evidence)
@@ -618,9 +651,10 @@ class ReasoningEngine:
         response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
 
         if self.working_memory:
-            self.working_memory.set_topic(topic)
+            if topic and confidence > 0.7:
+                self.working_memory.set_topic(topic)
             self.working_memory.remember_exchange(
-                query,
+                raw_query,
                 response_to_store
             )
 
