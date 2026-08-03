@@ -34,6 +34,7 @@ from brain.session import SessionManager
 from brain.state.state_manager import StateManager
 from brain.conversation.conversation_manager import ConversationManager
 from brain.goals.goal_manager import GoalManager
+from brain.tasks.task_manager import TaskManager
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -159,10 +160,11 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
     # ---------------------------------------------------------
-    # Conversation Manager & Goal Manager
+    # Conversation Manager, Goal Manager & Task Manager
     # ---------------------------------------------------------
     conversation_manager = ConversationManager()
     goal_manager = GoalManager()
+    task_manager = TaskManager()
 
     registry.register(
         "conversation_manager",
@@ -172,7 +174,11 @@ async def bootstrap_application() -> ServiceRegistry:
         "goal_manager",
         goal_manager
     )
-    logger.info("[BOOT TEST] ConversationManager and GoalManager configured")
+    registry.register(
+        "task_manager",
+        task_manager,
+    )
+    logger.info("[BOOT TEST] ConversationManager, GoalManager, and TaskManager configured")
 
     # ---------------------------------------------------------
     # ChromaDB
@@ -461,6 +467,7 @@ async def bootstrap_application() -> ServiceRegistry:
         action_manager=action_manager,
         mongodb=db_inst if mongo_client else None,
         agent_manager=agent_manager,
+        agent_coordinator=agent_coordinator,
     )
 
     personality_engine = PersonalityEngine(
@@ -532,6 +539,7 @@ async def bootstrap_application() -> ServiceRegistry:
         working_memory=working_memory,
         memory_engine=memory_engine,
         goal_manager=goal_manager,
+        task_manager=task_manager,
         agent_coordinator=agent_coordinator,
         lead_agent=lead_agent,
     )
