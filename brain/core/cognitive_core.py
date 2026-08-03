@@ -141,6 +141,9 @@ class CognitiveCore:
 
         task = self.task_manager.switch_task(query)
 
+        if task is None:
+            task = self.task_manager.highest_priority_task()
+
         if not task:
             return ""
 
@@ -175,6 +178,8 @@ class CognitiveCore:
 
                 if subject:
                     existing = self.task_manager.switch_task(query)
+                    if existing is None:
+                        existing = self.task_manager.highest_priority_task()
 
                     if existing and existing.title.lower() == subject.lower():
                         return
@@ -190,6 +195,8 @@ class CognitiveCore:
             return
 
         task = self.task_manager.switch_task(query)
+        if task is None:
+            task = self.task_manager.highest_priority_task()
 
         if not task:
             return
