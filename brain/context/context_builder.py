@@ -19,12 +19,14 @@ class ContextBuilder:
         memory_router=None,
         knowledge_graph=None,
         conversation_manager=None,
+        working_memory=None,
     ):
         self.state_manager = state_manager
         self.world_model = world_model
         self.memory_router = memory_router
         self.knowledge_graph = knowledge_graph
         self.conversation_manager = conversation_manager
+        self.working_memory = working_memory
 
     async def build(
         self,
@@ -40,6 +42,21 @@ class ContextBuilder:
         # -----------------------------------------------------
 
         ctx = dict(base_context or {})
+
+        working_topic = None
+        working_goal = None
+        working_entities = []
+        working_document = None
+        last_question = None
+        last_answer = None
+
+        if self.working_memory:
+            working_topic = self.working_memory.get_topic()
+            working_goal = self.working_memory.get_goal()
+            working_entities = self.working_memory.get_entities()
+            working_document = self.working_memory.get_document()
+            last_question = self.working_memory.last_question()
+            last_answer = self.working_memory.last_answer()
 
         clean_query = str(query or "").strip()
 
@@ -230,7 +247,7 @@ class ContextBuilder:
         # Document awareness
         # -----------------------------------------------------
 
-        document_active = bool(active_document)
+        document_active = bool(active_document or working_document)
 
         # -----------------------------------------------------
         # Response-depth hint
@@ -279,6 +296,24 @@ class ContextBuilder:
             # Temporary conversation state
             "state": state_data,
 
+            # Working memory state
+            "working_memory": {
+                "topic": working_topic,
+                "goal": working_goal,
+                "entities": working_entities,
+                "document": working_document,
+                "last_question": last_question,
+                "last_answer": last_answer,
+            },
+
+            # Active context situation object
+            "active_context": {
+                "topic": conversation_context.get("topic") or working_topic,
+                "goal": working_goal,
+                "entities": working_entities,
+                "document": active_document or working_document,
+            },
+
             # Conversation understanding
             "conversation": {
                 "previous_query": previous_query,
@@ -313,7 +348,7 @@ class ContextBuilder:
             # Document state
             "document": {
                 "active": document_active,
-                "name": active_document,
+                "name": active_document or working_document,
                 "last_question": last_document_question,
             },
 
