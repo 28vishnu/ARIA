@@ -100,6 +100,81 @@ class ReasoningEngine:
         self.goal_manager = goal_manager
         self.agent_coordinator = agent_coordinator
 
+    async def select_agents(self, query: str, context: dict) -> List[str]:
+
+        query_lower = query.lower()
+
+        agents = set()
+
+        # Coding
+        if any(word in query_lower for word in [
+            "code", "python", "fastapi", "api",
+            "program", "bug", "fix", "class",
+            "function", "script"
+        ]):
+            agents.add("coding")
+
+        # Research
+        if any(word in query_lower for word in [
+            "research", "find", "best",
+            "libraries", "compare",
+            "latest", "information"
+        ]):
+            agents.add("research")
+
+        # Planning
+        if any(word in query_lower for word in [
+            "plan", "roadmap",
+            "design", "architecture",
+            "build", "project"
+        ]):
+            agents.add("planning")
+
+        # Writing
+        if any(word in query_lower for word in [
+            "write", "email",
+            "article", "blog",
+            "documentation",
+            "summary"
+        ]):
+            agents.add("writing")
+
+        # Math
+        if any(word in query_lower for word in [
+            "calculate",
+            "equation",
+            "math",
+            "statistics"
+        ]):
+            agents.add("math")
+
+        selected_agents = list(agents)
+
+        active_goal = context.get("active_goal")
+
+        if active_goal:
+
+            goal_lower = active_goal.lower()
+
+            if "app" in goal_lower:
+                selected_agents.extend(
+                    ["planning", "coding"]
+                )
+
+            if "research" in goal_lower:
+                selected_agents.append("research")
+
+        selected_agents = list(
+            dict.fromkeys(selected_agents)
+        )
+
+        logger.info(
+            "[ReasoningEngine] Dynamically selected agents: %s",
+            selected_agents,
+        )
+
+        return selected_agents
+
     def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
         """
         Decide which specialist agents should handle the request.
@@ -621,8 +696,10 @@ class ReasoningEngine:
         reasoning_mode = await self.choose_reasoning_mode(context)
         reasoning_steps.append(f"Chosen reasoning mode: {reasoning_mode}")
 
-        intent_name = getattr(context.get("intent"), "name", None)
-        selected_agents = self.choose_best_agents(query, intent_name)
+        selected_agents = await self.select_agents(
+            query,
+            context,
+        )
         reasoning_steps.append(f"Selected best agents: {selected_agents}")
 
         requires_planning = await self.should_use_planner(goal, context)
