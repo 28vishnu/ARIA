@@ -31,6 +31,7 @@ from brain.agents.writing_agent import WritingAgent
 from brain.session import SessionManager
 from brain.state.state_manager import StateManager
 from brain.conversation.conversation_manager import ConversationManager
+from brain.goals.goal_manager import GoalManager
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -156,14 +157,20 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
     # ---------------------------------------------------------
-    # Conversation Manager
+    # Conversation Manager & Goal Manager
     # ---------------------------------------------------------
     conversation_manager = ConversationManager()
+    goal_manager = GoalManager()
+
     registry.register(
         "conversation_manager",
         conversation_manager
     )
-    logger.info("[BOOT TEST] ConversationManager configured")
+    registry.register(
+        "goal_manager",
+        goal_manager
+    )
+    logger.info("[BOOT TEST] ConversationManager and GoalManager configured")
 
     # ---------------------------------------------------------
     # ChromaDB
@@ -436,10 +443,10 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     executor = Executor(
+        planner=planner,
+        event_bus=event_bus,
         skill_manager=skill_manager,
         action_manager=action_manager,
-        event_bus=event_bus,
-        planner=planner,
         mongodb=db_inst if mongo_client else None,
         agent_manager=agent_manager,
     )
@@ -465,6 +472,7 @@ async def bootstrap_application() -> ServiceRegistry:
         world_model=world_model,
         event_bus=event_bus,
         working_memory=working_memory,
+        goal_manager=goal_manager,
     )
 
     # ---------------------------------------------------------
@@ -507,6 +515,9 @@ async def bootstrap_application() -> ServiceRegistry:
         event_bus=event_bus,
         llm_router=llm_router,
         conversation_manager=conversation_manager,
+        working_memory=working_memory,
+        memory_engine=memory_engine,
+        goal_manager=goal_manager,
     )
 
     registry.register(
