@@ -134,6 +134,23 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
+    def _get_active_task_context(self):
+
+        if not self.task_manager:
+            return ""
+
+        task = self.task_manager.current_task()
+
+        if not task:
+            return ""
+
+        return (
+            f"Current Active Task:\n"
+            f"Title: {task.title}\n"
+            f"Progress: {task.progress:.0f}%\n"
+            f"Status: {task.status}\n"
+        )
+
     def _observe_tasks(self, query: str):
         if not self.task_manager:
             return
@@ -512,6 +529,11 @@ class CognitiveCore:
                             "If a useful next step exists, suggest it naturally.\n"
                             "Never pad the answer."
                         )
+
+                        task_context = self._get_active_task_context()
+
+                        if task_context:
+                            system_context += "\n\n" + task_context
 
                         if execution_result:
                             system_context += f"""
