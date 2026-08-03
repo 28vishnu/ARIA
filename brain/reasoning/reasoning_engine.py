@@ -822,6 +822,46 @@ class ReasoningEngine:
         if requires_clarification:
             answer = "Could you please clarify your request with a bit more detail?"
 
+        if "summarize" in query.lower() or "summary" in query.lower():
+            conversation = context.get("conversation_history", [])
+            goal_obj = None
+            if self.goal_manager:
+                goal_obj = self.goal_manager.current_goal()
+
+            use_memory = any(
+                phrase in query.lower()
+                for phrase in [
+                    "about me",
+                    "my profile",
+                    "everything you know",
+                    "my memories",
+                ]
+            )
+
+            summary_memories = []
+            if use_memory and hasattr(self, "memory_engine") and self.memory_engine:
+                summary_memories = await self.memory_engine.retrieve(query)
+
+            summary_context = {
+                "conversation": conversation,
+                "goal": goal_obj,
+                "memories": summary_memories,
+            }
+
+            if self.llm_router and hasattr(self.llm_router, "chat"):
+                try:
+                    summary_prompt = (
+                        f"Summarize what has been done so far based on context:\n"
+                        f"Goal: {getattr(goal_obj, 'title', 'None')}\n"
+                        f"Progress: {getattr(goal_obj, 'progress', 0.0)}%\n"
+                        f"Conversation: {conversation}\n"
+                        f"Memories: {summary_memories}"
+                    )
+                    reply = await self.llm_router.chat([{"role": "user", "content": summary_prompt}])
+                    answer = str(reply).strip() if reply else "Here is the summary of your current project and progress."
+                except Exception:
+                    answer = f"Current Goal: {getattr(goal_obj, 'title', 'None')} (Progress: {getattr(goal_obj, 'progress', 0.0)}%)"
+
         action = "chat"
         if goal == "remember" or goal == "delete":
             action = "memory_conversation"
