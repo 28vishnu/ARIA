@@ -236,6 +236,97 @@ class Planner:
         return str(query or "").strip()
 
     # =========================================================
+    # TASK GRAPH CREATION
+    # =========================================================
+
+    def create_task_graph(self, goal: str):
+        """
+        Convert a goal into executable tasks.
+        """
+
+        goal_lower = goal.lower()
+
+        tasks = []
+
+        if any(word in goal_lower for word in [
+            "build",
+            "create",
+            "develop",
+            "implement"
+        ]):
+
+            tasks = [
+
+                {
+                    "id": 1,
+                    "agent": "research",
+                    "task": f"Research requirements for: {goal}",
+                    "status": "pending"
+                },
+
+                {
+                    "id": 2,
+                    "agent": "planning",
+                    "task": f"Design architecture for: {goal}",
+                    "status": "pending"
+                },
+
+                {
+                    "id": 3,
+                    "agent": "coding",
+                    "task": f"Implement: {goal}",
+                    "status": "pending"
+                },
+
+                {
+                    "id": 4,
+                    "agent": "testing",
+                    "task": f"Test: {goal}",
+                    "status": "pending"
+                }
+
+            ]
+
+        elif any(word in goal_lower for word in [
+            "research",
+            "compare",
+            "explain"
+        ]):
+
+            tasks = [
+
+                {
+                    "id": 1,
+                    "agent": "research",
+                    "task": goal,
+                    "status": "pending"
+                },
+
+                {
+                    "id": 2,
+                    "agent": "writing",
+                    "task": "Summarize findings",
+                    "status": "pending"
+                }
+
+            ]
+
+        else:
+
+            tasks = [
+
+                {
+                    "id": 1,
+                    "agent": "chat",
+                    "task": goal,
+                    "status": "pending"
+                }
+
+            ]
+
+        return tasks
+
+    # =========================================================
     # GOAL DECOMPOSITION
     # =========================================================
 
@@ -667,6 +758,14 @@ RULES:
 
             optimized = self.optimize_plan(plan)
             optimized.confidence = 0.92
+            
+            # Attach structured task graph
+            task_graph = self.create_task_graph(plan_goal)
+            if isinstance(optimized.metadata, dict):
+                optimized.metadata["task_graph"] = task_graph
+            else:
+                optimized.metadata = {"task_graph": task_graph}
+
             return optimized
 
         except Exception:
@@ -763,15 +862,21 @@ RULES:
         if not tasks:
             return None
 
+        goal_str = self._extract_goal(query, context)
         plan = ExecutionPlan(
-            goal=self._extract_goal(
-                query,
-                context,
-            ),
+            goal=goal_str,
             tasks=tasks,
         )
         plan.confidence = 0.95
-        return self.optimize_plan(plan)
+        optimized = self.optimize_plan(plan)
+        
+        task_graph = self.create_task_graph(goal_str)
+        if isinstance(optimized.metadata, dict):
+            optimized.metadata["task_graph"] = task_graph
+        else:
+            optimized.metadata = {"task_graph": task_graph}
+
+        return optimized
 
     # =========================================================
     # AUTONOMY METHODS
@@ -904,14 +1009,17 @@ RULES:
             "[Planner] No executable plan required."
         )
 
+        goal_str = self._extract_goal(clean_query, context)
+        task_graph = self.create_task_graph(goal_str)
+
         empty_plan = ExecutionPlan(
-            goal=self._extract_goal(
-                clean_query,
-                context,
-            ),
+            goal=goal_str,
             tasks=[],
         )
         empty_plan.confidence = 0.80
+        empty_plan.metadata = {"task_graph": task_graph}
+        self.plan_history.append(empty_plan)
+        self.statistics["plans_created"] += 1
         return empty_plan
 
     # =========================================================
