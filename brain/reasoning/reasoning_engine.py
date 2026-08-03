@@ -132,7 +132,7 @@ class ReasoningEngine:
         lower_q = clean_q.lower()
 
         # Handle explicit pronoun replacements using topic stack / last_subject / compared entities
-        pronouns = ["it", "he", "she", "they", "those", "this", "that", "him", "her", "there", "same"]
+        pronouns = ["it", "he", "she", "they", "them", "those", "this", "that", "him", "her", "there", "former", "latter", "same"]
         words = clean_q.split()
         replaced = False
         new_words = []
@@ -148,11 +148,13 @@ class ReasoningEngine:
             lower_q = clean_q.lower()
 
         if last_subject:
-            if lower_q == "continue":
-                return f"Continue your previous explanation about {last_subject} and expand with new information."
+            if lower_q in ("continue", "go on"):
+                return f"Continue explaining {last_subject}."
+            if lower_q in ("more", "tell me more"):
+                return f"Tell me more about {last_subject}."
             if lower_q == "why":
-                last_u = working = context.get("working_memory", {}).get("last_question") or conv_state.get("last_user")
-                return f"Why is {last_subject} better/significant?" if not last_u else f"Why {last_u}"
+                last_u = context.get("working_memory", {}).get("last_question") or conv_state.get("last_user")
+                return f"Why is {last_subject} preferred for AI?" if not last_u else f"Why {last_u}"
             if lower_q in ("give example", "example"):
                 if len(last_compared) >= 2:
                     return f"Give an example comparing {last_compared[0]} and {last_compared[1]}."
@@ -490,21 +492,6 @@ class ReasoningEngine:
 
         query = await self.resolve_references(raw_query, context)
         reasoning_steps.append("Resolved conversational references")
-
-        query_lower = query.lower().strip()
-
-        if query_lower in {
-            "continue",
-            "go on",
-            "tell me more",
-            "why",
-            "give example",
-            "example",
-            "which one",
-            "compare again",
-        }:
-            if topic:
-                query = f"{query} about {topic}"
 
         requires_clarification = await self.needs_clarification(query, context)
         if requires_clarification:
