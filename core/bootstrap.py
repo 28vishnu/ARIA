@@ -23,6 +23,7 @@ from brain.world.world_model import WorldModel
 from brain.world.context_builder import ContextBuilder as WorldContextBuilder
 from brain.document.document_repository import DocumentRepository
 from brain.agents.agent_manager import AgentManager
+from brain.agents.coordinator import AgentCoordinator
 from brain.agents.code_agent import CodeAgent
 from brain.agents.math_agent import MathAgent
 from brain.agents.planning_agent import PlanningAgent
@@ -383,13 +384,14 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Agents
+    # Agents & Coordinator
     # ---------------------------------------------------------
     logger.info(
         "[BOOT TEST] 8 - Starting AgentManager"
     )
 
     agent_manager = AgentManager()
+    agent_coordinator = AgentCoordinator(agent_manager)
 
     # Register ARIA's specialist reasoning agents.
     agent_manager.register(CodeAgent())
@@ -401,6 +403,10 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "agent_manager",
         agent_manager
+    )
+    registry.register(
+        "agent_coordinator",
+        agent_coordinator,
     )
 
     logger.info(
@@ -465,6 +471,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     reasoning_engine = ReasoningEngine(
         agent_manager=agent_manager,
+        agent_coordinator=agent_coordinator,
         llm_router=llm_router,
         action_manager=action_manager,
         knowledge_database=knowledge_database,
@@ -518,6 +525,7 @@ async def bootstrap_application() -> ServiceRegistry:
         working_memory=working_memory,
         memory_engine=memory_engine,
         goal_manager=goal_manager,
+        agent_coordinator=agent_coordinator,
     )
 
     registry.register(
