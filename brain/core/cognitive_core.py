@@ -93,6 +93,9 @@ class CognitiveCore:
         task_manager=None,
         agent_coordinator=None,
         lead_agent=None,
+        document_pipeline=None,
+        study_engine=None,
+        repository_memory=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -123,6 +126,9 @@ class CognitiveCore:
         self.task_manager = task_manager
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
+        self.document_pipeline = document_pipeline
+        self.study_engine = study_engine
+        self.repository_memory = repository_memory
 
         self.brain_state = {
             "thinking": False,
@@ -254,6 +260,18 @@ class CognitiveCore:
                     progress,
                 )
                 return
+
+    async def process_document(
+        self,
+        file_path: str,
+    ):
+
+        if self.document_pipeline is None:
+            return None
+
+        return await self.document_pipeline.process(
+            file_path
+        )
 
     async def _resolve_query(self, session_id: str, query: str) -> str:
         history = []
