@@ -65,24 +65,17 @@ class Executor:
 
     def __init__(
         self,
-        skill_manager: SkillManager,
-        action_manager=None,
-        event_bus=None,
-        planner=None,
-        mongodb=None,
+        planner,
+        event_bus,
         agent_manager=None,
     ):
-        self.skill_manager = skill_manager
-        self.action_manager = action_manager
-        self.event_bus = event_bus
         self.planner = planner
-        self.verifier = Verifier()
+        self.event_bus = event_bus
         self.agent_manager = agent_manager
+        self.verifier = Verifier()
 
-        self.mongodb = mongodb
+        self.mongodb = None
         self.collection = None
-        if mongodb is not None:
-            self.collection = mongodb["workflows"]
 
         self.paused_workflows: Dict[str, Dict[str, Any]] = {}
         self.execution_history: List[Dict[str, Any]] = []
@@ -484,19 +477,22 @@ class Executor:
         task_name = task.get("task")
 
         try:
-            result = await self.agent_manager.execute_agents(
-                [
-                    {
-                        "agent": agent,
-                        "task": task_name
-                    }
-                ],
-                context=context
-            )
+            if self.agent_manager:
+                results = await self.agent_manager.execute_agents(
+                    [
+                        {
+                            "agent": agent,
+                            "task": task_name
+                        }
+                    ],
+                    context=context
+                )
+            else:
+                results = []
 
             return {
                 "success": True,
-                "result": result
+                "result": results
             }
 
         except Exception as e:
