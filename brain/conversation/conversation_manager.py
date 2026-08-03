@@ -1,3 +1,5 @@
+import re
+import json
 from typing import Any, Dict, List, Optional
 
 
@@ -7,8 +9,9 @@ class ConversationManager:
     follow-up detection, and pronoun/reference resolution for ARIA.
     """
 
-    def __init__(self):
+    def __init__(self, llm_router: Optional[Any] = None):
         self._sessions: Dict[str, Dict[str, Any]] = {}
+        self.llm_router = llm_router
 
     def get_session(self, session_id: str) -> Dict[str, Any]:
         """
@@ -36,8 +39,79 @@ class ConversationManager:
                 "active_code": None,
                 "pending_reference": None,
                 "last_entity": None,
+                "last_person": None,
+                "last_company": None,
+                "last_place": None,
+                "last_language": None,
             }
         return self._sessions[session_id]
+
+    async def update_turn_async(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_message: str,
+        intent: Optional[str] = None,
+        entities: Optional[List[Any]] = None,
+    ) -> None:
+        """
+        Asynchronous version of update_turn to support LLM fallback entity extraction if needed.
+        """
+        session = self.get_session(session_id)
+
+        session["last_user_message"] = user_message
+        session["last_assistant_message"] = assistant_message
+        session["last_question"] = user_message
+        session["last_answer"] = assistant_message
+        session["turn_count"] = session.get("turn_count", 0) + 1
+
+        if intent is not None:
+            session["current_intent"] = intent
+
+        if entities:
+            session["entities"] = entities
+            new_topic = str(entities[0]) if isinstance(entities, list) and entities else str(entities)
+        else:
+            extracted_ents = await self.extract_entities_async(user_message)
+            if extracted_ents:
+                session["entities"] = extracted_ents
+                new_topic = extracted_ents[0]
+            else:
+                session["entities"] = []
+                new_topic = self.extract_topic(user_message)
+
+        if not new_topic:
+            new_topic = session.get("current_topic")
+
+        session["last_entity"] = new_topic
+
+        # Classify entity categories
+        if new_topic:
+            lower_topic = new_topic.lower()
+            languages = {"python", "java", "javascript", "c++", "c", "r", "go", "rust", "typescript"}
+            companies = {"tesla", "openai", "google", "microsoft", "apple", "amazon", "meta", "netflix"}
+            places = {"italy", "new york", "usa", "india", "tokyo", "london", "france", "germany"}
+            persons = {"elon musk", "bill gates", "steve jobs", "guido van rossum"}
+
+            if lower_topic in languages:
+                session["last_language"] = new_topic
+            elif lower_topic in companies:
+                session["last_company"] = new_topic
+            elif lower_topic in places:
+                session["last_place"] = new_topic
+            elif lower_topic in persons or len(new_topic.split()) == 2:
+                session["last_person"] = new_topic
+
+        if "compare" in user_message.lower():
+            extracted = await self.extract_entities_async(user_message)
+            if len(extracted) >= 2:
+                session["last_compared_entities"] = extracted
+
+        if new_topic:
+            if new_topic != session.get("current_topic"):
+                session["previous_topic"] = session.get("current_topic")
+                session["current_topic"] = new_topic
+            session["last_subject"] = new_topic
 
     def update_turn(
         self,
@@ -48,13 +122,7 @@ class ConversationManager:
         entities: Optional[List[Any]] = None,
     ) -> None:
         """
-        Update session runtime state for a completed turn:
-        - save last user message
-        - save last assistant reply
-        - increment turn count
-        - update current intent
-        - update entities
-        - if entities exist, update current topic & move old topic -> previous_topic
+        Synchronous wrapper for turn update using regex/fallback entity extraction.
         """
         session = self.get_session(session_id)
 
@@ -84,6 +152,22 @@ class ConversationManager:
 
         session["last_entity"] = new_topic
 
+        if new_topic:
+            lower_topic = new_topic.lower()
+            languages = {"python", "java", "javascript", "c++", "c", "r", "go", "rust", "typescript"}
+            companies = {"tesla", "openai", "google", "microsoft", "apple", "amazon", "meta", "netflix"}
+            places = {"italy", "new york", "usa", "india", "tokyo", "london", "france", "germany"}
+            persons = {"elon musk", "bill gates", "steve jobs", "guido van rossum"}
+
+            if lower_topic in languages:
+                session["last_language"] = new_topic
+            elif lower_topic in companies:
+                session["last_company"] = new_topic
+            elif lower_topic in places:
+                session["last_place"] = new_topic
+            elif lower_topic in persons or len(new_topic.split()) == 2:
+                session["last_person"] = new_topic
+
         if "compare" in user_message.lower():
             extracted = self.extract_entities(user_message)
             if len(extracted) >= 2:
@@ -104,7 +188,7 @@ class ConversationManager:
             "topic": session.get("current_topic"),
             "previous_topic": session.get("previous_topic"),
             "last_subject": session.get("last_subject"),
-            "intent": session.get("current_intent"),
+            "current_intent": session.get("current_intent"),
             "entities": session.get("entities"),
             "last_user": session.get("last_user_message"),
             "last_assistant": session.get("last_assistant_message"),
@@ -113,6 +197,10 @@ class ConversationManager:
             "user_goal": session.get("user_goal"),
             "pending_followup": session.get("pending_followup"),
             "conversation_summary": session.get("conversation_summary"),
+            "last_person": session.get("last_person"),
+            "last_company": session.get("last_company"),
+            "last_place": session.get("last_place"),
+            "last_language": session.get("last_language"),
         }
 
     def is_followup(self, query: str) -> bool:
@@ -280,29 +368,6 @@ class ConversationManager:
         if not text:
             return None
 
-        COMMON_TOPICS = {
-            "python",
-            "java",
-            "javascript",
-            "c++",
-            "docker",
-            "linux",
-            "mongodb",
-            "postgres",
-            "redis",
-            "fastapi",
-            "django",
-            "flask",
-        }
-
-        words = text.lower().split()
-
-        for word in words:
-            word = word.strip(".,?!")
-            if word in COMMON_TOPICS:
-                return word.title()
-
-        # Fallback for generic capitalization or single entity naming
         stripped = text.strip()
         if stripped and len(stripped.split()) <= 3:
             return stripped.title()
@@ -310,29 +375,57 @@ class ConversationManager:
         return None
 
     def extract_entities(self, text: str) -> List[str]:
-        known = []
-        TOPICS = {
-            "python",
-            "java",
-            "javascript",
-            "c++",
-            "docker",
-            "linux",
-            "tesla",
-            "spider-man",
-            "italy"
-        }
+        """
+        Step 1: Regex finding capitalized words/phrases (e.g., Elon Musk, New York, OpenAI).
+        """
+        if not text:
+            return []
 
-        for word in text.lower().split():
-            word = word.strip(".,?!")
-            if word in TOPICS:
-                known.append(word.title())
+        # Find sequences of capitalized words
+        pattern = r"\b[A-Z][a-zA-Z0-9_-]+(?:\s+[A-Z][a-zA-Z0-9_-]+)*\b"
+        matches = re.findall(pattern, text)
 
-        if not known:
-            # Capitalized word extraction fallback
-            for match in text.split():
-                cleaned_match = match.strip(".,?!")
-                if cleaned_match and cleaned_match[0].isupper() and cleaned_match.lower() not in {"what", "who", "where", "when", "why", "how", "is", "the", "a", "an"}:
-                    known.append(cleaned_match)
+        stop_words = {"What", "Who", "Where", "When", "Why", "How", "Is", "The", "A", "An", "And", "Or", "To", "In", "On", "Of", "For"}
+        filtered = [m for m in matches if m not in stop_words]
 
-        return known
+        return filtered
+
+    async def extract_entities_async(self, text: str) -> List[str]:
+        """
+        Step 1: Regex finding capitalized entities.
+        Step 2: If regex fails or returns nothing, call llm_router to extract entities as JSON list.
+        """
+        entities = self.extract_entities(text)
+        if entities:
+            return entities
+
+        if self.llm_router and hasattr(self.llm_router, "chat"):
+            try:
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Extract named entities (people, companies, places, programming languages, technologies) "
+                            "from the given text. Return ONLY a valid JSON list of strings, e.g., [\"Tesla\", \"Python\"]. "
+                            "If none are found, return []."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }
+                ]
+                response = await self.llm_router.chat(messages, task="entity_extraction")
+                if response:
+                    cleaned = response.strip()
+                    if cleaned.startswith("```json"):
+                        cleaned = cleaned[7:]
+                    if cleaned.endswith("```"):
+                        cleaned = cleaned[:-3]
+                    parsed = json.loads(cleaned.strip())
+                    if isinstance(parsed, list):
+                        return [str(item) for item in parsed]
+            except Exception:
+                pass
+
+        return []
