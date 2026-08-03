@@ -83,6 +83,7 @@ class ReasoningEngine:
         action_manager=None,
         event_bus=None,
         working_memory=None,
+        goal_manager=None,
     ):
         self.agent_manager = agent_manager
         self.planner = planner
@@ -95,6 +96,7 @@ class ReasoningEngine:
         self.action_manager = action_manager
         self.event_bus = event_bus
         self.working_memory = working_memory
+        self.goal_manager = goal_manager
 
     def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
         """
@@ -532,6 +534,18 @@ class ReasoningEngine:
         Core decision pipeline determining precisely what sub-pipelines are required
         and returning a comprehensive ReasoningResult object.
         """
+        active_goal = None
+        if self.goal_manager:
+            active_goal = self.goal_manager.current_goal()
+
+        context["active_goal"] = active_goal
+
+        if active_goal:
+            logger.info(
+                "[ReasoningEngine] Active Goal: %s",
+                active_goal.title,
+            )
+
         start_time = time.time()
         raw_query = str(context.get("query", "")).strip()
         reasoning_steps = []
