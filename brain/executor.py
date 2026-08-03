@@ -70,12 +70,14 @@ class Executor:
         event_bus=None,
         planner=None,
         mongodb=None,
+        agent_manager=None,
     ):
         self.skill_manager = skill_manager
         self.action_manager = action_manager
         self.event_bus = event_bus
         self.planner = planner
         self.verifier = Verifier()
+        self.agent_manager = agent_manager
 
         self.mongodb = mongodb
         self.collection = None
@@ -474,10 +476,82 @@ class Executor:
         return progress_info
 
     # =========================================================
-    # MAIN EXECUTION
+    # TASK & PLAN EXECUTION HELPERS
     # =========================================================
 
-    async def execute_plan(
+    async def execute_task(self, task, context=None):
+        agent = task.get("agent")
+        task_name = task.get("task")
+
+        try:
+            result = await self.agent_manager.execute_agents(
+                [
+                    {
+                        "agent": agent,
+                        "task": task_name
+                    }
+                ],
+                context=context
+            )
+
+            return {
+                "success": True,
+                "result": result
+            }
+
+        except Exception as e:
+
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def execute_plan(self, tasks, context=None):
+        if isinstance(tasks, ExecutionPlan):
+            tasks_list = getattr(tasks, "tasks", [])
+            # Check metadata for structured task_graph if plan tasks are empty/generic
+            if not tasks_list and isinstance(tasks.metadata, dict):
+                task_graph = tasks.metadata.get("task_graph")
+                if isinstance(task_graph, list) and task_graph:
+                    return await self.execute_plan(task_graph, context)
+            if not tasks_list:
+                return await self._execute_full_plan_object(tasks, context)
+            tasks = tasks_list
+
+        if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict) and "agent" in tasks[0]:
+            completed = []
+            failed = []
+
+            for task in tasks:
+                result = await self.execute_task(task, context)
+
+                if result["success"]:
+                    task["status"] = "completed"
+                    completed.append(result)
+                    continue
+
+                retry = await self.execute_task(task, context)
+
+                if retry["success"]:
+                    task["status"] = "completed"
+                    completed.append(retry)
+                else:
+                    task["status"] = "failed"
+                    failed.append(retry)
+
+            return {
+                "completed": completed,
+                "failed": failed
+            }
+
+        # Fallback to full ExecutionPlan pipeline if passed an ExecutionPlan directly
+        return await self._execute_full_plan_object(tasks, context)
+
+    # =========================================================
+    # MAIN EXECUTION (FULL PIPELINE)
+    # =========================================================
+
+    async def _execute_full_plan_object(
         self,
         plan: ExecutionPlan,
         base_context: Dict[str, Any],
