@@ -260,6 +260,7 @@ class CognitiveCore:
         # =========================================================
         # REASONING -> AGENTS -> PLANNER -> EXECUTOR FLOW
         # =========================================================
+        decision = context.get("decision")
         selected_agents = []
         needs_execution = False
         execution_result = None
@@ -283,7 +284,22 @@ class CognitiveCore:
             needs_execution
         )
 
-        if needs_execution and self.planner and self.executor:
+        if decision and decision.use_planner and self.planner and self.executor:
+            try:
+                plan = self.planner.create_task_graph(resolved_query)
+                execution_result = await self.executor.execute_plan(
+                    plan,
+                    context=context
+                )
+                if isinstance(reasoning, dict):
+                    reasoning["execution_result"] = execution_result
+                    reasoning["task_plan"] = plan
+                elif reasoning is not None:
+                    setattr(reasoning, "execution_result", execution_result)
+                    setattr(reasoning, "task_plan", plan)
+            except Exception as e:
+                logger.warning("Planner/Executor execution failed: %s", e)
+        elif needs_execution and self.planner and self.executor:
             try:
                 plan = self.planner.create_task_graph(resolved_query)
                 execution_result = await self.executor.execute_plan(
@@ -327,7 +343,12 @@ class CognitiveCore:
 
                 # Memory Subsystem
                 mem_res = None
-                if reasoning and getattr(reasoning, "retrieved_memory", None):
+                if decision and decision.use_memory and self.memory_router and hasattr(self.memory_router, "answer"):
+                    try:
+                        mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
+                    except Exception as e:
+                        logger.warning("Memory router answer search skipped: %s", e)
+                elif reasoning and getattr(reasoning, "retrieved_memory", None):
                     mem_res = reasoning.retrieved_memory
                 elif self.memory_router and hasattr(self.memory_router, "answer"):
                     try:
@@ -379,7 +400,12 @@ class CognitiveCore:
                 # World Model Subsystem
                 if not answer:
                     world_res = None
-                    if reasoning and hasattr(reasoning, "world_state"):
+                    if decision and decision.use_world_model and self.world_model and hasattr(self.world_model, "search"):
+                        try:
+                            world_res = await asyncio.to_thread(self.world_model.search, resolved_query)
+                        except Exception as e:
+                            logger.warning("World model search skipped: %s", e)
+                    elif reasoning and hasattr(reasoning, "world_state"):
                         world_res = reasoning.world_state
                     elif self.world_model and hasattr(self.world_model, "search"):
                         try:
@@ -1359,23 +1385,7 @@ Execution Results:
                 )
 
             # =================================================
-            # 5. REASONING ENGINE INTEGRATION (Central Control)
-            # =================================================
-            pre_ctx = dict(base_context or {})
-            pre_ctx["query"] = query
-            pre_ctx["session_id"] = session_id
-            pre_ctx["user_id"] = user_id
-            pre_ctx["state"] = state
-
-            reasoning = None
-            if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
-                try:
-                    reasoning = await self.reasoning_engine.reason(pre_ctx)
-                except Exception:
-                    logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
-
-            # =================================================
-            # 6. INTENT ANALYSIS
+            # 5. INTENT ANALYSIS
             # =================================================
 
             intent = None
@@ -1387,12 +1397,46 @@ Execution Results:
                         await self.intent_analyzer.analyze(query)
                     )
 
-                    pre_ctx["intent"] = intent
-
                 except Exception:
                     logger.exception(
                         "[CognitiveCore] Intent analysis failed."
                     )
+
+            # =================================================
+            # 6. DECISION ENGINE INTEGRATION (Central Control)
+            # =================================================
+            pre_ctx = dict(base_context or {})
+            pre_ctx["query"] = query
+            pre_ctx["session_id"] = session_id
+            pre_ctx["user_id"] = user_id
+            pre_ctx["state"] = state
+            if intent:
+                pre_ctx["intent"] = intent
+
+            decision = None
+            if self.decision_engine and hasattr(self.decision_engine, "decide"):
+                try:
+                    decision = await self.decision_engine.decide(
+                        query=query,
+                        intent=intent,
+                        context=pre_ctx,
+                    )
+                except Exception:
+                    logger.exception("[CognitiveCore] DecisionEngine invocation failed.")
+
+            logger.info(
+                "[CognitiveCore] Using decision: %s",
+                decision,
+            )
+
+            pre_ctx["decision"] = decision
+
+            reasoning = None
+            if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
+                try:
+                    reasoning = await self.reasoning_engine.reason(pre_ctx)
+                except Exception:
+                    logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
 
             # =================================================
             # PHASE 9: GOAL MANAGER & PROJECT MANAGER HOOKS
@@ -1425,7 +1469,22 @@ Execution Results:
 
             memories = []
 
-            if self.memory_engine and reasoning and getattr(reasoning, "requires_memory", False):
+            if decision and decision.use_memory:
+                if self.memory_engine:
+                    try:
+                        memories = await self.memory_engine.retrieve(query) or []
+                    except Exception:
+                        logger.exception("[CognitiveCore] Memory engine retrieval failed.")
+                elif self.memory_router:
+                    try:
+                        memories = (
+                            await self.memory_router.recall(query)
+                        ) or []
+                    except Exception:
+                        logger.exception(
+                            "[CognitiveCore] Memory retrieval failed."
+                        )
+            elif self.memory_engine and reasoning and getattr(reasoning, "requires_memory", False):
                 try:
                     memories = await self.memory_engine.retrieve(query) or []
                 except Exception:
@@ -1474,6 +1533,9 @@ Execution Results:
 
             if intent:
                 ctx["intent"] = intent
+
+            if decision:
+                ctx["decision"] = decision
 
             # =================================================
             # 9. ATTACH REGISTERED CAPABILITIES
