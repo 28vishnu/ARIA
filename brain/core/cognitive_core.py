@@ -87,6 +87,7 @@ class CognitiveCore:
         llm_router=None,
         conversation_manager=None,
         working_memory=None,
+        memory_engine=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -111,6 +112,7 @@ class CognitiveCore:
         self.llm_router = llm_router
         self.conversation_manager = conversation_manager
         self.working_memory = working_memory
+        self.memory_engine = memory_engine
 
         self.brain_state = {
             "thinking": False,
@@ -1316,13 +1318,34 @@ Execution Results:
                 )
 
             # =================================================
-            # 5. RETRIEVE RELEVANT MEMORY VIA ROUTER
+            # 5. REASONING ENGINE INTEGRATION (Central Control)
+            # =================================================
+            # Build initial minimal context to run reasoning first and determine if memory retrieval is necessary
+            pre_ctx = dict(base_context or {})
+            pre_ctx["query"] = query
+            pre_ctx["session_id"] = session_id
+            pre_ctx["user_id"] = user_id
+            pre_ctx["state"] = state
+
+            reasoning = None
+            if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
+                try:
+                    reasoning = await self.reasoning_engine.reason(pre_ctx)
+                except Exception:
+                    logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
+
+            # =================================================
+            # 6. RETRIEVE RELEVANT MEMORY CONDITIONALLY VIA ROUTER / ENGINE
             # =================================================
 
             memories = []
 
-            if self.memory_router:
-
+            if self.memory_engine and reasoning and getattr(reasoning, "requires_memory", False):
+                try:
+                    memories = await self.memory_engine.retrieve(query) or []
+                except Exception:
+                    logger.exception("[CognitiveCore] Memory engine retrieval failed.")
+            elif self.memory_router and reasoning and getattr(reasoning, "requires_memory", False):
                 try:
                     memories = (
                         await self.memory_router.recall(query)
@@ -1334,7 +1357,7 @@ Execution Results:
                     )
 
             # =================================================
-            # 6. BUILD COMPLETE CONTEXT
+            # 7. BUILD COMPLETE CONTEXT
             # =================================================
 
             if self.context_builder:
@@ -1364,16 +1387,8 @@ Execution Results:
             ctx.setdefault("state", state)
             ctx.setdefault("memory", memories)
 
-            # =================================================
-            # 7. REASONING ENGINE INTEGRATION (Central Control)
-            # =================================================
-
-            if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
-                try:
-                    reasoning = await self.reasoning_engine.reason(ctx)
-                    ctx["reasoning"] = reasoning
-                except Exception:
-                    logger.exception("[CognitiveCore] ReasoningEngine invocation failed.")
+            if reasoning:
+                ctx["reasoning"] = reasoning
 
             # =================================================
             # 8. ATTACH REGISTERED CAPABILITIES
