@@ -404,14 +404,34 @@ Execution Results:
                                 "content": resolved_query
                             }
                         ]
-                        answer = await self.llm_router.chat(messages)
+                        reply = await self.llm_router.chat(messages)
+                        if isinstance(reply, dict) and not reply.get("success", True):
+                            answer = None
+                        else:
+                            answer = str(reply).strip() if reply else None
+
                         source = "llm_generated"
                         confidence = 0.70
                     except Exception as e:
                         logger.warning("LLM fallback generation skipped: %s", e)
 
                 if not answer:
-                    answer = "I couldn't find the information to answer your request."
+                    class DummyExecutionResults:
+                        def __init__(self, completed):
+                            self.completed = completed
+                    
+                    execution_results = DummyExecutionResults(
+                        execution_result.get("completed", []) if isinstance(execution_result, dict) else []
+                    )
+                    
+                    if not answer:
+                        if execution_results.completed:
+                            answer = execution_results.completed[-1]
+                        else:
+                            answer = (
+                                "I'm temporarily unable to reach my language models. "
+                                "Please try again in a few seconds."
+                            )
                     confidence = 0.1
 
         finally:
@@ -1320,7 +1340,6 @@ Execution Results:
             # =================================================
             # 5. REASONING ENGINE INTEGRATION (Central Control)
             # =================================================
-            # Build initial minimal context to run reasoning first and determine if memory retrieval is necessary
             pre_ctx = dict(base_context or {})
             pre_ctx["query"] = query
             pre_ctx["session_id"] = session_id
