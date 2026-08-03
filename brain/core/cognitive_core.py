@@ -177,7 +177,13 @@ class CognitiveCore:
         source = "llm_generated"
         confidence = 0.5
 
-        resolved_query = await self._resolve_query(session_id, query)
+        if self.reasoning_engine:
+            resolved_query = await self.reasoning_engine.resolve_references(
+                query,
+                context,
+            )
+        else:
+            resolved_query = query
 
         # Step 1: Build context first via context_builder if available
         if self.context_builder:
@@ -1233,8 +1239,6 @@ class CognitiveCore:
                     },
                 )
 
-            resolved_query = await self._resolve_query(session_id, query)
-
             # =================================================
             # 5. RETRIEVE RELEVANT MEMORY VIA ROUTER
             # =================================================
@@ -1245,7 +1249,7 @@ class CognitiveCore:
 
                 try:
                     memories = (
-                        await self.memory_router.recall(resolved_query)
+                        await self.memory_router.recall(query)
                     ) or []
 
                 except Exception:
@@ -1260,7 +1264,7 @@ class CognitiveCore:
             if self.context_builder:
 
                 ctx = await self.context_builder.build(
-                    query=resolved_query,
+                    query=query,
                     session_id=session_id,
                     user_id=user_id,
                     base_context=base_context,
@@ -1272,13 +1276,13 @@ class CognitiveCore:
 
                 ctx = dict(base_context or {})
 
-                ctx["query"] = resolved_query
+                ctx["query"] = query
                 ctx["session_id"] = session_id
                 ctx["user_id"] = user_id
                 ctx["state"] = state
                 ctx["memory"] = memories
 
-            ctx.setdefault("query", resolved_query)
+            ctx.setdefault("query", query)
             ctx.setdefault("session_id", session_id)
             ctx.setdefault("user_id", user_id)
             ctx.setdefault("state", state)
@@ -1359,7 +1363,7 @@ class CognitiveCore:
                 try:
                     self.state_manager.update_state(
                         session_id,
-                        last_query=resolved_query,
+                        last_query=query,
                     )
                 except Exception as e:
                     logger.warning("State manager update skipped: %s", e)
@@ -1374,7 +1378,7 @@ class CognitiveCore:
 
                 try:
                     intent = (
-                        await self.intent_analyzer.analyze(resolved_query)
+                        await self.intent_analyzer.analyze(query)
                     )
 
                     ctx["intent"] = intent
@@ -1405,7 +1409,7 @@ class CognitiveCore:
 
                 reply = (
                     await self.memory_conversation_manager.handle(
-                        query=resolved_query,
+                        query=query,
                         context=ctx,
                     )
                 )
@@ -1433,7 +1437,7 @@ class CognitiveCore:
 
                     memory_result = (
                         await self.memory_router
-                        .remember(resolved_query)
+                        .remember(query)
                     )
 
                     if (
@@ -1448,7 +1452,7 @@ class CognitiveCore:
                                         type=event_types.MEMORY_CREATED,
                                         source="memory",
                                         data={
-                                            "query": resolved_query,
+                                            "query": query,
                                         }
                                     )
                                 )
@@ -1459,7 +1463,7 @@ class CognitiveCore:
 
                             refreshed = (
                                 await self.memory_router
-                                .recall(resolved_query)
+                                .recall(query)
                             )
 
                             if refreshed is not None:
@@ -1486,7 +1490,7 @@ class CognitiveCore:
             self.brain_state["reasoning"] = True
             return await self.knowledge_first_pipeline(
                 session_id,
-                resolved_query,
+                query,
                 ctx,
             )
 
