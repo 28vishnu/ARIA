@@ -11,6 +11,13 @@ class WorkingMemory:
         self._ttl = 1800  # 30 minutes
         self._active_topic: Optional[str] = None
         self._active_goal: Optional[str] = None
+        self._active_project: Optional[str] = None
+        self._active_task: Optional[str] = None
+        self._goal_progress: Dict[str, Any] = {}
+        self._reasoning_cache: Dict[str, Any] = {}
+        self._answer_cache: Dict[str, Any] = {}
+        self._active_plan: Optional[Any] = None
+        self._last_reasoning_trace: Optional[str] = None
         self._active_document: Optional[Any] = None
         self._active_entities: List[Any] = []
         self._last_question: Optional[str] = None
@@ -19,8 +26,6 @@ class WorkingMemory:
         self._active_company: Optional[str] = None
         self._active_place: Optional[str] = None
         self._active_language: Optional[str] = None
-        self._reasoning_cache: Dict[str, Any] = {}
-        self._answer_cache: Dict[str, Any] = {}
 
     def set(self, key: str, value: Any) -> None:
         """Stores or updates a key-value pair in working memory."""
@@ -62,6 +67,13 @@ class WorkingMemory:
         self._last_update.clear()
         self._active_topic = None
         self._active_goal = None
+        self._active_project = None
+        self._active_task = None
+        self._goal_progress.clear()
+        self._reasoning_cache.clear()
+        self._answer_cache.clear()
+        self._active_plan = None
+        self._last_reasoning_trace = None
         self._active_document = None
         self._active_entities = []
         self._last_question = None
@@ -70,8 +82,6 @@ class WorkingMemory:
         self._active_company = None
         self._active_place = None
         self._active_language = None
-        self._reasoning_cache.clear()
-        self._answer_cache.clear()
 
     def snapshot(self) -> Dict[str, Any]:
         """Returns a copy of the current working memory store."""
@@ -83,11 +93,53 @@ class WorkingMemory:
     def get_topic(self) -> Optional[str]:
         return self._active_topic
 
-    def set_goal(self, goal: Optional[str]) -> None:
+    def set_goal(self, goal: Any) -> None:
         self._active_goal = goal
 
-    def get_goal(self) -> Optional[str]:
+    def get_goal(self) -> Any:
         return self._active_goal
+
+    def set_project(self, project: Any) -> None:
+        self._active_project = project
+
+    def get_project(self) -> Any:
+        return self._active_project
+
+    def set_task(self, task: Any) -> None:
+        self._active_task = task
+
+    def get_task(self) -> Any:
+        return self._active_task
+
+    def update_progress(self, goal_id: str, progress: Any) -> None:
+        self._goal_progress[goal_id] = progress
+
+    def get_progress(self, goal_id: str) -> Any:
+        return self._goal_progress.get(goal_id, 0)
+
+    def cache_reasoning(self, query: str, answer: Any) -> None:
+        self._reasoning_cache[query] = answer
+
+    def get_cached_reasoning(self, query: str) -> Any:
+        return self._reasoning_cache.get(query)
+
+    def cache_answer(self, key: str, value: Any) -> None:
+        self._answer_cache[key] = value
+
+    def get_cached_answer(self, key: str) -> Any:
+        return self._answer_cache.get(key)
+
+    def set_active_plan(self, plan: Any) -> None:
+        self._active_plan = plan
+
+    def get_active_plan(self) -> Any:
+        return self._active_plan
+
+    def set_reasoning_trace(self, trace: Optional[str]) -> None:
+        self._last_reasoning_trace = trace
+
+    def get_reasoning_trace(self) -> Optional[str]:
+        return self._last_reasoning_trace
 
     def set_entities(self, entities: List[Any]) -> None:
         self._active_entities = list(entities)
@@ -134,15 +186,3 @@ class WorkingMemory:
 
     def get_active_language(self) -> Optional[str]:
         return self._active_language
-
-    def cache_answer(self, key: str, answer: Any) -> None:
-        self._answer_cache[key] = answer
-
-    def get_cached_answer(self, key: str) -> Any:
-        return self._answer_cache.get(key)
-
-    def cache_reasoning(self, key: str, reasoning: Any) -> None:
-        self._reasoning_cache[key] = reasoning
-
-    def get_cached_reasoning(self, key: str) -> Any:
-        return self._reasoning_cache.get(key)
