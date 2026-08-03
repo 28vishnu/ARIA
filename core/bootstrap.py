@@ -441,6 +441,7 @@ async def bootstrap_application() -> ServiceRegistry:
         event_bus=event_bus,
         planner=planner,
         mongodb=db_inst if mongo_client else None,
+        agent_manager=agent_manager,
     )
 
     personality_engine = PersonalityEngine(
