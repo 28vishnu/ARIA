@@ -88,6 +88,8 @@ class CognitiveCore:
         conversation_manager=None,
         working_memory=None,
         memory_engine=None,
+        goal_manager=None,
+        project_manager=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -113,6 +115,8 @@ class CognitiveCore:
         self.conversation_manager = conversation_manager
         self.working_memory = working_memory
         self.memory_engine = memory_engine
+        self.goal_manager = goal_manager
+        self.project_manager = project_manager
 
         self.brain_state = {
             "thinking": False,
@@ -170,6 +174,7 @@ class CognitiveCore:
         session_id: str,
         query: str,
         context: Dict[str, Any],
+        precomputed_reasoning: Optional[Any] = None,
     ) -> SystemResponse:
         """
         ARIA's core unified cognitive intelligence pipeline orchestrated via Reasoning, Planner, Executor, Memory, WorldModel, Reflection, and Learning.
@@ -227,14 +232,16 @@ class CognitiveCore:
             "world": world_state,
         }
 
-        # Step 2: Call the reasoning engine immediately
-        reasoning = None
-        if self.reasoning_engine:
+        # Step 2: Reuse precomputed reasoning result from process() instead of running reasoning twice
+        reasoning = precomputed_reasoning
+        if not reasoning and self.reasoning_engine:
             try:
                 reasoning = await self.reasoning_engine.reason(context)
-                context["reasoning"] = reasoning
             except Exception as e:
                 logger.warning("ReasoningEngine invocation skipped: %s", e)
+
+        if reasoning:
+            context["reasoning"] = reasoning
 
         # =========================================================
         # REASONING -> AGENTS -> PLANNER -> EXECUTOR FLOW
@@ -1354,7 +1361,43 @@ Execution Results:
                     logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
 
             # =================================================
-            # 6. RETRIEVE RELEVANT MEMORY CONDITIONALLY VIA ROUTER / ENGINE
+            # 6. INTENT ANALYSIS
+            # =================================================
+
+            intent = None
+
+            if self.intent_analyzer:
+
+                try:
+                    intent = (
+                        await self.intent_analyzer.analyze(query)
+                    )
+
+                    pre_ctx["intent"] = intent
+
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] Intent analysis failed."
+                    )
+
+            # =================================================
+            # PHASE 9: GOAL MANAGER & PROJECT MANAGER HOOKS
+            # =================================================
+
+            if self.goal_manager:
+                try:
+                    await self.goal_manager.observe(query, pre_ctx)
+                except Exception:
+                    logger.exception("[CognitiveCore] GoalManager observation failed.")
+
+            if self.project_manager:
+                try:
+                    await self.project_manager.observe(query, pre_ctx)
+                except Exception:
+                    logger.exception("[CognitiveCore] ProjectManager observation failed.")
+
+            # =================================================
+            # 7. RETRIEVE RELEVANT MEMORY CONDITIONALLY VIA ROUTER / ENGINE
             # =================================================
 
             memories = []
@@ -1376,7 +1419,7 @@ Execution Results:
                     )
 
             # =================================================
-            # 7. BUILD COMPLETE CONTEXT
+            # 8. BUILD COMPLETE CONTEXT
             # =================================================
 
             if self.context_builder:
@@ -1406,11 +1449,11 @@ Execution Results:
             ctx.setdefault("state", state)
             ctx.setdefault("memory", memories)
 
-            if reasoning:
-                ctx["reasoning"] = reasoning
+            if intent:
+                ctx["intent"] = intent
 
             # =================================================
-            # 8. ATTACH REGISTERED CAPABILITIES
+            # 9. ATTACH REGISTERED CAPABILITIES
             # =================================================
 
             app_state = None
@@ -1466,7 +1509,7 @@ Execution Results:
             }
 
             # =================================================
-            # 9. SAVE CURRENT QUERY
+            # 10. SAVE CURRENT QUERY
             # =================================================
 
             if self.state_manager:
@@ -1477,26 +1520,6 @@ Execution Results:
                     )
                 except Exception as e:
                     logger.warning("State manager update skipped: %s", e)
-
-            # =================================================
-            # 10. INTENT ANALYSIS
-            # =================================================
-
-            intent = None
-
-            if self.intent_analyzer:
-
-                try:
-                    intent = (
-                        await self.intent_analyzer.analyze(query)
-                    )
-
-                    ctx["intent"] = intent
-
-                except Exception:
-                    logger.exception(
-                        "[CognitiveCore] Intent analysis failed."
-                    )
 
             # =================================================
             # 11. EXPLICIT MEMORY MANAGEMENT
@@ -1602,6 +1625,7 @@ Execution Results:
                 session_id,
                 query,
                 ctx,
+                precomputed_reasoning=reasoning,
             )
 
         # =====================================================
