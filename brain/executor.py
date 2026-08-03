@@ -67,22 +67,32 @@ class Executor:
         self,
         planner,
         event_bus,
+        skill_manager=None,
+        action_manager=None,
+        mongodb=None,
         agent_manager=None,
     ):
         self.planner = planner
         self.event_bus = event_bus
+
+        self.skill_manager = skill_manager
+        self.action_manager = action_manager
         self.agent_manager = agent_manager
+
+        self.mongodb = mongodb
+        if mongodb is not None:
+            self.collection = mongodb["workflow_state"]
+        else:
+            self.collection = None
+
         self.verifier = Verifier()
 
-        self.mongodb = None
-        self.collection = None
-
-        self.paused_workflows: Dict[str, Dict[str, Any]] = {}
-        self.execution_history: List[Dict[str, Any]] = []
+        self.paused_workflows = {}
+        self.execution_history = []
         self.max_execution_history = 1000
 
-        self.task_queue: asyncio.Queue = asyncio.Queue()
-        self._resource_locks: Dict[str, asyncio.Lock] = {}
+        self.task_queue = asyncio.Queue()
+        self._resource_locks = {}
 
         self.statistics = {
             "workflows": 0,
