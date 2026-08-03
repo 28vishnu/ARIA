@@ -163,6 +163,35 @@ class ReasoningEngine:
 
         return "knowledge_first"
 
+    def _self_critique(
+        self,
+        answer: str,
+        context: dict,
+    ):
+        """
+        Perform a lightweight quality check on the generated answer.
+        """
+
+        score = 1.0
+        issues = []
+
+        if not answer or len(answer.strip()) < 10:
+            score -= 0.4
+            issues.append("too_short")
+
+        if "I couldn't find" in answer:
+            score -= 0.2
+            issues.append("low_confidence")
+
+        if answer.count("?") > 2:
+            score -= 0.1
+            issues.append("too_many_questions")
+
+        return {
+            "score": max(score, 0.0),
+            "issues": issues,
+        }
+
     def _analyze_execution_feedback(self, execution_result):
         """
         Analyze the previous execution to improve future reasoning.
@@ -412,7 +441,7 @@ class ReasoningEngine:
     async def confidence_score(self, evidence: List[Dict[str, Any]], critique: Dict[str, Any]) -> float:
         """Calculate robust confidence score combining evidence metrics and critique results."""
         base = 0.75 if not evidence else sum(item.get("confidence", 0.5) for item in evidence) / len(evidence)
-        return min(1.0, base + (0.15 if critique.get("valid"] else 0.0))
+        return min(1.0, base + (0.15 if critique.get("valid") else 0.0))
 
     async def action_prediction(self, goal: str, context: Dict[str, Any]) -> List[str]:
         """Predict likely follow-up actions or subsequent user needs."""
@@ -872,6 +901,34 @@ class ReasoningEngine:
         know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
         world_conf = 0.90 if world_state else 0.5
 
+        response_to_store = answer or (ranked_evidence[0].get("content" ) if ranked_evidence else "Done.")
+
+        if (
+            next_task
+            and active_goal
+            and response_to_store
+            and len(response_to_store) < 800
+        ):
+            response_to_store += (
+                f"\n\nA good next step would be to "
+                f"{next_task.title.lower()}."
+            )
+
+        critique_result = self._self_critique(
+            response_to_store,
+            context,
+        )
+
+        logger.info(
+            "[Reasoning] Self critique: %.2f",
+            critique_result["score"],
+        )
+
+        if critique_result["score"] < 0.5:
+            logger.warning(
+                "[Reasoning] Low quality answer detected."
+            )
+
         metadata = {
             "reasoning_time": reasoning_time,
             "planner_used": planner_used,
@@ -891,6 +948,7 @@ class ReasoningEngine:
             "reasoning_steps": reasoning_steps,
             "best_path": best_path,
             "strategy": strategy,
+            "self_critique": critique_result,
         }
 
         if feedback["needs_replanning"]:
@@ -905,19 +963,6 @@ class ReasoningEngine:
             decision.use_memory if decision else False,
             decision.use_planner if decision else False,
         )
-
-        response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
-
-        if (
-            next_task
-            and active_goal
-            and response_to_store
-            and len(response_to_store) < 800
-        ):
-            response_to_store += (
-                f"\n\nA good next step would be to "
-                f"{next_task.title.lower()}."
-            )
 
         if self.working_memory:
             if topic and confidence > 0.7:
