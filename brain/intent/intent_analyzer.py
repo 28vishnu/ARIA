@@ -54,6 +54,25 @@ class IntentAnalyzer:
                 requires_memory=True,
             )
 
+        # Local rule evaluation before calling LLM
+        if "compare" in q:
+            return Intent("Research", 0.96, False, False, False, True)
+
+        if q.startswith("who"):
+            return Intent("Research", 0.95, False, False, False, True)
+
+        if q.startswith("where"):
+            return Intent("Research", 0.95, False, False, False, True)
+
+        if q == "continue":
+            return Intent("Follow-up", 0.99, False, False, False, True)
+
+        if "remember" in q:
+            return Intent("Memory", 0.99, False, False, False, True)
+
+        if "plan" in q:
+            return Intent("Planning", 0.95, True, False, False, True)
+
         # Delegate to semantic analysis if LLM router is available
         if self.llm_router and hasattr(self.llm_router, "chat"):
             semantic_intent = await self._semantic_intent(query)
