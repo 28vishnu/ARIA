@@ -31,6 +31,12 @@ class AgentManager:
                 return agent
         return None
 
+    def get_agent(self, name: str) -> Optional[BaseAgent]:
+        """
+        Retrieves a registered agent by its name (alias for sequential execution support).
+        """
+        return self.get(name)
+
     async def select_agent(
         self,
         query: str,
@@ -62,3 +68,71 @@ class AgentManager:
                 best_agent = agent
 
         return best_agent, best_score
+
+    async def execute_agents(self, plan, context=None):
+        """
+        Execute multiple agents sequentially.
+
+        plan example:
+
+        [
+            {
+                "agent": "research",
+                "task": "Find information about Tesla"
+            },
+            {
+                "agent": "writing",
+                "task": "Summarize the findings"
+            }
+        ]
+        """
+
+        results = []
+
+        if not plan:
+            return results
+
+        for step in plan:
+
+            agent_name = step.get("agent")
+
+            task = step.get("task")
+
+            agent = self.get_agent(agent_name)
+
+            if not agent:
+                results.append({
+                    "agent": agent_name,
+                    "success": False,
+                    "error": "Agent not found"
+                })
+                continue
+
+            try:
+
+                if hasattr(agent, "run"):
+                    output = await agent.run(task, context)
+
+                elif hasattr(agent, "execute"):
+                    output = await agent.execute(task, context)
+
+                else:
+                    output = {
+                        "error": "Agent has no run() or execute() method"
+                    }
+
+                results.append({
+                    "agent": agent_name,
+                    "success": True,
+                    "result": output
+                })
+
+            except Exception as e:
+
+                results.append({
+                    "agent": agent_name,
+                    "success": False,
+                    "error": str(e)
+                })
+
+        return results
