@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import uuid
 import logging
+import json
+from pathlib import Path
+from dataclasses import asdict
 
 logger = logging.getLogger("aria")
 
@@ -43,6 +46,56 @@ class TaskManager:
     def __init__(self):
 
         self.tasks = []
+        self.storage_path = Path("data/tasks.json")
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.load()
+
+    def save(self):
+
+        data = [asdict(task) for task in self.tasks]
+
+        with open(self.storage_path, "w", encoding="utf-8") as f:
+            json.dump(
+                data,
+                f,
+                indent=2,
+                default=str,
+            )
+
+    def load(self):
+
+        if not self.storage_path.exists():
+            return
+
+        try:
+
+            with open(self.storage_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.tasks = []
+
+            for item in data:
+
+                if isinstance(item.get("created_at"), str):
+                    item["created_at"] = datetime.fromisoformat(item["created_at"])
+
+                if isinstance(item.get("updated_at"), str):
+                    item["updated_at"] = datetime.fromisoformat(item["updated_at"])
+
+                self.tasks.append(Task(**item))
+
+            logger.info(
+                "[TaskManager] Loaded %d tasks",
+                len(self.tasks),
+            )
+
+        except Exception as e:
+
+            logger.exception(
+                "[TaskManager] Failed loading tasks: %s",
+                e,
+            )
 
     def create_task(
         self,
@@ -68,6 +121,7 @@ class TaskManager:
             title,
         )
 
+        self.save()
         return task
 
     def current_task(self):
@@ -116,6 +170,7 @@ class TaskManager:
                     priority,
                 )
 
+                self.save()
                 return task
 
     def highest_priority_task(self):
@@ -152,6 +207,7 @@ class TaskManager:
 
                 task.updated_at = datetime.utcnow()
 
+                self.save()
                 return task
 
     def resume_task(self, task_id):
@@ -164,6 +220,7 @@ class TaskManager:
 
                 task.updated_at = datetime.utcnow()
 
+                self.save()
                 return task
 
     def complete_task(self, task_id):
@@ -178,6 +235,7 @@ class TaskManager:
 
                 task.updated_at = datetime.utcnow()
 
+                self.save()
                 return task
 
     def update_progress(
@@ -194,6 +252,7 @@ class TaskManager:
 
                 task.updated_at = datetime.utcnow()
 
+                self.save()
                 return task
 
     def add_milestone(
@@ -210,6 +269,7 @@ class TaskManager:
 
                 task.updated_at = datetime.utcnow()
 
+                self.save()
                 return task
 
     def complete_milestone(
@@ -228,6 +288,7 @@ class TaskManager:
 
                 task.updated_at = datetime.utcnow()
 
+                self.save()
                 return task
 
     def active_tasks(self):
