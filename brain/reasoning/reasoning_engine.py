@@ -96,6 +96,65 @@ class ReasoningEngine:
         self.event_bus = event_bus
         self.working_memory = working_memory
 
+    def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
+        """
+        Decide which specialist agents should handle the request.
+        """
+        query = query.lower()
+        agents = []
+
+        if any(word in query for word in [
+            "code",
+            "python",
+            "java",
+            "bug",
+            "program",
+            "implement"
+        ]):
+            agents.append("coding")
+
+        if any(word in query for word in [
+            "research",
+            "find",
+            "compare",
+            "search",
+            "history"
+        ]):
+            agents.append("research")
+
+        if any(word in query for word in [
+            "plan",
+            "roadmap",
+            "schedule",
+            "strategy"
+        ]):
+            agents.append("planning")
+
+        if any(word in query for word in [
+            "write",
+            "essay",
+            "email",
+            "story",
+            "article",
+            "summary"
+        ]):
+            agents.append("writing")
+
+        if not agents:
+            if intent_name == "memory":
+                agents.append("memory")
+            elif intent_name == "document":
+                agents.append("document")
+            else:
+                agents.append("chat")
+
+        unique_agents = list(dict.fromkeys(agents))
+        logger.info(
+            "[ReasoningEngine] Selected agents: %s",
+            unique_agents
+        )
+        return unique_agents
+
     async def track_conversation(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Track conversation turns, history, active topic, previous topic, entities, and dialogue stage."""
         conv = context.get("conversation", {})
@@ -511,6 +570,10 @@ class ReasoningEngine:
         reasoning_mode = await self.choose_reasoning_mode(context)
         reasoning_steps.append(f"Chosen reasoning mode: {reasoning_mode}")
 
+        intent_name = getattr(context.get("intent"), "name", None)
+        selected_agents = self.choose_best_agents(query, intent_name)
+        reasoning_steps.append(f"Selected best agents: {selected_agents}")
+
         requires_planning = await self.should_use_planner(goal, context)
         requires_tools = await self.should_use_agents(goal, context)
         requires_memory = await self.should_use_memory(context)
@@ -558,15 +621,15 @@ class ReasoningEngine:
 
         conflicts = await self.detect_conflicts(ranked_evidence)
 
-        selected_agents = await self.choose_agents(query, context) if requires_tools else []
+        selected_manager_agents = await self.choose_agents(query, context) if requires_tools else []
         workflow = AgentWorkflow()
-        for agent in selected_agents:
+        for agent in selected_manager_agents:
             workflow.add(agent)
 
         agent_outputs = {}
-        if selected_agents:
-            agent_outputs = await self.execute_agents(selected_agents, query, context)
-        reasoning_steps.append(f"Executed {len(selected_agents)} specialist agent(s)")
+        if selected_manager_agents:
+            agent_outputs = await self.execute_agents(selected_manager_agents, query, context)
+        reasoning_steps.append(f"Executed {len(selected_manager_agents)} specialist agent(s)")
 
         plan = []
         if requires_planning:
@@ -597,7 +660,7 @@ class ReasoningEngine:
         world_used = bool(world_state)
         web_used = requires_web
         planner_used = bool(plan)
-        tool_used = bool(agent_outputs or selected_agents)
+        tool_used = bool(agent_outputs or selected_manager_agents)
 
         mem_conf = max([m.get("confidence", 0.5) for m in memories], default=0.5) if memories else 0.5
         know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
