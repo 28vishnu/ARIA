@@ -765,6 +765,12 @@ class ReasoningEngine:
 
             context.update(coordination["shared_context"])
 
+        context["best_agent"] = (
+            agent_results[0]["agent"]
+            if agent_results
+            else None
+        )
+
         logger.info(
             "[ReasoningEngine] %d agents completed",
             len(agent_results),
@@ -772,7 +778,16 @@ class ReasoningEngine:
 
         workflow = AgentWorkflow()
 
-        agent_outputs = {res.get("agent"): res.get("result") for res in agent_results if isinstance(res, dict)}
+        agent_outputs = {}
+        for result in agent_results:
+            agent_outputs[result["agent"]] = result["result"]
+            logger.info(
+                "\nAgent: %s\nConfidence: %.2f\n%s\n",
+                result["agent"],
+                result["confidence"],
+                result["result"]
+            )
+
         reasoning_steps.append(f"Executed {len(agent_results)} specialist agent(s) sequentially via coordinator")
 
         plan = []
