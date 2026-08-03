@@ -168,6 +168,47 @@ class MemoryEngine:
         )
 
     # =========================================================
+    # SHOULD MEMORY BE USED?
+    # =========================================================
+
+    def should_use_memory(self, query: str, intent: Optional[Any] = None) -> bool:
+        """
+        Determines whether memory retrieval is necessary for the given query and intent.
+        Skips memory lookup for general knowledge, factual inquiries, historical facts, etc.
+        """
+        if not query:
+            return False
+
+        q = query.lower().strip()
+
+        # If intent is clearly research, coding, web search, or general factual asking about external entities
+        intent_name = getattr(intent, "name", "").lower() if intent else ""
+        if intent_name in ("research", "coding", "web search", "tool"):
+            return False
+
+        # General factual prefixes that indicate external/world questions rather than personal history/preferences
+        factual_starters = (
+            "who founded",
+            "who is",
+            "who was",
+            "what is",
+            "what was",
+            "where is",
+            "where was",
+            "when was",
+            "how does",
+            "how do",
+            "explain",
+            "compare",
+            "calculate"
+        )
+
+        if q.startswith(factual_starters):
+            return False
+
+        return True
+
+    # =========================================================
     # SHOULD THIS MESSAGE BE STORED?
     # =========================================================
 
