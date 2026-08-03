@@ -463,6 +463,7 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_graph=knowledge_graph,
         world_model=world_model,
         event_bus=event_bus,
+        working_memory=working_memory,
     )
 
     # ---------------------------------------------------------
