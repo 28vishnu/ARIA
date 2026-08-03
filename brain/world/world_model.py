@@ -26,6 +26,15 @@ class WorldModel:
         if mongodb is not None:
             self.collection = mongodb["world_model"]
 
+        self.current_goal = None
+        self.current_plan = []
+        self.running_tasks = []
+        self.completed_tasks = []
+        self.failed_tasks = []
+        self.active_agent = None
+        self.confidence = 0.0
+        self.last_action = None
+
         self.people: Dict[str, Any] = {}
         self.organizations: Dict[str, Any] = {}
         self.projects: Dict[str, Any] = {}
@@ -134,6 +143,15 @@ class WorldModel:
         if not doc:
             return
 
+        self.current_goal = doc.get("current_goal")
+        self.current_plan = doc.get("current_plan", [])
+        self.running_tasks = doc.get("running_tasks", [])
+        self.completed_tasks = doc.get("completed_tasks", [])
+        self.failed_tasks = doc.get("failed_tasks", [])
+        self.active_agent = doc.get("active_agent")
+        self.confidence = doc.get("confidence", 0.0)
+        self.last_action = doc.get("last_action")
+
         self.people = doc.get("people", {})
         self.organizations = doc.get("organizations", {})
         self.projects = doc.get("projects", {})
@@ -166,6 +184,38 @@ class WorldModel:
     async def rebuild(self):
         self.__init__(mongodb=self.mongodb)
         await self.load()
+
+    # ---------------------------------------------------------
+    # MENTAL MODEL TRACKING (GOALS, PLANS, AGENTS, TASKS)
+    # ---------------------------------------------------------
+
+    def set_goal(self, goal):
+        self.current_goal = goal
+
+    def set_plan(self, plan):
+        self.current_plan = plan
+
+    def set_active_agent(self, agent):
+        self.active_agent = agent
+
+    def task_started(self, task):
+        self.running_tasks.append(task)
+
+    def task_completed(self, task):
+        if task in self.running_tasks:
+            self.running_tasks.remove(task)
+        self.completed_tasks.append(task)
+
+    def task_failed(self, task):
+        if task in self.running_tasks:
+            self.running_tasks.remove(task)
+        self.failed_tasks.append(task)
+
+    def set_confidence(self, confidence):
+        self.confidence = confidence
+
+    def set_last_action(self, action):
+        self.last_action = action
 
     # ---------------------------------------------------------
     # WORKING SESSION CONTEXT SETTERS
@@ -658,6 +708,14 @@ class WorldModel:
 
     def snapshot(self):
         return {
+            "current_goal": self.current_goal,
+            "current_plan": self.current_plan,
+            "running_tasks": self.running_tasks,
+            "completed_tasks": self.completed_tasks,
+            "failed_tasks": self.failed_tasks,
+            "active_agent": self.active_agent,
+            "confidence": self.confidence,
+            "last_action": self.last_action,
             "people": self.people,
             "organizations": self.organizations,
             "projects": self.projects,
