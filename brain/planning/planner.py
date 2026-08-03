@@ -585,3 +585,600 @@ RULES:
   ]
 }}
 """
+        try:
+            raw_response = await self.llm_router.chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are ARIA's workflow adaptation engine. Update existing plans based on requirements. Return only valid JSON.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                temperature=0.0,
+                max_tokens=1200,
+                task="planning",
+            )
+
+            if raw_response:
+                text = str(raw_response).strip()
+                if text.startswith("```"):
+                    lines = text.splitlines()
+                    if lines:
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    text = "\n".join(lines).strip()
+                    if text.lower().startswith("json"):
+                        text = text[4:].strip()
+
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    raw_tasks = parsed.get("tasks", [])
+                    tasks: List[Task] = []
+                    for index, raw_task in enumerate(raw_tasks, start=1):
+                        task = self._normalize_task(raw_task, index)
+                        if task:
+                            tasks.append(task)
+
+                    updated_goal = str(parsed.get("goal") or existing_plan.goal).strip()
+                    updated_plan = ExecutionPlan(
+                        goal=updated_goal,
+                        tasks=tasks,
+                    )
+                    if self.validate_plan(updated_plan):
+                        optimized = self.optimize_plan(updated_plan)
+                        optimized.confidence = 0.93
+                        task_graph = self.create_task_graph(updated_goal)
+                        if isinstance(optimized.metadata, dict):
+                            optimized.metadata["task_graph"] = task_graph
+                        else:
+                            optimized.metadata = {"task_graph": task_graph}
+                        
+                        logger.info("[Planner] Updated existing plan.")
+                        return optimized
+        except Exception:
+            logger.exception("[Planner] Plan modification failed.")
+
+        return existing_plan
+
+    # =========================================================
+    # LLM PLAN GENERATION
+    # =========================================================
+
+    async def _generate_dynamic_plan(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> Optional[ExecutionPlan]:
+        """
+        Ask ARIA's language/reasoning layer to compose a
+        workflow from capabilities.
+
+        No individual user command is hard-coded here.
+        """
+
+        if not self.llm_router:
+            return None
+
+        enriched_context = await self._enrich_context(query, context)
+
+        capabilities = (
+            self.get_available_capabilities()
+        )
+
+        if (
+            not capabilities["skills"]
+            and not capabilities["actions"]
+        ):
+            return None
+
+        goal = self._extract_goal(
+            query,
+            context,
+        )
+
+        sub_goals = await self.decompose_goal(goal)
+
+        conversation = enriched_context.get(
+            "conversation",
+            {},
+        ) or {}
+
+        document = enriched_context.get(
+            "document",
+            {},
+        ) or {}
+
+        memory = enriched_context.get(
+            "memory",
+            [],
+        ) or []
+
+        knowledge_evidence = enriched_context.get("knowledge_evidence", [])
+        world_snapshot = enriched_context.get("world_snapshot", {})
+
+        planner_prompt = f"""
+You are ARIA's advanced multi-agent workflow planner.
+
+Your job is to convert the user's goal into the smallest safe
+sequence of executable tasks using ONLY the capabilities listed
+below.
+
+USER REQUEST:
+{query}
+
+GOAL:
+{goal}
+
+SUB-GOALS:
+{json.dumps(sub_goals)}
+
+AVAILABLE CAPABILITIES:
+{json.dumps(capabilities, default=str)}
+
+KNOWLEDGE EVIDENCE:
+{json.dumps(knowledge_evidence, default=str)}
+
+WORLD STATE:
+{json.dumps(world_snapshot, default=str)}
+
+ACTIVE DOCUMENT CONTEXT:
+{json.dumps(document, default=str)}
+
+RULES:
+
+1. Never invent a skill or action.
+2. Use only names present in AVAILABLE CAPABILITIES.
+3. Prefer the smallest plan that fully completes the goal.
+4. A simple request should normally use one task.
+5. A compound request may use multiple ordered tasks with explicit `depends_on` lists.
+6. Assign appropriate specialist agents (e.g., CodeAgent, ResearchAgent, MathAgent) via `assigned_agent` if applicable.
+7. Return ONLY valid JSON in exactly this structure:
+
+{{
+  "goal": "clear description of the user's goal",
+  "tasks": [
+    {{
+      "id": "task_1",
+      "name": "short task description",
+      "skill": "registered capability name",
+      "assigned_agent": "auto",
+      "depends_on": [],
+      "input": {{}}
+    }}
+  ]
+}}
+"""
+
+        try:
+
+            raw_response = None
+
+            if hasattr(
+                self.llm_router,
+                "chat",
+            ):
+                raw_response = (
+                    await self.llm_router.chat(
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are ARIA's workflow planning engine. "
+                                    "Create executable plans using only the "
+                                    "capabilities provided to you. "
+                                    "Return only valid JSON."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": planner_prompt,
+                            },
+                        ],
+                        temperature=0.0,
+                        max_tokens=1200,
+                        task="planning",
+                    )
+                )
+
+            if raw_response is None:
+                return None
+
+            if isinstance(
+                raw_response,
+                dict,
+            ):
+                parsed = raw_response
+
+            else:
+
+                text = str(
+                    raw_response
+                ).strip()
+
+                # Tolerate fenced JSON from providers.
+                if text.startswith("```"):
+                    lines = text.splitlines()
+
+                    if lines:
+                        lines = lines[1:]
+
+                    if (
+                        lines
+                        and lines[-1].strip()
+                        == "```"
+                    ):
+                        lines = lines[:-1]
+
+                    text = "\n".join(
+                        lines
+                    ).strip()
+
+                    if text.lower().startswith(
+                        "json"
+                    ):
+                        text = text[4:].strip()
+
+                parsed = json.loads(text)
+
+            if not isinstance(
+                parsed,
+                dict,
+            ):
+                return None
+
+            raw_tasks = parsed.get(
+                "tasks",
+                [],
+            )
+
+            if not isinstance(
+                raw_tasks,
+                list,
+            ):
+                return None
+
+            tasks: List[Task] = []
+
+            for index, raw_task in enumerate(
+                raw_tasks,
+                start=1,
+            ):
+
+                task = self._normalize_task(
+                    raw_task,
+                    index,
+                )
+
+                if task:
+                    tasks.append(task)
+
+            plan_goal = str(
+                parsed.get("goal")
+                or goal
+            ).strip()
+
+            plan = ExecutionPlan(
+                goal=plan_goal,
+                tasks=tasks,
+            )
+
+            if not self.validate_plan(plan):
+                logger.warning("[Planner] Generated plan failed validation.")
+                return None
+
+            optimized = self.optimize_plan(plan)
+            optimized.confidence = 0.92
+            
+            # Attach structured task graph
+            task_graph = self.create_task_graph(plan_goal)
+            if isinstance(optimized.metadata, dict):
+                optimized.metadata["task_graph"] = task_graph
+            else:
+                optimized.metadata = {"task_graph": task_graph}
+
+            logger.info("[Planner] Created new plan.")
+            return optimized
+
+        except Exception:
+
+            logger.exception(
+                "[Planner] Dynamic planning failed."
+            )
+
+            return None
+
+    # =========================================================
+    # REASONING WORKFLOW FALLBACK
+    # =========================================================
+
+    def _plan_from_reasoning(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> Optional[ExecutionPlan]:
+        """
+        If ReasoningEngine has already constructed a workflow,
+        convert it into an ExecutionPlan without reinterpreting
+        individual commands.
+        """
+
+        reasoning = self._extract_reasoning(
+            context
+        )
+
+        if not reasoning:
+            return None
+
+        workflow = getattr(
+            reasoning,
+            "workflow",
+            None,
+        )
+
+        if not workflow:
+            return None
+
+        tasks: List[Task] = []
+
+        for index, step in enumerate(
+            workflow,
+            start=1,
+        ):
+
+            if isinstance(step, dict):
+
+                task = self._normalize_task(
+                    step,
+                    index,
+                )
+
+                if task:
+                    tasks.append(task)
+
+                continue
+
+            name = str(
+                getattr(
+                    step,
+                    "name",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not name:
+                continue
+
+            task_input = getattr(
+                step,
+                "input",
+                {},
+            )
+
+            if not isinstance(
+                task_input,
+                dict,
+            ):
+                task_input = {}
+
+            tasks.append(
+                Task(
+                    id=f"task_{index}",
+                    name=name,
+                    skill=name,
+                    input=task_input,
+                )
+            )
+
+        if not tasks:
+            return None
+
+        goal_str = self._extract_goal(query, context)
+        plan = ExecutionPlan(
+            goal=goal_str,
+            tasks=tasks,
+        )
+        plan.confidence = 0.95
+        optimized = self.optimize_plan(plan)
+        
+        task_graph = self.create_task_graph(goal_str)
+        if isinstance(optimized.metadata, dict):
+            optimized.metadata["task_graph"] = task_graph
+        else:
+            optimized.metadata = {"task_graph": task_graph}
+
+        logger.info("[Planner] Created new plan.")
+        return optimized
+
+    # =========================================================
+    # AUTONOMY METHODS
+    # =========================================================
+
+    async def monitor_goal_progress(self, plan, execution_result):
+        """
+        Decide whether the original goal has been achieved.
+        """
+        if not plan or not plan.tasks:
+            return True
+        
+        if isinstance(execution_result, dict):
+            failed = execution_result.get("failed", [])
+            completed = execution_result.get("completed", [])
+            if failed:
+                return False
+            if len(completed) >= len(plan.tasks):
+                return True
+        return False
+
+    async def dynamic_replan(
+        self,
+        goal,
+        completed_tasks,
+        failed_tasks,
+        context,
+    ):
+        """
+        Build a new plan using only the unfinished work.
+        """
+        logger.info("[Planner] Executing dynamic replan for goal: %s", goal)
+        uncompleted_query = f"Complete remaining work for goal: {goal} after failures: {failed_tasks}"
+        new_plan = await self._generate_dynamic_plan(uncompleted_query, context)
+        if new_plan:
+            self.active_plan = new_plan
+        return new_plan
+
+    def detect_parallel_tasks(self, plan):
+        """
+        Return groups of tasks that have no dependencies
+        and can execute together.
+        """
+        if not plan or not plan.tasks:
+            return []
+
+        # Find tasks with no dependencies (or whose dependencies are completed)
+        independent_tasks = [t for t in plan.tasks if not t.depends_on]
+        dependent_tasks = [t for t in plan.tasks if t.depends_on]
+
+        groups = []
+        if independent_tasks:
+            groups.append(independent_tasks)
+        if dependent_tasks:
+            groups.append(dependent_tasks)
+        return groups
+
+    def estimate_completion(self, plan):
+        """
+        Estimate workflow completion percentage based on tasks.
+        """
+        if not plan or not plan.tasks:
+            return 100.0
+        
+        completed_count = len(getattr(plan, "completed_tasks", []))
+        total_count = len(plan.tasks)
+        if total_count == 0:
+            return 100.0
+        return (completed_count / total_count) * 100.0
+
+    # =========================================================
+    # PUBLIC PLANNER API
+    # =========================================================
+
+    async def create_plan(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> ExecutionPlan:
+        """
+        Canonical planning entry point used by CognitiveCore.
+        """
+
+        clean_query = str(
+            query or ""
+        ).strip()
+
+        MODIFICATION_KEYWORDS = [
+            "instead",
+            "change",
+            "modify",
+            "update",
+            "replace",
+            "remove",
+            "add",
+            "make it",
+            "actually",
+        ]
+
+        is_modification = any(
+            keyword in clean_query.lower()
+            for keyword in MODIFICATION_KEYWORDS
+        )
+
+        if self.active_plan and is_modification:
+            updated_plan = await self.modify_plan(
+                self.active_plan,
+                clean_query,
+                context,
+            )
+            self.active_plan = updated_plan
+            self.plan_history.append(updated_plan)
+            return updated_plan
+
+        # 1. Check historical similarity/reuse
+        similar_plan = await self.find_similar_plan(clean_query)
+        if similar_plan:
+            self.active_plan = similar_plan
+            return similar_plan
+
+        # 2. First use an already-understood workflow when ReasoningEngine supplied one.
+        reasoning_plan = (
+            self._plan_from_reasoning(
+                clean_query,
+                context,
+            )
+        )
+
+        if reasoning_plan:
+            logger.info(
+                "[Planner] Using reasoning-generated "
+                "workflow with %d task(s).",
+                len(reasoning_plan.tasks),
+            )
+            self.active_plan = reasoning_plan
+            self.plan_history.append(reasoning_plan)
+            self.statistics["plans_created"] += 1
+            return reasoning_plan
+
+        # 3. Otherwise dynamically compose tasks from ARIA's currently registered capabilities.
+        dynamic_plan = (
+            await self._generate_dynamic_plan(
+                clean_query,
+                context,
+            )
+        )
+
+        if dynamic_plan:
+
+            logger.info(
+                "[Planner] Dynamic plan generated with "
+                "%d task(s). Goal=%s",
+                len(dynamic_plan.tasks),
+                dynamic_plan.goal,
+            )
+            self.active_plan = dynamic_plan
+            self.plan_history.append(dynamic_plan)
+            self.statistics["plans_created"] += 1
+            return dynamic_plan
+
+        # 4. No executable workflow is required/available.
+        logger.info(
+            "[Planner] No executable plan required."
+        )
+
+        goal_str = self._extract_goal(clean_query, context)
+        task_graph = self.create_task_graph(goal_str)
+
+        empty_plan = ExecutionPlan(
+            goal=goal_str,
+            tasks=[],
+        )
+        empty_plan.confidence = 0.80
+        empty_plan.metadata = {"task_graph": task_graph}
+        self.active_plan = empty_plan
+        self.plan_history.append(empty_plan)
+        self.statistics["plans_created"] += 1
+        return empty_plan
+
+    # =========================================================
+    # EVENT LISTENER HANDLER
+    # =========================================================
+
+    async def handle(self, event):
+        """
+        Handle events from EventBus (e.g., successful execution learning).
+        """
+        if event.type == event_types.PLAN_FINISHED:
+            logger.info("[Planner] Plan finished successfully event received.")
