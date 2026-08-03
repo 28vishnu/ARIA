@@ -27,6 +27,10 @@ class GoalManager:
         self.goals = []
 
     def add_goal(self, title, metadata=None):
+        active = self.current_goal()
+
+        if active and active.title.lower() == title.lower():
+            return active
 
         goal = Goal(
             title=title,
