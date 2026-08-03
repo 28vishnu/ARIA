@@ -102,6 +102,32 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
 
+    def _analyze_execution_feedback(self, execution_result):
+        """
+        Analyze the previous execution to improve future reasoning.
+        """
+
+        if not execution_result:
+            return {
+                "success_rate": 1.0,
+                "needs_replanning": False,
+            }
+
+        completed = execution_result.get("completed", [])
+        failed = execution_result.get("failed", [])
+
+        total = len(completed) + len(failed)
+
+        success_rate = (
+            len(completed) / total
+            if total else 1.0
+        )
+
+        return {
+            "success_rate": success_rate,
+            "needs_replanning": len(failed) > 0,
+        }
+
     def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
         """
         Decide which specialist agents should handle the request.
@@ -501,6 +527,11 @@ class ReasoningEngine:
         """
         user_query = str(context.get("query", "")).strip()
 
+        feedback = self._analyze_execution_feedback(
+            context.get("execution_result")
+        )
+        context["execution_feedback"] = feedback
+
         if self.goal_manager:
             await self.goal_manager.observe(
                 query=user_query,
@@ -629,7 +660,12 @@ class ReasoningEngine:
         critique = await self.self_critique(hypotheses, ranked_evidence)
         reasoning_steps.append("Completed self-critique check")
 
-        confidence = await self.confidence_score(ranked_evidence, critique)
+        base_confidence = await self.confidence_score(ranked_evidence, critique)
+        confidence = base_confidence
+
+        if feedback["needs_replanning"]:
+            confidence *= 0.85
+
         reasoning_steps.append(f"Calculated advanced confidence score: {confidence:.2f}")
 
         action_predictions = await self.action_prediction(goal, context)
@@ -782,6 +818,9 @@ class ReasoningEngine:
             "reasoning_steps": reasoning_steps,
             "best_path": best_path,
         }
+
+        if feedback["needs_replanning"]:
+            metadata["replan"] = True
 
         trace = await self.build_reasoning_trace(reasoning_steps)
 
