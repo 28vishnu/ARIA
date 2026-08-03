@@ -168,6 +168,51 @@ class CognitiveCore:
                     )
                 return
 
+    def _update_task_progress(self, query: str):
+        if not self.task_manager:
+            return
+
+        task = self.task_manager.current_task()
+
+        if not task:
+            return
+
+        text = query.lower()
+
+        completed_words = [
+            "finished",
+            "done",
+            "completed",
+            "implemented",
+            "deployed",
+            "released",
+            "working now",
+            "it's working",
+        ]
+
+        for word in completed_words:
+            if word in text:
+                self.task_manager.complete_task(task.id)
+                return
+
+        progress_words = [
+            "started",
+            "implemented",
+            "created",
+            "added",
+            "built",
+            "working on",
+        ]
+
+        for word in progress_words:
+            if word in text:
+                progress = min(task.progress + 20.0, 90.0)
+                self.task_manager.update_progress(
+                    task.id,
+                    progress,
+                )
+                return
+
     async def _resolve_query(self, session_id: str, query: str) -> str:
         history = []
 
@@ -1421,9 +1466,10 @@ Execution Results:
                 )
 
             # =================================================
-            # 4.5 OBSERVE TASKS
+            # 4.5 OBSERVE & UPDATE TASKS
             # =================================================
             self._observe_tasks(query)
+            self._update_task_progress(query)
 
             # =================================================
             # 5. INTENT ANALYSIS
