@@ -1,6 +1,8 @@
 from pathlib import Path
 import logging
 
+from .parser_registry import ParserRegistry
+
 logger = logging.getLogger("aria")
 
 
@@ -8,7 +10,7 @@ class DocumentManager:
 
     def __init__(self):
 
-        self.parsers = {}
+        self.registry = ParserRegistry()
 
     def register_parser(
         self,
@@ -16,7 +18,10 @@ class DocumentManager:
         parser,
     ):
 
-        self.parsers[extension.lower()] = parser
+        self.registry.register(
+            extension,
+            parser,
+        )
 
         logger.info(
             "[DocumentManager] Registered parser: %s",
@@ -27,7 +32,9 @@ class DocumentManager:
 
         suffix = Path(file_path).suffix.lower()
 
-        parser = self.parsers.get(suffix)
+        parser = self.registry.get_parser(
+            suffix
+        )
 
         if parser is None:
 
