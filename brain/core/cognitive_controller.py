@@ -15,6 +15,8 @@ class CognitiveDecision:
     detail_level: str = "balanced"
     teaching_mode: bool = False
 
+    user_profile: dict = field(default_factory=dict)
+
     use_memory: bool = False
     use_documents: bool = False
     use_repository: bool = False
@@ -32,6 +34,17 @@ class CognitiveController:
     It does not answer questions—it builds a thinking strategy.
     """
 
+    def _build_user_profile(
+        self,
+        decision: CognitiveDecision,
+    ):
+        decision.user_profile = {
+            "expertise": decision.expertise,
+            "preferred_detail": decision.detail_level,
+            "teaching_mode": decision.teaching_mode,
+            "tone": decision.tone,
+        }
+
     def analyze(self, query: str, context: Dict | None = None) -> CognitiveDecision:
         decision = CognitiveDecision()
 
@@ -42,13 +55,21 @@ class CognitiveController:
             "python", "fastapi", "docker", "api",
             "repository", "code", "refactor"
         ]):
-            decision.expertise = "developer"
+            decision.expertise = "software_developer"
 
         elif any(word in q for word in [
             "study", "exam", "chapter", "notes",
             "quiz", "explain"
         ]):
             decision.expertise = "student"
+
+        elif any(word in q for word in [
+            "business",
+            "startup",
+            "marketing",
+            "finance",
+        ]):
+            decision.expertise = "business"
 
         # ---------- Detail Level ----------
 
@@ -82,7 +103,7 @@ class CognitiveController:
 
             decision.tone = "teacher"
 
-        elif decision.expertise == "developer":
+        elif decision.expertise == "software_developer":
 
             decision.tone = "technical"
 
@@ -111,13 +132,12 @@ class CognitiveController:
             decision.use_repository = True
             decision.evidence_sources.append("repository")
 
+        self._build_user_profile(decision)
+
         logger.info(
             "[CognitiveController] "
-            "Tone=%s Detail=%s Teaching=%s Expertise=%s",
-            decision.tone,
-            decision.detail_level,
-            decision.teaching_mode,
-            decision.expertise,
+            "Profile=%s",
+            decision.user_profile,
         )
 
         return decision
