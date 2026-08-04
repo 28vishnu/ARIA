@@ -81,6 +81,7 @@ from brain.llm.llm_router import LLMRouter
 from brain.events.event_bus import EventBus
 from brain.events.event import Event
 from brain.events import event_types
+from core.health_checker import HealthChecker
 
 
 logger = logging.getLogger("aria")
@@ -673,6 +674,12 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "cognitive_core",
         cognitive_core
+    )
+
+    health_checker = HealthChecker(registry)
+    registry.register(
+        "health_checker",
+        health_checker
     )
 
     working_memory.semantic().save_semantic_graph()
