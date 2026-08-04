@@ -337,6 +337,35 @@ async def bootstrap_application() -> ServiceRegistry:
     # Memory Router Setup
     # ---------------------------------------------------------
     working_memory = WorkingMemory()
+    graph = working_memory.semantic().load_semantic_graph()
+
+    if graph:
+
+        semantic = working_memory.semantic()
+
+        # Restore nodes
+        for node_id, node in graph.get("nodes", {}).items():
+
+            semantic.add_node(
+                node_id=node_id,
+                node_type=node["node_type"],
+                value=node["value"],
+                metadata=node.get("metadata", {}),
+            )
+
+        # Restore edges
+        for edge in graph.get("edges", []):
+
+            semantic.add_relation(
+                edge["source"],
+                edge["relation"],
+                edge["target"],
+            )
+
+        logger.info(
+            "[Bootstrap] Semantic graph restored."
+        )
+
     memory_router = MemoryRouter(
         working_memory=working_memory,
         memory_engine=memory_engine,
@@ -644,6 +673,13 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "cognitive_core",
         cognitive_core
+    )
+
+    working_memory.semantic().save_semantic_graph()
+
+    logger.info(
+        "[Bootstrap] Semantic Graph: %s",
+        working_memory.semantic_summary(),
     )
 
     await event_bus.publish(
