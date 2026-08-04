@@ -30,6 +30,7 @@ class WorkingMemory:
         self._active_company: Optional[str] = None
         self._active_place: Optional[str] = None
         self._active_language: Optional[str] = None
+        self.metadata = {}
         self.semantic_memory = SemanticMemory()
         logger.info(
             "[WorkingMemory] Semantic Memory initialized."
