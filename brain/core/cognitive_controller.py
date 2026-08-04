@@ -9,6 +9,7 @@ logger = logging.getLogger("aria")
 class CognitiveDecision:
     expertise: str = "general"
     mood: str = "neutral"
+    emotion: str = "neutral"
     response_style: str = "balanced"
 
     tone: str = "professional"
@@ -35,6 +36,17 @@ class CognitiveController:
     Decides HOW ARIA should think before reasoning begins.
     It does not answer questions—it builds a thinking strategy.
     """
+
+    def summary(self, decision):
+
+        return {
+            "expertise": decision.expertise,
+            "emotion": decision.emotion,
+            "tools": decision.required_tools,
+            "tone": decision.tone,
+            "detail": decision.detail_level,
+            "teaching": decision.teaching_mode,
+        }
 
     def _build_user_profile(
         self,
@@ -163,9 +175,8 @@ class CognitiveController:
             decision.required_tools.append("planner")
 
         logger.info(
-            "[CognitiveController] "
-            "Profile=%s",
-            decision.user_profile,
+            "[CognitiveController] %s",
+            self.summary(decision),
         )
 
         return decision
