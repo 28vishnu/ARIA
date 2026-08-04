@@ -277,6 +277,28 @@ class CognitiveCore:
             file_path
         )
 
+    async def _retrieve_semantic_memory(
+        self,
+        query,
+    ):
+        """
+        Retrieve semantic context related to the current query.
+        """
+
+        if not self.working_memory:
+            return None
+
+        semantic = self.working_memory.semantic()
+
+        logger.info(
+            "[SemanticMemory] Retrieved semantic context."
+        )
+
+        return {
+            "summary": semantic.summary(),
+            "graph": semantic,
+        }
+
     async def _execute_required_tools(
         self,
         decision,
@@ -325,6 +347,12 @@ class CognitiveCore:
                     evidence["coding"] = await self.agent_coordinator.prepare(
                         "coding",
                         query=query,
+                    )
+
+                elif tool == "semantic_memory":
+
+                    evidence["semantic_memory"] = (
+                        await self._retrieve_semantic_memory(query)
                     )
 
             except Exception:
@@ -1543,6 +1571,12 @@ Execution Results:
                     self.working_memory.metadata["tool_results"] = evidence
                 else:
                     setattr(self.working_memory, "tool_results", evidence)
+
+            if "semantic_memory" in evidence:
+
+                self.working_memory.metadata[
+                    "semantic_context"
+                ] = evidence["semantic_memory"]
 
             logger.info(
                 "[CognitiveController] Executed Tools: %s",
