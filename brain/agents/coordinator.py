@@ -76,15 +76,18 @@ class AgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Main entry point for multi-agent coordination.
-        Executes agents sequentially based on the decision's selected agents,
+        Executes agents sequentially based on the decision's required tools or selected agents,
         never stopping on failures, scoring/sorting results, and returning
-        structured merged outputs along with a consensus evaluation.
+        structured merged outputs along with a consensus evaluation.[span_0](start_span)[span_0](end_span)
         """
+        required_tools = getattr(decision, "required_tools", []) if decision else []
         selected_agents = getattr(decision, "selected_agents", []) if decision else []
-        execution_plan = []
-
-        for agent in selected_agents:
-            execution_plan.append(agent)
+        
+        # Prefer decision.required_tools over reclassifying/selected_agents if available
+        if required_tools:
+            execution_plan = [tool for tool in required_tools if tool in ["coding", "research", "planning", "writing", "math"]]
+        else:
+            execution_plan = list(selected_agents)
 
         shared_context = dict(context)
         shared_context["agent_outputs"] = {}
@@ -207,6 +210,7 @@ class AgentCoordinator:
         class DummyDecision:
             def __init__(self, ags):
                 self.selected_agents = ags
+                self.required_tools = ags
 
         decision = DummyDecision(agents)
         coord_res = await self.coordinate(decision, query, context)
