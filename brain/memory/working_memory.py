@@ -1,5 +1,9 @@
 import time
+import logging
 from typing import Dict, Any, Optional, List
+from brain.memory.semantic_memory import SemanticMemory
+
+logger = logging.getLogger("aria")
 
 
 class WorkingMemory:
@@ -26,6 +30,46 @@ class WorkingMemory:
         self._active_company: Optional[str] = None
         self._active_place: Optional[str] = None
         self._active_language: Optional[str] = None
+        self.semantic_memory = SemanticMemory()
+        logger.info(
+            "[WorkingMemory] Semantic Memory initialized."
+        )
+
+    def semantic(self):
+
+        return self.semantic_memory
+
+    def register_entity(
+        self,
+        entity_id,
+        entity_type,
+        value,
+        metadata=None,
+    ):
+
+        return self.semantic_memory.add_node(
+            node_id=entity_id,
+            node_type=entity_type,
+            value=value,
+            metadata=metadata,
+        )
+
+    def relate(
+        self,
+        source,
+        relation,
+        target,
+    ):
+
+        self.semantic_memory.add_relation(
+            source,
+            relation,
+            target,
+        )
+
+    def semantic_summary(self):
+
+        return self.semantic_memory.summary()
 
     def set(self, key: str, value: Any) -> None:
         """Stores or updates a key-value pair in working memory."""
