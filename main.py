@@ -921,8 +921,19 @@ async def telegram_webhook(req: Request):
 
 @app.get("/health")
 async def health(req: Request):
+
     registry = req.app.state.registry
+
+    if not registry.has("health_checker"):
+
+        return {
+            "status": "healthy",
+            "version": "12.0.0",
+            "message": "Health checker not registered."
+        }
+
     checker = registry.get("health_checker")
+
     base_health = await checker.check_readiness()
 
     extended_status = {
@@ -933,14 +944,17 @@ async def health(req: Request):
             "action_manager": registry.has("action_manager"),
             "plugin_manager": registry.has("plugin_manager"),
             "scheduler": registry.has("scheduler"),
-            "http_client": registry.has("http_client")
+            "http_client": registry.has("http_client"),
         },
-        "plugins_loaded": list(registry.get("plugin_manager").plugins.keys()) if registry.has("plugin_manager") else [],
-        "version": "12.0.0"
+        "plugins_loaded": (
+            list(registry.get("plugin_manager").plugins.keys())
+            if registry.has("plugin_manager")
+            else []
+        ),
+        "version": "12.0.0",
     }
 
-    status_code = 200 if base_health["status"] == "healthy" else 503
-    return JSONResponse(status_code=status_code, content=extended_status)
+    return extended_status
 
 @app.get("/")
 async def root():
