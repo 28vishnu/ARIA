@@ -1425,16 +1425,17 @@ Execution Results:
                     logger.warning("Conversation manager resolution skipped: %s", e)
 
             # =================================================
-            # 2.5 COGNITIVE CONTROLLER ANALYSIS
+            # 2.5 COGNITIVE CONTROLLER ANALYSIS & CONTROLLED RETRIEVAL
             # =================================================
+            context = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "state": state,
+                "base_context": base_context,
+            }
             decision = self.cognitive_controller.analyze(
                 query=query,
-                context={
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "state": state,
-                    "base_context": base_context,
-                },
+                context=context,
             )
 
             if self.working_memory:
@@ -1446,6 +1447,37 @@ Execution Results:
             logger.info(
                 "[CognitiveController] %s",
                 decision,
+            )
+
+            evidence = {}
+
+            if getattr(decision, "use_memory", False) and self.memory_engine:
+                try:
+                    evidence["memory"] = await self.memory_engine.retrieve(query=query)
+                except Exception:
+                    logger.exception("[CognitiveCore] Controlled memory retrieval failed.")
+
+            if getattr(decision, "use_documents", False) and self.document_pipeline:
+                try:
+                    evidence["documents"] = await self.document_pipeline.search(query=query)
+                except Exception:
+                    logger.exception("[CognitiveCore] Controlled document retrieval failed.")
+
+            if getattr(decision, "use_repository", False) and self.repository_memory:
+                try:
+                    evidence["repository"] = await self.repository_memory.search(query=query)
+                except Exception:
+                    logger.exception("[CognitiveCore] Controlled repository retrieval failed.")
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["evidence"] = evidence
+                else:
+                    setattr(self.working_memory, "evidence", evidence)
+
+            logger.info(
+                "[CognitiveController] Evidence selected: %s",
+                list(evidence.keys()),
             )
 
             # =================================================
@@ -1665,38 +1697,39 @@ Execution Results:
             # 7. RETRIEVE RELEVANT MEMORY CONDITIONALLY VIA ROUTER / ENGINE
             # =================================================
 
-            memories = []
+            memories = evidence.get("memory", [])
 
-            if decision and decision.use_memory:
-                if self.memory_engine:
+            if not memories:
+                if decision and decision.use_memory:
+                    if self.memory_engine:
+                        try:
+                            memories = await self.memory_engine.retrieve(query) or []
+                        except Exception:
+                            logger.exception("[CognitiveCore] Memory engine retrieval failed.")
+                    elif self.memory_router:
+                        try:
+                            memories = (
+                                await self.memory_router.recall(query)
+                            ) or []
+                        except Exception:
+                            logger.exception(
+                                "[CognitiveCore] Memory retrieval failed."
+                            )
+                elif self.memory_engine and reasoning and getattr(reasoning, "requires_memory", False):
                     try:
                         memories = await self.memory_engine.retrieve(query) or []
                     except Exception:
                         logger.exception("[CognitiveCore] Memory engine retrieval failed.")
-                elif self.memory_router:
+                elif self.memory_router and reasoning and getattr(reasoning, "requires_memory", False):
                     try:
                         memories = (
                             await self.memory_router.recall(query)
                         ) or []
+
                     except Exception:
                         logger.exception(
                             "[CognitiveCore] Memory retrieval failed."
                         )
-            elif self.memory_engine and reasoning and getattr(reasoning, "requires_memory", False):
-                try:
-                    memories = await self.memory_engine.retrieve(query) or []
-                except Exception:
-                    logger.exception("[CognitiveCore] Memory engine retrieval failed.")
-            elif self.memory_router and reasoning and getattr(reasoning, "requires_memory", False):
-                try:
-                    memories = (
-                        await self.memory_router.recall(query)
-                    ) or []
-
-                except Exception:
-                    logger.exception(
-                        "[CognitiveCore] Memory retrieval failed."
-                    )
 
             # =================================================
             # 8. BUILD COMPLETE CONTEXT
