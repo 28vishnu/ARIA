@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
+import json
 import logging
 
 logger = logging.getLogger("aria")
@@ -24,13 +26,77 @@ class SemanticEdge:
 
 class SemanticMemory:
 
-    def __init__(self):
+    def __init__(self, storage_path="storage"):
 
         self.nodes = {}
 
         self.edges = []
 
         self.graph = defaultdict(list)
+
+        self.semantic_graph_path = (
+            Path(storage_path)
+            / "semantic_graph.json"
+        )
+
+    def save_semantic_graph(self):
+
+        data = {
+            "nodes": {},
+            "edges": [],
+        }
+
+        for node_id, node in self.nodes.items():
+
+            data["nodes"][node_id] = {
+                "node_type": node.node_type,
+                "value": node.value,
+                "metadata": node.metadata,
+            }
+
+        for edge in self.edges:
+
+            data["edges"].append({
+                "source": edge.source,
+                "relation": edge.relation,
+                "target": edge.target,
+                "created_at": edge.created_at.isoformat(),
+            })
+
+        self.semantic_graph_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(
+            self.semantic_graph_path,
+            "w",
+            encoding="utf-8",
+        ) as f:
+
+            json.dump(
+                data,
+                f,
+                indent=2,
+            )
+
+        logger.info(
+            "[SemanticMemory] Graph persisted successfully."
+        )
+
+    def load_semantic_graph(self):
+
+        if not self.semantic_graph_path.exists():
+
+            return None
+
+        with open(
+            self.semantic_graph_path,
+            "r",
+            encoding="utf-8",
+        ) as f:
+
+            data = json.load(f)
+            logger.info(
+                "[SemanticMemory] Graph restored."
+            )
+            return data
 
     def add_node(
         self,
