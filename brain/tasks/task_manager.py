@@ -43,9 +43,10 @@ class Task:
 
 class TaskManager:
 
-    def __init__(self):
+    def __init__(self, working_memory=None):
 
         self.tasks = []
+        self.working_memory = working_memory
         self.storage_path = Path("data/tasks.json")
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -120,6 +121,25 @@ class TaskManager:
             "[TaskManager] Created task: %s",
             title,
         )
+
+        if hasattr(self, "working_memory") and self.working_memory:
+
+            semantic = self.working_memory.semantic()
+
+            semantic.add_node(
+                node_id=task.id,
+                node_type="task",
+                value=task.title,
+                metadata=task.metadata,
+            )
+
+            if task.goal_id:
+
+                semantic.add_relation(
+                    task.goal_id,
+                    "has_task",
+                    task.id,
+                )
 
         self.save()
         return task
