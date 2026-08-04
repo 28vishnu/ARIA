@@ -8,6 +8,7 @@ from brain.response.response_formatter import ResponseFormatter
 from brain.agents.response_fusion import ResponseFusion
 from brain.events.event import Event
 from brain.events import event_types
+from brain.core.cognitive_controller import CognitiveController
 
 logger = logging.getLogger("aria")
 
@@ -129,6 +130,7 @@ class CognitiveCore:
         self.document_pipeline = document_pipeline
         self.study_engine = study_engine
         self.repository_memory = repository_memory
+        self.cognitive_controller = CognitiveController()
 
         self.brain_state = {
             "thinking": False,
@@ -1421,6 +1423,30 @@ Execution Results:
                         )
                 except Exception as e:
                     logger.warning("Conversation manager resolution skipped: %s", e)
+
+            # =================================================
+            # 2.5 COGNITIVE CONTROLLER ANALYSIS
+            # =================================================
+            decision = self.cognitive_controller.analyze(
+                query=query,
+                context={
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "state": state,
+                    "base_context": base_context,
+                },
+            )
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["cognitive_decision"] = decision
+                else:
+                    setattr(self.working_memory, "cognitive_decision", decision)
+
+            logger.info(
+                "[CognitiveController] %s",
+                decision,
+            )
 
             # =================================================
             # 3. RESUME / CANCEL PENDING WORKFLOW
