@@ -13,6 +13,7 @@ from core.logging_config import setup_logging
 from core.bootstrap import bootstrap_application
 from core.dependency_injection import RequestContext
 from personality.response import SystemResponse
+from api.upload import router as upload_router
 
 setup_logging("INFO")
 logger = logging.getLogger("aria")
@@ -62,6 +63,8 @@ async def lifespan(app: FastAPI):
     logger.info("[Lifespan] All resources successfully released.")
 
 app = FastAPI(title="ARIA AI Operating Platform", version="12.0.0", lifespan=lifespan)
+
+app.include_router(upload_router)
 
 @app.middleware("http")
 async def add_request_metadata(request: Request, call_next):
