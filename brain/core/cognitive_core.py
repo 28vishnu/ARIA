@@ -9,6 +9,7 @@ from brain.agents.response_fusion import ResponseFusion
 from brain.events.event import Event
 from brain.events import event_types
 from brain.core.cognitive_controller import CognitiveController
+from brain.core.prompt_builder import PromptBuilder
 
 logger = logging.getLogger("aria")
 
@@ -131,6 +132,7 @@ class CognitiveCore:
         self.study_engine = study_engine
         self.repository_memory = repository_memory
         self.cognitive_controller = CognitiveController()
+        self.prompt_builder = PromptBuilder()
 
         self.brain_state = {
             "thinking": False,
@@ -608,6 +610,15 @@ Execution Results:
 {execution_result}
 
 """
+
+                        decision_obj = None
+                        if self.working_memory and hasattr(self.working_memory, "metadata"):
+                            decision_obj = self.working_memory.metadata.get("cognitive_decision")
+
+                        system_context = self.prompt_builder.build(
+                            decision_obj,
+                            system_context,
+                        )
 
                         messages = [
                             {
