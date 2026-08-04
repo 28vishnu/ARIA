@@ -102,6 +102,18 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
 
+    def _build_semantic_context(self):
+
+        if not hasattr(self, "working_memory"):
+            return None
+
+        semantic = self.working_memory.semantic()
+
+        return {
+            "summary": semantic.summary(),
+            "relationships": semantic.edges,
+        }
+
     def _select_reasoning_strategy(
         self,
         query: str,
@@ -643,6 +655,14 @@ class ReasoningEngine:
         and returning a comprehensive ReasoningResult object.
         """
         user_query = str(context.get("query", "")).strip()
+
+        semantic_context = self._build_semantic_context()
+
+        if semantic_context:
+            context["semantic_memory"] = semantic_context
+            logger.info(
+                "[Reasoning] Using semantic relationships."
+            )
 
         strategy = self._select_reasoning_strategy(
             user_query,
