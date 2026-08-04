@@ -1076,6 +1076,21 @@ RULES:
         Canonical planning entry point used by CognitiveCore.
         """
 
+        decision = context.get("decision")
+        if decision and not getattr(decision, "use_planner", True):
+            logger.info("[Planner] Planner disabled by CognitiveController decision.")
+            goal_str = self._extract_goal(query, context)
+            task_graph = self.create_task_graph(goal_str)
+            empty_plan = ExecutionPlan(
+                goal=goal_str,
+                tasks=[],
+            )
+            empty_plan.confidence = 0.80
+            empty_plan.metadata = {"task_graph": task_graph}
+            self.active_plan = empty_plan
+            self.plan_history.append(empty_plan)
+            return empty_plan
+
         clean_query = str(
             query or ""
         ).strip()
