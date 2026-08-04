@@ -21,6 +21,7 @@ class CognitiveDecision:
     use_memory: bool = False
     use_documents: bool = False
     use_repository: bool = False
+    use_semantic_memory: bool = False
     use_reasoning: bool = True
     use_agents: bool = False
     use_planner: bool = False
@@ -46,6 +47,7 @@ class CognitiveController:
             "tone": decision.tone,
             "detail": decision.detail_level,
             "teaching": decision.teaching_mode,
+            "semantic_memory": decision.use_semantic_memory,
         }
 
     def _build_user_profile(
@@ -133,6 +135,26 @@ class CognitiveController:
             decision.use_memory = True
             decision.evidence_sources.append("memory")
 
+        # ---------- Semantic Memory ----------
+
+        semantic_keywords = [
+            "continue",
+            "again",
+            "same project",
+            "previous project",
+            "resume",
+            "last conversation",
+            "roadmap",
+            "architecture",
+            "repository",
+        ]
+
+        if any(keyword in q for keyword in semantic_keywords):
+
+            decision.use_semantic_memory = True
+
+            decision.evidence_sources.append("semantic_memory")
+
         if any(word in q for word in [
             "pdf", "document", "notes"
         ]):
@@ -161,6 +183,10 @@ class CognitiveController:
         if decision.use_memory:
 
             decision.required_tools.append("memory")
+
+        if decision.use_semantic_memory:
+
+            decision.required_tools.append("semantic_memory")
 
         if decision.teaching_mode:
 
