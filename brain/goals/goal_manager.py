@@ -31,8 +31,9 @@ class Goal:
 
 class GoalManager:
 
-    def __init__(self):
+    def __init__(self, working_memory=None):
         self.goals = []
+        self.working_memory = working_memory
 
     def generate_subgoals(self, title: str):
 
@@ -74,6 +75,17 @@ class GoalManager:
 
         self.goals.append(goal)
         logger.info("[GoalManager] Created new goal: %s", title)
+
+        if hasattr(self, "working_memory") and self.working_memory:
+
+            semantic = self.working_memory.semantic()
+
+            semantic.add_node(
+                node_id=goal.id,
+                node_type="goal",
+                value=goal.title,
+                metadata=goal.metadata,
+            )
 
         return goal
 
