@@ -921,7 +921,6 @@ async def telegram_webhook(req: Request):
 
 @app.get("/health")
 async def health(req: Request):
-
     registry = req.app.state.registry
 
     if not registry.has("health_checker"):
