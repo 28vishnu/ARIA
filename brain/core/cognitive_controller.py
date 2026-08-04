@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List, Dict
+import logging
+
+logger = logging.getLogger("aria")
 
 
 @dataclass
@@ -7,6 +10,10 @@ class CognitiveDecision:
     expertise: str = "general"
     mood: str = "neutral"
     response_style: str = "balanced"
+
+    tone: str = "professional"
+    detail_level: str = "balanced"
+    teaching_mode: bool = False
 
     use_memory: bool = False
     use_documents: bool = False
@@ -43,6 +50,46 @@ class CognitiveController:
         ]):
             decision.expertise = "student"
 
+        # ---------- Detail Level ----------
+
+        if any(word in q for word in [
+            "brief",
+            "short",
+            "quick",
+        ]):
+            decision.detail_level = "short"
+
+        elif any(word in q for word in [
+            "detailed",
+            "deep",
+            "comprehensive",
+            "complete",
+        ]):
+            decision.detail_level = "detailed"
+
+        # ---------- Teaching Detection ----------
+        if any(word in q for word in [
+            "teach",
+            "learn",
+            "explain",
+            "understand",
+            "study",
+        ]):
+            decision.teaching_mode = True
+
+        # ---------- Tone Detection ----------
+        if decision.teaching_mode:
+
+            decision.tone = "teacher"
+
+        elif decision.expertise == "developer":
+
+            decision.tone = "technical"
+
+        else:
+
+            decision.tone = "professional"
+
         # ---------- Evidence ----------
         if any(word in q for word in [
             "remember", "previous", "before",
@@ -63,5 +110,14 @@ class CognitiveController:
         ]):
             decision.use_repository = True
             decision.evidence_sources.append("repository")
+
+        logger.info(
+            "[CognitiveController] "
+            "Tone=%s Detail=%s Teaching=%s Expertise=%s",
+            decision.tone,
+            decision.detail_level,
+            decision.teaching_mode,
+            decision.expertise,
+        )
 
         return decision
