@@ -7,6 +7,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from core.logging_config import setup_logging
 from core.bootstrap import bootstrap_application
@@ -944,3 +945,50 @@ async def health(req: Request):
 @app.get("/")
 async def root():
     return {"system": "ARIA AI Operating Platform", "status": "operational", "version": "12.0.0"}
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str = "web"
+
+class ChatResponse(BaseModel):
+    success: bool
+    reply: str
+
+@app.post("/chat", response_model=ChatResponse)
+async def web_chat(
+    request: ChatRequest,
+    req: Request,
+):
+    """
+    Web frontend endpoint.
+
+    Uses the exact same cognitive pipeline
+    as Telegram.
+    """
+
+    request_id = str(uuid.uuid4())
+
+    try:
+
+        result = await process_task(
+            user_text=request.message,
+            session_id=request.session_id,
+            request_id=request_id,
+            app_state=req.app.state,
+        )
+
+        return ChatResponse(
+            success=True,
+            reply=str(result),
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "[WEB CHAT]"
+        )
+
+        return ChatResponse(
+            success=False,
+            reply=f"System Error: {e}"
+        )
