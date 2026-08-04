@@ -22,12 +22,18 @@ class DocumentIntelligence:
         memory_engine=None,
         llm_router=None,
         vector_db=None,
-        document_repository=None
+        document_repository=None,
+        working_memory=None,
+        project_manager=None,
+        task_manager=None,
     ):
         self.memory_engine = memory_engine
         self.llm_router = llm_router
         self.vector_db = vector_db
         self.document_repository = document_repository
+        self.working_memory = working_memory
+        self.project_manager = project_manager
+        self.task_manager = task_manager
 
         self._embedding_cache: Dict[str, List[float]] = {}
 
@@ -103,6 +109,57 @@ class DocumentIntelligence:
                     "[DocumentAI] Failed to store document: %s",
                     e
                 )
+
+        class ProcessedDocument:
+            def __init__(self, doc_id, title, file_type):
+                self.id = doc_id
+                self.title = title
+                self.file_type = file_type
+
+        document = ProcessedDocument(
+            doc_id=f"doc_{session_id}_{actual_document_name}",
+            title=actual_document_name,
+            file_type=Path(file_path).suffix.lower().lstrip(".")
+        )
+
+        if self.working_memory:
+            semantic = self.working_memory.semantic()
+
+            semantic.add_node(
+                node_id=document.id,
+                node_type="document",
+                value=document.title,
+                metadata={
+                    "type": getattr(document, "file_type", None),
+                },
+            )
+
+            if self.project_manager and hasattr(self.project_manager, "current_project"):
+                project = self.project_manager.current_project()
+
+                if project:
+
+                    semantic.add_relation(
+                        project.id,
+                        "contains_document",
+                        document.id,
+                    )
+
+            if self.task_manager and hasattr(self.task_manager, "current_task"):
+                task = self.task_manager.current_task()
+
+                if task:
+
+                    semantic.add_relation(
+                        task.id,
+                        "uses_document",
+                        document.id,
+                    )
+
+            logger.info(
+                "[SemanticMemory] Linked document '%s'",
+                document.title,
+            )
 
         t_total = time.perf_counter() - t_start
         logger.info(
