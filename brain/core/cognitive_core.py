@@ -756,9 +756,10 @@ Execution Results:
         if self.self_reflection:
             try:
                 await self.self_reflection.reflect(
-                    session_id,
-                    resolved_query,
-                    answer,
+                    "review",
+                    query=resolved_query,
+                    answer=answer,
+                    source=source,
                 )
             except Exception as e:
                 logger.warning("Self reflection skipped: %s", e)
