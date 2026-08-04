@@ -19,3 +19,4 @@ pymupdf
 python-docx
 pillow
 rapidocr-onnxruntime
+python-multipart
