@@ -34,9 +34,10 @@ IMPORTANCE = {
 
 class MemoryEngine:
 
-    def __init__(self, mongo_db, llm_router=None):
+    def __init__(self, mongo_db, llm_router=None, working_memory=None):
         self.db = mongo_db
         self.llm_router = llm_router
+        self.working_memory = working_memory if working_memory is not None else None
 
         self.memory_col = (
             mongo_db["personal_memory"]
@@ -45,6 +46,34 @@ class MemoryEngine:
         self.profile_col = (
             mongo_db["user_profile"]
             if mongo_db is not None else None
+        )
+
+    def _update_semantic_memory(
+        self,
+        memory,
+    ):
+        """
+        Mirror important memories into the semantic graph.
+        """
+
+        if not self.working_memory:
+            return
+
+        semantic = self.working_memory.semantic()
+
+        semantic.add_node(
+            node_id=memory.get("key"),
+            node_type=memory.get("category", "general"),
+            value=str(memory.get("value")),
+            metadata={
+                "importance": memory.get("importance"),
+                "confidence": memory.get("confidence"),
+            },
+        )
+
+        logger.info(
+            "[SemanticMemory] Mirrored memory '%s' into graph.",
+            memory.get("key", "unknown"),
         )
 
     # =========================================================
@@ -751,6 +780,8 @@ class MemoryEngine:
                     upsert=True
                 )
 
+                self._update_semantic_memory(item_memory)
+
                 stored.append(item)
 
             return {
@@ -807,6 +838,8 @@ class MemoryEngine:
             },
             upsert=True
         )
+
+        self._update_semantic_memory(memory)
 
         logger.info(
             "[MemoryEngine] Stored memory — Key: %s | Value: %s",
