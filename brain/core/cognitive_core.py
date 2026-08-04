@@ -277,6 +277,65 @@ class CognitiveCore:
             file_path
         )
 
+    async def _execute_required_tools(
+        self,
+        decision,
+        query,
+        context,
+    ):
+        evidence = {}
+
+        for tool in decision.required_tools:
+
+            try:
+
+                if tool == "memory" and self.memory_engine:
+
+                    evidence["memory"] = await self.memory_engine.retrieve(
+                        query=query
+                    )
+
+                elif tool == "document" and self.document_pipeline:
+
+                    evidence["documents"] = await self.document_pipeline.search(
+                        query=query
+                    )
+
+                elif tool == "repository" and self.repository_memory:
+
+                    evidence["repository"] = await self.repository_memory.search(
+                        query=query
+                    )
+
+                elif tool == "study" and self.study_engine:
+
+                    evidence["study"] = await self.study_engine.prepare_context(
+                        query=query
+                    )
+
+                elif tool == "planner" and self.planner:
+
+                    evidence["plan"] = await self.planner.plan(
+                        query=query,
+                        context=context,
+                    )
+
+                elif tool == "coding" and self.agent_coordinator:
+
+                    evidence["coding"] = await self.agent_coordinator.prepare(
+                        "coding",
+                        query=query,
+                    )
+
+            except Exception:
+
+                logger.exception(
+                    "Tool execution failed: %s",
+                    tool,
+                )
+
+        return evidence
+
     async def _resolve_query(self, session_id: str, query: str) -> str:
         history = []
 
@@ -1473,34 +1532,20 @@ Execution Results:
                 decision,
             )
 
-            evidence = {}
-
-            if getattr(decision, "use_memory", False) and self.memory_engine:
-                try:
-                    evidence["memory"] = await self.memory_engine.retrieve(query=query)
-                except Exception:
-                    logger.exception("[CognitiveCore] Controlled memory retrieval failed.")
-
-            if getattr(decision, "use_documents", False) and self.document_pipeline:
-                try:
-                    evidence["documents"] = await self.document_pipeline.search(query=query)
-                except Exception:
-                    logger.exception("[CognitiveCore] Controlled document retrieval failed.")
-
-            if getattr(decision, "use_repository", False) and self.repository_memory:
-                try:
-                    evidence["repository"] = await self.repository_memory.search(query=query)
-                except Exception:
-                    logger.exception("[CognitiveCore] Controlled repository retrieval failed.")
+            evidence = await self._execute_required_tools(
+                decision,
+                query,
+                context,
+            )
 
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
-                    self.working_memory.metadata["evidence"] = evidence
+                    self.working_memory.metadata["tool_results"] = evidence
                 else:
-                    setattr(self.working_memory, "evidence", evidence)
+                    setattr(self.working_memory, "tool_results", evidence)
 
             logger.info(
-                "[CognitiveController] Evidence selected: %s",
+                "[CognitiveController] Executed Tools: %s",
                 list(evidence.keys()),
             )
 
