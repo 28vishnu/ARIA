@@ -1449,6 +1449,19 @@ Execution Results:
                 context=context,
             )
 
+            logger.info(
+                "[CognitiveController] Required Tools: %s",
+                decision.required_tools,
+            )
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["required_tools"] = (
+                        decision.required_tools
+                    )
+                else:
+                    setattr(self.working_memory, "required_tools", decision.required_tools)
+
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
                     self.working_memory.metadata["cognitive_decision"] = decision
