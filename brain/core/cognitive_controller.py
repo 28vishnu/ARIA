@@ -27,6 +27,8 @@ class CognitiveDecision:
 
     evidence_sources: List[str] = field(default_factory=list)
 
+    required_tools: list = field(default_factory=list)
+
 
 class CognitiveController:
     """
@@ -133,6 +135,32 @@ class CognitiveController:
             decision.evidence_sources.append("repository")
 
         self._build_user_profile(decision)
+
+        # ---------- Tool Selection ----------
+
+        if decision.use_documents:
+
+            decision.required_tools.append("document")
+
+        if decision.use_repository:
+
+            decision.required_tools.append("repository")
+
+        if decision.use_memory:
+
+            decision.required_tools.append("memory")
+
+        if decision.teaching_mode:
+
+            decision.required_tools.append("study")
+
+        if decision.expertise == "software_developer":
+
+            decision.required_tools.append("coding")
+
+        if decision.use_planner:
+
+            decision.required_tools.append("planner")
 
         logger.info(
             "[CognitiveController] "
