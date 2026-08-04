@@ -740,24 +740,26 @@ class ReasoningEngine:
         working_memory = await self.build_working_memory(context)
         reasoning_steps.append("Built working memory context")
 
-        decision = context.get("decision")
+        decision = self.working_memory.metadata.get(
+            "cognitive_decision"
+        )
         if decision:
-            mode = decision.reasoning_mode
+            mode = getattr(decision, "reasoning_mode", "knowledge_first")
         else:
             mode = "knowledge_first"
         reasoning_steps.append(f"Chosen reasoning mode: {mode}")
 
         selected_agents = []
         if decision:
-            selected_agents = decision.selected_agents
+            selected_agents = getattr(decision, "selected_agents", [])
 
         reasoning_steps.append(f"Selected best agents: {selected_agents}")
 
         requires_planning = decision.use_planner if decision else False
-        requires_tools = decision.use_tools if decision else False
+        requires_tools = getattr(decision, "use_tools", False) if decision else False
         requires_memory = decision.use_memory if decision else True
         requires_documents = decision.use_documents if decision else False
-        requires_web = False
+        requires_web = getattr(decision, "use_web", False) if decision else False
 
         retrieval = await self.retrieve_context(query)
         raw_memories = retrieval["memories"] if requires_memory else []
@@ -1000,7 +1002,7 @@ class ReasoningEngine:
         logger.info(
             "[ReasoningEngine] Mode=%s Agents=%s Memory=%s Planner=%s",
             mode,
-            decision.selected_agents if decision else [],
+            selected_agents,
             decision.use_memory if decision else False,
             decision.use_planner if decision else False,
         )
@@ -1012,6 +1014,8 @@ class ReasoningEngine:
                 raw_query,
                 response_to_store
             )
+
+        response_strategy = await self.decide_response_strategy(goal, context)
 
         return ReasoningResult(
             goal=goal,
