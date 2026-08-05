@@ -69,6 +69,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://ariaintel.vercel.app",
         "https://ariaassisant.vercel.app",
         "https://aria-frontend.vercel.app",
     ],
