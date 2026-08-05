@@ -6,6 +6,7 @@ from typing import Any
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -63,6 +64,18 @@ async def lifespan(app: FastAPI):
     logger.info("[Lifespan] All resources successfully released.")
 
 app = FastAPI(title="ARIA AI Operating Platform", version="12.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://ariaassisant.vercel.app",
+        "https://aria-frontend.vercel.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(upload_router)
 
