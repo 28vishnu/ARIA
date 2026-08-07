@@ -10,6 +10,7 @@ from brain.events.event import Event
 from brain.events import event_types
 from brain.core.cognitive_controller import CognitiveController
 from brain.core.prompt_builder import PromptBuilder
+from brain.core.fast_router import should_fast_route
 
 logger = logging.getLogger("aria")
 
@@ -1572,6 +1573,41 @@ Execution Results:
         """
 
         try:
+            # =================================================
+            # FAST ROUTER
+            # =================================================
+
+            fast = should_fast_route(query)
+
+            if fast.fast:
+                logger.info("[FastRouter] %s", fast.reason)
+
+                if self.llm_router:
+                    reply = await self.llm_router.chat([
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are ARIA. "
+                                "Reply naturally. "
+                                "Keep responses conversational and concise."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": query,
+                        },
+                    ])
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="fast_router",
+                        data={
+                            "response": reply,
+                            "message": reply,
+                        },
+                    )
+
             # =================================================
             # 1. LOAD STATE
             # =================================================
