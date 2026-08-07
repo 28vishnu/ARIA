@@ -1538,57 +1538,30 @@ Execution Results:
                 "state": state,
                 "base_context": base_context,
             }
-            decision = self.cognitive_controller.analyze(
+            
+            # Initial cognitive analysis
+            controller_decision = self.cognitive_controller.analyze(
                 query=query,
                 context=context,
             )
-
             logger.info(
-                "[CognitiveController] Required Tools: %s",
-                decision.required_tools,
+                "[CognitiveController] %s",
+                controller_decision,
             )
 
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
                     self.working_memory.metadata["required_tools"] = (
-                        decision.required_tools
+                        controller_decision.required_tools
                     )
                 else:
-                    setattr(self.working_memory, "required_tools", decision.required_tools)
+                    setattr(self.working_memory, "required_tools", controller_decision.required_tools)
 
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
-                    self.working_memory.metadata["cognitive_decision"] = decision
+                    self.working_memory.metadata["cognitive_decision"] = controller_decision
                 else:
-                    setattr(self.working_memory, "cognitive_decision", decision)
-
-            logger.info(
-                "[CognitiveController] %s",
-                decision,
-            )
-
-            evidence = await self._execute_required_tools(
-                decision,
-                query,
-                context,
-            )
-
-            if self.working_memory:
-                if hasattr(self.working_memory, "metadata"):
-                    self.working_memory.metadata["tool_results"] = evidence
-                else:
-                    setattr(self.working_memory, "tool_results", evidence)
-
-            if "semantic_memory" in evidence:
-
-                self.working_memory.metadata[
-                    "semantic_context"
-                ] = evidence["semantic_memory"]
-
-            logger.info(
-                "[CognitiveController] Executed Tools: %s",
-                list(evidence.keys()),
-            )
+                    setattr(self.working_memory, "cognitive_decision", controller_decision)
 
             # =================================================
             # 3. RESUME / CANCEL PENDING WORKFLOW
@@ -1753,16 +1726,17 @@ Execution Results:
             if intent:
                 pre_ctx["intent"] = intent
 
-            decision = None
+            decision = controller_decision
             if self.decision_engine and hasattr(self.decision_engine, "decide"):
-                try:
-                    decision = await self.decision_engine.decide(
-                        query=query,
-                        intent=intent,
-                        context=pre_ctx,
-                    )
-                except Exception:
-                    logger.exception("[CognitiveCore] DecisionEngine invocation failed.")
+
+                engine_decision = await self.decision_engine.decide(
+                    query=query,
+                    intent=intent,
+                    context=pre_ctx,
+                )
+
+                if engine_decision:
+                    decision = engine_decision
 
             logger.info(
                 "[CognitiveCore] Using decision: %s",
@@ -1770,6 +1744,30 @@ Execution Results:
             )
 
             pre_ctx["decision"] = decision
+
+            # Execute required tools based on final decision
+            evidence = await self._execute_required_tools(
+                decision,
+                query,
+                context,
+            )
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["tool_results"] = evidence
+                else:
+                    setattr(self.working_memory, "tool_results", evidence)
+
+            if "semantic_memory" in evidence:
+
+                self.working_memory.metadata[
+                    "semantic_context"
+                ] = evidence["semantic_memory"]
+
+            logger.info(
+                "[CognitiveController] Executed Tools: %s",
+                list(evidence.keys()),
+            )
 
             reasoning = None
             if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
