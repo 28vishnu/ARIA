@@ -728,6 +728,18 @@ Return JSON:
 
             elif getattr(decision, "use_world_model", False):
                 strategy = "knowledge_first"
+        else:
+            if getattr(decision, "use_memory", False):
+                strategy = "memory_first"
+
+            elif getattr(decision, "use_planner", False):
+                strategy = "planning"
+
+            elif getattr(decision, "use_reasoning", False):
+                strategy = "deep_reasoning"
+
+            else:
+                strategy = "fast"
 
         context["reasoning_strategy"] = strategy
 
