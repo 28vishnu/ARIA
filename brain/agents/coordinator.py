@@ -17,6 +17,9 @@ class AgentCoordinator:
         self.agent_manager = agent_manager
         self.max_parallel_agents = 3
 
+        # Stores previous agent executions
+        self.execution_history = []
+
     def score_result(self, agent: str, result):
 
         if result is None:
@@ -222,13 +225,20 @@ class AgentCoordinator:
             "[Coordinator] Multi-agent execution completed."
         )
 
-        return {
+        result = {
             "success": True,
             "results": merged,
             "outputs": outputs,
             "shared_context": shared_context,
             "consensus": consensus_result,
         }
+        
+        self.execution_history.append(result)
+        
+        if len(self.execution_history) > 100:
+            self.execution_history.pop(0)
+            
+        return result
 
     async def execute(
         self,
@@ -269,3 +279,11 @@ class AgentCoordinator:
             query,
             context,
         )
+
+    def last_execution(self):
+        if not self.execution_history:
+            return None
+        return self.execution_history[-1]
+
+    def clear_history(self):
+        self.execution_history.clear()
