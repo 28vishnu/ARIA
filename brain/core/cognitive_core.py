@@ -531,10 +531,29 @@ class CognitiveCore:
                         context,
                     )
 
-                    execution_result = await self.executor.execute_plan(
-                        plan,
-                        context,
-                    )
+                    goal_completed = False
+                    attempt = 0
+                    max_attempts = 5
+                    while not goal_completed and attempt < max_attempts:
+
+                        result = await self.executor.execute_plan(
+                            plan,
+                            context,
+                        )
+
+                        evaluation = await self.reasoning_engine.evaluate_result(
+                            query=resolved_query,
+                            result=result,
+                        )
+
+                        goal_completed = evaluation.get(
+                            "goal_completed",
+                            True,
+                        )
+
+                        attempt += 1
+
+                    execution_result = result
                 else:
 
                     execution_result = await self.reasoning_engine.reason(
@@ -552,10 +571,29 @@ class CognitiveCore:
         elif needs_execution and self.planner and self.executor:
             try:
                 plan = self.planner.create_task_graph(resolved_query)
-                execution_result = await self.executor.execute_plan(
-                    plan,
-                    context=context
-                )
+                goal_completed = False
+                attempt = 0
+                max_attempts = 5
+                while not goal_completed and attempt < max_attempts:
+
+                    result = await self.executor.execute_plan(
+                        plan,
+                        context=context,
+                    )
+
+                    evaluation = await self.reasoning_engine.evaluate_result(
+                        query=resolved_query,
+                        result=result,
+                    )
+
+                    goal_completed = evaluation.get(
+                        "goal_completed",
+                        True,
+                    )
+
+                    attempt += 1
+
+                execution_result = result
                 if isinstance(reasoning, dict):
                     reasoning["execution_result"] = execution_result
                     reasoning["task_plan"] = plan
@@ -575,10 +613,29 @@ class CognitiveCore:
             # Step 4: If reasoning generated a plan, execute it via the executor
             if not answer and reasoning and getattr(reasoning, "plan", None) and self.executor:
                 try:
-                    result = await self.executor.execute_plan(
-                        reasoning.plan,
-                        context,
-                    )
+                    goal_completed = False
+                    attempt = 0
+                    max_attempts = 5
+                    while not goal_completed and attempt < max_attempts:
+                        result = await self.executor.execute_plan(
+                            reasoning.plan,
+                            context,
+                        )
+                        
+                        if self.reasoning_engine and hasattr(self.reasoning_engine, "evaluate_result"):
+                            evaluation = await self.reasoning_engine.evaluate_result(
+                                query=resolved_query,
+                                result=result,
+                            )
+                            goal_completed = evaluation.get(
+                                "goal_completed",
+                                True,
+                            )
+                        else:
+                            goal_completed = True
+
+                        attempt += 1
+
                     if result:
                         answer = result.get("response") or result.get("message") or (result.get("task_outputs") and str(result.get("task_outputs")))
                         if answer:
