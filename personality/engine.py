@@ -91,6 +91,31 @@ Return ONLY the final user-facing response.
 class PersonalityEngine:
     def __init__(self, llm_router=None):
         self.llm_router = llm_router
+        self.conversation_style = {
+            "tone": "assistant",
+            "verbosity": "balanced",
+            "humor": False,
+        }
+
+    def update_style(
+        self,
+        tone=None,
+        verbosity=None,
+        humor=None,
+    ):
+
+        if tone is not None:
+            self.conversation_style["tone"] = tone
+
+        if verbosity is not None:
+            self.conversation_style["verbosity"] = verbosity
+
+        if humor is not None:
+            self.conversation_style["humor"] = humor
+
+    def current_style(self):
+
+        return self.conversation_style
 
     async def apply_personality(
         self,
