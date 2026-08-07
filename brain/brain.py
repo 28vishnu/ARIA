@@ -9,10 +9,11 @@ from brain.retrieval import RetrievalEngine
 from brain.knowledge.learning_engine import LearningEngine
 
 class AriaBrain:
-    def __init__(self, chroma_client, mongo_db):
+    def __init__(self, chroma_client, mongo_db, registry=None):
         self.events = EventBus()
         self.mongo = MongoRepository(mongo_db)
         self.chroma = ChromaRepository(chroma_client)
+        self.registry = registry
         
         self.cache = CacheManager(self.chroma)
         self.graph = GraphManager(self.mongo)
@@ -78,3 +79,19 @@ class AriaBrain:
 
     async def record_feedback(self, query: str, wrong_ans: str, correction: str):
         await self.learning.record_correction(query, wrong_ans, correction)
+
+    async def plan(self, goal):
+        planner = self.registry.get("planner_engine")
+        executor = self.registry.get("plan_executor")
+        verifier = self.registry.get("plan_verifier")
+
+        plan = await planner.create_plan(goal)
+        plan = await executor.execute(plan)
+        verified = await verifier.verify(plan)
+
+        return {
+            "verified": verified,
+            "plan": plan,
+        }
+
+brain/brain.py
