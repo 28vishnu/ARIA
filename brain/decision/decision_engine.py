@@ -48,6 +48,7 @@ class DecisionEngine:
     ):
         self.knowledge_manager = knowledge_manager
         self.self_reflection = self_reflection
+        self.decision_history = []
 
     async def decide(
         self,
@@ -117,4 +118,18 @@ class DecisionEngine:
             decision.selected_agents,
         )
 
+        self.decision_history.append(decision)
+        if len(self.decision_history) > 100:
+            self.decision_history.pop(0)
         return decision
+
+    def last_decision(self):
+
+        if not self.decision_history:
+            return None
+
+        return self.decision_history[-1]
+
+    def clear_history(self):
+
+        self.decision_history.clear()
