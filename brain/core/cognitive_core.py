@@ -680,7 +680,9 @@ class CognitiveCore:
                         answer = mem_res
                         source = "memory"
                         confidence = 0.94
-                    elif isinstance(mem_res, list) and mem_res:
+                    elif isinstance(mem_res, list):
+                        context["memory"] = mem_res
+                    else:
                         answer = str(mem_res)
                         source = "memory"
                         confidence = 0.94
@@ -798,12 +800,29 @@ Execution Results:
                             {
                                 "role": "system",
                                 "content": system_context
-                            },
-                            {
-                                "role": "user",
-                                "content": resolved_query
                             }
                         ]
+
+                        memory_items = context.get("memory", [])
+
+                        if memory_items:
+                            memory_text = "\n".join(
+                                f"{m['key']}: {m['value']}"
+                                for m in memory_items
+                            )
+
+                            messages.append({
+                                "role": "system",
+                                "content":
+                                    "Known user memories:\n"
+                                    + memory_text +
+                                    "\nUse these memories when answering if relevant."
+                            })
+
+                        messages.append({
+                            "role": "user",
+                            "content": resolved_query
+                        })
                         reply = await self.llm_router.chat(messages)
                         if isinstance(reply, dict) and not reply.get("success", True):
                             answer = None
