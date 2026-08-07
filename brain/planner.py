@@ -47,6 +47,7 @@ class Planner:
 
     def __init__(self, llm_router):
         self.llm_router = llm_router
+        self.plan_history = []
 
     async def create_plan(
         self,
@@ -66,11 +67,15 @@ class Planner:
                 "Skipping orchestration."
             )
 
-            return ExecutionPlan(
+            plan = ExecutionPlan(
                 goal=goal,
                 tasks=[],
                 confidence=1.0,
             )
+            self.plan_history.append(plan)
+            if len(self.plan_history) > 100:
+                self.plan_history.pop(0)
+            return plan
 
         # -----------------------------------------------------
         # DISCOVER REGISTERED SKILLS + ACTIONS
@@ -183,11 +188,15 @@ class Planner:
 
         if self.llm_router is None:
 
-            return ExecutionPlan(
+            plan = ExecutionPlan(
                 goal=goal,
                 tasks=[],
                 confidence=0.5,
             )
+            self.plan_history.append(plan)
+            if len(self.plan_history) > 100:
+                self.plan_history.pop(0)
+            return plan
 
         # -----------------------------------------------------
         # DESCRIPTIONS
@@ -825,7 +834,7 @@ Then return the JSON only.
                 ],
             )
 
-            return ExecutionPlan(
+            plan = ExecutionPlan(
                 goal=str(
                     plan_data.get(
                         "goal",
@@ -841,6 +850,10 @@ Then return the JSON only.
                     "supports_result_references": True,
                 },
             )
+            self.plan_history.append(plan)
+            if len(self.plan_history) > 100:
+                self.plan_history.pop(0)
+            return plan
 
         except Exception:
 
@@ -848,8 +861,20 @@ Then return the JSON only.
                 "[Planner] Failed to create execution plan."
             )
 
-            return ExecutionPlan(
+            plan = ExecutionPlan(
                 goal=goal,
                 tasks=[],
                 confidence=0.4,
             )
+            self.plan_history.append(plan)
+            if len(self.plan_history) > 100:
+                self.plan_history.pop(0)
+            return plan
+
+    def last_plan(self):
+        if not self.plan_history:
+            return None
+        return self.plan_history[-1]
+
+    def clear_history(self):
+        self.plan_history.clear()
