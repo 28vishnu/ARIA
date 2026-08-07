@@ -1,5 +1,3 @@
-# Brain/core/cognitive_core.py
-
 import logging
 import asyncio
 import re
