@@ -1623,7 +1623,17 @@ Execution Results:
                             "content": query
                         })
 
-                    return await self.llm_router.chat(messages)
+                    reply = await self.llm_router.chat(messages)
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="fast_router",
+                        data={
+                            "response": reply,
+                            "message": reply,
+                        },
+                    )
 
                 # Greeting / Coding / Simple
                 messages.append({
@@ -1631,7 +1641,17 @@ Execution Results:
                     "content": query
                 })
 
-                return await self.llm_router.chat(messages)
+                reply = await self.llm_router.chat(messages)
+
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="fast_router",
+                    data={
+                        "response": reply,
+                        "message": reply,
+                    },
+                )
 
             # ============================================
             # EXECUTION ROUTER
