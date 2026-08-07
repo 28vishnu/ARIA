@@ -20,6 +20,7 @@ class CognitiveConductor:
         self.execution_graph = ExecutionGraph(registry)
         self.reflection_engine = ReflectionEngine(memory_engine)
         self.router = RequestRouter()
+        self.brain = registry.get("brain") if registry else None
 
     async def process(self, query: str, context: Dict[str, Any]) -> str:
         """Executes the complete observe -> understand -> reason -> execute -> reflect loop."""
@@ -47,6 +48,9 @@ class CognitiveConductor:
                 logger.info("[Router] Tool Route")
             elif route.value == "planner":
                 logger.info("[Router] Planner Route")
+                if self.brain and hasattr(self.brain, "plan"):
+                    plan = await self.brain.plan(query)
+                    logger.info(plan)
             else:
                 logger.info("[Router] General Route")
 
@@ -71,3 +75,5 @@ class CognitiveConductor:
             logger.exception("[CognitiveConductor ERROR] Pipeline failed: %s", e)
             self.working_memory.clear()
             return f"An error occurred during cognitive processing: {str(e)}"
+
+cognitive/conductor.py
