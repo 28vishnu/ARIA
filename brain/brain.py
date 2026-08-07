@@ -96,5 +96,3 @@ class AriaBrain:
             "graph": graph,
             "verified": verified,
         }
-
-brain/brain.py
