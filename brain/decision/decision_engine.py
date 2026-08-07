@@ -39,78 +39,57 @@ class DecisionEngine:
         self.self_reflection = self_reflection
         self.decision_history = []
 
-    async def decide(
-        self,
-        query: str,
-        intent,
-        context,
-    ) -> Decision:
-        """
-        Convert ARIA's advanced reasoning result into the final execution route
-        with confidence-based routing, conflict handling, and evidence validation.
-        """
+    async def decide(self, query: str, intent, context) -> Decision:
         decision = Decision(
             action="chat",
             reasoning_mode="knowledge_first",
+            confidence=1.0,
         )
 
-        query_lower = str(query).lower()
+        route = getattr(intent, "route", None)
 
-        if any(word in query_lower for word in [
-            "plan",
-            "roadmap",
-            "schedule",
-            "design",
-        ]):
-            decision.use_planner = True
-            decision.reasoning_mode = "planning"
+        if route:
+            route = str(route).lower()
 
-        if any(word in query_lower for word in [
-            "research",
-            "latest",
-            "compare",
-        ]):
-            decision.reasoning_mode = "research"
+            if "memory" in route:
+                decision.use_memory = True
+                decision.reasoning_mode = "memory_first"
+                decision.selected_agents.append("memory")
 
-        if any(word in query_lower for word in [
-            "remember",
-            "my",
-            "previous",
-        ]):
-            decision.use_memory = True
-
-        if any(word in query_lower for word in [
-            "write",
-            "generate",
-            "code",
-        ]):
-            decision.use_multi_agent = True
-
-        if decision.reasoning_mode == "planning":
-            if "planning" not in decision.selected_agents:
-                decision.selected_agents.append("planning")
-
-        if decision.reasoning_mode == "research":
-            if "research" not in decision.selected_agents:
-                decision.selected_agents.append("research")
-
-        if "code" in query_lower:
-            if "coding" not in decision.selected_agents:
+            elif "coding" in route:
+                decision.use_executor = True
+                decision.reasoning_mode = "coding"
                 decision.selected_agents.append("coding")
 
-        if "write" in query_lower:
-            if "writing" not in decision.selected_agents:
-                decision.selected_agents.append("writing")
+            elif "planner" in route:
+                decision.use_planner = True
+                decision.reasoning_mode = "planning"
+                decision.selected_agents.append("planning")
 
-        decision.required_tools = list(decision.selected_agents)
-        decision.confidence = 0.95
+            elif "research" in route:
+                decision.use_world_model = True
+                decision.reasoning_mode = "research"
+                decision.selected_agents.append("research")
+
+            elif "document" in route:
+                decision.use_documents = True
+                decision.reasoning_mode = "document"
+                decision.selected_agents.append("document")
+
+            elif "vision" in route:
+                decision.use_tools = True
+                decision.reasoning_mode = "vision"
+                decision.selected_agents.append("vision")
+
+        # Remove duplicates
+        decision.selected_agents = list(dict.fromkeys(decision.selected_agents))
+        decision.required_tools = decision.selected_agents
 
         logger.info(
-            "[DecisionEngine] Decision=%s Mode=%s Agents=%s Tools=%s",
+            "[DecisionEngine] Decision=%s Mode=%s Agents=%s",
             decision.action,
             decision.reasoning_mode,
             decision.selected_agents,
-            decision.required_tools,
         )
 
         self.decision_history.append(decision)
