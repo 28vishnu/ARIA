@@ -33,48 +33,59 @@ class TaskPlanner:
             task = AgentTask(
                 id=index,
                 description=part,
-                agent="research"
+                agent="research",
+                priority=5,
+                estimated_seconds=5,
+                required_tools=[],
+                dependencies=[],
             )
 
-            text = part.lower()
-
+            text = part.lower()# Mathematics
             if any(x in text for x in [
                 "calculate",
                 "solve",
+                "equation",
+                "math",
                 "+",
                 "-",
                 "*",
                 "/",
-                "=",
-                "equation",
-                "math"
             ]):
                 task.agent = "math"
-
+                task.priority = 8# Coding
             elif any(x in text for x in [
                 "python",
                 "code",
                 "program",
                 "script",
-                "function"
+                "bug",
+                "debug",
+                "api",
             ]):
-                task.agent = "python"
-
+                task.agent = "coding"
+                task.priority = 9
+                task.required_tools = ["python"]# Writing
             elif any(x in text for x in [
-                "write",
-                "email",
                 "essay",
+                "email",
+                "letter",
                 "article",
-                "letter"
+                "write",
             ]):
                 task.agent = "writing"
-
+                task.priority = 5# Planning
             elif any(x in text for x in [
                 "plan",
+                "roadmap",
                 "schedule",
-                "roadmap"
+                "strategy",
             ]):
                 task.agent = "planning"
+                task.priority = 7# Research
+            else:
+                task.agent = "research"
+                task.priority = 6
+                task.required_tools = ["browser"]
 
             plan.add(task)
 
