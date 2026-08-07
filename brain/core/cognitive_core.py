@@ -11,6 +11,7 @@ from brain.events import event_types
 from brain.core.cognitive_controller import CognitiveController
 from brain.core.prompt_builder import PromptBuilder
 from brain.core.fast_router import should_fast_route
+from brain.core.execution_router import decide, Route
 
 logger = logging.getLogger("aria")
 
@@ -1607,6 +1608,29 @@ Execution Results:
                             "message": reply,
                         },
                     )
+
+            # ============================================
+            # EXECUTION ROUTER
+            # ============================================
+
+            route = decide(query)
+
+            logger.info(
+                "[ExecutionRouter] Route=%s Confidence=%.2f",
+                route.route.value,
+                route.confidence,
+            )
+
+            if route.route == Route.GREETING:
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="execution_router",
+                    data={
+                        "response": "Hello, Sir. How can I help you today?",
+                        "message": "Hello, Sir. How can I help you today?",
+                    },
+                )
 
             # =================================================
             # 1. LOAD STATE
