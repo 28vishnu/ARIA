@@ -1,4 +1,11 @@
 from enum import Enum
+from core.route_handlers import (
+    GreetingHandler,
+    DocumentHandler,
+    VisionHandler,
+    ToolHandler,
+    PlannerHandler,
+)
 
 
 class Route(str, Enum):
@@ -34,3 +41,12 @@ class RequestRouter:
             return Route.PLANNER
 
         return Route.GENERAL
+
+    def get_handler(self, route):
+        return {
+            Route.GREETING: GreetingHandler(),
+            Route.DOCUMENT: DocumentHandler(),
+            Route.VISION: VisionHandler(),
+            Route.TOOL: ToolHandler(),
+            Route.PLANNER: PlannerHandler(),
+        }.get(route)
