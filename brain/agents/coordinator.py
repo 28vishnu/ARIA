@@ -15,6 +15,7 @@ class AgentCoordinator:
 
     def __init__(self, agent_manager):
         self.agent_manager = agent_manager
+        self.max_parallel_agents = 3
 
     def score_result(self, agent: str, result):
 
@@ -41,6 +42,22 @@ class AgentCoordinator:
             score += 0.1
 
         return max(0.0, min(score, 1.0))
+
+    async def run_parallel(
+        self,
+        jobs,
+    ):
+        """
+        Execute multiple independent agent jobs concurrently.
+        """
+
+        if not jobs:
+            return []
+
+        return await asyncio.gather(
+            *jobs,
+            return_exceptions=True,
+        )
 
     async def consensus(
         self,
@@ -102,6 +119,11 @@ class AgentCoordinator:
             "math": None,
         }
 
+        logger.info(
+            "[Coordinator] %d agents scheduled.",
+            len(execution_plan),
+        )
+
         for agent_name in execution_plan:
             agent = None
             if self.agent_manager:
@@ -120,6 +142,11 @@ class AgentCoordinator:
             )
 
             shared_context["previous_agents"] = outputs
+            shared_context["current_agent"] = agent_name
+            shared_context["remaining_agents"] = [
+                a for a in execution_plan
+                if a != agent_name
+            ]
 
             output = None
             try:
@@ -148,6 +175,7 @@ class AgentCoordinator:
                 outputs.append(res_item)
                 merged[agent_name] = res_item
                 shared_context["agent_outputs"][agent_name] = output
+                shared_context["latest_result"] = output
 
             except Exception as e:
                 logger.exception(e)
@@ -190,6 +218,10 @@ class AgentCoordinator:
             (consensus_result.get("agreement", 0.0) * 100) if consensus_result else 0.0,
         )
 
+        logger.info(
+            "[Coordinator] Multi-agent execution completed."
+        )
+
         return {
             "success": True,
             "results": merged,
@@ -218,3 +250,4 @@ class AgentCoordinator:
             "outputs": coord_res["outputs"],
             "shared_context": coord_res["shared_context"],
         }
+
