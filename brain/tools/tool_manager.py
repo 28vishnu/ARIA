@@ -13,9 +13,11 @@ class ToolManager:
 
     def __init__(self):
         self.tools: List[BaseTool] = []
+        self.tool_usage = {}
 
     def register(self, tool: BaseTool):
         self.tools.append(tool)
+        self.tool_usage[tool.name] = 0
 
         logger.info(
             "[ToolManager] Registered tool: %s",
@@ -54,4 +56,20 @@ class ToolManager:
                 best_score = score
                 best_tool = tool
 
+        if best_tool is not None:
+            self.tool_usage[best_tool.name] += 1
+
         return best_tool 
+
+    def most_used_tools(self):
+
+        return sorted(
+            self.tool_usage.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+    def reset_statistics(self):
+
+        for tool in self.tool_usage:
+            self.tool_usage[tool] = 0
