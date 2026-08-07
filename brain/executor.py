@@ -3,6 +3,7 @@ import re
 import time
 import asyncio
 from typing import Dict, Any, Optional, List, Set
+from dataclasses import dataclass
 
 from brain.plan import ExecutionPlan
 from brain.verifier import Verifier
@@ -28,6 +29,32 @@ NON_RETRYABLE_PHRASES = [
 
 REFERENCE_PATTERN = re.compile(
     r"\{\{\s*([A-Za-z0-9_-]+)\.([A-Za-z0-9_.-]+)\s*\}\}"
+)
+
+
+@dataclass
+class IntentDecision:
+    intent: str
+    confidence: float
+
+
+import re
+
+MEMORY_PATTERNS = (
+    r"^i like ",
+    r"^i love ",
+    r"^i prefer ",
+    r"^my favorite ",
+    r"^my favourite ",
+    r"^my preferred ",
+    r"^remember that ",
+)
+
+MEMORY_QUERY_PATTERNS = (
+    r"^what is my ",
+    r"^what's my ",
+    r"^do you remember ",
+    r"^who am i",
 )
 
 
@@ -492,6 +519,26 @@ class Executor:
     # =========================================================
 
     async def execute_task(self, task, context=None):
+        text = query.strip().lower()
+
+        # Memory statement
+        for p in MEMORY_PATTERNS:
+            if re.match(p, text):
+                logger.info("[ExecutionRouter] Route=memory_statement")
+                return IntentDecision(
+                    intent="memory_statement",
+                    confidence=0.99,
+                )
+
+        # Memory question
+        for p in MEMORY_QUERY_PATTERNS:
+            if re.match(p, text):
+                logger.info("[ExecutionRouter] Route=memory_query")
+                return IntentDecision(
+                    intent="memory_query",
+                    confidence=0.99,
+                )
+
         agent = task.get("agent")
         task_name = task.get("task")
 
