@@ -26,6 +26,13 @@ class AriaBrain:
         """
         return "general"
 
+    def should_use_reasoning(self, route):
+        return route in (
+            "planner",
+            "general",
+            "tool",
+        )
+
     async def search(self, request: BrainRequest) -> dict:
         """Deterministic Kernel Orchestrator with Confidence Scoring and Correction Matching."""
         query = request.query
