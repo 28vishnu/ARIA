@@ -48,6 +48,12 @@ class MemoryEngine:
             if mongo_db is not None else None
         )
 
+    async def prefetch(self, route, session_id):
+        """
+        Prepare only the memory needed for this route.
+        """
+        return
+
     def _update_semantic_memory(
         self,
         memory,
