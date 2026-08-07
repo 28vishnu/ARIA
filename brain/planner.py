@@ -72,6 +72,15 @@ class Planner:
                 tasks=[],
                 confidence=1.0,
             )
+            # Convert a single plan into executable steps
+            if not hasattr(plan, "steps") or not plan.steps:
+                plan.steps = [
+                    {
+                        "id": 1,
+                        "description": plan.goal if hasattr(plan, "goal") else "Execute request",
+                        "status": "pending",
+                    }
+                ]
             self.plan_history.append(plan)
             if len(self.plan_history) > 100:
                 self.plan_history.pop(0)
@@ -193,6 +202,15 @@ class Planner:
                 tasks=[],
                 confidence=0.5,
             )
+            # Convert a single plan into executable steps
+            if not hasattr(plan, "steps") or not plan.steps:
+                plan.steps = [
+                    {
+                        "id": 1,
+                        "description": plan.goal if hasattr(plan, "goal") else "Execute request",
+                        "status": "pending",
+                    }
+                ]
             self.plan_history.append(plan)
             if len(self.plan_history) > 100:
                 self.plan_history.pop(0)
@@ -850,6 +868,15 @@ Then return the JSON only.
                     "supports_result_references": True,
                 },
             )
+            # Convert a single plan into executable steps
+            if not hasattr(plan, "steps") or not plan.steps:
+                plan.steps = [
+                    {
+                        "id": 1,
+                        "description": plan.goal if hasattr(plan, "goal") else "Execute request",
+                        "status": "pending",
+                    }
+                ]
             self.plan_history.append(plan)
             if len(self.plan_history) > 100:
                 self.plan_history.pop(0)
@@ -866,10 +893,27 @@ Then return the JSON only.
                 tasks=[],
                 confidence=0.4,
             )
+            # Convert a single plan into executable steps
+            if not hasattr(plan, "steps") or not plan.steps:
+                plan.steps = [
+                    {
+                        "id": 1,
+                        "description": plan.goal if hasattr(plan, "goal") else "Execute request",
+                        "status": "pending",
+                    }
+                ]
             self.plan_history.append(plan)
             if len(self.plan_history) > 100:
                 self.plan_history.pop(0)
             return plan
+
+    def next_step(self, plan):
+
+        for step in plan.steps:
+            if step["status"] == "pending":
+                return step
+
+        return None
 
     def last_plan(self):
         if not self.plan_history:
