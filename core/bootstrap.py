@@ -68,7 +68,7 @@ from actions.actions.notification import NotificationAction
 from actions.actions.web_search import WebSearchAction
 
 from brain.planner import Planner
-from brain.planner.executor import Executor
+from brain.executor import Executor
 from brain.core.cognitive_core import CognitiveCore
 
 from personality.engine import PersonalityEngine
