@@ -1,8 +1,24 @@
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict
 import logging
 
 logger = logging.getLogger("aria")
+
+
+class Route(str, Enum):
+    GREETING = "greeting"
+    CHAT = "chat"
+    CODING = "coding"
+    MEMORY = "memory"
+    DOCUMENT = "document"
+    VISION = "vision"
+    TOOL = "tool"
+    PLANNER = "planner"
+    RESEARCH = "research"
+    WEB = "web"
+    TASK = "task"
+    AUTOMATION = "automation"
 
 
 @dataclass
@@ -30,6 +46,10 @@ class CognitiveDecision:
     evidence_sources: List[str] = field(default_factory=list)
 
     required_tools: list = field(default_factory=list)
+    
+    action: str = "chat"
+    reasoning_mode: str = "balanced"
+    confidence: float = 1.0
 
 
 class CognitiveController:
@@ -62,6 +82,38 @@ class CognitiveController:
         }
 
     def analyze(self, query: str, context: Dict | None = None) -> CognitiveDecision:
+        context = context or {}
+        execution_decision = context.get("execution_decision")
+
+        if execution_decision is not None:
+            route = getattr(execution_decision, "route", None)
+
+            if route == Route.GREETING:
+                return CognitiveDecision(
+                    action="chat",
+                    reasoning_mode="fast",
+                    use_memory=False,
+                    use_reasoning=False,
+                    confidence=1.0,
+                )
+
+            if route == Route.MEMORY:
+                return CognitiveDecision(
+                    action="memory",
+                    reasoning_mode="fast",
+                    use_memory=True,
+                    use_reasoning=False,
+                    confidence=1.0,
+                )
+
+            if route == Route.CODING:
+                return CognitiveDecision(
+                    action="coding",
+                    reasoning_mode="expert",
+                    use_reasoning=False,
+                    confidence=1.0,
+                )
+
         decision = CognitiveDecision()
 
         q = (query or "").lower()
