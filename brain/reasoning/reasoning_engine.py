@@ -798,26 +798,29 @@ Return JSON:
         working_memory = await self.build_working_memory(context)
         reasoning_steps.append("Built working memory context")
 
-        decision = getattr(self.working_memory, "metadata", {}).get(
-            "cognitive_decision"
-        ) if self.working_memory else None
-        
+        decision = context.get("decision")
+
+        if decision is None and self.working_memory:
+            decision = getattr(
+                self.working_memory,
+                "metadata",
+                {}
+            ).get("cognitive_decision")
+
         if decision:
-            mode = getattr(decision, "reasoning_mode", "knowledge_first")
+            mode = decision.reasoning_mode
         else:
             mode = "knowledge_first"
         reasoning_steps.append(f"Chosen reasoning mode: {mode}")
 
-        selected_agents = []
-        if decision:
-            selected_agents = getattr(decision, "selected_agents", [])
+        selected_agents = decision.selected_agents if decision else []
 
         reasoning_steps.append(f"Selected best agents: {selected_agents}")
 
-        requires_planning = getattr(decision, "use_planner", False) if decision else False
-        requires_tools = getattr(decision, "use_tools", False) if decision else False
-        requires_memory = getattr(decision, "use_memory", True) if decision else True
-        requires_documents = getattr(decision, "use_documents", False) if decision else False
+        requires_planning = decision.use_planner if decision else False
+        requires_tools = decision.use_tools if decision else False
+        requires_memory = decision.use_memory if decision else True
+        requires_documents = decision.use_documents if decision else False
         requires_web = getattr(decision, "use_web", False) if decision else False
 
         retrieval = await self.retrieve_context(query)
