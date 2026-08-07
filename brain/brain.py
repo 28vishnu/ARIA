@@ -82,16 +82,19 @@ class AriaBrain:
 
     async def plan(self, goal):
         planner = self.registry.get("planner_engine")
-        executor = self.registry.get("plan_executor")
-        verifier = self.registry.get("plan_verifier")
-
+        
         plan = await planner.create_plan(goal)
-        plan = await executor.execute(plan)
-        verified = await verifier.verify(plan)
+
+        graph = plan["graph"]
+        executor = self.registry.get("graph_executor")
+        graph = await executor.execute(graph)
+        verifier = self.registry.get("graph_verifier")
+        verified = await verifier.verify(graph)
 
         return {
+            "plan": plan["plan"],
+            "graph": graph,
             "verified": verified,
-            "plan": plan,
         }
 
 brain/brain.py
