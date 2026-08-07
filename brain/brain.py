@@ -20,6 +20,12 @@ class AriaBrain:
         self.retrieval = RetrievalEngine(self.chroma, self.mongo, self.cache)
         self.learning = LearningEngine(mongo_db)
 
+    def classify_request(self, request):
+        """
+        Placeholder for future routing optimizations.
+        """
+        return "general"
+
     async def search(self, request: BrainRequest) -> dict:
         """Deterministic Kernel Orchestrator with Confidence Scoring and Correction Matching."""
         query = request.query
