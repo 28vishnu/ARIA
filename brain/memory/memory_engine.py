@@ -48,6 +48,35 @@ class MemoryEngine:
             if mongo_db is not None else None
         )
 
+        self.short_term_memory = []
+
+    def add_short_term_memory(
+        self,
+        user,
+        assistant,
+    ):
+
+        self.short_term_memory.append(
+            {
+                "user": user,
+                "assistant": assistant,
+            }
+        )
+
+        if len(self.short_term_memory) > 20:
+            self.short_term_memory.pop(0)
+
+    def recent_context(
+        self,
+        limit=5,
+    ):
+
+        return self.short_term_memory[-limit:]
+
+    def clear_short_term_memory(self):
+
+        self.short_term_memory.clear()
+
     async def prefetch(self, route, session_id):
         """
         Prepare only the memory needed for this route.
