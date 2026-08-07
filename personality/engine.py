@@ -165,6 +165,9 @@ class PersonalityEngine:
             reply = ConversationStyle.apply(reply)
             reply = ConversationStyle.follow_up(reply, user_text)
 
+            if source == ResponseSource.MEMORY:
+                return reply
+
             # Universal ARIA personality pass.
             reply = await self._apply_aria_voice(
                 user_text=user_text,
