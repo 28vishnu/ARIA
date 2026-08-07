@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List, Set
 
 from brain.plan import ExecutionPlan
 from brain.verifier import Verifier
+from brain.optimizer import PlanOptimizer
 from skills.manager import SkillManager
 from skills.base import SkillResponse
 from brain.events.event import Event
@@ -88,6 +89,7 @@ class Executor:
             self.collection = None
 
         self.verifier = Verifier()
+        self.optimizer = PlanOptimizer()
 
         self.paused_workflows = {}
         self.execution_history = []
@@ -539,6 +541,7 @@ class Executor:
                 )
 
         if isinstance(tasks, ExecutionPlan):
+            tasks = self.optimizer.optimize(tasks)
             tasks_list = getattr(tasks, "tasks", [])
             # Check metadata for structured task_graph if plan tasks are empty/generic
             if not tasks_list and isinstance(tasks.metadata, dict):
@@ -589,6 +592,9 @@ class Executor:
         resume_state: Optional[Dict[str, Any]] = None,
         confirmed_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if isinstance(plan, ExecutionPlan):
+            plan = self.optimizer.optimize(plan)
+
         base_context = base_context or {}
         resume_state = resume_state or {}
 
