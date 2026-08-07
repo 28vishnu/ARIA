@@ -7,29 +7,18 @@ logger = logging.getLogger("aria")
 
 @dataclass
 class Decision:
-
     action: str
-
     reasoning_mode: str
-
     use_memory: bool = False
-
     use_planner: bool = False
-
     use_executor: bool = False
-
     use_tools: bool = False
-
     use_documents: bool = False
-
     use_world_model: bool = False
-
     use_multi_agent: bool = False
-
     selected_agents: List[str] = field(default_factory=list)
-
+    required_tools: List[str] = field(default_factory=list)
     confidence: float = 1.0
-
     explanation: Optional[str] = None
 
 
@@ -98,24 +87,30 @@ class DecisionEngine:
             decision.use_multi_agent = True
 
         if decision.reasoning_mode == "planning":
-            decision.selected_agents.append("planning")
+            if "planning" not in decision.selected_agents:
+                decision.selected_agents.append("planning")
 
         if decision.reasoning_mode == "research":
-            decision.selected_agents.append("research")
+            if "research" not in decision.selected_agents:
+                decision.selected_agents.append("research")
 
         if "code" in query_lower:
-            decision.selected_agents.append("coding")
+            if "coding" not in decision.selected_agents:
+                decision.selected_agents.append("coding")
 
         if "write" in query_lower:
-            decision.selected_agents.append("writing")
+            if "writing" not in decision.selected_agents:
+                decision.selected_agents.append("writing")
 
+        decision.required_tools = list(decision.selected_agents)
         decision.confidence = 0.95
 
         logger.info(
-            "[DecisionEngine] Decision=%s Mode=%s Agents=%s",
+            "[DecisionEngine] Decision=%s Mode=%s Agents=%s Tools=%s",
             decision.action,
             decision.reasoning_mode,
             decision.selected_agents,
+            decision.required_tools,
         )
 
         self.decision_history.append(decision)
@@ -124,12 +119,10 @@ class DecisionEngine:
         return decision
 
     def last_decision(self):
-
         if not self.decision_history:
             return None
 
         return self.decision_history[-1]
 
     def clear_history(self):
-
         self.decision_history.clear()
