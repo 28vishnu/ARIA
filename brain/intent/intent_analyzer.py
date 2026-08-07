@@ -40,12 +40,13 @@ class IntentAnalyzer:
 
     def __init__(self, llm_router=None):
         self.llm_router = llm_router
+        self.intent_history = []
 
     async def analyze(self, query: str) -> Intent:
         q = self._normalize(query)
 
         if not q:
-            return Intent(
+            intent = Intent(
                 name="Chat",
                 confidence=0.50,
                 requires_planning=False,
@@ -53,40 +54,79 @@ class IntentAnalyzer:
                 requires_documents=False,
                 requires_memory=True,
             )
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         # Local rule evaluation before calling LLM
         if "compare" in q:
-            return Intent("Research", 0.96, False, False, False, True)
+            intent = Intent("Research", 0.96, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         if q.startswith("who"):
-            return Intent("Research", 0.95, False, False, False, True)
+            intent = Intent("Research", 0.95, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         if q.startswith("where"):
-            return Intent("Research", 0.95, False, False, False, True)
+            intent = Intent("Research", 0.95, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         if q == "continue":
-            return Intent("Follow-up", 0.99, False, False, False, True)
+            intent = Intent("Follow-up", 0.99, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         if "remember" in q:
-            return Intent("Memory", 0.99, False, False, False, True)
+            intent = Intent("Memory", 0.99, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         if "plan" in q:
-            return Intent("Planning", 0.95, True, False, False, True)
+            intent = Intent("Planning", 0.95, True, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         # Delegate to semantic analysis if LLM router is available
         if self.llm_router and hasattr(self.llm_router, "chat"):
             semantic_intent = await self._semantic_intent(query)
             if semantic_intent is not None:
+                self.intent_history.append(semantic_intent)
+                if len(self.intent_history) > 100:
+                    self.intent_history.pop(0)
                 return semantic_intent
 
         # Fallback local heuristics
         if q in {"hi", "hello", "hey", "good morning", "good afternoon", "good evening"}:
-            return Intent("Chat", 0.99, False, False, False, True)
+            intent = Intent("Chat", 0.99, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
         if q in {"continue", "go on", "tell me more", "explain more", "next", "and", "then"}:
-            return Intent("Follow-up", 0.90, False, False, False, True)
+            intent = Intent("Follow-up", 0.90, False, False, False, True)
+            self.intent_history.append(intent)
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+            return intent
 
-        return Intent(
+        intent = Intent(
             name="Chat",
             confidence=0.80,
             requires_planning=False,
@@ -94,6 +134,10 @@ class IntentAnalyzer:
             requires_documents=False,
             requires_memory=True,
         )
+        self.intent_history.append(intent)
+        if len(self.intent_history) > 100:
+            self.intent_history.pop(0)
+        return intent
 
     async def _semantic_intent(self, query: str) -> Optional[Intent]:
         if not self.llm_router:
@@ -176,3 +220,10 @@ Return ONLY valid JSON in this exact structure:
 
     def _normalize(self, query: str) -> str:
         return re.sub(r"\s+", " ", str(query or "").lower()).strip()
+
+    def previous_intent(self):
+
+        if not self.intent_history:
+            return None
+
+        return self.intent_history[-1]
