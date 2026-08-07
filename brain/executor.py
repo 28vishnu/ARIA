@@ -536,10 +536,21 @@ class Executor:
             if step is None:
                 break
 
-            result = await self.execute(
-                step,
-                context,
-            )
+            for retry in range(3):
+
+                try:
+
+                    result = await self.execute(
+                        step,
+                        context,
+                    )
+
+                    break
+
+                except Exception:
+
+                    if retry == 2:
+                        raise
 
             step["status"] = "completed"
 
