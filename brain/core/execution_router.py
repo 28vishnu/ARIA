@@ -23,6 +23,41 @@ class RouteDecision:
     confidence: float
 
 
+CODING_VERBS = (
+    "write",
+    "create",
+    "build",
+    "generate",
+    "implement",
+    "fix",
+    "debug",
+    "explain",
+    "optimize",
+    "convert",
+    "refactor",
+)
+
+CODING_TECH = (
+    "python",
+    "flask",
+    "fastapi",
+    "react",
+    "next",
+    "javascript",
+    "typescript",
+    "sql",
+    "api",
+    "docker",
+    "java",
+    "c++",
+    "django",
+    "algorithm",
+    "github",
+    "bug",
+    "code",
+)
+
+
 def decide(query: str) -> RouteDecision:
     q = query.lower().strip()
 
@@ -37,25 +72,11 @@ def decide(query: str) -> RouteDecision:
         return RouteDecision(Route.GREETING, 1.0)
 
     # Coding
-    if any(word in q for word in (
-        "python",
-        "java",
-        "c++",
-        "javascript",
-        "typescript",
-        "react",
-        "next",
-        "flask",
-        "fastapi",
-        "django",
-        "sql",
-        "api",
-        "debug",
-        "bug",
-        "code",
-        "algorithm",
-        "github",
-    )):
+    if (
+        any(v in q for v in CODING_VERBS)
+        and
+        any(t in q for t in CODING_TECH)
+    ):
         return RouteDecision(Route.CODING, 0.98)
 
     # Memory
