@@ -2009,7 +2009,7 @@ Execution Results:
             reasoning = None
             if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
                 try:
-                    reasoning = await self.reasoning_engine.reason(pre_ctx)
+                    reasoning = await self.reasoning_engine.reason(context)
                 except Exception:
                     logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
 
