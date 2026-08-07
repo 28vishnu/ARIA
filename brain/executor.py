@@ -38,40 +38,6 @@ class IntentDecision:
     confidence: float
 
 
-import re
-
-MEMORY_PATTERNS = (
-    r"^i like ",
-    r"^i love ",
-    r"^i prefer ",
-    r"^my favorite ",
-    r"^my favourite ",
-    r"^my preferred ",
-    r"^remember that ",
-)
-
-MEMORY_QUERY_PATTERNS = (
-    r"^what is my ",
-    r"^what's my ",
-    r"^do you remember ",
-    r"^who am i",
-)
-
-MEMORY_STATEMENTS = (
-    r"^i like ",
-    r"^i love ",
-    r"^i prefer ",
-    r"^my favorite ",
-    r"^my favourite ",
-    r"^my preferred ",
-)
-
-MEMORY_QUESTIONS = (
-    r"^what is my ",
-    r"^what's my ",
-    r"^who am i",
-    r"^do you remember",
-)
 
 
 class Executor:
@@ -535,17 +501,6 @@ class Executor:
     # =========================================================
 
     async def execute_task(self, task, context=None):
-        text = query.strip().lower()
-
-        # Memory statement
-        for pattern in MEMORY_STATEMENTS:
-            if re.match(pattern, q):
-                return RouteDecision(Route.MEMORY, 0.99)
-
-        for pattern in MEMORY_QUESTIONS:
-            if re.match(pattern, q):
-                return RouteDecision(Route.MEMORY, 0.99)
-
         agent = task.get("agent")
         task_name = task.get("task")
 
