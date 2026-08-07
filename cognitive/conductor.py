@@ -33,9 +33,22 @@ class CognitiveConductor:
             self.working_memory.set("intent", intent)
             logger.info("[CognitiveConductor] Resolved Intent Type: %s (Confidence: %.2f)", intent.get("type"), intent.get("confidence", 0.0))
 
-            # Route determination (added per instructions)
+            # Route determination & verification logging (added per instructions)
             route = self.router.route(intent)
             logger.info("[Router] Selected route: %s", route.value)
+
+            if route.value == "greeting":
+                logger.info("[Router] Greeting Route")
+            elif route.value == "document":
+                logger.info("[Router] Document Route")
+            elif route.value == "vision":
+                logger.info("[Router] Vision Route")
+            elif route.value == "tool":
+                logger.info("[Router] Tool Route")
+            elif route.value == "planner":
+                logger.info("[Router] Planner Route")
+            else:
+                logger.info("[Router] General Route")
 
             # 3. Reason & Decide: Build execution strategy
             strategy = await self.decision_engine.decide(intent, context, self.memory_engine)
