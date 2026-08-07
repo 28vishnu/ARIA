@@ -524,11 +524,23 @@ class CognitiveCore:
 
         if decision and decision.use_planner and self.planner and self.executor:
             try:
-                plan = self.planner.create_task_graph(resolved_query)
-                execution_result = await self.executor.execute_plan(
-                    plan,
-                    context=context
-                )
+                if decision.use_planner:
+
+                    plan = await self.planner.plan(
+                        resolved_query,
+                        context,
+                    )
+
+                    execution_result = await self.executor.execute_plan(
+                        plan,
+                        context,
+                    )
+                else:
+
+                    execution_result = await self.reasoning_engine.reason(
+                        resolved_query,
+                        context,
+                    )
                 if isinstance(reasoning, dict):
                     reasoning["execution_result"] = execution_result
                     reasoning["task_plan"] = plan
