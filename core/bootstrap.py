@@ -67,7 +67,7 @@ from actions.actions.file import FileAction
 from actions.actions.notification import NotificationAction
 from actions.actions.web_search import WebSearchAction
 
-from brain.planner.planner import Planner
+from brain.planner import Planner
 from brain.planner.executor import Executor
 from brain.planner.verifier import PlanVerifier
 from brain.core.cognitive_core import CognitiveCore
