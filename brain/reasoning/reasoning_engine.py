@@ -714,11 +714,25 @@ Return JSON:
             context,
         )
 
+        decision = context.get("decision")
+
+        if decision:
+            if getattr(decision, "use_memory", False):
+                strategy = "memory_first"
+
+            elif getattr(decision, "use_planner", False):
+                strategy = "planning"
+
+            elif getattr(decision, "use_documents", False):
+                strategy = "document"
+
+            elif getattr(decision, "use_world_model", False):
+                strategy = "knowledge_first"
+
         context["reasoning_strategy"] = strategy
 
         logger.info(
-            "[Reasoning] Strategy selected: %s",
-            strategy,
+            f"[Reasoning] Strategy={strategy} Decision={decision}"
         )
 
         feedback = self._analyze_execution_feedback(
