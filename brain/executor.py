@@ -57,6 +57,22 @@ MEMORY_QUERY_PATTERNS = (
     r"^who am i",
 )
 
+MEMORY_STATEMENTS = (
+    r"^i like ",
+    r"^i love ",
+    r"^i prefer ",
+    r"^my favorite ",
+    r"^my favourite ",
+    r"^my preferred ",
+)
+
+MEMORY_QUESTIONS = (
+    r"^what is my ",
+    r"^what's my ",
+    r"^who am i",
+    r"^do you remember",
+)
+
 
 class Executor:
     """
@@ -522,22 +538,13 @@ class Executor:
         text = query.strip().lower()
 
         # Memory statement
-        for p in MEMORY_PATTERNS:
-            if re.match(p, text):
-                logger.info("[ExecutionRouter] Route=memory_statement")
-                return IntentDecision(
-                    intent="memory_statement",
-                    confidence=0.99,
-                )
+        for pattern in MEMORY_STATEMENTS:
+            if re.match(pattern, q):
+                return RouteDecision(Route.MEMORY, 0.99)
 
-        # Memory question
-        for p in MEMORY_QUERY_PATTERNS:
-            if re.match(p, text):
-                logger.info("[ExecutionRouter] Route=memory_query")
-                return IntentDecision(
-                    intent="memory_query",
-                    confidence=0.99,
-                )
+        for pattern in MEMORY_QUESTIONS:
+            if re.match(pattern, q):
+                return RouteDecision(Route.MEMORY, 0.99)
 
         agent = task.get("agent")
         task_name = task.get("task")
