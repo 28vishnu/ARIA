@@ -1,3 +1,5 @@
+# Brain/core/cognitive_core.py
+
 import logging
 import asyncio
 import re
@@ -1586,36 +1588,35 @@ Execution Results:
             # FAST ROUTER
             # =================================================
 
-            fast = should_fast_route(query)
+            decision = should_fast_route(query)
 
-            if fast.fast:
-                logger.info("[FastRouter] %s", fast.reason)
+            if decision.fast:
 
-                if self.llm_router:
-                    reply = await self.llm_router.chat([
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are ARIA. "
-                                "Reply naturally. "
-                                "Keep responses conversational and concise."
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": query,
-                        },
-                    ])
+                logger.info(f"[FastRouter] {decision.reason}")
 
-                    return SystemResponse(
-                        success=True,
-                        confidence=1.0,
-                        source="fast_router",
-                        data={
-                            "response": reply,
-                            "message": reply,
-                        },
-                    )
+                # Memory
+                if decision.reason == "memory":
+                    memories = await self.memory_engine.retrieve(query)
+
+                    if memories:
+                        return await self.llm_router.answer_with_memory(
+                            query,
+                            memories
+                        )
+
+                    return "I couldn't find anything about that in memory."
+
+                # Coding
+                if decision.reason == "coding":
+                    return await self.llm_router.chat(query)
+
+                # Greeting
+                if decision.reason == "greeting":
+                    return await self.llm_router.chat(query)
+
+                # Simple chat
+                if decision.reason == "simple":
+                    return await self.llm_router.chat(query)
 
             # ============================================
             # EXECUTION ROUTER
