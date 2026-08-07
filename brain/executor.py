@@ -114,6 +114,7 @@ class Executor:
             "cancelled": 0,
         }
         self._active_workflows: Set[str] = set()
+        self.execution_log = []
 
     # =========================================================
     # RESOURCE LOCKING
@@ -386,7 +387,7 @@ class Executor:
         pending_action_name: Optional[str] = None,
         pending_action_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return {
+        result = {
             "task_outputs": dict(
                 task_outputs
             ),
@@ -423,6 +424,10 @@ class Executor:
                 and len(skipped) == 0
             ),
         }
+        self.execution_log.append(result)
+        if len(self.execution_log) > 100:
+            self.execution_log.pop(0)
+        return result
 
     # =========================================================
     # BACKGROUND EXECUTION SUPPORT
@@ -1273,3 +1278,11 @@ class Executor:
             "error": action_result.error,
             "source": task.action_name,
         }
+
+    def last_execution(self):
+        if not self.execution_log:
+            return None
+        return self.execution_log[-1]
+
+    def clear_log(self):
+        self.execution_log.clear()
