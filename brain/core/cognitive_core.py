@@ -355,12 +355,18 @@ class CognitiveCore:
                         await self._retrieve_semantic_memory(query)
                     )
 
-            except Exception:
-
+            except Exception as e:
                 logger.exception(
-                    "Tool execution failed: %s",
-                    tool,
+                    "[Tool Error] %s",
+                    tool
                 )
+
+                print(
+                    f"\n========== {tool.upper()} ERROR =========="
+                )
+                print(type(e).__name__)
+                print(str(e))
+                print("=====================================\n")
 
         return evidence
 
