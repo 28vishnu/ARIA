@@ -658,6 +658,42 @@ class ReasoningEngine:
         await asyncio.gather(*(run(agent) for agent in agents))
         return outputs
 
+    async def evaluate_result(
+        self,
+        query,
+        result,
+    ):
+        prompt = f"""
+User Goal:{query}
+
+Current Result:{result}
+
+Determine whether the user's goal has been fully completed.
+
+Return JSON:
+
+{{
+    "goal_completed": true,
+    "confidence": 0.98,
+    "missing": []
+}}
+"""
+
+        response = await self.llm_router.chat(
+            [
+                {
+                    "role": "system",
+                    "content": "Return only JSON.",
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ]
+        )
+
+        return self.llm_router.extract_json(response)
+
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
         """
         Core decision pipeline determining precisely what sub-pipelines are required
