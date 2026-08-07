@@ -1585,6 +1585,21 @@ Execution Results:
                 )
 
             # =================================================
+            # 1.5 INITIALIZE UNIFIED EXECUTION CONTEXT
+            # =================================================
+            context = dict(base_context or {})
+            context.update({
+                "memory": self.memory_engine,
+                "planner": self.planner,
+                "executor": self.executor,
+                "reasoning": self.reasoning_engine,
+                "decision": self.decision_engine,
+                "agent_manager": getattr(self, "agent_manager", None),
+                "tool_manager": getattr(self, "tool_manager", None),
+                "session": session_id,
+            })
+
+            # =================================================
             # 2. RESOLVE FOLLOW-UP REFERENCES
             # =================================================
 
@@ -1601,12 +1616,12 @@ Execution Results:
             # =================================================
             # 2.5 COGNITIVE CONTROLLER ANALYSIS & CONTROLLED RETRIEVAL
             # =================================================
-            context = {
+            context.update({
                 "session_id": session_id,
                 "user_id": user_id,
                 "state": state,
                 "base_context": base_context,
-            }
+            })
             
             # Initial cognitive analysis
             controller_decision = self.cognitive_controller.analyze(
@@ -1787,7 +1802,7 @@ Execution Results:
             # =================================================
             # 6. DECISION ENGINE INTEGRATION (Central Control)
             # =================================================
-            pre_ctx = dict(base_context or {})
+            pre_ctx = dict(context)
             pre_ctx["query"] = query
             pre_ctx["session_id"] = session_id
             pre_ctx["user_id"] = user_id
@@ -1813,6 +1828,7 @@ Execution Results:
             )
 
             pre_ctx["decision"] = decision
+            context["decision"] = decision
 
             # Execute required tools based on final decision
             evidence = await self._execute_required_tools(
@@ -1922,28 +1938,26 @@ Execution Results:
                     memory=memories,
                     state=state,
                 )
+                context.update(ctx)
 
             else:
+                context["query"] = query
+                context["session_id"] = session_id
+                context["user_id"] = user_id
+                context["state"] = state
+                context["memory"] = memories
 
-                ctx = dict(base_context or {})
-
-                ctx["query"] = query
-                ctx["session_id"] = session_id
-                ctx["user_id"] = user_id
-                ctx["state"] = state
-                ctx["memory"] = memories
-
-            ctx.setdefault("query", query)
-            ctx.setdefault("session_id", session_id)
-            ctx.setdefault("user_id", user_id)
-            ctx.setdefault("state", state)
-            ctx.setdefault("memory", memories)
+            context.setdefault("query", query)
+            context.setdefault("session_id", session_id)
+            context.setdefault("user_id", user_id)
+            context.setdefault("state", state)
+            context.setdefault("memory", memories)
 
             if intent:
-                ctx["intent"] = intent
+                context["intent"] = intent
 
             if decision:
-                ctx["decision"] = decision
+                context["decision"] = decision
 
             # =================================================
             # 9. ATTACH REGISTERED CAPABILITIES
@@ -1987,10 +2001,10 @@ Execution Results:
                         "document repository."
                     )
 
-            ctx["document_intelligence"] = document_ai
-            ctx["document_repository"] = document_repository
+            context["document_intelligence"] = document_ai
+            context["document_repository"] = document_repository
 
-            ctx["capabilities"] = {
+            context["capabilities"] = {
                 "memory": self.memory_router is not None,
                 "documents": document_ai is not None,
                 "document_repository":
@@ -2036,7 +2050,7 @@ Execution Results:
                 reply = (
                     await self.memory_conversation_manager.handle(
                         query=query,
-                        context=ctx,
+                        context=context,
                     )
                 )
 
@@ -2094,7 +2108,7 @@ Execution Results:
 
                             if refreshed is not None:
                                 memories = refreshed
-                                ctx["memory"] = refreshed
+                                context["memory"] = refreshed
 
                         except Exception:
                             logger.exception(
@@ -2117,7 +2131,7 @@ Execution Results:
             return await self.knowledge_first_pipeline(
                 session_id,
                 query,
-                ctx,
+                context,
                 precomputed_reasoning=reasoning,
                 completed_goal=completed_goal,
             )
