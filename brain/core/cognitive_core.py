@@ -13,6 +13,7 @@ from brain.core.prompt_builder import PromptBuilder
 from brain.core.fast_router import should_fast_route
 from brain.core.execution_router import decide, Route
 from brain.engines.coding_engine import CodingEngine
+from brain.core.engine_manager import EngineManager
 
 logger = logging.getLogger("aria")
 
@@ -137,6 +138,11 @@ class CognitiveCore:
         self.cognitive_controller = CognitiveController()
         self.prompt_builder = PromptBuilder()
         self.coding_engine = CodingEngine(self.llm_router)
+        self.engine_manager = EngineManager()
+        self.engine_manager.register(
+            "coding",
+            self.coding_engine,
+        )
 
         self.brain_state = {
             "thinking": False,
@@ -1635,9 +1641,10 @@ Execution Results:
                 )
 
             if route.route == Route.CODING:
-                logger.info("[CodingEngine] Processing request")
 
-                reply = await self.coding_engine.process(query)
+                engine = self.engine_manager.get("coding")
+
+                reply = await engine.process(query)
 
                 return SystemResponse(
                     success=True,
