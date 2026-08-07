@@ -1284,6 +1284,15 @@ Return ONLY valid JSON in this exact format:
         if not memories:
             return ""
 
+        if len(memories) == 1:
+            memory = memories[0]
+            if hasattr(memory, "key") and hasattr(memory, "value"):
+                return f"Your {memory.key.replace('_', ' ')} is {memory.value}, Sir."
+            elif isinstance(memory, dict) and "key" in memory and "value" in memory:
+                key_str = str(memory["key"]).replace("_", " ")
+                val_str = str(memory["value"])
+                return f"Your {key_str} is {val_str}, Sir."
+
         memory_payload = []
 
         for memory in memories:
