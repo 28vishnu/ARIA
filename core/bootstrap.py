@@ -113,6 +113,7 @@ async def bootstrap_application() -> ServiceRegistry:
     mongo_client = None
     memory_engine = None
     document_repository = None
+    db_inst = None
 
     if config.mongodb_uri:
 
@@ -626,6 +627,25 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("decision_engine", decision_engine)
     registry.register("intent_analyzer", intent_analyzer)
     registry.register("reasoning_engine", reasoning_engine)
+
+    # ---------- Cross Wiring ----------
+    planner.executor = executor
+    planner.memory_engine = memory_engine
+    planner.reasoning_engine = reasoning_engine
+    executor.planner = planner
+    executor.memory_engine = memory_engine
+    executor.reasoning_engine = reasoning_engine
+    reasoning_engine.memory_engine = memory_engine
+    reasoning_engine.planner = planner
+    reasoning_engine.executor = executor
+    decision_engine.reasoning_engine = reasoning_engine
+    decision_engine.memory_engine = memory_engine
+    agent_coordinator.reasoning_engine = reasoning_engine
+    agent_coordinator.memory_engine = memory_engine
+    if memory_engine is not None:
+        memory_engine.reasoning_engine = reasoning_engine
+        memory_engine.planner = planner
+    logger.info("[Bootstrap] Cross wiring complete.")
 
     # ---------------------------------------------------------
     # Cognitive Core
