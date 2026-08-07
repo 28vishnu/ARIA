@@ -5,6 +5,7 @@ from cognitive.decision import DecisionEngine
 from cognitive.working_memory import WorkingMemory
 from cognitive.execution_graph import ExecutionGraph
 from cognitive.reflection import ReflectionEngine
+from core.request_router import RequestRouter
 
 logger = logging.getLogger("aria")
 
@@ -18,6 +19,7 @@ class CognitiveConductor:
         self.working_memory = WorkingMemory()
         self.execution_graph = ExecutionGraph(registry)
         self.reflection_engine = ReflectionEngine(memory_engine)
+        self.router = RequestRouter()
 
     async def process(self, query: str, context: Dict[str, Any]) -> str:
         """Executes the complete observe -> understand -> reason -> execute -> reflect loop."""
@@ -30,6 +32,10 @@ class CognitiveConductor:
             intent = await self.intent_analyzer.analyze(query, context)
             self.working_memory.set("intent", intent)
             logger.info("[CognitiveConductor] Resolved Intent Type: %s (Confidence: %.2f)", intent.get("type"), intent.get("confidence", 0.0))
+
+            # Route determination (added per instructions)
+            route = self.router.route(intent)
+            logger.info("[Router] Selected route: %s", route.value)
 
             # 3. Reason & Decide: Build execution strategy
             strategy = await self.decision_engine.decide(intent, context, self.memory_engine)
