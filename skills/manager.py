@@ -117,6 +117,13 @@ class SkillManager:
     # CAPABILITY DISCOVERY
     # =========================================================
 
+    def supports(self, capability: str):
+        return [
+            skill
+            for skill in self.skills
+            if capability in getattr(skill, "capabilities", [])
+        ]
+
     def get_capabilities(self) -> List[Dict[str, Any]]:
         """
         Describe everything ARIA can currently do through skills.
