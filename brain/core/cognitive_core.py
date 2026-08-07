@@ -12,7 +12,7 @@ from brain.core.cognitive_controller import CognitiveController
 from brain.core.prompt_builder import PromptBuilder
 from brain.core.fast_router import should_fast_route
 from brain.core.execution_router import decide, Route
-from brain.engines.coding_engine import CodingEngine
+from brain.core.coding_engine import CodingEngine
 from brain.core.engine_manager import EngineManager
 
 logger = logging.getLogger("aria")
