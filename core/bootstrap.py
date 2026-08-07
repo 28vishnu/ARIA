@@ -574,14 +574,7 @@ async def bootstrap_application() -> ServiceRegistry:
     action_manager.register(WebSearchAction())
 
     planner = Planner(
-        memory_router=memory_router,
         llm_router=llm_router,
-        skill_manager=skill_manager,
-        action_manager=action_manager,
-        knowledge_manager=knowledge_manager,
-        knowledge_graph=knowledge_graph,
-        world_model=world_model,
-        event_bus=event_bus,
     )
 
     executor = Executor(
