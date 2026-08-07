@@ -245,12 +245,10 @@ class MemoryEngine:
 
         q = query.lower().strip()
 
-        # If intent is clearly research, coding, web search, or general factual asking about external entities
         intent_name = getattr(intent, "name", "").lower() if intent else ""
         if intent_name in ("research", "coding", "web search", "tool"):
             return False
 
-        # General factual prefixes that indicate external/world questions rather than personal history/preferences
         factual_starters = (
             "who founded",
             "who is",
@@ -311,7 +309,6 @@ class MemoryEngine:
         if lower in greetings:
             return False
 
-        # Questions normally should not become memories.
         question_prefixes = (
             "what ",
             "what's ",
@@ -567,7 +564,6 @@ class MemoryEngine:
                 prefer_match.group(1)
             )
 
-            # Don't store complex behavioural statements as user_likes.
             if not re.search(
                 r"\b(?:but|don't|do not|call me|called)\b",
                 segment,
@@ -596,7 +592,6 @@ class MemoryEngine:
 
         value = value.strip()
 
-        # Stop extraction when a new clause begins.
         value = re.split(
             r"\s+(?:but|and\s+i|because|although|however)\s+",
             value,
@@ -736,8 +731,14 @@ class MemoryEngine:
         }
 
     # =========================================================
-    # STORE MEMORY
+    # STORE MEMORY (UPDATED TO PREVENT DUPLICATES)
     # =========================================================
+
+    async def get_memory(self, key: str) -> Optional[dict]:
+        """Helper to fetch an existing memory by its key."""
+        if self.memory_col is None:
+            return None
+        return await self.memory_col.find_one({"key": key})
 
     async def _store_extracted_memory(
         self,
@@ -750,6 +751,28 @@ class MemoryEngine:
         key = memory["key"]
         value = memory["value"]
 
+        # Check for existing memory to prevent duplicates and update instead
+        existing = await self.get_memory(key)
+
+        if existing is not None:
+            existing["value"] = value
+            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+            await self.update_memory(existing.get("_id"), existing)
+
+            logger.info(
+                "[Memory] Updated existing memory: %s",
+                key,
+            )
+
+            return {
+                "success": True,
+                "key": key,
+                "value": str(value),
+                "action": "update"
+            }
+
+        # Only if no existing memory is found should the code continue to insert
         imp_val = memory.get("importance", 0.5)
         if isinstance(imp_val, str):
             is_perm = imp_val in ("high", "critical")
@@ -773,29 +796,29 @@ class MemoryEngine:
                 item_memory["value"] = item
                 record = self._build_memory_record(item_memory)
 
-                existing = await self.memory_col.find_one(
+                existing_item = await self.memory_col.find_one(
                     {
                         "key": key,
                         "value": item
                     }
                 )
 
-                if existing and existing.get("value") == item:
+                if existing_item and existing_item.get("value") == item:
                     stored.append(item)
                     continue
 
                 version = 1
                 history = []
 
-                if existing:
-                    version = existing.get("version", 1) + 1
-                    history = existing.get("history", [])
+                if existing_item:
+                    version = existing_item.get("version", 1) + 1
+                    history = existing_item.get("history", [])
                     history.append({
-                        "value": existing.get("value"),
-                        "updated_at": existing.get("updated_at")
+                        "value": existing_item.get("value"),
+                        "updated_at": existing_item.get("updated_at")
                     })
-                    record["created_at"] = existing.get("created_at", record["created_at"])
-                    record["access_count"] = existing.get("access_count", 0)
+                    record["created_at"] = existing_item.get("created_at", record["created_at"])
+                    record["access_count"] = existing_item.get("access_count", 0)
 
                 record["version"] = version
                 record["history"] = history
@@ -829,50 +852,13 @@ class MemoryEngine:
         if not self._validate_value(str(value)):
             return {"success": False}
 
-        existing = await self.memory_col.find_one(
-            {"key": key}
-        )
-
-        if existing and str(existing.get("value")) == str(value):
-            return {
-                "success": True,
-                "action": "already_exists",
-                "key": key,
-                "value": str(value),
-            }
-
         record = self._build_memory_record(memory)
 
-        action = "stored"
-        version = 1
-        history = []
-
-        if existing:
-            if str(existing.get("value")) != str(value):
-                action = "update"
-            version = existing.get("version", 1) + 1
-            history = existing.get("history", [])
-            history.append({
-                "value": existing.get("value"),
-                "updated_at": existing.get("updated_at")
-            })
-            record["created_at"] = existing.get("created_at", record["created_at"])
-            record["access_count"] = existing.get("access_count", 0)
-
-        record["version"] = version
-        record["history"] = history
+        record["version"] = 1
+        record["history"] = []
         record["is_permanent"] = memory["is_permanent"]
 
-        await self.memory_col.update_one(
-            {"key": key},
-            {
-                "$set": record,
-                "$setOnInsert": {
-                    "expires_at": None
-                }
-            },
-            upsert=True
-        )
+        insert_result = await self.memory_col.insert_one(record)
 
         self._update_semantic_memory(memory)
 
@@ -886,7 +872,7 @@ class MemoryEngine:
             "success": True,
             "key": key,
             "value": str(value),
-            "action": action
+            "action": "stored"
         }
 
     # =========================================================
@@ -924,10 +910,6 @@ class MemoryEngine:
         ):
             return {"success": False}
 
-        # ---------------------------------------------------------
-        # LEVEL 1 — FAST DETERMINISTIC MEMORY
-        # ---------------------------------------------------------
-
         memory = self._extract_memory(
             user_text
         )
@@ -940,10 +922,6 @@ class MemoryEngine:
                 if hasattr(self, "learning_engine") and self.learning_engine:
                     await self.learning_engine.learn_from_memory(memory)
             return res
-
-        # ---------------------------------------------------------
-        # LEVEL 2 — INTELLIGENT LLM MEMORY UNDERSTANDING
-        # ---------------------------------------------------------
 
         if (
             self.llm_router is not None
@@ -1029,7 +1007,6 @@ class MemoryEngine:
             0.5
         )
 
-        # Convert string importance to numeric value
         if isinstance(importance, str):
             importance = {
                 "low": 0.25,
@@ -1053,7 +1030,6 @@ class MemoryEngine:
             0
         )
 
-        # Cap the influence of access_count to prevent domination
         capped_accesses = min(accesses, 10)
 
         return (
@@ -1079,24 +1055,12 @@ class MemoryEngine:
         query: str,
         limit: int = 10
     ) -> list[dict]:
-        """
-        Retrieve memories relevant to natural-language queries.
-
-        Retrieval strategy:
-        1. Exact high-confidence memory patterns.
-        2. Keyword scoring across stored personal memories.
-        3. LLM-assisted semantic ranking when available.
-        """
 
         if self.memory_col is None:
             return []
 
         try:
             lower = query.lower().strip()
-
-            # =====================================================
-            # LEVEL 1 — EXACT / HIGH-CONFIDENCE LOOKUPS
-            # =====================================================
 
             filter_query = None
 
@@ -1140,10 +1104,6 @@ class MemoryEngine:
             ):
                 filter_query = {"key": "user_likes"}
 
-            # =====================================================
-            # EXACT FAVORITE LOOKUP
-            # =====================================================
-
             if filter_query is None:
 
                 favorite_match = re.search(
@@ -1159,10 +1119,6 @@ class MemoryEngine:
                     filter_query = {
                         "key": self._normalize_key(subject)
                     }
-
-            # =====================================================
-            # RETURN EXACT RESULTS IMMEDIATELY
-            # =====================================================
 
             if filter_query is not None:
 
@@ -1232,10 +1188,6 @@ class MemoryEngine:
                         if m.get("key") and m.get("value")
                     ]
 
-            # =====================================================
-            # LEVEL 2 — LOAD PERSONAL MEMORIES
-            # =====================================================
-
             cursor = self.memory_col.find({
                 "category": {
                     "$nin": [
@@ -1251,10 +1203,6 @@ class MemoryEngine:
 
             if not all_memories:
                 return []
-
-            # =====================================================
-            # QUERY NORMALISATION
-            # =====================================================
 
             stop_words = {
                 "what",
@@ -1299,10 +1247,6 @@ class MemoryEngine:
                 if len(word) > 1
                 and word not in stop_words
             }
-
-            # =====================================================
-            # SEMANTIC ALIASES
-            # =====================================================
 
             aliases = {
                 "plan": {
@@ -1406,10 +1350,6 @@ class MemoryEngine:
                         aliases[word]
                     )
 
-            # =====================================================
-            # SCORE STORED MEMORIES
-            # =====================================================
-
             scored = []
 
             for memory in all_memories:
@@ -1461,7 +1401,6 @@ class MemoryEngine:
 
                 semantic_score = 0.0
 
-                # Direct word overlap
                 direct_matches = (
                     query_words
                     & memory_words
@@ -1471,7 +1410,6 @@ class MemoryEngine:
                     direct_matches
                 ) * 3.0
 
-                # Expanded semantic overlap
                 semantic_matches = (
                     expanded_query_words
                     & memory_words
@@ -1481,7 +1419,6 @@ class MemoryEngine:
                     semantic_matches
                 ) * 1.5
 
-                # Key matches are especially important
                 key_words = set(
                     re.findall(
                         r"[a-zA-Z0-9]+",
@@ -1513,10 +1450,6 @@ class MemoryEngine:
                 key=lambda item: item[0],
                 reverse=True
             )
-
-            # =====================================================
-            # LEVEL 3 — LLM SEMANTIC MEMORY SELECTION
-            # =====================================================
 
             if (
                 self.llm_router is not None
@@ -1562,7 +1495,6 @@ class MemoryEngine:
                             in selected_key_set
                         ]
 
-                        # Merge LLM results with keyword results.
                         existing_keys = {
                             m.get("key")
                             for _, m in scored
@@ -1586,10 +1518,6 @@ class MemoryEngine:
                     logger.exception(
                         "[MemoryEngine] Semantic memory selection failed."
                     )
-
-            # =====================================================
-            # FINAL RESULTS
-            # =====================================================
 
             if not scored:
                 return []
@@ -1646,10 +1574,9 @@ class MemoryEngine:
                 if len(final_memories) >= limit:
                     break
 
-            # Update access_count and last_accessed only for the top utilized/returned memory or cap updates
             returned_keys = [
                 m["key"]
-                for m in final_memories[:1]  # Increment access count only for the top matching memory to prevent over-inflation
+                for m in final_memories[:1]
             ]
 
             if returned_keys:
