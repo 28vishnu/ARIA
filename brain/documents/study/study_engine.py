@@ -68,3 +68,20 @@ class StudyEngine:
         return sorted(
             set(topics)
         )
+
+    async def prepare_context(
+        self,
+        query: str,
+    ):
+        """
+        Compatibility method used by CognitiveCore.
+        Returns study context for the query.
+        """
+
+        result = self.explain(query)
+
+        return {
+            "query": query,
+            "knowledge": result.get("results", []),
+            "found": result.get("found", False),
+        }
