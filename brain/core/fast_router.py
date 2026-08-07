@@ -18,12 +18,11 @@ FAST_PREFIXES = (
     "good evening",
 )
 
-MEMORY_PREFIXES = (
+MEMORY_QUERY_PREFIXES = (
     "what is my",
     "what's my",
-    "who am i",
-    "remember",
     "do you remember",
+    "who am i",
 )
 
 CODING_WORDS = (
@@ -47,7 +46,7 @@ def should_fast_route(query: str) -> FastDecision:
     if any(q.startswith(x) for x in FAST_PREFIXES):
         return FastDecision(True, "greeting")
 
-    if any(q.startswith(x) for x in MEMORY_PREFIXES):
+    if any(q.startswith(x) for x in MEMORY_QUERY_PREFIXES):
         return FastDecision(True, "memory")
 
     if any(word in q for word in CODING_WORDS):
