@@ -1665,40 +1665,18 @@ Execution Results:
                 route.confidence,
             )
 
-            decision = decide(query)
-            if decision.intent == "memory_statement":
-
+            if route.route == Route.MEMORY:
                 await self.memory_engine.deterministic_extract_and_store(query)
 
-                return "Certainly, Sir. I'll remember that."
-
-            elif decision.intent == "memory_query":
-
-                memories = await self.memory_engine.retrieve(query)
-
-                if memories:
-
-                    memory_text = "\n".join(
-                        f"{m['key']}: {m['value']}"
-                        for m in memories
-                    )
-
-                    messages = [
-                        {
-                            "role": "system",
-                            "content": "You are ARIA. Answer ONLY using the supplied memories."
-                        },
-                        {
-                            "role": "user",
-                            "content":
-                                f"Question:\n{query}\n\n"
-                                f"Memories:\n{memory_text}"
-                        }
-                    ]
-
-                    return await self.llm_router.chat(messages)
-
-                return "I don't have that information yet, Sir."
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="memory",
+                    data={
+                        "response": "Certainly, Sir. I'll remember that.",
+                        "message": "Certainly, Sir. I'll remember that.",
+                    },
+                )
 
             if route.route == Route.GREETING:
                 return SystemResponse(
