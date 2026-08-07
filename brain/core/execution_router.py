@@ -11,6 +11,10 @@ class Route(str, Enum):
     VISION = "vision"
     TOOL = "tool"
     PLANNER = "planner"
+    RESEARCH = "research"
+    WEB = "web"
+    TASK = "task"
+    AUTOMATION = "automation"
 
 
 @dataclass
@@ -20,48 +24,107 @@ class RouteDecision:
 
 
 def decide(query: str) -> RouteDecision:
-    q = query.lower()
+    q = query.lower().strip()
 
-    if any(
-        q.startswith(x)
-        for x in (
-            "hi",
-            "hello",
-            "hey",
-            "good morning",
-            "good evening",
-        )
-    ):
+    # Greetings
+    if any(q.startswith(x) for x in (
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good evening",
+    )):
         return RouteDecision(Route.GREETING, 1.0)
 
-    if any(
-        word in q
-        for word in (
-            "python",
-            "flask",
-            "fastapi",
-            "react",
-            "next",
-            "javascript",
-            "typescript",
-            "code",
-            "algorithm",
-            "debug",
-            "api",
-            "sql",
-        )
-    ):
-        return RouteDecision(Route.CODING, 0.95)
+    # Coding
+    if any(word in q for word in (
+        "python",
+        "java",
+        "c++",
+        "javascript",
+        "typescript",
+        "react",
+        "next",
+        "flask",
+        "fastapi",
+        "django",
+        "sql",
+        "api",
+        "debug",
+        "bug",
+        "code",
+        "algorithm",
+        "github",
+    )):
+        return RouteDecision(Route.CODING, 0.98)
 
-    if any(
-        word in q
-        for word in (
-            "remember",
-            "memory",
-            "my name",
-            "what do you know about me",
-        )
-    ):
-        return RouteDecision(Route.MEMORY, 0.95)
+    # Memory
+    if any(word in q for word in (
+        "remember",
+        "recall",
+        "memory",
+        "my name",
+        "what do you know about me",
+        "favorite",
+        "favourite",
+        "did i tell you",
+    )):
+        return RouteDecision(Route.MEMORY, 0.97)
 
-    return RouteDecision(Route.PLANNER, 0.8)
+    # Planning
+    if any(word in q for word in (
+        "plan",
+        "roadmap",
+        "schedule",
+        "strategy",
+        "goal",
+        "career",
+        "study plan",
+    )):
+        return RouteDecision(Route.PLANNER, 0.95)
+
+    # Documents
+    if any(word in q for word in (
+        "pdf",
+        "document",
+        "notes",
+        "ppt",
+        "docx",
+        "summarize",
+        "summary",
+    )):
+        return RouteDecision(Route.DOCUMENT, 0.95)
+
+    # Vision
+    if any(word in q for word in (
+        "image",
+        "photo",
+        "picture",
+        "scan",
+        "ocr",
+        "camera",
+    )):
+        return RouteDecision(Route.VISION, 0.95)
+
+    # Research / Web
+    if any(word in q for word in (
+        "latest",
+        "news",
+        "research",
+        "compare",
+        "search",
+        "find",
+    )):
+        return RouteDecision(Route.RESEARCH, 0.95)
+
+    # Task
+    if any(word in q for word in (
+        "remind",
+        "todo",
+        "task",
+        "complete",
+        "finish",
+    )):
+        return RouteDecision(Route.TASK, 0.95)
+
+    return RouteDecision(Route.CHAT, 0.80)
