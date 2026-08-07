@@ -95,7 +95,7 @@ class AgentCoordinator:
         Main entry point for multi-agent coordination.
         Executes agents sequentially based on the decision's required tools or selected agents,
         never stopping on failures, scoring/sorting results, and returning
-        structured merged outputs along with a consensus evaluation.[span_0](start_span)[span_0](end_span)
+        structured merged outputs along with a consensus evaluation.
         """
         required_tools = getattr(decision, "required_tools", []) if decision else []
         selected_agents = getattr(decision, "selected_agents", []) if decision else []
@@ -251,3 +251,21 @@ class AgentCoordinator:
             "shared_context": coord_res["shared_context"],
         }
 
+    async def prepare(
+        self,
+        agent_name: str,
+        query: str,
+        context=None,
+    ):
+        """
+        Compatibility wrapper for CognitiveCore.
+        """
+
+        if context is None:
+            context = {}
+
+        return await self.execute(
+            [agent_name],
+            query,
+            context,
+        )
