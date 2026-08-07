@@ -13,7 +13,7 @@ from brain.events import event_types
 from brain.core.cognitive_controller import CognitiveController
 from brain.core.prompt_builder import PromptBuilder
 from brain.core.fast_router import should_fast_route
-from brain.core.execution_router import decide, Route, ExecutionRouter
+from brain.core.execution_router import decide, Route
 from brain.core.coding_engine import CodingEngine
 from brain.core.engine_manager import EngineManager
 
@@ -137,7 +137,6 @@ class CognitiveCore:
         self.document_pipeline = document_pipeline
         self.study_engine = study_engine
         self.repository_memory = repository_memory
-        self.execution_router = ExecutionRouter()
         self.cognitive_controller = CognitiveController()
         self.prompt_builder = PromptBuilder()
         self.coding_engine = CodingEngine(self.llm_router)
@@ -1666,7 +1665,7 @@ Execution Results:
                 route.confidence,
             )
 
-            decision = await self.execution_router.route(query)
+            decision = decide(query)
             if decision.intent == "memory_statement":
 
                 await self.memory_engine.deterministic_extract_and_store(query)
