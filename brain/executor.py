@@ -521,70 +521,35 @@ class Executor:
                 "error": str(e)
             }
 
-    async def execute_plan(self, tasks, context=None):
-        context = context or {}
-        decision = context.get("decision")
+    async def execute_plan(
+        self,
+        plan,
+        context,
+    ):
 
-        if (
-            decision
-            and decision.use_multi_agent
-            and self.agent_coordinator
-        ):
-            try:
-                logger.info(
-                    "[Executor] Executing multi-agent workflow: %s",
-                    decision.selected_agents if decision else [],
-                )
-                return await self.agent_coordinator.coordinate(
-                    decision=decision,
-                    query=context.get("query", ""),
-                    context=context,
-                )
-            except Exception:
-                logger.exception(
-                    "[Executor] Coordinator failed"
-                )
+        results = []
 
-        if isinstance(tasks, ExecutionPlan):
-            tasks = self.optimizer.optimize(tasks)
-            tasks_list = getattr(tasks, "tasks", [])
-            # Check metadata for structured task_graph if plan tasks are empty/generic
-            if not tasks_list and isinstance(tasks.metadata, dict):
-                task_graph = tasks.metadata.get("task_graph")
-                if isinstance(task_graph, list) and task_graph:
-                    return await self.execute_plan(task_graph, context)
-            if not tasks_list:
-                return await self._execute_full_plan_object(tasks, context)
-            tasks = tasks_list
+        while True:
 
-        if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict) and "agent" in tasks[0]:
-            completed = []
-            failed = []
+            step = self.planner.next_step(plan)
 
-            for task in tasks:
-                result = await self.execute_task(task, context)
+            if step is None:
+                break
 
-                if result["success"]:
-                    task["status"] = "completed"
-                    completed.append(result)
-                    continue
+            result = await self.execute(
+                step,
+                context,
+            )
 
-                retry = await self.execute_task(task, context)
+            step["status"] = "completed"
 
-                if retry["success"]:
-                    task["status"] = "completed"
-                    completed.append(retry)
-                else:
-                    task["status"] = "failed"
-                    failed.append(retry)
+            step["result"] = result
 
-            return {
-                "completed": completed,
-                "failed": failed
-            }
+            results.append(result)
 
-        # Fallback to full ExecutionPlan pipeline if passed an ExecutionPlan directly
-        return await self._execute_full_plan_object(tasks, context)
+        plan.completed = True
+
+        return results
 
     # =========================================================
     # MAIN EXECUTION (FULL PIPELINE)
