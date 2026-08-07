@@ -67,8 +67,11 @@ from actions.actions.file import FileAction
 from actions.actions.notification import NotificationAction
 from actions.actions.web_search import WebSearchAction
 
-from brain.planning.planner import Planner
-from brain.executor import Executor
+from brain.planner.planner import Planner
+from brain.planner.executor import Executor
+from brain.planner.planner import Planner
+from brain.planner.executor import PlanExecutor
+from brain.planner.verifier import PlanVerifier
 from brain.core.cognitive_core import CognitiveCore
 
 from personality.engine import PersonalityEngine
@@ -629,6 +632,9 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("action_manager", action_manager)
     registry.register("planner", planner)
     registry.register("executor", executor)
+    registry.register("planner_engine", Planner())
+    registry.register("plan_executor", PlanExecutor())
+    registry.register("plan_verifier", PlanVerifier())
     registry.register("personality_engine", personality_engine)
     registry.register("decision_engine", decision_engine)
     registry.register("intent_analyzer", intent_analyzer)
