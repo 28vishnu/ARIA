@@ -1,1024 +1,1769 @@
-import os
-import uuid
-import asyncio
+import re
 import logging
-from typing import Any
-from pathlib import Path
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+import traceback
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
 
-from core.logging_config import setup_logging
-from core.bootstrap import bootstrap_application
-from core.dependency_injection import RequestContext
-from personality.response import SystemResponse
-from api.upload import router as upload_router
-
-setup_logging("INFO")
 logger = logging.getLogger("aria")
 
-class BackgroundTaskManager:
-    def __init__(self):
-        self.tasks = set()
+SCHEMA_VERSION = 3
+MEMORY_SCHEMA_VERSION = 4
 
-    def schedule(self, coro):
-        task = asyncio.create_task(coro)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-        return task
+MEMORY_TYPES = {
+    "personal",
+    "preference",
+    "goal",
+    "project",
+    "decision",
+    "document",
+    "fact",
+    "schedule",
+    "relationship",
+    "skill",
+    "event",
+    "contact"
+}
 
-    async def shutdown(self):
-        if self.tasks:
-            logger.info("[BackgroundTaskManager] Awaiting completion of %d background tasks...", len(self.tasks))
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+IMPORTANCE = {
+    "low": 0.25,
+    "medium": 0.5,
+    "high": 0.75,
+    "critical": 1.0
+}
 
-background_manager = BackgroundTaskManager()
 
-# ---------------------------------------------------------
-# PENDING DOCUMENT CONFIRMATIONS
-# ---------------------------------------------------------
+class MemoryEngine:
 
-pending_document_actions = {}
+    def __init__(self, mongo_db, llm_router=None, working_memory=None):
+        self.db = mongo_db
+        self.llm_router = llm_router
+        self.working_memory = working_memory if working_memory is not None else None
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    registry = await bootstrap_application()
-    app.state.registry = registry
-    app.state.bg_manager = background_manager
-    logger.info("[Lifespan] ARIA Platform successfully started.")
-    yield
-    logger.info("[Lifespan] Shutting down resources...")
-    await background_manager.shutdown()
-
-    if registry.has("scheduler"):
-        try:
-            registry.get("scheduler").shutdown()
-        except Exception:
-            pass
-    if registry.has("http_client"):
-        await registry.get("http_client").aclose()
-    if registry.has("mongo_client"):
-        registry.get("mongo_client").close()
-    logger.info("[Lifespan] All resources successfully released.")
-
-app = FastAPI(title="ARIA AI Operating Platform", version="12.0.0", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://ariaintel.vercel.app",
-        "https://ariaassisant.vercel.app",
-        "https://aria-frontend.vercel.app",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(upload_router)
-
-@app.middleware("http")
-async def add_request_metadata(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    response: Response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("[GlobalExceptionHandler] Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"success": False, "error": "An internal system error occurred, Sir.", "detail": str(exc)})
-
-def build_request_context(session_id: str, request_id: str, registry) -> RequestContext:
-    return RequestContext(
-        session_id=session_id,
-        request_id=request_id,
-        session_manager=registry.get("session_manager"),
-        memory_engine=registry.get("memory_engine"),
-        skill_manager=registry.get("skill_manager"),
-        action_manager=registry.get("action_manager"),
-        planner=registry.get("planner"),
-        cognitive_core=registry.get("cognitive_core"),
-        executor=registry.get("executor"),
-        personality_engine=registry.get("personality_engine")
-    )
-
-async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> Any:
-    registry = app_state.registry
-    ctx = build_request_context(session_id, request_id, registry)
-
-    if ctx.memory_engine is not None:
-        app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
-
-    session = ctx.session_manager.get_or_create_session(session_id)
-    base_context = {
-        "app_state": app_state,
-        "session": session,
-        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
-        "document_intelligence": registry.get("document_intelligence") if registry.has("document_intelligence") else None
-    }
-
-    conversation_manager = registry.get("conversation_manager")
-
-    resolved_text = user_text
-
-    if conversation_manager:
-        resolved_text = conversation_manager.resolve_reference(
-            session_id=session_id,
-            query=user_text,
+        self.memory_col = (
+            mongo_db["personal_memory"]
+            if mongo_db is not None else None
+        )
+        self.profile_col = (
+            mongo_db["user_profile"]
+            if mongo_db is not None else None
         )
 
-    sys_res = await ctx.cognitive_core.process(
-        query=resolved_text,
-        session_id=session_id,
-        user_id=session_id,
-        base_context=base_context,
-    )
+        self.short_term_memory = []
 
-    # Preserve structured document actions for the transport layer.
-    if (
-        sys_res
-        and isinstance(sys_res.data, dict)
-        and sys_res.data.get("document_action")
+    def add_short_term_memory(
+        self,
+        user,
+        assistant,
     ):
-        return sys_res
 
-    return await ctx.personality_engine.apply_personality(
-        session_id,
-        resolved_text,
-        sys_res
-    )
-
-@app.post("/telegram-webhook")
-async def telegram_webhook(req: Request):
-    request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
-    config = req.app.state.registry.get("config")
-    token = config.telegram_token
-
-    if not token:
-        return {"status": "telegram token unconfigured"}
-
-    data = await req.json()
-    msg = data.get("message", {})
-
-    chat_id = msg.get("chat", {}).get("id")
-    user_id = msg.get("from", {}).get("id")
-    text = msg.get("text", "").strip()
-
-    if chat_id is None or user_id is None:
-        return {"status": "ok"}
-
-    # ---------------------------------------------------------
-    # PRIVATE OWNER-ONLY ACCESS
-    # ---------------------------------------------------------
-
-    allowed_user_id = os.getenv("ALLOWED_TELEGRAM_USER_ID", "").strip()
-
-    if not allowed_user_id:
-        logger.error(
-            "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
-        )
-        return {"status": "unauthorized"}
-
-    if str(user_id) != allowed_user_id:
-        logger.warning(
-            "[Security] Unauthorized Telegram access attempt."
-        )
-        return {"status": "unauthorized"}
-
-    logger.info("[Security] Authorized Telegram user.")
-
-    # ---------------------------------------------------------
-    # HANDLE PENDING DOCUMENT CONFIRMATION
-    # ---------------------------------------------------------
-
-    confirmation_key = str(user_id)
-
-    if confirmation_key in pending_document_actions:
-
-        pending = pending_document_actions[confirmation_key]
-        answer = text.lower().strip()
-
-        # -----------------------------------------------------
-        # USER IS SELECTING A DOCUMENT
-        # -----------------------------------------------------
-
-        if pending.get("action") == "select_document":
-
-            # Allow the user to cancel/leave document selection.
-            cancel_phrases = {
-                "cancel",
-                "cancel it",
-                "leave it",
-                "leave",
-                "never mind",
-                "nevermind",
-                "forget it",
-                "stop",
-                "no",
-                "no thanks",
-                "no thank you",
+        self.short_term_memory.append(
+            {
+                "user": user,
+                "assistant": assistant,
             }
+        )
 
-            if answer in cancel_phrases:
+        if len(self.short_term_memory) > 20:
+            self.short_term_memory.pop(0)
 
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
+    def recent_context(
+        self,
+        limit=5,
+    ):
 
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
+        return self.short_term_memory[-limit:]
 
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "Alright, Sir. Document selection cancelled."
-                    }
+    def clear_short_term_memory(self):
+
+        self.short_term_memory.clear()
+
+    async def prefetch(self, route, session_id):
+        """
+        Prepare only the memory needed for this route.
+        """
+        return
+
+    def _update_semantic_memory(
+        self,
+        memory,
+    ):
+        """
+        Mirror important memories into the semantic graph.
+        """
+
+        if not self.working_memory:
+            return
+
+        semantic = self.working_memory.semantic()
+
+        semantic.add_node(
+            node_id=memory.get("key"),
+            node_type=memory.get("category", "general"),
+            value=str(memory.get("value")),
+            metadata={
+                "importance": memory.get("importance"),
+                "confidence": memory.get("confidence"),
+            },
+        )
+
+        logger.info(
+            "[SemanticMemory] Mirrored memory '%s' into graph.",
+            memory.get("key", "unknown"),
+        )
+
+    # =========================================================
+    # DATABASE INITIALISATION
+    # =========================================================
+
+    async def initialize_indexes(self):
+        if self.memory_col is None:
+            return
+
+        try:
+            await self.memory_col.create_index("key")
+            await self.memory_col.create_index("category")
+            await self.memory_col.create_index("memory_type")
+            await self.memory_col.create_index("updated_at")
+
+            await self.memory_col.create_index(
+                [("key", 1), ("value", 1)]
+            )
+
+            logger.info(
+                "[MemoryEngine] MongoDB indexes initialized."
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "[MemoryEngine] Index creation note: %s",
+                exc
+            )
+
+    # =========================================================
+    # PROFILE
+    # =========================================================
+
+    async def get_profile(self) -> dict:
+
+        if self.profile_col is None:
+            return {}
+
+        try:
+            profile = await self.profile_col.find_one({})
+
+            if not profile:
+                return {}
+
+            profile.pop("_id", None)
+
+            return profile
+
+        except Exception:
+            logger.exception(
+                "[MemoryEngine] Failed to load profile."
+            )
+            return {}
+
+    # =========================================================
+    # NORMALISATION
+    # =========================================================
+
+    def _normalize(self, value: str) -> str:
+
+        value = value.strip()
+
+        value = re.sub(
+            r"\s+",
+            " ",
+            value
+        )
+
+        return value.strip(" .,!?")
+
+    def _normalize_key(self, subject: str) -> str:
+
+        subject = subject.lower().strip()
+
+        subject = subject.replace(
+            "favourite",
+            "favorite"
+        )
+
+        subject = re.sub(
+            r"^favorite\s+",
+            "",
+            subject
+        )
+
+        subject = re.sub(
+            r"[^a-z0-9\s_]",
+            "",
+            subject
+        )
+
+        subject = re.sub(
+            r"\s+",
+            "_",
+            subject
+        )
+
+        return f"favorite_{subject}"
+
+    def _validate_value(self, value: str) -> bool:
+
+        if not value:
+            return False
+
+        cleaned = value.strip().lower()
+
+        invalid = {
+            "",
+            "it",
+            "that",
+            "this",
+            "something",
+            "nothing",
+            "everything"
+        }
+
+        return (
+            len(cleaned) >= 2
+            and cleaned not in invalid
+        )
+
+    # =========================================================
+    # SHOULD MEMORY BE USED?
+    # =========================================================
+
+    def should_use_memory(self, query: str, intent: Optional[Any] = None) -> bool:
+        """
+        Determine whether the query should use personal memory.
+
+        Personal-reference questions must be allowed to use memory even
+        when they begin with phrases such as "what is", "where is", etc.
+
+        General knowledge questions should still bypass memory.
+        """
+        if not query:
+            return False
+
+        q = query.lower().strip()
+
+        intent_name = getattr(intent, "name", "").lower() if intent else ""
+
+        # These routes normally do not require personal-memory retrieval.
+        if intent_name in ("research", "coding", "web search", "tool"):
+            return False
+
+        # ---------------------------------------------------------
+        # PERSONAL MEMORY QUESTIONS
+        # ---------------------------------------------------------
+        # These must take priority over generic factual starters.
+        personal_patterns = (
+            r"\bmy\b",
+            r"\bmine\b",
+            r"\bi\b",
+            r"\bme\b",
+            r"\bdo you remember\b",
+            r"\bremember\b",
+            r"\brecall\b",
+            r"\babout me\b",
+            r"\babout myself\b",
+            r"\bwhat do you know about me\b",
+            r"\bwhat have i told you\b",
+        )
+
+        # Questions explicitly referring to the user should use memory.
+        if any(re.search(pattern, q) for pattern in personal_patterns):
+            return True
+
+        # ---------------------------------------------------------
+        # GENERAL KNOWLEDGE / FACTUAL QUESTIONS
+        # ---------------------------------------------------------
+        factual_starters = (
+            "who founded",
+            "who is",
+            "who was",
+            "what is",
+            "what was",
+            "where is",
+            "where was",
+            "when was",
+            "how does",
+            "how do",
+            "explain",
+            "calculate",
+        )
+
+        if q.startswith(factual_starters):
+            return False
+
+        # Default: allow memory for conversational/personal queries.
+        return True
+
+    # =========================================================
+    # SHOULD THIS MESSAGE BE STORED?
+    # =========================================================
+
+    def _should_extract(self, text: str) -> bool:
+
+        if not text:
+            return False
+
+        # Aadhaar
+        if re.search(
+            r"\b\d{4}\s?\d{4}\s?\d{4}\b",
+            text
+        ):
+            return False
+
+        # PAN
+        if re.search(
+            r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+            text.upper()
+        ):
+            return False
+
+        lower = text.lower().strip()
+
+        greetings = {
+            "hi",
+            "hello",
+            "hey",
+            "thanks",
+            "thank you",
+            "good morning",
+            "good evening",
+            "bye"
+        }
+
+        if lower in greetings:
+            return False
+
+        question_prefixes = (
+            "what ",
+            "what's ",
+            "what is ",
+            "who ",
+            "where ",
+            "when ",
+            "why ",
+            "how ",
+            "do i ",
+            "did i ",
+            "can i "
+        )
+
+        if lower.startswith(question_prefixes):
+            return False
+
+        if re.fullmatch(
+            r"[\d+\-*/.()\s]+",
+            text
+        ):
+            return False
+
+        return True
+
+    # =========================================================
+    # CENTRAL MEMORY EXTRACTOR
+    # =========================================================
+
+    def _extract_memory(
+        self,
+        text: str
+    ) -> Optional[Dict[str, Any]]:
+
+        original = text.strip()
+        lower = original.lower().strip()
+
+        # -----------------------------------------------------
+        # 1. NAME
+        # -----------------------------------------------------
+
+        name_patterns = [
+            r"\bmy name is\s+([a-zA-Z][a-zA-Z .'-]{1,80})",
+            r"\bi am called\s+([a-zA-Z][a-zA-Z .'-]{1,80})",
+            r"\bi'm called\s+([a-zA-Z][a-zA-Z .'-]{1,80})"
+        ]
+
+        for pattern in name_patterns:
+
+            match = re.search(
+                pattern,
+                original,
+                re.IGNORECASE
+            )
+
+            if match:
+
+                value = self._clean_clause(
+                    match.group(1)
                 )
 
                 return {
-                    "status": "document_selection_cancelled"
+                    "key": "name",
+                    "value": value,
+                    "category": "identity",
+                    "memory_type": "fact",
+                    "importance": 0.75,
+                    "is_list": False
                 }
 
-            documents = pending.get("documents", [])
+        # -----------------------------------------------------
+        # 2. PREFERRED NAME
+        # -----------------------------------------------------
 
-            ignored_words = {
-                "pdf",
-                "document",
-                "file",
+        preferred_name_patterns = [
+            r"\bcall me\s+([a-zA-Z][a-zA-Z .'-]{1,50})",
+            r"\bi prefer to be called\s+([a-zA-Z][a-zA-Z .'-]{1,50})",
+            r"\bpreferred name is\s+([a-zA-Z][a-zA-Z .'-]{1,50})"
+        ]
+
+        for pattern in preferred_name_patterns:
+
+            match = re.search(
+                pattern,
+                original,
+                re.IGNORECASE
+            )
+
+            if match:
+
+                value = self._clean_clause(
+                    match.group(1)
+                )
+
+                return {
+                    "key": "preferred_name",
+                    "value": value,
+                    "category": "identity",
+                    "memory_type": "preference",
+                    "importance": 0.75,
+                    "is_list": False
+                }
+
+        # -----------------------------------------------------
+        # 3. ADDRESSING PREFERENCE
+        # -----------------------------------------------------
+
+        if re.search(
+            r"\b(?:don't|do not)\s+call me\s+(?:by|with)\s+my name\b",
+            lower
+        ):
+
+            return {
+                "key": "address_by_name",
+                "value": "false",
+                "category": "interaction_preference",
+                "memory_type": "preference",
+                "importance": 0.75,
+                "is_list": False
+            }
+
+        # -----------------------------------------------------
+        # 4. BIRTHDAY
+        # -----------------------------------------------------
+
+        birthday_patterns = [
+            r"\bmy birthday is\s+(.+)",
+            r"\bmy date of birth is\s+(.+)",
+            r"\bi was born on\s+(.+)"
+        ]
+
+        for pattern in birthday_patterns:
+
+            match = re.search(
+                pattern,
+                original,
+                re.IGNORECASE
+            )
+
+            if match:
+
+                value = self._clean_clause(
+                    match.group(1)
+                )
+
+                return {
+                    "key": "birthday",
+                    "value": value,
+                    "category": "personal",
+                    "memory_type": "fact",
+                    "importance": 0.75,
+                    "is_list": False
+                }
+
+        # -----------------------------------------------------
+        # 5. FAVORITES
+        # -----------------------------------------------------
+
+        fav_match = re.search(
+            r"\bmy favou?rite\s+"
+            r"([a-zA-Z0-9 ]+?)\s+is\s+"
+            r"([^,.!?]+)",
+            original,
+            re.IGNORECASE
+        )
+
+        if fav_match:
+
+            subject = fav_match.group(1)
+
+            value = self._clean_clause(
+                fav_match.group(2)
+            )
+
+            return {
+                "key": self._normalize_key(subject),
+                "value": value,
+                "category": "preference",
+                "memory_type": "preference",
+                "importance": 0.5,
+                "is_list": False
+            }
+
+        # -----------------------------------------------------
+        # 6. STUDY / EDUCATION
+        # -----------------------------------------------------
+
+        study_match = re.search(
+            r"\bi (?:study|am studying)\s+([^,.!?]+)",
+            original,
+            re.IGNORECASE
+        )
+
+        if study_match:
+
+            value = self._clean_clause(
+                study_match.group(1)
+            )
+
+            return {
+                "key": "field_of_study",
+                "value": value,
+                "category": "education",
+                "memory_type": "fact",
+                "importance": 0.5,
+                "is_list": False
+            }
+
+        # -----------------------------------------------------
+        # 7. GENERAL LIKES
+        # -----------------------------------------------------
+
+        like_match = re.search(
+            r"\bi\s+(?:like|love)\s+([^.!?]+)",
+            original,
+            re.IGNORECASE
+        )
+
+        if like_match:
+
+            segment = self._clean_clause(
+                like_match.group(1)
+            )
+
+            items = self._parse_preference_items(
+                segment
+            )
+
+            if items:
+
+                return {
+                    "key": "user_likes",
+                    "value": items,
+                    "category": "preference",
+                    "memory_type": "preference",
+                    "importance": 0.25,
+                    "is_list": True
+                }
+
+        # -----------------------------------------------------
+        # 8. GENERAL "I PREFER"
+        # -----------------------------------------------------
+
+        prefer_match = re.search(
+            r"\bi prefer\s+([^.!?]+)",
+            original,
+            re.IGNORECASE
+        )
+
+        if prefer_match:
+
+            segment = self._clean_clause(
+                prefer_match.group(1)
+            )
+
+            if not re.search(
+                r"\b(?:but|don't|do not|call me|called)\b",
+                segment,
+                re.IGNORECASE
+            ):
+
+                return {
+                    "key": "general_preference",
+                    "value": segment,
+                    "category": "interaction_preference",
+                    "memory_type": "preference",
+                    "importance": 0.5,
+                    "is_list": False
+                }
+
+        return None
+
+    # =========================================================
+    # CLAUSE CLEANING
+    # =========================================================
+
+    def _clean_clause(
+        self,
+        value: str
+    ) -> str:
+
+        value = value.strip()
+
+        value = re.split(
+            r"\s+(?:but|and\s+i|because|although|however)\s+",
+            value,
+            maxsplit=1,
+            flags=re.IGNORECASE
+        )[0]
+
+        return self._normalize(value)
+
+    # =========================================================
+    # LIST PREFERENCES
+    # =========================================================
+
+    def _parse_preference_items(
+        self,
+        segment: str
+    ) -> list[str]:
+
+        segment = re.sub(
+            r"\band\b",
+            ",",
+            segment,
+            flags=re.IGNORECASE
+        )
+
+        items = []
+
+        for raw in segment.split(","):
+
+            item = self._normalize(raw)
+
+            if self._validate_value(item):
+                items.append(item)
+
+        return items
+
+    # =========================================================
+    # MEMORY RECORD BUILDER
+    # =========================================================
+
+    def _build_memory_record(
+        self,
+        memory: Dict[str, Any]
+    ):
+        now = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        imp = memory.get("importance", 0.5)
+        if isinstance(imp, str):
+            imp = {
+                "low": 0.25,
+                "medium": 0.5,
+                "high": 0.75,
+                "critical": 1.0,
+            }.get(imp.lower(), 0.5)
+        try:
+            imp = float(imp)
+        except (TypeError, ValueError):
+            imp = 0.5
+
+        return {
+
+            "key": memory["key"],
+
+            "value": memory["value"],
+
+            "summary": memory.get(
+                "summary",
+                str(memory["value"])
+            ),
+
+            "category": memory.get(
+                "category",
+                "general"
+            ),
+
+            "memory_type": memory.get(
+                "memory_type",
+                "fact"
+            ),
+
+            "importance": imp,
+
+            "confidence": memory.get(
+                "confidence",
+                1.0
+            ),
+
+            "source": memory.get(
+                "source",
+                "conversation"
+            ),
+
+            "entities": memory.get(
+                "entities",
+                []
+            ),
+
+            "relationships": memory.get(
+                "relationships",
+                []
+            ),
+
+            "topics": memory.get(
+                "topics",
+                []
+            ),
+
+            "aliases": memory.get(
+                "aliases",
+                []
+            ),
+
+            "tags": memory.get(
+                "tags",
+                []
+            ),
+
+            "embedding_id": memory.get(
+                "embedding_id"
+            ),
+
+            "document_id": memory.get(
+                "document_id"
+            ),
+
+            "created_at": now,
+
+            "updated_at": now,
+
+            "last_accessed": now,
+
+            "access_count": 0,
+
+            "schema_version": MEMORY_SCHEMA_VERSION
+        }
+
+    # =========================================================
+    # STORE MEMORY (UPDATED TO PREVENT DUPLICATES)
+    # =========================================================
+
+    async def get_memory(self, key: str) -> Optional[dict]:
+        """Helper to fetch an existing memory by its key."""
+        if self.memory_col is None:
+            return None
+        return await self.memory_col.find_one({"key": key})
+
+    async def _store_extracted_memory(
+        self,
+        memory: Dict[str, Any]
+    ) -> dict:
+
+        if self.memory_col is None:
+            return {"success": False}
+
+        key = memory["key"]
+        value = memory["value"]
+
+        # Check for existing memory to prevent duplicates and update instead
+        existing = await self.get_memory(key)
+
+        if existing is not None:
+            existing["value"] = value
+            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+            await self.update_memory(existing.get("_id"), existing)
+
+            logger.info(
+                "[Memory] Updated existing memory: %s",
+                key,
+            )
+
+            return {
+                "success": True,
+                "key": key,
+                "value": str(value),
+                "action": "update"
+            }
+
+        # Only if no existing memory is found should the code continue to insert
+        imp_val = memory.get("importance", 0.5)
+        if isinstance(imp_val, str):
+            is_perm = imp_val in ("high", "critical")
+        else:
+            try:
+                is_perm = float(imp_val) >= 0.75
+            except (TypeError, ValueError):
+                is_perm = False
+        memory["is_permanent"] = is_perm
+
+        if memory.get("is_list"):
+
+            stored = []
+
+            for item in value:
+
+                if not self._validate_value(item):
+                    continue
+
+                item_memory = dict(memory)
+                item_memory["value"] = item
+                record = self._build_memory_record(item_memory)
+
+                existing_item = await self.memory_col.find_one(
+                    {
+                        "key": key,
+                        "value": item
+                    }
+                )
+
+                if existing_item and existing_item.get("value") == item:
+                    stored.append(item)
+                    continue
+
+                version = 1
+                history = []
+
+                if existing_item:
+                    version = existing_item.get("version", 1) + 1
+                    history = existing_item.get("history", [])
+                    history.append({
+                        "value": existing_item.get("value"),
+                        "updated_at": existing_item.get("updated_at")
+                    })
+                    record["created_at"] = existing_item.get("created_at", record["created_at"])
+                    record["access_count"] = existing_item.get("access_count", 0)
+
+                record["version"] = version
+                record["history"] = history
+                record["is_permanent"] = memory["is_permanent"]
+
+                await self.memory_col.update_one(
+                    {
+                        "key": key,
+                        "value": item
+                    },
+                    {
+                        "$set": record,
+                        "$setOnInsert": {
+                            "expires_at": None
+                        }
+                    },
+                    upsert=True
+                )
+
+                self._update_semantic_memory(item_memory)
+
+                stored.append(item)
+
+            return {
+                "success": bool(stored),
+                "key": key,
+                "value": ", ".join(stored),
+                "action": "stored"
+            }
+
+        if not self._validate_value(str(value)):
+            return {"success": False}
+
+        record = self._build_memory_record(memory)
+
+        record["version"] = 1
+        record["history"] = []
+        record["is_permanent"] = memory["is_permanent"]
+
+        insert_result = await self.memory_col.insert_one(record)
+
+        self._update_semantic_memory(memory)
+
+        logger.info(
+            "[MemoryEngine] Stored memory — Key: %s | Value: %s",
+            key,
+            value
+        )
+
+        return {
+            "success": True,
+            "key": key,
+            "value": str(value),
+            "action": "stored"
+        }
+
+    # =========================================================
+    # PUBLIC STORE METHODS
+    # =========================================================
+
+    async def deterministic_extract_and_store(
+        self,
+        user_text: str
+    ):
+
+        if (
+            self.memory_col is None
+            or not self._should_extract(user_text)
+        ):
+            return
+
+        memory = self._extract_memory(
+            user_text
+        )
+
+        if memory:
+            await self._store_extracted_memory(
+                memory
+            )
+
+    async def process_and_store(
+        self,
+        user_text: str
+    ) -> dict:
+
+        if (
+            self.memory_col is None
+            or not self._should_extract(user_text)
+        ):
+            return {"success": False}
+
+        memory = self._extract_memory(
+            user_text
+        )
+
+        if memory:
+            res = await self._store_extracted_memory(
+                memory
+            )
+            if res.get("success"):
+                if hasattr(self, "learning_engine") and self.learning_engine:
+                    await self.learning_engine.learn_from_memory(memory)
+            return res
+
+        if (
+            self.llm_router is not None
+            and hasattr(self.llm_router, "extract_memories")
+        ):
+            try:
+
+                memories = await self.llm_router.extract_memories(
+                    user_text
+                )
+
+                if memories:
+
+                    stored_results = []
+
+                    for extracted in memories:
+
+                        memory_data = {
+                            "key": extracted.get("key"),
+                            "value": extracted.get("value"),
+                            "category": extracted.get(
+                                "category",
+                                "general"
+                            ),
+                            "memory_type": extracted.get(
+                                "memory_type",
+                                "fact"
+                            ),
+                            "importance": extracted.get(
+                                "importance",
+                                0.5
+                            ),
+                            "is_list": False
+                        }
+
+                        if (
+                            not memory_data["key"]
+                            or not memory_data["value"]
+                        ):
+                            continue
+
+                        result = await self._store_extracted_memory(
+                            memory_data
+                        )
+
+                        if result.get("success"):
+                            stored_results.append(result)
+                            if hasattr(self, "learning_engine") and self.learning_engine:
+                                await self.learning_engine.learn_from_memory(memory_data)
+
+                    if stored_results:
+
+                        logger.info(
+                            "[MemoryEngine] Intelligent memory stored %d memories.",
+                            len(stored_results)
+                        )
+
+                        return {
+                            "success": True,
+                            "action": "intelligent_store",
+                            "memories": stored_results
+                        }
+
+            except Exception:
+                logger.exception(
+                    "[MemoryEngine] Intelligent memory extraction failed."
+                )
+
+        return {"success": False}
+
+    # =========================================================
+    # MEMORY RETRIEVAL
+    # =========================================================
+
+    def _calculate_score(
+        self,
+        memory,
+        semantic_score
+    ):
+
+        importance = memory.get(
+            "importance",
+            0.5
+        )
+
+        if isinstance(importance, str):
+            importance = {
+                "low": 0.25,
+                "medium": 0.5,
+                "high": 0.75,
+                "critical": 1.0,
+            }.get(importance.lower(), 0.5)
+
+        try:
+            importance = float(importance)
+        except (TypeError, ValueError):
+            importance = 0.5
+
+        confidence = memory.get(
+            "confidence",
+            1
+        )
+
+        accesses = memory.get(
+            "access_count",
+            0
+        )
+
+        capped_accesses = min(accesses, 10)
+
+        return (
+
+            semantic_score
+
+            +
+
+            importance * 0.15
+
+            +
+
+            confidence * 5
+
+            +
+
+            capped_accesses * 0.08
+
+        )
+
+    async def get_relevant_memories(
+        self,
+        query: str,
+        limit: int = 10
+    ) -> list[dict]:
+
+        if self.memory_col is None:
+            return []
+
+        try:
+            lower = query.lower().strip()
+
+            filter_query = None
+
+            if re.search(
+                r"\b(?:what(?:'s| is) my name|who am i|do you know my name|tell me my name|remember my name|what's my name again|say my name)\b",
+                lower
+            ):
+                filter_query = {"key": "name"}
+
+            elif "preferred name" in lower:
+                filter_query = {"key": "preferred_name"}
+
+            elif any(
+                token in lower
+                for token in (
+                    "birthday",
+                    "date of birth",
+                    "dob",
+                    "when was i born"
+                )
+            ):
+                filter_query = {"key": "birthday"}
+
+            elif any(
+                token in lower
+                for token in (
+                    "what do i study",
+                    "what am i studying",
+                    "field of study"
+                )
+            ):
+                filter_query = {"key": "field_of_study"}
+
+            elif any(
+                token in lower
+                for token in (
+                    "what do i like",
+                    "things i like",
+                    "my likes"
+                )
+            ):
+                filter_query = {"key": "user_likes"}
+
+            if filter_query is None:
+
+                favorite_match = re.search(
+                    r"(?:what(?:'s| is)|remember|recall)\s+"
+                    r"(?:my\s+)?(?:favorite|favourite)\s+"
+                    r"([a-zA-Z0-9\s]+)",
+                    lower
+                )
+
+                if favorite_match:
+                    subject = favorite_match.group(1).strip()
+
+                    filter_query = {
+                        "key": self._normalize_key(subject)
+                    }
+
+            if filter_query is not None:
+
+                cursor = self.memory_col.find(
+                    filter_query
+                ).limit(limit)
+
+                memories = await cursor.to_list(
+                    length=limit
+                )
+
+                if memories:
+
+                    now_iso = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+
+                    matched_ids = [
+                        m["_id"]
+                        for m in memories
+                        if m.get("_id")
+                    ]
+
+                    if matched_ids:
+                        await self.memory_col.update_many(
+                            {
+                                "_id": {
+                                    "$in": matched_ids
+                                }
+                            },
+                            {
+                                "$inc": {
+                                    "access_count": 1
+                                },
+                                "$set": {
+                                    "last_accessed": now_iso
+                                }
+                            }
+                        )
+
+                    return [
+                        {
+                            "key": m.get("key"),
+                            "value": m.get("value"),
+                            "category": m.get(
+                                "category",
+                                "general"
+                            ),
+                            "memory_type": m.get(
+                                "memory_type",
+                                "fact"
+                            ),
+                            "importance": m.get(
+                                "importance",
+                                0.5
+                            ),
+                            "confidence": m.get(
+                                "confidence",
+                                1.0
+                            ),
+                            "retrieval_score": 1.0,
+                            "updated_at": m.get(
+                                "updated_at"
+                            )
+                        }
+                        for m in memories
+                        if m.get("key") and m.get("value")
+                    ]
+
+            cursor = self.memory_col.find({
+                "category": {
+                    "$nin": [
+                        "document",
+                        "document_chunk"
+                    ]
+                }
+            })
+
+            all_memories = await cursor.to_list(
+                length=200
+            )
+
+            if not all_memories:
+                return []
+
+            stop_words = {
+                "what",
+                "whats",
+                "what's",
+                "where",
+                "when",
+                "why",
+                "how",
+                "who",
+                "which",
+                "did",
+                "does",
+                "do",
+                "am",
+                "is",
+                "are",
+                "was",
+                "were",
                 "the",
+                "a",
+                "an",
                 "my",
-                "one",
-                "give",
-                "send",
                 "me",
-                "please",
+                "i",
+                "you",
+                "your",
+                "about",
+                "know",
+                "remember",
+                "recall",
+                "tell",
+                "please"
             }
 
             query_words = {
                 word
-                for word in (
-                    answer
-                    .replace(".pdf", "")
-                    .replace("_", " ")
-                    .replace("-", " ")
-                    .split()
+                for word in re.findall(
+                    r"[a-zA-Z0-9]+",
+                    lower
                 )
-                if word not in ignored_words
+                if len(word) > 1
+                and word not in stop_words
             }
 
-            best_document = None
-            best_score = 0
+            aliases = {
+                "plan": {
+                    "plan",
+                    "planned",
+                    "planning",
+                    "goal",
+                    "future",
+                    "postgraduate",
+                    "masters",
+                    "master",
+                    "education",
+                    "study"
+                },
 
-            for document in documents:
+                "future": {
+                    "future",
+                    "plan",
+                    "planned",
+                    "planning",
+                    "goal",
+                    "career",
+                    "postgraduate"
+                },
 
-                filename = str(
-                    document.get("filename", "")
-                )
+                "btech": {
+                    "btech",
+                    "degree",
+                    "undergraduate",
+                    "postgraduate",
+                    "masters",
+                    "education"
+                },
 
-                filename_words = {
-                    word
-                    for word in (
-                        filename
-                        .lower()
-                        .replace(".pdf", "")
-                        .replace("_", " ")
-                        .replace("-", " ")
-                        .split()
-                    )
-                    if word not in ignored_words
+                "master": {
+                    "master",
+                    "masters",
+                    "postgraduate",
+                    "degree",
+                    "study"
+                },
+
+                "masters": {
+                    "master",
+                    "masters",
+                    "postgraduate",
+                    "degree",
+                    "study"
+                },
+
+                "study": {
+                    "study",
+                    "education",
+                    "degree",
+                    "university",
+                    "college",
+                    "postgraduate"
+                },
+
+                "italy": {
+                    "italy",
+                    "europe",
+                    "european"
+                },
+
+                "education": {
+                    "education",
+                    "study",
+                    "degree",
+                    "university",
+                    "college"
+                },
+
+                "career": {
+                    "career",
+                    "job",
+                    "work",
+                    "future",
+                    "goal",
+                    "plan"
+                },
+
+                "preference": {
+                    "preference",
+                    "prefer",
+                    "favorite",
+                    "favourite",
+                    "love",
+                    "prefer"
                 }
-
-                score = len(
-                    query_words.intersection(filename_words)
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_document = document
-
-            if best_document and best_score > 0:
-
-                telegram_file_id = best_document.get(
-                    "telegram_file_id"
-                )
-
-                filename = best_document.get(
-                    "filename",
-                    "document.pdf"
-                )
-
-                if telegram_file_id:
-
-                    http_client = req.app.state.registry.get(
-                        "http_client"
-                    )
-
-                    telegram_response = await http_client.post(
-                        f"https://api.telegram.org/bot{token}/sendDocument",
-                        json={
-                            "chat_id": chat_id,
-                            "document": telegram_file_id,
-                            "caption": filename,
-                        }
-                    )
-
-                    if telegram_response.is_success:
-
-                        pending_document_actions.pop(
-                            confirmation_key,
-                            None
-                        )
-
-                        return {
-                            "status": "document_sent"
-                        }
-
-            # No document matched the user's selection.
-            filenames = [
-                document.get(
-                    "filename",
-                    "Unnamed document"
-                )
-                for document in documents
-            ]
-
-            http_client = req.app.state.registry.get(
-                "http_client"
-            )
-
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": (
-                        "I couldn't identify which document you meant, Sir. "
-                        "Please choose one of these:\n\n"
-                        + "\n".join(
-                            f"• {name}"
-                            for name in filenames
-                        )
-                    )
-                }
-            )
-
-            return {
-                "status": "document_selection_required"
             }
 
-        # User cancelled the operation.
-        if answer in (
-            "no",
-            "n",
-            "cancel",
-            "stop",
-            "don't",
-            "dont",
-        ):
-            pending_document_actions.pop(
-                confirmation_key,
-                None
+            expanded_query_words = set(
+                query_words
             )
 
-            http_client = req.app.state.registry.get(
-                "http_client"
-            )
+            for word in list(query_words):
 
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": "Cancelled, Sir."
-                }
-            )
-
-            return {
-                "status": "document_action_cancelled"
-            }
-
-        # User confirmed the operation.
-        if answer in (
-            "yes",
-            "y",
-            "confirm",
-            "yes delete",
-            "delete it",
-            "do it",
-        ):
-            document_repository = req.app.state.registry.get(
-                "document_repository"
-            )
-
-            action = pending.get("action")
-
-            if action == "delete_document":
-
-                document_id = pending.get(
-                    "document_id"
-                )
-
-                filename = pending.get(
-                    "filename",
-                    "document"
-                )
-
-                deleted = await document_repository.delete_document(
-                    document_id=document_id,
-                    user_id=str(user_id)
-                )
-
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
-
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
-                message = (
-                    f"Deleted {filename}, Sir."
-                    if deleted
-                    else "I couldn't delete that document, Sir."
-                )
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": message
-                    }
-                )
-
-                return {
-                    "status": (
-                        "document_deleted"
-                        if deleted
-                        else "document_delete_failed"
+                if word in aliases:
+                    expanded_query_words.update(
+                        aliases[word]
                     )
-                }
 
-            if action == "delete_all_documents":
+            scored = []
 
-                deleted_count = (
-                    await document_repository.delete_all_user_documents(
-                        user_id=str(user_id)
+            for memory in all_memories:
+
+                key = str(
+                    memory.get(
+                        "key",
+                        ""
+                    )
+                ).lower()
+
+                value = str(
+                    memory.get(
+                        "value",
+                        ""
+                    )
+                ).lower()
+
+                category = str(
+                    memory.get(
+                        "category",
+                        ""
+                    )
+                ).lower()
+
+                memory_type = str(
+                    memory.get(
+                        "memory_type",
+                        ""
+                    )
+                ).lower()
+
+                searchable = (
+                    key.replace("_", " ")
+                    + " "
+                    + value
+                    + " "
+                    + category
+                    + " "
+                    + memory_type
+                )
+
+                memory_words = set(
+                    re.findall(
+                        r"[a-zA-Z0-9]+",
+                        searchable
                     )
                 )
 
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
+                semantic_score = 0.0
+
+                direct_matches = (
+                    query_words
+                    & memory_words
                 )
 
-                http_client = req.app.state.registry.get(
-                    "http_client"
+                semantic_score += len(
+                    direct_matches
+                ) * 3.0
+
+                semantic_matches = (
+                    expanded_query_words
+                    & memory_words
                 )
 
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            f"Deleted {deleted_count} stored "
-                            f"document(s), Sir."
+                semantic_score += len(
+                    semantic_matches
+                ) * 1.5
+
+                key_words = set(
+                    re.findall(
+                        r"[a-zA-Z0-9]+",
+                        key.replace("_", " ")
+                    )
+                )
+
+                key_matches = (
+                    expanded_query_words
+                    & key_words
+                )
+
+                semantic_score += len(
+                    key_matches
+                ) * 2.5
+
+                score = self._calculate_score(memory, semantic_score)
+
+                if semantic_score > 0:
+
+                    scored.append(
+                        (
+                            score,
+                            memory
                         )
-                    }
-                )
+                    )
 
-                return {
-                    "status": "all_documents_deleted"
-                }
-
-    # Handle document upload
-    if "document" in msg:
-        document = msg["document"]
-        file_id = document["file_id"]
-
-        http_client = req.app.state.registry.get("http_client")
-
-        # Get Telegram file information
-        file_info = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
-            params={"file_id": file_id}
-        )
-
-        file_path = file_info.json()["result"]["file_path"]
-
-        download_url = (
-            f"https://api.telegram.org/file/bot"
-            f"{token}/{file_path}"
-        )
-
-        os.makedirs("uploads", exist_ok=True)
-
-        # Preserve the original Telegram filename/extension.
-        original_filename = document.get("file_name")
-
-        if original_filename:
-            safe_filename = os.path.basename(original_filename)
-        else:
-            safe_filename = os.path.basename(file_path)
-
-        local_path = os.path.join(
-            "uploads",
-            safe_filename
-        )
-
-        response = await http_client.get(download_url)
-
-        with open(local_path, "wb") as f:
-            f.write(response.content)
-
-        document_ai = req.app.state.registry.get("document_intelligence")
-
-        session_id = str(chat_id)
-
-        original_filename = (
-            document.get("file_name")
-            or Path(local_path).name
-        )
-
-        result = await document_ai.process_document(
-            file_path=local_path,
-            session_id=session_id,
-            document_name=original_filename
-        )
-
-        # -----------------------------------------------------
-        # Persist document metadata in MongoDB
-        # -----------------------------------------------------
-
-        if req.app.state.registry.has("document_repository"):
-
-            document_repository = req.app.state.registry.get(
-                "document_repository"
+            scored.sort(
+                key=lambda item: item[0],
+                reverse=True
             )
 
-            try:
-                saved_document = await document_repository.save_document(
-                    user_id=str(user_id),
-                    filename=safe_filename,
-                    telegram_file_id=document.get("file_id"),
-                    telegram_file_unique_id=document.get(
-                        "file_unique_id"
-                    ),
-                    mime_type=document.get("mime_type"),
-                    size=document.get("file_size"),
-                    summary=result.get("summary"),
-                    text_preview=result.get("text_preview"),
-                    vector_ids=result.get("vector_ids", []),
-                    metadata={
-                        "source": "telegram",
-                        "chat_id": str(chat_id),
-                        "session_id": session_id,
-                    },
-                )
-
-                logger.info(
-                    "[Telegram] Document catalogue entry saved: %s",
-                    saved_document.get("document_id")
-                )
-
-            except Exception:
-                logger.exception(
-                    "[Telegram] Failed to persist document metadata."
-                )
-
-        state_manager = req.app.state.registry.get("state_manager")
-
-        if state_manager:
-            doc_name = document.get("file_name") or Path(local_path).name
-
-            state_manager.update_state(
-                session_id,
-                active_document=True,
-                document_uploaded=True,
-                current_document=doc_name,
-                current_document_summary=result["summary"],
-                last_document_question=None,
-                last_document_answer=None
-            )
-
-        logger.info(
-            "[Telegram] Document processed and stored for session %s. "
-            "Waiting for user instruction.",
-            session_id,
-        )
-
-        return {
-            "status": "processed",
-            "document_ready": True,
-        }
-
-    result = await process_task(
-        text,
-        str(chat_id),
-        request_id,
-        req.app.state
-    )
-
-    http_client = req.app.state.registry.get("http_client")
-
-    # ---------------------------------------------------------
-    # STRUCTURED DOCUMENT ACTION
-    # ---------------------------------------------------------
-
-    if isinstance(result, SystemResponse):
-
-        response_data = (
-            result.data
-            if isinstance(result.data, dict)
-            else {}
-        )
-
-        document_action = response_data.get(
-            "document_action"
-        )
-
-        # -----------------------------------------------------
-        # SEND STORED DOCUMENT
-        # -----------------------------------------------------
-
-        if document_action == "send_document":
-
-            documents = response_data.get(
-                "documents",
-                []
-            )
-
-            query = str(
-                response_data.get("query", text)
-            ).lower()
-
-            if not documents:
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I couldn't find that document, Sir."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_not_found"
-                }
-
-            # -------------------------------------------------
-            # Choose the best matching document.
-            #
-            # Prefer filenames whose meaningful words occur
-            # in the user's request.
-            # -------------------------------------------------
-
-            best_document = None
-            best_score = -1
-
-            ignored_words = {
-                "pdf",
-                "document",
-                "file",
-                "give",
-                "send",
-                "get",
-                "return",
-                "download",
-                "share",
-                "show",
-                "me",
-                "my",
-                "the",
-                "a",
-                "an",
-                "please",
-                "now",
-            }
-
-            for document in documents:
-
-                filename = str(
-                    document.get("filename", "")
-                )
-
-                normalized_filename = (
-                    filename
-                    .lower()
-                    .replace(".pdf", "")
-                    .replace("_", " ")
-                    .replace("-", " ")
-                )
-
-                filename_words = {
-                    word
-                    for word in normalized_filename.split()
-                    if word not in ignored_words
-                }
-
-                score = sum(
-                    1
-                    for word in filename_words
-                    if word in query
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_document = document
-
-            # If there are several documents and nothing matched,
-            # do not silently send an arbitrary file.
             if (
-                len(documents) > 1
-                and best_score <= 0
+                self.llm_router is not None
+                and hasattr(
+                    self.llm_router,
+                    "select_relevant_memories"
+                )
             ):
 
-                filenames = [
-                    document.get(
-                        "filename",
-                        "Unnamed document"
-                    )
-                    for document in documents
-                ]
+                try:
 
-                # Remember that ARIA is waiting for the user
-                # to choose one of these documents.
-                pending_document_actions[str(user_id)] = {
-                    "action": "select_document",
-                    "documents": documents,
-                }
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I found multiple documents, Sir. "
-                            "Which one would you like?\n\n"
-                            + "\n".join(
-                                f"• {name}"
-                                for name in filenames
+                    candidates = [
+                        {
+                            "key": m.get("key"),
+                            "value": m.get("value"),
+                            "category": m.get(
+                                "category",
+                                "general"
                             )
+                        }
+                        for m in all_memories
+                        if m.get("key")
+                        and m.get("value")
+                    ]
+
+                    selected_keys = (
+                        await self.llm_router.select_relevant_memories(
+                            query,
+                            candidates
                         )
-                    }
-                )
-
-                return {
-                    "status": "document_selection_required"
-                }
-
-            if not best_document:
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I couldn't identify the requested "
-                            "document, Sir."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_not_found"
-                }
-
-            telegram_file_id = best_document.get(
-                "telegram_file_id"
-            )
-
-            filename = best_document.get(
-                "filename",
-                "document.pdf"
-            )
-
-            if not telegram_file_id:
-
-                logger.warning(
-                    "[Telegram] Stored document '%s' has no "
-                    "telegram_file_id.",
-                    filename
-                )
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I found the document record, Sir, "
-                            "but its original Telegram file reference "
-                            "is unavailable."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_file_unavailable"
-                }
-
-            # -------------------------------------------------
-            # Telegram can resend an existing uploaded file
-            # directly using its stored file_id.
-            # -------------------------------------------------
-
-            telegram_response = await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendDocument",
-                json={
-                    "chat_id": chat_id,
-                    "document": telegram_file_id,
-                    "caption": filename
-                }
-            )
-
-            if telegram_response.is_success:
-
-                logger.info(
-                    "[Telegram] Sent stored document '%s'.",
-                    filename
-                )
-
-                return {
-                    "status": "document_sent"
-                }
-
-            logger.error(
-                "[Telegram] Failed to send stored document '%s': %s",
-                filename,
-                telegram_response.text
-            )
-
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": (
-                        "I found the document, Sir, but Telegram "
-                        "couldn't send it."
                     )
-                }
+
+                    if selected_keys:
+
+                        selected_key_set = set(
+                            selected_keys
+                        )
+
+                        llm_selected = [
+                            m
+                            for m in all_memories
+                            if m.get("key")
+                            in selected_key_set
+                        ]
+
+                        existing_keys = {
+                            m.get("key")
+                            for _, m in scored
+                        }
+
+                        for memory in llm_selected:
+
+                            if (
+                                memory.get("key")
+                                not in existing_keys
+                            ):
+                                scored.append(
+                                    (
+                                        self._calculate_score(memory, 2.0),
+                                        memory
+                                    )
+                                )
+
+                except Exception:
+
+                    logger.exception(
+                        "[MemoryEngine] Semantic memory selection failed."
+                    )
+
+            if not scored:
+                return []
+
+            scored.sort(
+                key=lambda item: item[0],
+                reverse=True
             )
 
-            return {
-                "status": "document_send_failed"
-            }
+            final_memories = []
+            seen_keys = set()
 
-    # ---------------------------------------------------------
-    # NORMAL TEXT RESPONSE
-    # ---------------------------------------------------------
+            for score, memory in scored:
 
-    reply_text = str(result)
+                key = memory.get("key")
+                value = memory.get("value")
 
-    logger.info(
-        "[Telegram] Final reply text: %r",
-        reply_text
-    )
+                if not key or not value:
+                    continue
 
-    telegram_response = await http_client.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": reply_text
-        }
-    )
+                if key in seen_keys:
+                    continue
 
-    # ---------------------------------------------------------
-    # SAVE COMPLETED CONVERSATION TURN
-    # ---------------------------------------------------------
+                seen_keys.add(key)
 
-    if telegram_response.is_success:
+                final_memories.append({
+                    "key": key,
+                    "value": value,
+                    "category": memory.get(
+                        "category",
+                        "general"
+                    ),
+                    "memory_type": memory.get(
+                        "memory_type",
+                        "fact"
+                    ),
+                    "importance": memory.get(
+                        "importance",
+                        0.5
+                    ),
+                    "confidence": memory.get(
+                        "confidence",
+                        1.0
+                    ),
+                    "retrieval_score": round(
+                        float(score),
+                        3
+                    ),
+                    "updated_at": memory.get(
+                        "updated_at"
+                    )
+                })
 
-        state_manager = req.app.state.registry.get(
-            "state_manager"
-        )
+                if len(final_memories) >= limit:
+                    break
 
-        if state_manager:
+            returned_keys = [
+                m["key"]
+                for m in final_memories[:1]
+            ]
 
-            state_manager.update_state(
-                str(chat_id),
-                last_query=text,
-                last_assistant_response=reply_text,
-            )
+            if returned_keys:
 
-            state_manager.add_conversation_turn(
-                session_id=str(chat_id),
-                user_message=text,
-                assistant_message=reply_text
-            )
+                await self.memory_col.update_many(
+                    {
+                        "key": {
+                            "$in": returned_keys
+                        }
+                    },
+                    {
+                        "$inc": {
+                            "access_count": 1
+                        },
+                        "$set": {
+                            "last_accessed": datetime.now(
+                                timezone.utc
+                            ).isoformat()
+                        }
+                    }
+                )
 
             logger.info(
-                "[Conversation] Stored completed turn "
-                "for session %s.",
-                chat_id
+                "[MemoryEngine] Retrieved %d relevant memories for query: %s",
+                len(final_memories),
+                query
             )
 
-        conversation_manager = req.app.state.registry.get("conversation_manager")
+            return final_memories
 
-        if conversation_manager:
-            # Simple entity extraction fallback based on common words or capitalized words in text
-            extracted_entities = [word for word in text.split() if word and word[0].isupper()]
-            conversation_manager.update_turn(
-                session_id=str(chat_id),
-                user_message=text,
-                assistant_message=reply_text,
-                intent=None,
-                entities=extracted_entities
+        except Exception:
+
+            logger.exception("[Memory Retrieval Error]")
+
+            traceback.print_exc()
+
+            return []
+
+    async def retrieve(self, query: str) -> list[dict]:
+
+        return await self.get_relevant_memories(query)
+
+    # =========================================================
+    # DELETE MEMORY
+    # =========================================================
+
+    async def delete_memory(
+        self,
+        query_or_key: str
+    ) -> bool:
+
+        if self.memory_col is None:
+            return False
+
+        try:
+
+            cleaned = query_or_key.lower().strip()
+
+            cleaned = re.sub(
+                r"^(forget|delete|clear|remove)\s+",
+                "",
+                cleaned,
+                flags=re.IGNORECASE
             )
 
-    return {
-        "status": "ok"
-    }
+            cleaned = re.sub(
+                r"\bmy\b",
+                "",
+                cleaned,
+                flags=re.IGNORECASE
+            ).strip()
 
-@app.get("/health")
-async def health(req: Request):
-    registry = req.app.state.registry
+            target_key = (
+                self._normalize_key(cleaned)
+                if cleaned else ""
+            )
 
-    if not registry.has("health_checker"):
+            if target_key:
+                res = await self.memory_col.delete_one(
+                    {"key": target_key}
+                )
+                if res.deleted_count > 0:
+                    return True
 
-        return {
-            "status": "healthy",
-            "version": "12.0.0",
-            "message": "Health checker not registered."
-        }
+            res_direct = await self.memory_col.delete_one(
+                {"key": query_or_key}
+            )
 
-    checker = registry.get("health_checker")
+            if res_direct.deleted_count > 0:
+                return True
 
-    base_health = await checker.check_readiness()
+            res_regex = await self.memory_col.delete_one(
+                {"key": {"$regex": cleaned, "$options": "i"}}
+            )
 
-    extended_status = {
-        **base_health,
-        "subsystems": {
-            "memory_engine": registry.has("memory_engine"),
-            "skill_manager": registry.has("skill_manager"),
-            "action_manager": registry.has("action_manager"),
-            "plugin_manager": registry.has("plugin_manager"),
-            "scheduler": registry.has("scheduler"),
-            "http_client": registry.has("http_client"),
-        },
-        "plugins_loaded": (
-            list(registry.get("plugin_manager").plugins.keys())
-            if registry.has("plugin_manager")
-            else []
-        ),
-        "version": "12.0.0",
-    }
+            if res_regex.deleted_count > 0:
+                return True
 
-    return extended_status
+            return False
 
-@app.get("/")
-async def root():
-    return {"system": "ARIA AI Operating Platform", "status": "operational", "version": "12.0.0"}
+        except Exception:
+            logger.exception("[MemoryEngine Delete Error]")
+            return False
 
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str = "web"
+    # =========================================================
+    # ADDITIONAL ROUTER METHODS
+    # =========================================================
 
-class ChatResponse(BaseModel):
-    success: bool
-    reply: str
+    async def store_chat(self, chat):
+        return await self.process_and_store(chat)
 
-@app.post("/chat", response_model=ChatResponse)
-async def web_chat(
-    request: ChatRequest,
-    req: Request,
-):
-    """
-    Web frontend endpoint.
+    async def store_profile(self, profile):
+        if self.profile_col is None:
+            return
 
-    Uses the exact same cognitive pipeline
-    as Telegram.
-    """
-
-    request_id = str(uuid.uuid4())
-
-    try:
-
-        result = await process_task(
-            user_text=request.message,
-            session_id=request.session_id,
-            request_id=request_id,
-            app_state=req.app.state,
+        await self.profile_col.update_one(
+            {},
+            {
+                "$set": profile
+            },
+            upsert=True
         )
 
-        return ChatResponse(
-            success=True,
-            reply=str(result),
+    async def update_memory(
+        self,
+        memory_id,
+        data
+    ):
+        if self.memory_col is None:
+            return False
+
+        await self.memory_col.update_one(
+            {
+                "_id": memory_id
+            },
+            {
+                "$set": data
+            }
         )
 
-    except Exception as e:
+        return True
 
-        logger.exception(
-            "[WEB CHAT]"
+    async def memory_exists(
+        self,
+        query
+    ):
+        if self.memory_col is None:
+            return False
+
+        memory = await self.memory_col.find_one(
+            {
+                "$or": [
+                    {"key": query},
+                    {"value": query}
+                ]
+            }
         )
 
-        return ChatResponse(
-            success=False,
-            reply=f"System Error: {e}"
-        )
+        return memory is not None
