@@ -7,6 +7,7 @@ class Route(str, Enum):
     CHAT = "chat"
     CODING = "coding"
     TIME = "time"
+    WEATHER = "weather"
     MEMORY = "memory"
     DOCUMENT = "document"
     VISION = "vision"
@@ -84,6 +85,27 @@ def decide(query: str) -> RouteDecision:
         "clock",
     )):
         return RouteDecision(Route.TIME, 0.99)
+
+    # Weather
+    if any(word in q for word in (
+        "weather",
+        "temperature",
+        "forecast",
+        "rain",
+        "raining",
+        "sunny",
+        "cloudy",
+        "humidity",
+        "wind",
+        "snow",
+        "storm",
+        "thunderstorm",
+        "precipitation",
+        "climate",
+        "hot",
+        "cold",
+    )):
+        return RouteDecision(Route.WEATHER, 0.99)
 
     # Coding
     if (
