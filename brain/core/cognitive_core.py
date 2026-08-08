@@ -528,6 +528,64 @@ class CognitiveCore:
 
         return evidence
 
+    def _normalize_execution_verification(
+        self,
+        evaluation,
+        result,
+    ) -> Dict[str, Any]:
+        """
+        Normalize executor verification into one reliable structure.
+
+        Verification states:
+        - verified_success
+        - verified_failure
+        - uncertain
+        """
+
+        if not isinstance(evaluation, dict):
+            evaluation = {}
+
+        goal_completed = evaluation.get("goal_completed")
+
+        if goal_completed is True:
+            return {
+                "status": "verified_success",
+                "goal_completed": True,
+                "confidence": float(
+                    evaluation.get("confidence", 1.0)
+                    or 1.0
+                ),
+                "reason": evaluation.get(
+                    "reason",
+                    "Goal verified successfully.",
+                ),
+            }
+
+        if goal_completed is False:
+            return {
+                "status": "verified_failure",
+                "goal_completed": False,
+                "confidence": float(
+                    evaluation.get("confidence", 0.0)
+                    or 0.0
+                ),
+                "reason": evaluation.get(
+                    "reason",
+                    "Goal was not completed.",
+                ),
+            }
+
+        # Missing verification is NOT success.
+        return {
+            "status": "uncertain",
+            "goal_completed": False,
+            "confidence": 0.0,
+            "reason": (
+                evaluation.get("reason")
+                or "Execution result could not be verified."
+            ),
+        }
+
     async def _execute_plan_with_recovery(
         self,
         *,
@@ -619,31 +677,33 @@ class CognitiveCore:
                             exc,
                         )
 
+                verification = (
+                    self._normalize_execution_verification(
+                        evaluation,
+                        last_result,
+                    )
+                )
+
                 # -------------------------------------------------
                 # ACCEPT VERIFIED SUCCESS
                 # -------------------------------------------------
 
-                if isinstance(evaluation, dict):
-
-                    goal_completed = evaluation.get(
-                        "goal_completed"
+                if verification["goal_completed"]:
+                    logger.info(
+                        "[Recovery] Goal verified successfully "
+                        "on attempt %d.",
+                        attempt,
                     )
 
-                    if goal_completed is True:
-                        logger.info(
-                            "[Recovery] Goal verified successfully "
-                            "on attempt %d.",
-                            attempt,
-                        )
-
-                        return {
-                            "result": last_result,
-                            "plan": current_plan,
-                            "evaluation": evaluation,
-                            "attempts": attempt,
-                            "recovered": attempt > 1,
-                            "success": True,
-                        }
+                    return {
+                        "result": last_result,
+                        "plan": current_plan,
+                        "evaluation": evaluation,
+                        "verification": verification,
+                        "attempts": attempt,
+                        "recovered": attempt > 1,
+                        "success": True,
+                    }
 
                 # -------------------------------------------------
                 # FALLBACK SUCCESS DETECTION
@@ -688,6 +748,7 @@ class CognitiveCore:
                             "result": last_result,
                             "plan": current_plan,
                             "evaluation": evaluation,
+                            "verification": verification,
                             "attempts": attempt,
                             "recovered": attempt > 1,
                             "success": True,
@@ -791,7 +852,8 @@ class CognitiveCore:
         return {
             "result": last_result,
             "plan": current_plan,
-            "evaluation": None,
+            "evaluation": evaluation if isinstance(evaluation, dict) else {},
+            "verification": verification,
             "attempts": max_attempts,
             "recovered": False,
             "success": False,
@@ -1003,6 +1065,9 @@ class CognitiveCore:
                     )
 
                     execution_result = recovery.get("result")
+                    context["execution_verification"] = (
+                        recovery.get("verification", {})
+                    )
 
                     if recovery.get("success"):
                         logger.info(
@@ -1041,6 +1106,9 @@ class CognitiveCore:
                 )
 
                 execution_result = recovery.get("result")
+                context["execution_verification"] = (
+                    recovery.get("verification", {})
+                )
 
                 if recovery.get("success"):
                     logger.info(
@@ -1081,6 +1149,9 @@ class CognitiveCore:
                     )
 
                     result = recovery.get("result")
+                    context["execution_verification"] = (
+                        recovery.get("verification", {})
+                    )
 
                     if not recovery.get("success"):
                         logger.warning(
@@ -1280,18 +1351,43 @@ Execution Results:
                         def __init__(self, completed):
                             self.completed = completed
                     
-                    execution_results = DummyExecutionResults(
-                        execution_result.get("completed", []) if isinstance(execution_result, dict) else []
+                    verification = context.get(
+                        "execution_verification",
+                        {},
                     )
-                    
-                    if not answer:
+
+                    verification_status = verification.get(
+                        "status"
+                    )
+
+                    if (
+                        execution_result
+                        and verification_status == "verified_success"
+                    ):
+                        execution_results = DummyExecutionResults(
+                            execution_result.get("completed", [])
+                            if isinstance(execution_result, dict)
+                            else []
+                        )
+
                         if execution_results.completed:
                             answer = execution_results.completed[-1]
-                        else:
-                            answer = (
-                                "I'm temporarily unable to reach my language models. "
-                                "Please try again in a few seconds."
-                            )
+
+                    elif (
+                        execution_result
+                        and verification_status == "uncertain"
+                    ):
+                        answer = (
+                            "I completed the execution attempt, "
+                            "but I could not reliably verify that the "
+                            "requested result was achieved."
+                        )
+
+                    if not answer:
+                        answer = (
+                            "I'm temporarily unable to reach my language models. "
+                            "Please try again in a few seconds."
+                        )
                     confidence = 0.1
 
         finally:
