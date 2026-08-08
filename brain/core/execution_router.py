@@ -6,6 +6,7 @@ class Route(str, Enum):
     GREETING = "greeting"
     CHAT = "chat"
     CODING = "coding"
+    TIME = "time"
     MEMORY = "memory"
     DOCUMENT = "document"
     VISION = "vision"
@@ -70,6 +71,19 @@ def decide(query: str) -> RouteDecision:
         "good evening",
     )):
         return RouteDecision(Route.GREETING, 1.0)
+
+    # Time
+    if any(word in q for word in (
+        "what time",
+        "current time",
+        "local time",
+        "time in",
+        "what's the time",
+        "whats the time",
+        "tell me the time",
+        "clock",
+    )):
+        return RouteDecision(Route.TIME, 0.99)
 
     # Coding
     if (
