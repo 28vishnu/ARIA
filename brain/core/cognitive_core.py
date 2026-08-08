@@ -1007,6 +1007,39 @@ Execution Results:
             in REJECT_WORDS
         )
 
+    def _looks_like_memory_recall_request(self, query: str) -> bool:
+        """
+        Detect questions that ask ARIA to retrieve existing memories
+        rather than store/update a new memory.
+        """
+
+        q = str(query or "").strip().lower()
+
+        recall_phrases = (
+            "what do you remember about me",
+            "what do you remember about me?",
+            "what do you know about me",
+            "what do you know about me?",
+            "what can you remember about me",
+            "what can you remember about me?",
+            "tell me what you remember about me",
+            "tell me what you know about me",
+            "show me what you remember about me",
+            "show me what you know about me",
+            "list what you remember about me",
+            "list what you know about me",
+            "what have you remembered about me",
+            "what have you learned about me",
+            "what memories do you have about me",
+            "show my memories",
+            "list my memories",
+        )
+
+        return any(
+            phrase in q
+            for phrase in recall_phrases
+        )
+
     def _looks_like_web_search_request(
         self,
         query: str,
@@ -1671,6 +1704,62 @@ Execution Results:
                         "message": reply,
                     },
                 )
+
+            # ============================================
+            # MEMORY RECALL FAST PATH
+            # ============================================
+            #
+            # Questions asking what ARIA already remembers
+            # must NEVER be routed to memory storage.
+            #
+            # Example:
+            #   "What do you remember about me?"
+            #
+            # This is retrieval, not memory creation.
+            # ============================================
+
+            if self._looks_like_memory_recall_request(query):
+
+                logger.info(
+                    "[MemoryRecall] Retrieving existing memories."
+                )
+
+                try:
+                    memories = await self.memory_engine.retrieve(query)
+
+                    if memories:
+                        return SystemResponse(
+                            success=True,
+                            confidence=1.0,
+                            source="memory",
+                            data={
+                                "memories": memories,
+                            },
+                        )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="memory",
+                        data={
+                            "memories": [],
+                            "message": "I don't have any relevant memories about you yet, Sir.",
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[MemoryRecall] Memory retrieval failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="memory",
+                        error="I couldn't retrieve your memories right now.",
+                    )
+
 
             # ============================================
             # EXECUTION ROUTER
