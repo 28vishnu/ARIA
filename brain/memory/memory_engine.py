@@ -661,8 +661,22 @@ class MemoryEngine:
         segment: str
     ) -> list[str]:
 
+        segment = self._normalize(segment)
+
+        # Stop preference extraction when the sentence changes direction.
+        # Example:
+        # "I like Saketh but don't call me that"
+        # -> ["Saketh"]
+        segment = re.split(
+            r"\s+(?:but|however|although|except)\s+",
+            segment,
+            maxsplit=1,
+            flags=re.IGNORECASE
+        )[0]
+
+        # Split natural lists.
         segment = re.sub(
-            r"\band\b",
+            r"\s+\band\b\s+",
             ",",
             segment,
             flags=re.IGNORECASE
@@ -674,10 +688,30 @@ class MemoryEngine:
 
             item = self._normalize(raw)
 
+            # Remove conversational filler.
+            item = re.sub(
+                r"^(?:that|this|it|something)\s+",
+                "",
+                item,
+                flags=re.IGNORECASE
+            )
+
+            item = self._normalize(item)
+
             if self._validate_value(item):
                 items.append(item)
 
-        return items
+        # Preserve order while removing duplicates.
+        unique_items = []
+
+        for item in items:
+            if item.lower() not in {
+                existing.lower()
+                for existing in unique_items
+            }:
+                unique_items.append(item)
+
+        return unique_items
 
     # =========================================================
     # MEMORY RECORD BUILDER
