@@ -67,6 +67,7 @@ from actions.actions.file import FileAction
 from actions.actions.notification import NotificationAction
 from actions.actions.web_search import WebSearchAction
 from actions.actions.time import TimeAction
+from actions.actions.weather import WeatherAction
 
 from brain.planner import Planner
 from brain.executor import Executor
@@ -575,6 +576,7 @@ async def bootstrap_application() -> ServiceRegistry:
     action_manager.register(NotificationAction())
     action_manager.register(WebSearchAction())
     action_manager.register(TimeAction())
+    action_manager.register(WeatherAction())
 
     planner = Planner(
         llm_router=llm_router,
