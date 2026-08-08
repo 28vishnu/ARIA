@@ -2199,6 +2199,74 @@ Execution Results:
 
             context["cognitive_decision"] = controller_decision
 
+            # =============================================================
+            # 2.6 NORMALIZE COGNITIVE DECISION
+            # =============================================================
+
+            def _decision_value(decision, key, default=None):
+                if decision is None:
+                    return default
+
+                if isinstance(decision, dict):
+                    return decision.get(key, default)
+
+                return getattr(decision, key, default)
+
+
+            decision_contract = {
+                "intent": _decision_value(
+                    controller_decision,
+                    "intent",
+                ),
+                "route": _decision_value(
+                    controller_decision,
+                    "route",
+                ),
+                "action": _decision_value(
+                    controller_decision,
+                    "action",
+                ),
+                "requires_reasoning": bool(
+                    _decision_value(
+                        controller_decision,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
+                "requires_memory": bool(
+                    _decision_value(
+                        controller_decision,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+                "requires_tool": bool(
+                    _decision_value(
+                        controller_decision,
+                        "requires_tool",
+                        False,
+                    )
+                ),
+                "requires_planning": bool(
+                    _decision_value(
+                        controller_decision,
+                        "requires_planning",
+                        False,
+                    )
+                ),
+                "confidence": _decision_value(
+                    controller_decision,
+                    "confidence",
+                ),
+            }
+
+            context["decision_contract"] = decision_contract
+
+            logger.info(
+                "[CognitiveDecision] Normalized decision: %s",
+                decision_contract,
+            )
+
             logger.info(
                 "[CognitiveController] %s",
                 controller_decision,
