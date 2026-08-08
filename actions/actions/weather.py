@@ -16,6 +16,7 @@ class WeatherAction(BaseAction):
 
     Supports:
     - Worldwide city/location lookup
+    - Natural-language weather queries
     - Current temperature
     - Feels-like temperature
     - Humidity
@@ -31,8 +32,9 @@ class WeatherAction(BaseAction):
 
     description = (
         "Get live weather and forecast information for any worldwide "
-        "city or location. Supports temperature, feels-like temperature, "
-        "humidity, rain, precipitation, wind, sunrise, sunset and forecasts."
+        "city or location. Supports natural-language weather queries, "
+        "temperature, feels-like temperature, humidity, rain, "
+        "precipitation, wind, sunrise, sunset and forecasts."
     )
 
     permission_level = "safe"
@@ -89,6 +91,10 @@ class WeatherAction(BaseAction):
 
     async def execute(self, params: Dict[str, Any]) -> ActionResult:
         try:
+            # =====================================================
+            # 1. EXTRACT LOCATION
+            # =====================================================
+
             location = (
                 params.get("location")
                 or params.get("city")
@@ -102,7 +108,26 @@ class WeatherAction(BaseAction):
                     error="Please provide a location.",
                 )
 
+            original_location = location
+
             location = self._clean_location(location)
+
+            if not location:
+                return ActionResult(
+                    success=False,
+                    action_name=self.name,
+                    error="I couldn't determine the weather location.",
+                )
+
+            logger.info(
+                "[WeatherAction] Location extracted: '%s' -> '%s'",
+                original_location,
+                location,
+            )
+
+            # =====================================================
+            # 2. FORECAST DAYS
+            # =====================================================
 
             forecast_days = params.get("forecast_days", 1)
 
@@ -113,13 +138,21 @@ class WeatherAction(BaseAction):
 
             forecast_days = max(1, min(forecast_days, 7))
 
+            # =====================================================
+            # 3. HTTP CLIENT
+            # =====================================================
+
             async with httpx.AsyncClient(
-                timeout=self.timeout_seconds
+                timeout=self.timeout_seconds,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "ARIA-WeatherAction/1.0",
+                },
             ) as client:
 
-                # -------------------------------------------------
-                # 1. GLOBAL GEOCODING
-                # -------------------------------------------------
+                # =================================================
+                # 4. GLOBAL GEOCODING
+                # =================================================
 
                 geo_response = await client.get(
                     self.GEOCODING_URL,
@@ -131,6 +164,31 @@ class WeatherAction(BaseAction):
                     },
                 )
 
+                # -------------------------------------------------
+                # Handle geocoding rate limit separately
+                # -------------------------------------------------
+
+                if geo_response.status_code == 429:
+                    retry_after = geo_response.headers.get(
+                        "Retry-After"
+                    )
+
+                    logger.warning(
+                        "[WeatherAction] Geocoding API rate-limited. "
+                        "Retry-After=%s",
+                        retry_after,
+                    )
+
+                    return ActionResult(
+                        success=False,
+                        action_name=self.name,
+                        error=(
+                            "The weather service is temporarily "
+                            "rate-limited while locating the city. "
+                            "Please try again shortly."
+                        ),
+                    )
+
                 geo_response.raise_for_status()
 
                 geo_data = geo_response.json()
@@ -141,13 +199,26 @@ class WeatherAction(BaseAction):
                     return ActionResult(
                         success=False,
                         action_name=self.name,
-                        error=f"I couldn't find a location matching '{location}'.",
+                        error=(
+                            f"I couldn't find a location matching "
+                            f"'{location}'."
+                        ),
                     )
 
                 place = results[0]
 
-                latitude = place["latitude"]
-                longitude = place["longitude"]
+                latitude = place.get("latitude")
+                longitude = place.get("longitude")
+
+                if latitude is None or longitude is None:
+                    return ActionResult(
+                        success=False,
+                        action_name=self.name,
+                        error=(
+                            f"I found '{location}', but couldn't "
+                            "determine its coordinates."
+                        ),
+                    )
 
                 city = (
                     place.get("name")
@@ -158,9 +229,9 @@ class WeatherAction(BaseAction):
                 country_code = place.get("country_code", "")
                 timezone = place.get("timezone", "auto")
 
-                # -------------------------------------------------
-                # 2. LIVE WEATHER
-                # -------------------------------------------------
+                # =================================================
+                # 5. LIVE WEATHER
+                # =================================================
 
                 weather_response = await client.get(
                     self.FORECAST_URL,
@@ -197,13 +268,38 @@ class WeatherAction(BaseAction):
                     },
                 )
 
+                # -------------------------------------------------
+                # IMPORTANT: HTTP 429
+                # -------------------------------------------------
+
+                if weather_response.status_code == 429:
+                    retry_after = weather_response.headers.get(
+                        "Retry-After"
+                    )
+
+                    logger.warning(
+                        "[WeatherAction] Forecast API rate-limited. "
+                        "Retry-After=%s location=%s",
+                        retry_after,
+                        location,
+                    )
+
+                    return ActionResult(
+                        success=False,
+                        action_name=self.name,
+                        error=(
+                            "The weather service is temporarily "
+                            "rate-limited. Please try again shortly."
+                        ),
+                    )
+
                 weather_response.raise_for_status()
 
                 weather = weather_response.json()
 
-            # -----------------------------------------------------
-            # 3. FORMAT RESULT
-            # -----------------------------------------------------
+            # =====================================================
+            # 6. FORMAT WEATHER DATA
+            # =====================================================
 
             current = weather.get("current", {})
             daily = weather.get("daily", {})
@@ -223,17 +319,20 @@ class WeatherAction(BaseAction):
             wind_speed = current.get("wind_speed_10m")
             wind_direction = current.get("wind_direction_10m")
             pressure = current.get("surface_pressure")
-
             current_time = current.get("time")
 
-            # -----------------------------------------------------
-            # 4. BUILD HUMAN-READABLE MESSAGE
-            # -----------------------------------------------------
+            # =====================================================
+            # 7. HUMAN-READABLE LOCATION
+            # =====================================================
 
             location_name = city
 
             if country:
                 location_name = f"{city}, {country}"
+
+            # =====================================================
+            # 8. CURRENT WEATHER MESSAGE
+            # =====================================================
 
             lines = [
                 f"Weather in {location_name}",
@@ -251,9 +350,9 @@ class WeatherAction(BaseAction):
                 f"Timezone: {timezone}",
             ]
 
-            # -----------------------------------------------------
-            # 5. FORECAST
-            # -----------------------------------------------------
+            # =====================================================
+            # 9. FORECAST
+            # =====================================================
 
             dates = daily.get("time", [])
 
@@ -325,10 +424,12 @@ class WeatherAction(BaseAction):
                     lines.append(
                         f"{date}: {description}, "
                         f"{min_temp}°C–{max_temp}°C, "
-                        f"precipitation {precipitation_total} mm"
+                        f"precipitation "
+                        f"{precipitation_total} mm"
                     )
 
                     if index == 0:
+
                         if index < len(sunrise):
                             lines.append(
                                 f"Sunrise: {sunrise[index]}"
@@ -340,6 +441,16 @@ class WeatherAction(BaseAction):
                             )
 
             message = "\n".join(lines)
+
+            # =====================================================
+            # 10. SUCCESS
+            # =====================================================
+
+            logger.info(
+                "[WeatherAction] Weather retrieved successfully "
+                "for %s",
+                location_name,
+            )
 
             return ActionResult(
                 success=True,
@@ -358,54 +469,197 @@ class WeatherAction(BaseAction):
                 },
             )
 
+        # =========================================================
+        # 11. TIMEOUT
+        # =========================================================
+
         except httpx.TimeoutException:
+
+            logger.warning(
+                "[WeatherAction] Weather service timeout."
+            )
+
             return ActionResult(
                 success=False,
                 action_name=self.name,
-                error="The weather service timed out. Please try again shortly.",
+                error=(
+                    "The weather service timed out. "
+                    "Please try again shortly."
+                ),
+            )
+
+        # =========================================================
+        # 12. HTTP ERROR
+        # =========================================================
+
+        except httpx.HTTPStatusError as e:
+
+            status_code = (
+                e.response.status_code
+                if e.response is not None
+                else None
+            )
+
+            logger.exception(
+                "[WeatherAction] HTTP status error: %s",
+                status_code,
+            )
+
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error=(
+                    "The weather service returned an error. "
+                    "Please try again shortly."
+                ),
             )
 
         except httpx.HTTPError as e:
-            logger.exception("[WeatherAction] HTTP error")
-            return ActionResult(
-                success=False,
-                action_name=self.name,
-                error=f"Weather service error: {e}",
+
+            logger.exception(
+                "[WeatherAction] HTTP error"
             )
 
-        except Exception as e:
-            logger.exception("[WeatherAction] Unexpected error")
             return ActionResult(
                 success=False,
                 action_name=self.name,
-                error=f"Unable to retrieve weather: {e}",
+                error=(
+                    "Unable to connect to the weather service. "
+                    "Please try again shortly."
+                ),
             )
+
+        # =========================================================
+        # 13. UNEXPECTED ERROR
+        # =========================================================
+
+        except Exception as e:
+
+            logger.exception(
+                "[WeatherAction] Unexpected error"
+            )
+
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error=(
+                    "Unable to retrieve weather right now."
+                ),
+            )
+
+    # =============================================================
+    # NATURAL-LANGUAGE LOCATION EXTRACTION
+    # =============================================================
 
     @staticmethod
     def _clean_location(location: str) -> str:
         """
-        Remove common natural-language prefixes.
+        Convert natural-language weather requests into a clean
+        geocoding location.
 
         Examples:
-            'weather in Tokyo' -> 'Tokyo'
-            'weather at London' -> 'London'
-            'temperature in Paris' -> 'Paris'
+
+            weather in Tokyo
+                -> Tokyo
+
+            What's the weather in New York?
+                -> New York
+
+            What is the weather in London?
+                -> London
+
+            Can you tell me the weather in Paris?
+                -> Paris
+
+            temperature in Mumbai
+                -> Mumbai
+
+            What's the temperature at Tokyo?
+                -> Tokyo
         """
 
         value = location.strip()
 
-        value = re.sub(
-            r"^(?:the\s+)?weather\s+(?:in|at|for)\s+",
-            "",
-            value,
-            flags=re.IGNORECASE,
+        # ---------------------------------------------------------
+        # Remove surrounding quotation marks
+        # ---------------------------------------------------------
+
+        value = value.strip(
+            " \t\n\r\"'“”‘’"
         )
 
-        value = re.sub(
-            r"^(?:the\s+)?temperature\s+(?:in|at|for)\s+",
-            "",
-            value,
-            flags=re.IGNORECASE,
+        # ---------------------------------------------------------
+        # "What's the weather in X?"
+        # "What is the weather in X?"
+        # ---------------------------------------------------------
+
+        patterns = [
+
+            # What's the weather in London?
+            r"^(?:what(?:'s| is)\s+)?"
+            r"(?:the\s+)?weather\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # Can you tell me the weather in London?
+            r"^(?:can\s+you\s+tell\s+me\s+)?"
+            r"(?:the\s+)?weather\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # How is the weather in London?
+            r"^how(?:'s| is)\s+"
+            r"(?:the\s+)?weather\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # Give me the weather in London
+            r"^(?:give\s+me|show\s+me|get\s+me)\s+"
+            r"(?:the\s+)?weather\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # Weather in London
+            r"^(?:the\s+)?weather\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # Temperature in London
+            r"^(?:the\s+)?temperature\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # What's the temperature in London?
+            r"^(?:what(?:'s| is)\s+)?"
+            r"(?:the\s+)?temperature\s+"
+            r"(?:in|at|for)\s+(.+)$",
+
+            # Can you tell me the temperature in London?
+            r"^(?:can\s+you\s+tell\s+me\s+)?"
+            r"(?:the\s+)?temperature\s+"
+            r"(?:in|at|for)\s+(.+)$",
+        ]
+
+        for pattern in patterns:
+
+            match = re.match(
+                pattern,
+                value,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+                value = match.group(1).strip()
+                break
+
+        # ---------------------------------------------------------
+        # Remove common trailing punctuation
+        # ---------------------------------------------------------
+
+        value = value.strip(
+            " \t\n\r?!.,;:"
         )
 
-        return value.strip(" ?.,")
+        # ---------------------------------------------------------
+        # Remove accidental surrounding quotes again
+        # ---------------------------------------------------------
+
+        value = value.strip(
+            "\"'“”‘’"
+        )
+
+        return value.strip()
