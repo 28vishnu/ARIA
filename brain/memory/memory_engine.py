@@ -181,31 +181,51 @@ class MemoryEngine:
         return value.strip(" .,!?")
 
     def _normalize_key(self, subject: str) -> str:
+        """
+        Convert a memory subject into one stable canonical key.
 
-        subject = subject.lower().strip()
+        This prevents duplicate memories such as:
+            favorite_color
+            favorite_colour
 
-        subject = subject.replace(
-            "favourite",
-            "favorite"
-        )
+        from representing the same user preference.
+        """
 
+        subject = str(subject or "").lower().strip()
+
+        # British -> canonical American spelling
+        subject = subject.replace("favourite", "favorite")
+        subject = subject.replace("colour", "color")
+
+        # Remove the generic "favorite" prefix because we add it below.
         subject = re.sub(
             r"^favorite\s+",
             "",
             subject
         )
 
+        # Normalize common wording variations.
+        subject = subject.replace("programming language", "language")
+        subject = subject.replace("coding language", "language")
+
+        # Keep only safe key characters.
         subject = re.sub(
             r"[^a-z0-9\s_]",
             "",
             subject
         )
 
+        # Collapse whitespace.
         subject = re.sub(
             r"\s+",
             "_",
             subject
         )
+
+        subject = subject.strip("_")
+
+        if not subject:
+            return "favorite_unknown"
 
         return f"favorite_{subject}"
 
