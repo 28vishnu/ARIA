@@ -243,69 +243,62 @@ class WeatherAction(BaseAction):
                 # 5. LIVE WEATHER
                 # =================================================
 
-                weather_response = await client.get(
-                    self.FORECAST_URL,
-                    params={
-                        "latitude": latitude,
-                        "longitude": longitude,
-                        "current": (
-                            "temperature_2m,"
-                            "relative_humidity_2m,"
-                            "apparent_temperature,"
-                            "precipitation,"
-                            "rain,"
-                            "weather_code,"
-                            "wind_speed_10m,"
-                            "wind_direction_10m,"
-                            "surface_pressure"
-                        ),
-                        "daily": (
-                            "weather_code,"
-                            "temperature_2m_max,"
-                            "temperature_2m_min,"
-                            "apparent_temperature_max,"
-                            "apparent_temperature_min,"
-                            "precipitation_sum,"
-                            "rain_sum,"
-                            "sunrise,"
-                            "sunset"
-                        ),
-                        "forecast_days": forecast_days,
-                        "timezone": "auto",
-                        "temperature_unit": "celsius",
-                        "wind_speed_unit": "kmh",
-                        "precipitation_unit": "mm",
-                    },
-                )
-
-                # -------------------------------------------------
-                # IMPORTANT: HTTP 429
-                # -------------------------------------------------
-
-                if weather_response.status_code == 429:
-                    retry_after = weather_response.headers.get(
-                        "Retry-After"
+                try:
+                    weather_response = await client.get(
+                        self.FORECAST_URL,
+                        params={
+                            "latitude": latitude,
+                            "longitude": longitude,
+                            "current": (
+                                "temperature_2m,"
+                                "relative_humidity_2m,"
+                                "apparent_temperature,"
+                                "precipitation,"
+                                "rain,"
+                                "weather_code,"
+                                "wind_speed_10m,"
+                                "wind_direction_10m,"
+                                "surface_pressure"
+                            ),
+                            "daily": (
+                                "weather_code,"
+                                "temperature_2m_max,"
+                                "temperature_2m_min,"
+                                "apparent_temperature_max,"
+                                "apparent_temperature_min,"
+                                "precipitation_sum,"
+                                "rain_sum,"
+                                "sunrise,"
+                                "sunset"
+                            ),
+                            "forecast_days": forecast_days,
+                            "timezone": "auto",
+                            "temperature_unit": "celsius",
+                            "wind_speed_unit": "kmh",
+                            "precipitation_unit": "mm",
+                        },
                     )
 
+                    if weather_response.status_code == 429:
+                        logger.warning(
+                            "[WeatherAction] Open-Meteo rate limited (429). Switching to fallback."
+                        )
+                        raise httpx.HTTPStatusError(
+                            "Open-Meteo rate limited",
+                            request=weather_response.request,
+                            response=weather_response,
+                        )
+
+                    weather_response.raise_for_status()
+                    weather = weather_response.json()
+
+                except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.HTTPError) as exc:
                     logger.warning(
-                        "[WeatherAction] Forecast API rate-limited. "
-                        "Retry-After=%s location=%s",
-                        retry_after,
-                        location,
+                        "[WeatherAction] Open-Meteo failed (%s). Attempting MET Norway fallback.",
+                        exc,
                     )
-
-                    return ActionResult(
-                        success=False,
-                        action_name=self.name,
-                        error=(
-                            "The weather service is temporarily "
-                            "rate-limited. Please try again shortly."
-                        ),
-                    )
-
-                weather_response.raise_for_status()
-
-                weather = weather_response.json()
+                    met_raw_data = await self._get_met_weather(client, latitude, longitude)
+                    weather = self._normalize_met_weather(met_raw_data)
 
             # =====================================================
             # 6. FORMAT WEATHER DATA
@@ -556,6 +549,126 @@ class WeatherAction(BaseAction):
                     "Unable to retrieve weather right now."
                 ),
             )
+
+    # =============================================================
+    # MET NORWAY FALLBACK
+    # =============================================================
+
+    async def _get_met_weather(
+        self,
+        client: httpx.AsyncClient,
+        latitude: float,
+        longitude: float,
+    ) -> Dict[str, Any]:
+        """
+        Fallback weather provider using MET Norway.
+
+        Used when Open-Meteo is temporarily unavailable or rate-limited.
+        """
+
+        logger.info(
+            "[WeatherAction] Trying MET Norway fallback for "
+            "lat=%s lon=%s",
+            latitude,
+            longitude,
+        )
+
+        response = await client.get(
+            MET_FORECAST_URL,
+            params={
+                "lat": latitude,
+                "lon": longitude,
+            },
+            headers={
+                "Accept": "application/json",
+                "User-Agent": MET_USER_AGENT,
+            },
+        )
+
+        if response.status_code == 429:
+            logger.warning(
+                "[WeatherAction] MET Norway also rate-limited."
+            )
+
+            raise httpx.HTTPStatusError(
+                "MET Norway rate limited",
+                request=response.request,
+                response=response,
+            )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        logger.info(
+            "[WeatherAction] MET Norway fallback succeeded."
+        )
+
+        return data
+
+    @staticmethod
+    def _normalize_met_weather(data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalizes MET Norway response structure to match Open-Meteo format.
+        """
+        properties = data.get("properties", {})
+        timeseries = properties.get("timeseries", [])
+
+        current_instant = {}
+        current_details = {}
+        if timeseries:
+            first_entry = timeseries[0]
+            current_instant = first_entry.get("data", {}).get("instant", {}).get("details", {})
+
+        current_time = timeseries[0].get("time") if timeseries else None
+
+        current_normalized = {
+            "temperature_2m": current_instant.get("air_temperature"),
+            "relative_humidity_2m": current_instant.get("relative_humidity_percent"),
+            "apparent_temperature": current_instant.get("air_temperature"),
+            "precipitation": 0.0,
+            "rain": 0.0,
+            "weather_code": 0,
+            "wind_speed_10m": current_instant.get("wind_speed"),
+            "wind_direction_10m": current_instant.get("wind_from_direction"),
+            "surface_pressure": current_instant.get("air_pressure_at_sea_level"),
+            "time": current_time,
+        }
+
+        daily_times = []
+        daily_max_temps = []
+        daily_min_temps = []
+        daily_codes = []
+        daily_precip = []
+
+        seen_dates = set()
+        for entry in timeseries:
+            time_str = entry.get("time", "")
+            date_part = time_str.split("T")[0] if "T" in time_str else time_str
+            if date_part and date_part not in seen_dates:
+                seen_dates.add(date_part)
+                daily_times.append(date_part)
+                details = entry.get("data", {}).get("instant", {}).get("details", {})
+                temp = details.get("air_temperature", 0.0)
+                daily_max_temps.append(temp)
+                daily_min_temps.append(temp)
+                daily_codes.append(0)
+                daily_precip.append(0.0)
+
+        daily_normalized = {
+            "time": daily_times,
+            "temperature_2m_max": daily_max_temps,
+            "temperature_2m_min": daily_min_temps,
+            "weather_code": daily_codes,
+            "precipitation_sum": daily_precip,
+            "sunrise": [],
+            "sunset": [],
+        }
+
+        return {
+            "current": current_normalized,
+            "daily": daily_normalized,
+        }
 
     # =============================================================
     # NATURAL-LANGUAGE LOCATION EXTRACTION
