@@ -161,9 +161,15 @@ class PersonalityEngine:
             else:
                 reply = self._format_fallback(data)
 
-            # Basic deterministic conversation styling first.
-            reply = ConversationStyle.apply(reply)
-            reply = ConversationStyle.follow_up(reply, user_text)
+            # Apply conversation styling only to normal conversational replies.
+            # Memory/profile responses are already structured and must remain intact.
+            if source not in {
+                ResponseSource.MEMORY,
+                ResponseSource.PROFILE,
+                ResponseSource.MEMORY_CONVERSATION,
+            }:
+                reply = ConversationStyle.apply(reply)
+                reply = ConversationStyle.follow_up(reply, user_text)
 
             # ---------------------------------------------------------
             # FACTUAL / ROUTED RESPONSES MUST NOT BE REINTERPRETED
@@ -285,29 +291,171 @@ class PersonalityEngine:
         return random.choice(responses)
 
     def _format_memory(self, data: Any) -> str:
+        """
+        Format remembered personal information naturally.
+
+        Handles:
+        - Single memory recall
+        - Multiple-memory summaries
+        - Natural responses supplied by MemoryConversationManager
+
+        Memory facts are treated as authoritative and are never
+        rewritten by the personality LLM.
+        """
+
         data_dict = data if isinstance(data, dict) else {}
 
-        # If the MemoryConversationManager already provided a natural response
-        if "message" in data_dict:
-            return str(data_dict["message"])
+        # ---------------------------------------------------------
+        # 1. Already-generated natural memory response
+        # ---------------------------------------------------------
+
+        message = data_dict.get("message")
+
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+
+        # ---------------------------------------------------------
+        # 2. Extract memories
+        # ---------------------------------------------------------
 
         memories = data_dict.get("memories", [])
-        snippets = []
-        for m in memories:
-            if isinstance(m, dict):
-                k = m.get("key") or m.get("field") or m.get("category") or "Detail"
-                v = m.get("value") or m.get("content") or m.get("text") or m.get("summary")
-                if v:
-                    snippets.append(f"• {str(k).capitalize()}: {str(v)}")
-                else:
-                    snippets.append(f"• {str(m)}")
+
+        if not isinstance(memories, (list, tuple)):
+            memories = [memories] if memories else []
+
+        if not memories:
+            return "I don't have any relevant information about you yet, Sir."
+
+        # ---------------------------------------------------------
+        # 3. Human-friendly memory names
+        # ---------------------------------------------------------
+
+        labels = {
+            "name": "Your name",
+            "preferred_name": "How you'd like to be addressed",
+            "favorite_color": "Your favorite color",
+            "favorite_colour": "Your favorite color",
+            "favorite_language": "Your favorite programming language",
+            "favorite_movie": "Your favorite movie",
+            "favorite_food": "Your favorite food",
+            "favorite_car": "Your favorite car",
+            "favorite_superhero": "Your favorite superhero",
+            "favorite_animal": "Your favorite animal",
+            "favorite_dinosaur": "Your favorite dinosaur",
+            "favorite_planet": "Your favorite planet",
+            "planned_postgraduate_degree": "Your planned postgraduate degree",
+            "intended_degree": "Your intended degree",
+            "current_degree": "Your current degree",
+            "current_education_level": "Your current education level",
+            "planned_postgraduate_location": "Your planned postgraduate location",
+            "study_destination": "Your study destination",
+            "future_education_plan": "Your future education plan",
+            "backup_plan_country": "Your backup country",
+            "alternative_country": "Your alternative country",
+            "education_preference": "Your education preference",
+            "preferred_education_region": "Your preferred education region",
+            "education_priority": "Your education priority",
+            "exam_preparation": "Your exam preparation",
+            "project_name": "Your project",
+            "project_type": "Your project type",
+            "project": "Your project",
+            "watch_budget": "Your watch budget",
+            "preferred_watch_material": "Your preferred watch material",
+            "favorite_shopping_platform": "Your preferred shopping platform",
+        }
+
+        # ---------------------------------------------------------
+        # 4. Convert memories into natural statements
+        # ---------------------------------------------------------
+
+        statements = []
+
+        for memory in memories:
+
+            if not isinstance(memory, dict):
+                continue
+
+            key = (
+                memory.get("key")
+                or memory.get("field")
+                or memory.get("category")
+            )
+
+            value = (
+                memory.get("value")
+                or memory.get("content")
+                or memory.get("text")
+                or memory.get("summary")
+            )
+
+            if not key or value is None:
+                continue
+
+            key = str(key).strip().lower()
+            value = str(value).strip()
+
+            if not value:
+                continue
+
+            label = labels.get(
+                key,
+                str(key).replace("_", " ").capitalize()
+            )
+
+            # Special cases where "Your..." reads naturally.
+            if key == "name":
+                statement = f"Your name is {value}."
+            elif key in {
+                "favorite_color",
+                "favorite_colour",
+                "favorite_language",
+                "favorite_movie",
+                "favorite_food",
+                "favorite_car",
+                "favorite_superhero",
+                "favorite_animal",
+                "favorite_dinosaur",
+                "favorite_planet",
+            }:
+                statement = f"{label} is {value}."
+            elif key in {
+                "planned_postgraduate_degree",
+                "intended_degree",
+                "current_degree",
+                "current_education_level",
+                "planned_postgraduate_location",
+                "study_destination",
+                "future_education_plan",
+                "backup_plan_country",
+                "alternative_country",
+                "education_preference",
+                "preferred_education_region",
+                "education_priority",
+                "exam_preparation",
+                "project_name",
+                "project_type",
+                "project",
+                "watch_budget",
+                "preferred_watch_material",
+                "favorite_shopping_platform",
+            }:
+                statement = f"{label} is {value}."
             else:
-                snippets.append(f"• {str(m)}")
+                statement = f"{label} is {value}."
 
-        if snippets:
-            return "Here's what I found, Sir:\n\n" + "\n".join(snippets)
+            statements.append(statement)
 
-        return "No relevant records found, Sir."
+        # ---------------------------------------------------------
+        # 5. Return clean natural summary
+        # ---------------------------------------------------------
+
+        if statements:
+            return (
+                "Certainly, Sir. Here's what I remember about you:\n\n"
+                + "\n".join(f"• {statement}" for statement in statements)
+            )
+
+        return "I don't have any relevant information about you yet, Sir."
 
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
