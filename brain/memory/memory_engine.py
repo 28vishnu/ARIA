@@ -866,7 +866,16 @@ class MemoryEngine:
             existing["value"] = value
             existing["updated_at"] = datetime.now(timezone.utc).isoformat()
 
+            # Keep MongoDB memory and semantic memory synchronized.
             await self.update_memory(existing.get("_id"), existing)
+
+            updated_memory = dict(existing)
+            updated_memory.update(memory)
+            updated_memory["key"] = key
+            updated_memory["value"] = value
+            updated_memory["updated_at"] = existing["updated_at"]
+
+            self._update_semantic_memory(updated_memory)
 
             logger.info(
                 "[Memory] Updated existing memory: %s",
