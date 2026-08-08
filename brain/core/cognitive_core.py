@@ -2063,6 +2063,70 @@ Execution Results:
                         error=f"Unable to retrieve time: {e}",
                     )
 
+            if route.route == Route.WEATHER:
+                try:
+
+                    if not self.action_manager:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="weather_action",
+                            error="Weather action manager is not available.",
+                        )
+
+                    # Extract the location from the user's query.
+                    weather_query = query.strip()
+
+                    action_result = await self.action_manager.execute_action(
+                        action_name="weather_action",
+                        params={
+                            "location": weather_query,
+                        },
+                        confirmed=True,
+                    )
+
+                    if not action_result.success:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="weather_action",
+                            error=action_result.error,
+                        )
+
+                    data = action_result.data or {}
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="weather_action",
+                        data={
+                            "response": data.get("message"),
+                            "message": data.get("message"),
+                            "location": data.get("location"),
+                            "city": data.get("city"),
+                            "country": data.get("country"),
+                            "country_code": data.get("country_code"),
+                            "latitude": data.get("latitude"),
+                            "longitude": data.get("longitude"),
+                            "timezone": data.get("timezone"),
+                            "current": data.get("current"),
+                            "forecast": data.get("forecast"),
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[WeatherAction] Weather retrieval failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="weather_action",
+                        error=f"Unable to retrieve weather: {e}",
+                    )
+
             if route.route == Route.CODING:
 
                 engine = self.engine_manager.get("coding")
