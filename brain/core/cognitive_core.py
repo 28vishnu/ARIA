@@ -1659,20 +1659,176 @@ Execution Results:
                     memories = await self.memory_engine.retrieve(query)
 
                     if memories:
+                        # ---------------------------------------------------------
+                        # DETERMINISTIC PERSONAL MEMORY ANSWERS
+                        # ---------------------------------------------------------
+                        # If ARIA has an exact personal fact, answer from memory
+                        # directly instead of asking an LLM to interpret it.
+                        #
+                        # This prevents:
+                        #   Known memory: favorite_color = blue
+                        #   LLM answer: "I don't have that information."
+                        #
+                        # It also makes personal memory reliable and fast.
+                        # ---------------------------------------------------------
+
+                        q = query.lower().strip()
+
+                        exact_memory_key = None
+
+                        if re.search(
+                            r"\b(?:what(?:'s| is) my name|who am i|"
+                            r"do you know my name|tell me my name|"
+                            r"remember my name|what's my name again|say my name)\b",
+                            q,
+                        ):
+                            exact_memory_key = "name"
+
+                        elif "preferred name" in q:
+                            exact_memory_key = "preferred_name"
+
+                        elif re.search(
+                            r"\b(?:what(?:'s| is)|remember|recall)\s+"
+                            r"(?:my\s+)?(?:favorite|favourite)\s+",
+                            q,
+                        ):
+                            favorite_match = re.search(
+                                r"(?:what(?:'s| is)|remember|recall)\s+"
+                                r"(?:my\s+)?(?:favorite|favourite)\s+"
+                                r"([a-zA-Z0-9\s]+?)(?:\?|$)",
+                                q,
+                            )
+
+                            if favorite_match:
+                                subject = favorite_match.group(1).strip()
+
+                                # Keep this normalization consistent with MemoryEngine.
+                                subject = subject.replace("favourite", "favorite")
+                                subject = subject.replace("colour", "color")
+                                subject = subject.replace(
+                                    "programming language",
+                                    "language",
+                                )
+                                subject = subject.replace(
+                                    "coding language",
+                                    "language",
+                                )
+
+                                subject = re.sub(
+                                    r"^favorite\s+",
+                                    "",
+                                    subject,
+                                )
+
+                                subject = re.sub(
+                                    r"[^a-z0-9\s_]",
+                                    "",
+                                    subject,
+                                )
+
+                                subject = re.sub(
+                                    r"\s+",
+                                    "_",
+                                    subject,
+                                ).strip("_")
+
+                                if subject:
+                                    exact_memory_key = f"favorite_{subject}"
+
+                        elif any(
+                            phrase in q
+                            for phrase in (
+                                "what do i study",
+                                "what am i studying",
+                                "what is my field of study",
+                                "what do you know about my studies",
+                            )
+                        ):
+                            exact_memory_key = "field_of_study"
+
+                        if exact_memory_key:
+                            for memory in memories:
+                                if memory.get("key") == exact_memory_key:
+                                    value = memory.get("value")
+
+                                    if isinstance(value, list):
+                                        value = ", ".join(
+                                            str(item)
+                                            for item in value
+                                        )
+
+                                    if value:
+                                        if exact_memory_key == "name":
+                                            response = f"Your name is {value}."
+
+                                        elif exact_memory_key == "preferred_name":
+                                            response = (
+                                                f"You prefer to be called {value}."
+                                            )
+
+                                        elif exact_memory_key.startswith(
+                                            "favorite_"
+                                        ):
+                                            subject = (
+                                                exact_memory_key[
+                                                    len("favorite_"):
+                                                ]
+                                                .replace("_", " ")
+                                            )
+
+                                            response = (
+                                                f"Your favorite {subject} "
+                                                f"is {value}."
+                                            )
+
+                                        elif exact_memory_key == "field_of_study":
+                                            response = (
+                                                f"You are studying {value}."
+                                            )
+
+                                        else:
+                                            response = str(value)
+
+                                        return SystemResponse(
+                                            success=True,
+                                            confidence=1.0,
+                                            source="memory",
+                                            data={
+                                                "response": response,
+                                                "message": response,
+                                                "memory_exact": True,
+                                            },
+                                        )
+
+                        # ---------------------------------------------------------
+                        # GENERAL MEMORY QUERY
+                        # ---------------------------------------------------------
+                        # If this wasn't an exact fact question, allow the LLM to
+                        # synthesize an answer from the retrieved memories.
+                        # ---------------------------------------------------------
+
                         memory_text = "\n".join(
-                            f"{m['key']}: {m['value']}" for m in memories
+                            f"{m['key']}: {m['value']}"
+                            for m in memories
                         )
 
                         messages.append({
                             "role": "user",
-                            "content":
+                            "content": (
                                 f"User question:\n{query}\n\n"
-                                f"Known memories:\n{memory_text}"
+                                f"Known memories:\n{memory_text}\n\n"
+                                "Answer using only the known memories above. "
+                                "If the user asks what you remember about them, "
+                                "summarize the relevant memories naturally. "
+                                "Never claim you do not know something that is "
+                                "explicitly present in the known memories."
+                            ),
                         })
+
                     else:
                         messages.append({
                             "role": "user",
-                            "content": query
+                            "content": query,
                         })
 
                     reply = await self.llm_router.chat(messages)
