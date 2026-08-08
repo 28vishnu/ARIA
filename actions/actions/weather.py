@@ -1142,112 +1142,95 @@ class WeatherAction(BaseAction):
     @staticmethod
     def _clean_location(location: str) -> str:
         """
-        Convert natural-language weather requests into a clean
-        geocoding location.
+        Extract a clean geographical location from a natural-language
+        weather request.
 
         Examples:
-
-            weather in Tokyo
-                -> Tokyo
-
-            What's the weather in New York?
-                -> New York
-
-            What is the weather in London?
-                -> London
-
-            Can you tell me the weather in Paris?
-                -> Paris
-
-            temperature in Mumbai
-                -> Mumbai
-
-            What's the temperature at Tokyo?
-                -> Tokyo
+            "What's the weather in Vizag?" -> "Vizag"
+            "weather in London" -> "London"
+            "Temperature in New York" -> "New York"
+            "What's the weather in Vizag, and tell me if it will rain"
+                -> "Vizag"
+            "Will it rain tomorrow in Tokyo?" -> "Tokyo"
         """
 
-        value = location.strip()
+        if not isinstance(location, str):
+            return ""
 
-        # ---------------------------------------------------------
-        # Remove surrounding quotation marks
-        # ---------------------------------------------------------
+        text = location.strip()
 
-        value = value.strip(
-            " \t\n\r\"'“”‘’"
+        if not text:
+            return ""
+
+        # Normalize whitespace.
+        text = re.sub(r"\s+", " ", text)
+
+        # Remove common leading weather phrases.
+        text = re.sub(
+            r"^(?:"
+            r"what(?:'|’)s\s+"
+            r"|what\s+is\s+"
+            r"|tell\s+me\s+"
+            r"|can\s+you\s+tell\s+me\s+"
+            r"|give\s+me\s+"
+            r"|show\s+me\s+"
+            r")?",
+            "",
+            text,
+            flags=re.IGNORECASE,
         )
 
-        # ---------------------------------------------------------
-        # "What's the weather in X?"
-        # "What is the weather in X?"
-        # ---------------------------------------------------------
-
-        patterns = [
-
-            # What's the weather in London?
-            r"^(?:what(?:'s| is)\s+)?"
-            r"(?:the\s+)?weather\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # Can you tell me the weather in London?
-            r"^(?:can\s+you\s+tell\s+me\s+)?"
-            r"(?:the\s+)?weather\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # How is the weather in London?
-            r"^how(?:'s| is)\s+"
-            r"(?:the\s+)?weather\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # Give me the weather in London
-            r"^(?:give\s+me|show\s+me|get\s+me)\s+"
-            r"(?:the\s+)?weather\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # Weather in London
-            r"^(?:the\s+)?weather\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # Temperature in London
-            r"^(?:the\s+)?temperature\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # What's the temperature in London?
-            r"^(?:what(?:'s| is)\s+)?"
-            r"(?:the\s+)?temperature\s+"
-            r"(?:in|at|for)\s+(.+)$",
-
-            # Can you tell me the temperature in London?
-            r"^(?:can\s+you\s+tell\s+me\s+)?"
-            r"(?:the\s+)?temperature\s+"
-            r"(?:in|at|for)\s+(.+)$",
-        ]
-
-        for pattern in patterns:
-
-            match = re.match(
-                pattern,
-                value,
-                flags=re.IGNORECASE,
-            )
-
-            if match:
-                value = match.group(1).strip()
-                break
-
-        # ---------------------------------------------------------
-        # Remove common trailing punctuation
-        # ---------------------------------------------------------
-
-        value = value.strip(
-            " \t\n\r?!.,;:"
+        # Remove common weather-intent prefixes.
+        text = re.sub(
+            r"^(?:"
+            r"the\s+"
+            r")?"
+            r"(?:current\s+|today(?:'|’s)\s+|tomorrow(?:'|’s)\s+)?"
+            r"(?:weather|temperature|forecast)"
+            r"(?:\s+(?:in|at|for|of))?\s+",
+            "",
+            text,
+            flags=re.IGNORECASE,
         )
 
-        # ---------------------------------------------------------
-        # Remove accidental surrounding quotes again
-        # ---------------------------------------------------------
-
-        value = value.strip(
-            "\"'“”‘’"
+        # Handle phrases such as:
+        # "will it rain in Vizag"
+        # "will it rain tomorrow in Vizag"
+        text = re.sub(
+            r"^(?:"
+            r"will\s+it\s+(?:rain|snow)"
+            r"|is\s+it\s+(?:raining|snowing)"
+            r")"
+            r"(?:\s+(?:today|tomorrow))?"
+            r"\s+(?:in|at)\s+",
+            "",
+            text,
+            flags=re.IGNORECASE,
         )
 
-        return value.strip()
+        # If the request contains a clear location boundary,
+        # keep only the location before the follow-up clause.
+        text = re.split(
+            r"\s*(?:,\s*(?:and|but)\b|\s+\b(?:and|but)\b|"
+            r"\s+(?:and\s+)?(?:tell|show|give|let\s+me\s+know)\s+me\b|"
+            r"\s+(?:whether|if)\b)",
+            text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+
+        # Remove trailing question marks and punctuation.
+        text = re.sub(r"[?!.]+$", "", text).strip()
+
+        # Remove accidental leading/trailing punctuation.
+        text = text.strip(" ,;:-")
+
+        # Handle common trailing weather-query words.
+        text = re.sub(
+            r"\s+(?:today|tomorrow|tonight)$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        return text
