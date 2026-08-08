@@ -590,9 +590,41 @@ class CognitiveCore:
             return await self._format_response(response_text, "goal_manager", context, 1.0)
 
         self.brain_state["retrieving"] = True
+
+        # =========================================================
+        # PHASE 1 — CANONICAL COGNITIVE PIPELINE
+        # =========================================================
+        #
+        # This method is the authoritative cognitive path.
+        #
+        # The pipeline must always follow:
+        #
+        # INPUT
+        #   ↓
+        # REFERENCE RESOLUTION
+        #   ↓
+        # CONTEXT
+        #   ↓
+        # REASONING
+        #   ↓
+        # DECISION
+        #   ↓
+        # EXECUTION / KNOWLEDGE / CHAT
+        #   ↓
+        # VERIFICATION
+        #   ↓
+        # RESPONSE
+        #
+        # Individual routers, agents and tools may assist this
+        # pipeline, but none of them may become a second brain.
+        # =========================================================
+
         answer = None
-        source = "llm_generated"
-        confidence = 0.5
+        source = "cognitive_core"
+        confidence = 0.0
+        decision = None
+        execution_result = None
+        plan = None
 
         if self.reasoning_engine:
             resolved_query = await self.reasoning_engine.resolve_references(
@@ -654,13 +686,12 @@ class CognitiveCore:
             context["reasoning"] = reasoning
 
         # =========================================================
-        # REASONING -> AGENTS -> PLANNER -> EXECUTOR FLOW
+        # REASONING -> DECISION -> AGENTS -> PLANNER -> EXECUTOR
         # =========================================================
+
         decision = context.get("decision")
         selected_agents = []
         needs_execution = False
-        execution_result = None
-        plan = None
 
         if reasoning:
             selected_agents = getattr(reasoning, "selected_agents", []) or []
@@ -678,6 +709,11 @@ class CognitiveCore:
         logger.info(
             "[CognitiveCore] Execution required: %s",
             needs_execution
+        )
+
+        logger.info(
+            "[CognitiveCore] Canonical pipeline active: "
+            "context -> reasoning -> decision -> execution"
         )
 
         if decision and decision.use_planner and self.planner and self.executor:
