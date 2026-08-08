@@ -182,31 +182,26 @@ class MemoryEngine:
 
     def _normalize_key(self, subject: str) -> str:
         """
-        Convert a memory subject into one stable canonical key.
+        Convert equivalent human wording into one canonical memory key.
 
-        This prevents duplicate memories such as:
-            favorite_color
-            favorite_colour
-
-        from representing the same user preference.
+        Examples:
+            favourite color  -> favorite_color
+            favorite colour  -> favorite_color
+            favourite colour -> favorite_color
         """
 
-        subject = str(subject or "").lower().strip()
+        subject = subject.lower().strip()
 
-        # British -> canonical American spelling
+        # British -> American spelling
         subject = subject.replace("favourite", "favorite")
         subject = subject.replace("colour", "color")
 
-        # Remove the generic "favorite" prefix because we add it below.
+        # Remove duplicate favorite prefix.
         subject = re.sub(
             r"^favorite\s+",
             "",
             subject
         )
-
-        # Normalize common wording variations.
-        subject = subject.replace("programming language", "language")
-        subject = subject.replace("coding language", "language")
 
         # Keep only safe key characters.
         subject = re.sub(
@@ -215,17 +210,11 @@ class MemoryEngine:
             subject
         )
 
-        # Collapse whitespace.
         subject = re.sub(
             r"\s+",
             "_",
             subject
         )
-
-        subject = subject.strip("_")
-
-        if not subject:
-            return "favorite_unknown"
 
         return f"favorite_{subject}"
 
@@ -826,10 +815,52 @@ class MemoryEngine:
         if self.memory_col is None:
             return {"success": False}
 
-        key = memory["key"]
+        key = str(memory["key"]).strip()
         value = memory["value"]
 
-        existing = await self.get_memory(key)
+        # Always store canonical keys.
+        if key.startswith("favorite_"):
+            key = self._normalize_key(
+                key.replace("favorite_", "", 1)
+            )
+
+        memory["key"] = key
+
+        existing = await self.memory_col.find_one(
+            {"key": key}
+        )
+
+        # ---------------------------------------------------------
+        # Legacy-key migration
+        # ---------------------------------------------------------
+        # Merge old spelling variants into the canonical key.
+        #
+        # Example:
+        #   favorite_colour -> favorite_color
+        #
+        # Only applies to favorite keys.
+        # ---------------------------------------------------------
+
+        if key == "favorite_color":
+            legacy = await self.memory_col.find_one(
+                {
+                    "key": "favorite_colour"
+                }
+            )
+
+            if legacy is not None and existing is None:
+                existing = legacy
+                await self.memory_col.update_one(
+                    {
+                        "_id": legacy["_id"]
+                    },
+                    {
+                        "$set": {
+                            "key": "favorite_color",
+                            "updated_at": datetime.now(timezone.utc).isoformat()
+                        }
+                    }
+                )
 
         if existing is not None:
             existing["value"] = value
