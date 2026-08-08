@@ -9,6 +9,16 @@ from actions.base import BaseAction, ActionResult
 
 logger = logging.getLogger("aria")
 
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+MET_FORECAST_URL = (
+    "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+)
+
+MET_USER_AGENT = (
+    "ARIA-AI/1.0 "
+    "(https://aria-ai-s5go.onrender.com)"
+)
+
 
 class WeatherAction(BaseAction):
     """
