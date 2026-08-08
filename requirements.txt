@@ -16,7 +16,6 @@ google-genai
 certifi
 aiofiles
 pymupdf
-python-docx
 pillow
 rapidocr-onnxruntime
 python-multipart
