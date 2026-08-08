@@ -2122,17 +2122,43 @@ Execution Results:
             # =================================================
             context = dict(base_context or {})
             context.update({
+                # Core identity / request
+                "query": query,
+                "session_id": session_id,
+                "user_id": user_id,
+
+                # Cognitive state
+                "state": state,
+
+                # Brain components
                 "memory": self.memory_engine,
                 "planner": self.planner,
                 "executor": self.executor,
                 "reasoning": self.reasoning_engine,
                 "decision": self.decision_engine,
+
+                # Capability managers
                 "agent_manager": getattr(self, "agent_manager", None),
                 "tool_manager": getattr(self, "tool_manager", None),
-                "session": session_id,
+                "action_manager": self.action_manager,
+                "skill_manager": self.skill_manager,
 
-                # Phase 1 routing metadata.
-                # Classification only — never authoritative execution.
+                # Conversation
+                "conversation_manager": self.conversation_manager,
+                "working_memory": self.working_memory,
+
+                # Knowledge
+                "knowledge_manager": self.knowledge_manager,
+                "knowledge_graph": self.knowledge_graph,
+                "knowledge_database": self.knowledge_database,
+                "world_model": self.world_model,
+
+                # Learning / reflection
+                "learning_engine": self.learning_engine,
+                "autonomous_learning": self.autonomous_learning,
+                "self_reflection": self.self_reflection,
+
+                # Routing metadata
                 "fast_route": (
                     getattr(fast_decision, "reason", None)
                     if fast_decision
@@ -2162,6 +2188,7 @@ Execution Results:
                 "user_id": user_id,
                 "state": state,
                 "base_context": base_context,
+                "context": context,
             })
             
             # Initial cognitive analysis
@@ -2169,6 +2196,9 @@ Execution Results:
                 query=query,
                 context=context,
             )
+
+            context["cognitive_decision"] = controller_decision
+
             logger.info(
                 "[CognitiveController] %s",
                 controller_decision,
