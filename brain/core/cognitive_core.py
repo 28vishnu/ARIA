@@ -1819,246 +1819,49 @@ Execution Results:
 
         try:
             # =================================================
-            # FAST ROUTER
+            # PHASE 1 — FAST ROUTER AS CLASSIFIER ONLY
+            # =================================================
+            #
+            # FastRouter is allowed to classify the request for
+            # performance, but it is NOT allowed to generate the
+            # final response or bypass the Cognitive Core.
+            #
+            # Canonical ownership remains:
+            #
+            # CognitiveCore
+            #     ↓
+            # routing classification
+            #     ↓
+            # authoritative decision
+            #     ↓
+            # execution / reasoning / knowledge / memory / LLM
+            #
+            # This prevents FastRouter from becoming a second brain.
             # =================================================
 
-            decision = should_fast_route(query)
+            fast_decision = None
 
-            if decision.fast:
+            try:
+                fast_decision = should_fast_route(query)
 
-                logger.info(f"[FastRouter] {decision.reason}")
-
-                messages = [
-                    {
-                        "role": "system",
-                        "content": "You are ARIA. Reply naturally. Keep responses conversational and concise."
-                    }
-                ]
-
-                # Memory
-                if decision.reason == "memory":
-
-                    memories = await self.memory_engine.retrieve(query)
-
-                    if memories:
-
-                        q = query.lower().strip()
-
-                        # ---------------------------------------------------------
-                        # GENERAL MEMORY RECALL
-                        # ---------------------------------------------------------
-                        # Questions such as:
-                        #   "What do you remember about me?"
-                        #   "What do you know about me?"
-                        #
-                        # must be answered directly from the memory system.
-                        # Do NOT send these to the LLM because the LLM may rewrite
-                        # a correct memory response incorrectly.
-                        # ---------------------------------------------------------
-
-                        if self._looks_like_memory_recall_request(q):
-
-                            return SystemResponse(
-                                success=True,
-                                confidence=1.0,
-                                source="memory",
-                                data={
-                                    "memories": memories,
-                                    "memory_recall": True,
-                                },
-                            )
-
-                        # ---------------------------------------------------------
-                        # DETERMINISTIC PERSONAL MEMORY ANSWERS
-                        # ---------------------------------------------------------
-
-                        exact_memory_key = None
-
-                        if re.search(
-                            r"\b(?:what(?:'s| is) my name|who am i|"
-                            r"do you know my name|tell me my name|"
-                            r"remember my name|what's my name again|say my name)\b",
-                            q,
-                        ):
-                            exact_memory_key = "name"
-
-                        elif "preferred name" in q:
-                            exact_memory_key = "preferred_name"
-
-                        elif re.search(
-                            r"\b(?:what(?:'s| is)|remember|recall)\s+"
-                            r"(?:my\s+)?(?:favorite|favourite)\s+",
-                            q,
-                        ):
-                            favorite_match = re.search(
-                                r"(?:what(?:'s| is)|remember|recall)\s+"
-                                r"(?:my\s+)?(?:favorite|favourite)\s+"
-                                r"([a-zA-Z0-9\s]+?)(?:\?|$)",
-                                q,
-                            )
-
-                            if favorite_match:
-                                subject = favorite_match.group(1).strip()
-
-                                subject = subject.replace("favourite", "favorite")
-                                subject = subject.replace("colour", "color")
-                                subject = subject.replace(
-                                    "programming language",
-                                    "language",
-                                )
-                                subject = subject.replace(
-                                    "coding language",
-                                    "language",
-                                )
-
-                                subject = re.sub(
-                                    r"^favorite\s+",
-                                    "",
-                                    subject,
-                                )
-
-                                subject = re.sub(
-                                    r"[^a-z0-9\s_]",
-                                    "",
-                                    subject,
-                                )
-
-                                subject = re.sub(
-                                    r"\s+",
-                                    "_",
-                                    subject,
-                                ).strip("_")
-
-                                if subject:
-                                    exact_memory_key = f"favorite_{subject}"
-
-                        elif any(
-                            phrase in q
-                            for phrase in (
-                                "what do i study",
-                                "what am i studying",
-                                "what is my field of study",
-                                "what do you know about my studies",
-                            )
-                        ):
-                            exact_memory_key = "field_of_study"
-
-                        if exact_memory_key:
-
-                            for memory in memories:
-
-                                if memory.get("key") != exact_memory_key:
-                                    continue
-
-                                value = memory.get("value")
-
-                                if isinstance(value, list):
-                                    value = ", ".join(
-                                        str(item)
-                                        for item in value
-                                    )
-
-                                if not value:
-                                    continue
-
-                                if exact_memory_key == "name":
-                                    response = f"Your name is {value}."
-
-                                elif exact_memory_key == "preferred_name":
-                                    response = (
-                                        f"You prefer to be called {value}."
-                                    )
-
-                                elif exact_memory_key.startswith("favorite_"):
-                                    subject = (
-                                        exact_memory_key[
-                                            len("favorite_"):
-                                        ]
-                                        .replace("_", " ")
-                                    )
-
-                                    response = (
-                                        f"Your favorite {subject} "
-                                        f"is {value}."
-                                    )
-
-                                elif exact_memory_key == "field_of_study":
-                                    response = (
-                                        f"You are studying {value}."
-                                    )
-
-                                else:
-                                    response = str(value)
-
-                                return SystemResponse(
-                                    success=True,
-                                    confidence=1.0,
-                                    source="memory",
-                                    data={
-                                        "response": response,
-                                        "message": response,
-                                        "memory_exact": True,
-                                    },
-                                )
-
-                        # ---------------------------------------------------------
-                        # OTHER MEMORY QUESTIONS
-                        # ---------------------------------------------------------
-                        # Only use the LLM when this is NOT a general memory
-                        # recall request and NOT an exact personal fact.
-                        # ---------------------------------------------------------
-
-                        memory_text = "\n".join(
-                            f"{m['key']}: {m['value']}"
-                            for m in memories
-                        )
-
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                f"User question:\n{query}\n\n"
-                                f"Known memories:\n{memory_text}\n\n"
-                                "Answer using only the known memories above. "
-                                "Never claim you do not know something that is "
-                                "explicitly present in the known memories."
-                            ),
-                        })
-
-                    else:
-                        messages.append({
-                            "role": "user",
-                            "content": query,
-                        })
-
-                    reply = await self.llm_router.chat(messages)
-
-                    return SystemResponse(
-                        success=True,
-                        confidence=1.0,
-                        source="fast_router",
-                        data={
-                            "response": reply,
-                            "message": reply,
-                        },
+                if fast_decision:
+                    logger.info(
+                        "[FastRouter] Classification=%s reason=%s",
+                        getattr(fast_decision, "fast", False),
+                        getattr(fast_decision, "reason", "unknown"),
                     )
 
-                # Greeting / Coding / Simple
-                messages.append({
-                    "role": "user",
-                    "content": query
-                })
-
-                reply = await self.llm_router.chat(messages)
-
-                return SystemResponse(
-                    success=True,
-                    confidence=1.0,
-                    source="fast_router",
-                    data={
-                        "response": reply,
-                        "message": reply,
-                    },
+            except Exception as e:
+                logger.warning(
+                    "[FastRouter] Classification skipped: %s",
+                    e,
                 )
+
+            # IMPORTANT:
+            # Do not return from the FastRouter.
+            # The request must continue through the canonical
+            # Cognitive Core pipeline.
+
 
             # ============================================
             # MEMORY RECALL FAST PATH
@@ -2327,6 +2130,14 @@ Execution Results:
                 "agent_manager": getattr(self, "agent_manager", None),
                 "tool_manager": getattr(self, "tool_manager", None),
                 "session": session_id,
+
+                # Phase 1 routing metadata.
+                # Classification only — never authoritative execution.
+                "fast_route": (
+                    getattr(fast_decision, "reason", None)
+                    if fast_decision
+                    else None
+                ),
             })
 
             # =================================================
