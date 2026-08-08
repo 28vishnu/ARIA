@@ -1208,8 +1208,27 @@ class WeatherAction(BaseAction):
             flags=re.IGNORECASE,
         )
 
-        # If the request contains a clear location boundary,
-        # keep only the location before the follow-up clause.
+        # Forecast-request boundary.
+        text = re.split(
+            r"\s+\bfor\s+(?:the\s+)?"
+            r"(?:next\s+)?"
+            r"(?:\d+\s+)?"
+            r"(?:days?|weeks?|week|day)\b",
+            text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+
+        # Defensive handling for malformed router output such as:
+        # "Vizag for the and tell me which days have rain"
+        text = re.sub(
+            r"\s+\bfor\s+the\s+and\b.*$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        # Existing location/follow-up boundary.
         text = re.split(
             r"\s*(?:,\s*(?:and|but)\b|\s+\b(?:and|but)\b|"
             r"\s+(?:and\s+)?(?:tell|show|give|let\s+me\s+know)\s+me\b|"
