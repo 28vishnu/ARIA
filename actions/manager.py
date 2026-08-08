@@ -1,8 +1,9 @@
+import asyncio
 import logging
 import time
-import asyncio
-from typing import Dict, Any
-from actions.base import BaseAction, ActionResult
+from typing import Any, Dict
+
+from actions.base import ActionResult, BaseAction
 from actions.permissions import PermissionManager
 from actions.validator import ActionValidator
 
@@ -70,6 +71,93 @@ class ActionManager:
         return (
             isinstance(action_name, str)
             and action_name in self.actions
+        )
+
+    async def execute_decision(
+        self,
+        decision: Dict[str, Any],
+        confirmed: bool = False,
+    ) -> ActionResult:
+        """
+        Execute an action selected by ARIA's cognitive decision layer.
+
+        This is the controlled boundary between:
+            CognitiveCore -> ActionManager
+
+        The ActionManager remains responsible for:
+            - action existence
+            - parameter normalization
+            - permissions
+            - validation
+            - timeout
+            - retry
+            - rollback
+
+        The LLM must never call actions directly.
+        """
+
+        if not isinstance(decision, dict):
+            return ActionResult(
+                success=False,
+                action_name="",
+                error="Invalid cognitive decision.",
+            )
+
+        action_name = decision.get("action")
+
+        if not isinstance(action_name, str):
+            action_name = ""
+
+        action_name = action_name.strip()
+
+        if not action_name:
+            return ActionResult(
+                success=False,
+                action_name="",
+                error="No action was selected by the cognitive layer.",
+            )
+
+        if not self.has_action(action_name):
+            logger.warning(
+                "[ActionManager] Cognitive decision selected "
+                "unknown action: %s",
+                action_name,
+            )
+
+            return ActionResult(
+                success=False,
+                action_name=action_name,
+                error=(
+                    f"Action '{action_name}' is not available."
+                ),
+            )
+
+        params = decision.get("params", {})
+
+        if params is None:
+            params = {}
+
+        if not isinstance(params, dict):
+            return ActionResult(
+                success=False,
+                action_name=action_name,
+                error=(
+                    f"Invalid parameters supplied for "
+                    f"action '{action_name}'."
+                ),
+            )
+
+        logger.info(
+            "[ActionManager] Executing cognitive decision: "
+            "action=%s confirmed=%s",
+            action_name,
+            confirmed,
+        )
+
+        return await self.execute_action(
+            action_name=action_name,
+            params=params,
+            confirmed=confirmed,
         )
 
     async def execute_action(
