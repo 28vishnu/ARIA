@@ -370,10 +370,19 @@ class WeatherAction(BaseAction):
                     "Unknown conditions",
                 )
             else:
-                condition = current.get(
-                    "weather_symbol",
-                    "Unknown conditions",
-                ).replace("_", " ").title()
+                condition = (
+                    current.get("weather_symbol")
+                    or "Unknown conditions"
+                )
+
+                condition = (
+                    condition
+                    .replace("_", " ")
+                    .replace("day", "")
+                    .replace("night", "")
+                    .strip()
+                    .title()
+                )
 
             temperature = current.get("temperature_2m")
             feels_like = current.get("apparent_temperature")
@@ -508,12 +517,12 @@ class WeatherAction(BaseAction):
                         f"precipitation {precipitation_total} mm"
                     )
 
-                    if index < len(sunrise):
+                    if index < len(sunrise) and sunrise[index]:
                         lines.append(
                             f"Sunrise: {sunrise[index]}"
                         )
 
-                    if index < len(sunset):
+                    if index < len(sunset) and sunset[index]:
                         lines.append(
                             f"Sunset: {sunset[index]}"
                         )
@@ -632,174 +641,443 @@ class WeatherAction(BaseAction):
 
     @staticmethod
     def _normalize_met_weather(
-        data: Dict[str, Any],
+        met_data: Dict[str, Any],
         timezone: str,
     ) -> Dict[str, Any]:
         """
-        Convert MET Norway's response into the internal weather
-        structure used by ARIA, including daily forecasts and
-        converting UTC timestamps to the local timezone.
+        Convert MET Norway Locationforecast JSON into the
+        Open-Meteo-like structure used by WeatherAction.
+
+        MET Norway provides a time series, so this method builds:
+            current
+            daily
+
+        from that time series.
         """
 
-        properties = data.get("properties", {})
-        timeseries = properties.get("timeseries", [])
+        timeseries = (
+            met_data
+            .get("properties", {})
+            .get("timeseries", [])
+        )
 
         if not timeseries:
             raise ValueError(
-                "MET Norway returned no weather observations."
+                "MET Norway returned no forecast timeseries."
             )
 
-        current_entry = timeseries[0]
+        # ---------------------------------------------------------
+        # Helper functions
+        # ---------------------------------------------------------
 
-        instant = (
-            current_entry
+        def instant(data: Dict[str, Any], key: str):
+            return (
+                data
+                .get("data", {})
+                .get("instant", {})
+                .get("details", {})
+                .get(key)
+            )
+
+        def period_details(
+            data: Dict[str, Any],
+            period: str,
+        ) -> Dict[str, Any]:
+            return (
+                data
+                .get("data", {})
+                .get(period, {})
+                .get("details", {})
+            )
+
+        # ---------------------------------------------------------
+        # CURRENT
+        # ---------------------------------------------------------
+
+        first = timeseries[0]
+
+        first_details = (
+            first
             .get("data", {})
             .get("instant", {})
             .get("details", {})
         )
 
-        next_1h = (
-            current_entry
+        current_time = first.get("time")
+
+        temperature = first_details.get(
+            "air_temperature"
+        )
+
+        humidity = first_details.get(
+            "relative_humidity"
+        )
+
+        wind_speed_ms = first_details.get(
+            "wind_speed"
+        )
+
+        wind_direction = first_details.get(
+            "wind_from_direction"
+        )
+
+        pressure = first_details.get(
+            "air_pressure_at_sea_level"
+        )
+
+        # MET Norway wind speed is m/s.
+        # ARIA internally uses km/h.
+        wind_speed_kmh = None
+
+        if wind_speed_ms is not None:
+            wind_speed_kmh = round(
+                float(wind_speed_ms) * 3.6,
+                1,
+            )
+
+        # ---------------------------------------------------------
+        # WEATHER SYMBOL
+        # ---------------------------------------------------------
+
+        first_period = (
+            first
             .get("data", {})
             .get("next_1_hours", {})
         )
 
-        summary = next_1h.get("summary", {})
-        symbol = summary.get("symbol_code", "unknown")
-
-        temperature = instant.get("air_temperature")
-        humidity = instant.get("relative_humidity")
-        wind_speed = instant.get("wind_speed")
-        wind_direction = instant.get("wind_from_direction")
-        pressure = instant.get("air_pressure_at_sea_level")
-
-        precipitation = (
-            next_1h
-            .get("details", {})
-            .get("precipitation_amount", 0)
+        symbol_code = (
+            first_period
+            .get("summary", {})
+            .get("symbol_code")
         )
 
-        raw_time = current_entry.get("time")
-        local_time_str = raw_time
-
-        if raw_time:
-            try:
-                # Parse MET Norway UTC timestamp (e.g. 2026-08-08T09:00:00Z)
-                dt_utc = datetime.fromisoformat(
-                    raw_time.replace("Z", "+00:00")
-                )
-                if timezone and timezone != "auto":
-                    tz = ZoneInfo(timezone)
-                    dt_local = dt_utc.astimezone(tz)
-                    local_time_str = dt_local.isoformat()
-                else:
-                    local_time_str = dt_utc.isoformat()
-            except Exception:
-                logger.exception(
-                    "[WeatherAction] Failed to convert MET time to local timezone."
-                )
-
-        # Aggregate daily data from MET Norway timeseries entries
-        daily_times: list[str] = []
-        daily_symbols: list[str] = []
-        daily_max_temps: list[float] = []
-        daily_min_temps: list[float] = []
-        daily_precips: list[float] = []
-        daily_sunrises: list[str] = []
-        daily_sunsets: list[str] = []
-
-        # Simple grouping by date string (YYYY-MM-DD)
-        date_buckets: Dict[str, Dict[str, Any]] = {}
-
-        for entry in timeseries:
-            t_str = entry.get("time")
-            if not t_str:
-                continue
-            try:
-                dt_entry = datetime.fromisoformat(t_str.replace("Z", "+00:00"))
-                if timezone and timezone != "auto":
-                    dt_entry = dt_entry.astimezone(ZoneInfo(timezone))
-                date_key = dt_entry.strftime("%Y-%m-%d")
-            except Exception:
-                date_key = t_str[:10]
-
-            if date_key not in date_buckets:
-                date_buckets[date_key] = {
-                    "temps": [],
-                    "precip": 0.0,
-                    "symbols": [],
-                }
-
-            details = entry.get("data", {}).get("instant", {}).get("details", {})
-            t_val = details.get("air_temperature")
-            if t_val is not None:
-                date_buckets[date_key]["temps"].append(t_val)
-
-            p_amt = (
-                entry.get("data", {})
-                .get("next_1_hours", {})
-                .get("details", {})
-                .get("precipitation_amount", 0.0)
+        if not symbol_code:
+            first_period = (
+                first
+                .get("data", {})
+                .get("next_6_hours", {})
             )
-            if p_amt:
-                date_buckets[date_key]["precip"] += p_amt
 
-            sym = (
-                entry.get("data", {})
-                .get("next_1_hours", {})
+            symbol_code = (
+                first_period
                 .get("summary", {})
                 .get("symbol_code")
             )
-            if sym:
-                date_buckets[date_key]["symbols"].append(sym)
 
-        for d_date, d_info in list(date_buckets.items()):
-            daily_times.append(d_date)
-            temps = d_info["temps"]
+        # ---------------------------------------------------------
+        # PRECIPITATION
+        # ---------------------------------------------------------
+
+        precipitation = (
+            period_details(
+                first,
+                "next_1_hours",
+            )
+            .get("precipitation_amount")
+        )
+
+        if precipitation is None:
+            precipitation = (
+                period_details(
+                    first,
+                    "next_6_hours",
+                )
+                .get("precipitation_amount")
+            )
+
+        if precipitation is None:
+            precipitation = 0.0
+
+        # ---------------------------------------------------------
+        # BUILD DAILY DATA
+        #
+        # MET provides hourly/6-hourly forecast points.
+        # We aggregate those points by local calendar date.
+        # ---------------------------------------------------------
+
+        daily_map: Dict[str, Dict[str, Any]] = {}
+
+        for item in timeseries:
+
+            timestamp = item.get("time")
+
+            if not timestamp:
+                continue
+
+            try:
+                dt_utc = datetime.fromisoformat(
+                    timestamp.replace("Z", "+00:00")
+                )
+
+                if timezone and timezone != "auto":
+                    try:
+                        dt_local = dt_utc.astimezone(
+                            ZoneInfo(timezone)
+                        )
+                    except Exception:
+                        dt_local = dt_utc
+                else:
+                    dt_local = dt_utc
+
+            except Exception:
+                continue
+
+            date = dt_local.date().isoformat()
+
+            if date not in daily_map:
+                daily_map[date] = {
+                    "temps": [],
+                    "symbols": [],
+                    "precipitation": [],
+                }
+
+            details = (
+                item
+                .get("data", {})
+                .get("instant", {})
+                .get("details", {})
+            )
+
+            temp = details.get(
+                "air_temperature"
+            )
+
+            if temp is not None:
+                daily_map[date]["temps"].append(
+                    float(temp)
+                )
+
+            # Prefer 1-hour symbol.
+            period = item.get(
+                "data",
+                {}
+            ).get(
+                "next_1_hours",
+                {}
+            )
+
+            symbol = (
+                period
+                .get("summary", {})
+                .get("symbol_code")
+            )
+
+            if not symbol:
+
+                period = item.get(
+                    "data",
+                    {}
+                ).get(
+                    "next_6_hours",
+                    {}
+                )
+
+                symbol = (
+                    period
+                    .get("summary", {})
+                    .get("symbol_code")
+                )
+
+            if symbol:
+                daily_map[date]["symbols"].append(
+                    symbol
+                )
+
+            precipitation_value = (
+                period
+                .get("details", {})
+                .get("precipitation_amount")
+            )
+
+            if precipitation_value is not None:
+                daily_map[date]["precipitation"].append(
+                    float(precipitation_value)
+                )
+
+        # ---------------------------------------------------------
+        # Convert daily map into Open-Meteo-like arrays
+        # ---------------------------------------------------------
+
+        dates = sorted(daily_map.keys())
+
+        daily_codes = []
+        min_temps = []
+        max_temps = []
+        precipitation_sums = []
+
+        for date in dates:
+
+            info = daily_map[date]
+
+            temps = info["temps"]
+
+            # Temperature range
             if temps:
-                daily_max_temps.append(max(temps))
-                daily_min_temps.append(min(temps))
+                min_temps.append(
+                    round(min(temps), 1)
+                )
+                max_temps.append(
+                    round(max(temps), 1)
+                )
             else:
-                daily_max_temps.append(temperature)
-                daily_min_temps.append(temperature)
+                min_temps.append(None)
+                max_temps.append(None)
 
-            daily_precips.append(round(d_info["precip"], 1))
+            # -----------------------------------------------------
+            # Convert MET symbol_code into ARIA weather code
+            # -----------------------------------------------------
 
-            syms = d_info["symbols"]
-            daily_symbols.append(syms[0] if syms else symbol)
-            daily_sunrises.append("")
-            daily_sunsets.append("")
+            symbol = (
+                info["symbols"][0]
+                if info["symbols"]
+                else None
+            )
+
+            daily_codes.append(
+                WeatherAction._met_symbol_to_weather_code(
+                    symbol
+                )
+            )
+
+            precipitation_sums.append(
+                round(
+                    sum(info["precipitation"]),
+                    1,
+                )
+            )
+
+        # ---------------------------------------------------------
+        # LOCAL CURRENT TIME
+        # ---------------------------------------------------------
+
+        local_time = current_time
+
+        if current_time:
+
+            try:
+
+                dt_utc = datetime.fromisoformat(
+                    current_time.replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+
+                if timezone and timezone != "auto":
+                    try:
+                        local_time = dt_utc.astimezone(
+                            ZoneInfo(timezone)
+                        ).isoformat()
+                    except Exception:
+                        local_time = dt_utc.isoformat()
+
+            except Exception:
+                pass
+
+        # ---------------------------------------------------------
+        # FINAL NORMALIZED STRUCTURE
+        # ---------------------------------------------------------
 
         return {
             "current": {
                 "temperature_2m": temperature,
-                "relative_humidity_2m": humidity,
                 "apparent_temperature": temperature,
+                "relative_humidity_2m": humidity,
                 "precipitation": precipitation,
                 "rain": precipitation,
-                "weather_code": None,
-                "weather_symbol": symbol,
-                "wind_speed_10m": wind_speed,
+                "weather_code": WeatherAction._met_symbol_to_weather_code(
+                    symbol_code
+                ),
+                "weather_symbol": symbol_code,
+                "wind_speed_10m": wind_speed_kmh,
                 "wind_direction_10m": wind_direction,
                 "surface_pressure": pressure,
-                "time": local_time_str,
+                "time": local_time,
             },
+
             "daily": {
-                "time": daily_times,
-                "weather_code": [],
-                "temperature_2m_max": daily_max_temps,
-                "temperature_2m_min": daily_min_temps,
-                "apparent_temperature_max": daily_max_temps,
-                "apparent_temperature_min": daily_min_temps,
-                "precipitation_sum": daily_precips,
-                "rain_sum": daily_precips,
-                "sunrise": daily_sunrises,
-                "sunset": daily_sunsets,
-                "weather_symbol": daily_symbols,
+                "time": dates,
+                "weather_code": daily_codes,
+                "temperature_2m_max": max_temps,
+                "temperature_2m_min": min_temps,
+                "precipitation_sum": precipitation_sums,
+
+                # MET fallback does not provide Open-Meteo-style
+                # sunrise/sunset arrays here.
+                "sunrise": [],
+                "sunset": [],
             },
-            "timezone": timezone,
-            "_provider": "met_norway",
         }
+
+    # =============================================================
+    # MET SYMBOL TO WEATHER CODE HELPER
+    # =============================================================
+
+    @staticmethod
+    def _met_symbol_to_weather_code(
+        symbol: str | None,
+    ) -> int | None:
+        """
+        Convert MET Norway symbol_code to the
+        closest WMO/Open-Meteo weather code.
+        """
+
+        if not symbol:
+            return None
+
+        value = symbol.lower()
+
+        # Thunder
+        if "thunder" in value:
+            return 95
+
+        # Snow
+        if "snow" in value:
+            if "heavy" in value:
+                return 75
+            return 71
+
+        # Sleet / freezing precipitation
+        if "sleet" in value:
+            return 65
+
+        if "freezing" in value:
+            return 66
+
+        # Rain
+        if "heavyrain" in value:
+            return 65
+
+        if "rainshowers" in value:
+            return 80
+
+        if "rain" in value:
+            return 63
+
+        # Drizzle
+        if "drizzle" in value:
+            return 51
+
+        # Fog
+        if "fog" in value:
+            return 45
+
+        # Overcast
+        if "cloudy" in value:
+            if "partly" in value:
+                return 2
+
+            return 3
+
+        # Clear
+        if "clearsky" in value:
+            return 0
+
+        # Fair / mostly clear
+        if "fair" in value:
+            return 1
+
+        return None
 
     # =============================================================
     # MET NORWAY FALLBACK
