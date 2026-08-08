@@ -1659,20 +1659,36 @@ Execution Results:
                     memories = await self.memory_engine.retrieve(query)
 
                     if memories:
+
+                        q = query.lower().strip()
+
+                        # ---------------------------------------------------------
+                        # GENERAL MEMORY RECALL
+                        # ---------------------------------------------------------
+                        # Questions such as:
+                        #   "What do you remember about me?"
+                        #   "What do you know about me?"
+                        #
+                        # must be answered directly from the memory system.
+                        # Do NOT send these to the LLM because the LLM may rewrite
+                        # a correct memory response incorrectly.
+                        # ---------------------------------------------------------
+
+                        if self._looks_like_memory_recall_request(q):
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=1.0,
+                                source="memory",
+                                data={
+                                    "memories": memories,
+                                    "memory_recall": True,
+                                },
+                            )
+
                         # ---------------------------------------------------------
                         # DETERMINISTIC PERSONAL MEMORY ANSWERS
                         # ---------------------------------------------------------
-                        # If ARIA has an exact personal fact, answer from memory
-                        # directly instead of asking an LLM to interpret it.
-                        #
-                        # This prevents:
-                        #   Known memory: favorite_color = blue
-                        #   LLM answer: "I don't have that information."
-                        #
-                        # It also makes personal memory reliable and fast.
-                        # ---------------------------------------------------------
-
-                        q = query.lower().strip()
 
                         exact_memory_key = None
 
@@ -1702,7 +1718,6 @@ Execution Results:
                             if favorite_match:
                                 subject = favorite_match.group(1).strip()
 
-                                # Keep this normalization consistent with MemoryEngine.
                                 subject = subject.replace("favourite", "favorite")
                                 subject = subject.replace("colour", "color")
                                 subject = subject.replace(
@@ -1747,64 +1762,68 @@ Execution Results:
                             exact_memory_key = "field_of_study"
 
                         if exact_memory_key:
+
                             for memory in memories:
-                                if memory.get("key") == exact_memory_key:
-                                    value = memory.get("value")
 
-                                    if isinstance(value, list):
-                                        value = ", ".join(
-                                            str(item)
-                                            for item in value
-                                        )
+                                if memory.get("key") != exact_memory_key:
+                                    continue
 
-                                    if value:
-                                        if exact_memory_key == "name":
-                                            response = f"Your name is {value}."
+                                value = memory.get("value")
 
-                                        elif exact_memory_key == "preferred_name":
-                                            response = (
-                                                f"You prefer to be called {value}."
-                                            )
+                                if isinstance(value, list):
+                                    value = ", ".join(
+                                        str(item)
+                                        for item in value
+                                    )
 
-                                        elif exact_memory_key.startswith(
-                                            "favorite_"
-                                        ):
-                                            subject = (
-                                                exact_memory_key[
-                                                    len("favorite_"):
-                                                ]
-                                                .replace("_", " ")
-                                            )
+                                if not value:
+                                    continue
 
-                                            response = (
-                                                f"Your favorite {subject} "
-                                                f"is {value}."
-                                            )
+                                if exact_memory_key == "name":
+                                    response = f"Your name is {value}."
 
-                                        elif exact_memory_key == "field_of_study":
-                                            response = (
-                                                f"You are studying {value}."
-                                            )
+                                elif exact_memory_key == "preferred_name":
+                                    response = (
+                                        f"You prefer to be called {value}."
+                                    )
 
-                                        else:
-                                            response = str(value)
+                                elif exact_memory_key.startswith("favorite_"):
+                                    subject = (
+                                        exact_memory_key[
+                                            len("favorite_"):
+                                        ]
+                                        .replace("_", " ")
+                                    )
 
-                                        return SystemResponse(
-                                            success=True,
-                                            confidence=1.0,
-                                            source="memory",
-                                            data={
-                                                "response": response,
-                                                "message": response,
-                                                "memory_exact": True,
-                                            },
-                                        )
+                                    response = (
+                                        f"Your favorite {subject} "
+                                        f"is {value}."
+                                    )
+
+                                elif exact_memory_key == "field_of_study":
+                                    response = (
+                                        f"You are studying {value}."
+                                    )
+
+                                else:
+                                    response = str(value)
+
+                                return SystemResponse(
+                                    success=True,
+                                    confidence=1.0,
+                                    source="memory",
+                                    data={
+                                        "response": response,
+                                        "message": response,
+                                        "memory_exact": True,
+                                    },
+                                )
 
                         # ---------------------------------------------------------
-                        # GENERAL MEMORY QUERY
+                        # OTHER MEMORY QUESTIONS
                         # ---------------------------------------------------------
-                        # If this wasn't an exact fact question, allow the LLM to
-                        # synthesize an answer from the retrieved memories.
+                        # Only use the LLM when this is NOT a general memory
+                        # recall request and NOT an exact personal fact.
                         # ---------------------------------------------------------
 
                         memory_text = "\n".join(
@@ -1818,8 +1837,6 @@ Execution Results:
                                 f"User question:\n{query}\n\n"
                                 f"Known memories:\n{memory_text}\n\n"
                                 "Answer using only the known memories above. "
-                                "If the user asks what you remember about them, "
-                                "summarize the relevant memories naturally. "
                                 "Never claim you do not know something that is "
                                 "explicitly present in the known memories."
                             ),
