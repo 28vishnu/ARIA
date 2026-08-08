@@ -53,12 +53,53 @@ class LLMRouter:
         self._cache: Dict[str, tuple[str, float]] = {}
         self._cache_ttl = 30.0
 
+    def is_allowed_for_llm(self, context: dict | None = None) -> bool:
+        """
+        Determines whether the LLM is allowed to participate.
+
+        The LLM is a supporting intelligence layer.
+        It must never become ARIA's primary controller.
+        """
+
+        context = context or {}
+
+        decision = context.get("decision_contract", {})
+
+        # Brain-controlled routes should not be delegated to the LLM.
+        protected_routes = {
+            "weather",
+            "time",
+            "date",
+            "calculator",
+            "memory",
+            "search",
+            "action",
+            "planner",
+            "security",
+        }
+
+        route = decision.get("route")
+
+        if route in protected_routes:
+            return False
+
+        # Explicit reasoning may use the LLM as a reasoning component.
+        if decision.get("requires_reasoning") is True:
+            return True
+
+        # Explicit conversational generation may use the LLM.
+        if context.get("llm_required") is True:
+            return True
+
+        return False
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
         temperature: float = 0.7,
         max_tokens: int = 1024,
-        task: str = "general"
+        task: str = "general",
+        context: dict | None = None
     ) -> Any:
         """
         Generate a response using ARIA's provider failover chain.
@@ -72,6 +113,12 @@ class LLMRouter:
         - Provider in cooldown: skip immediately.
         - Permanent failure: move to next provider.
         """
+
+        if not self.is_allowed_for_llm(context):
+            logger.info(
+                "[LLMRouter] LLM bypassed: brain-controlled route."
+            )
+            return None
 
         # -------------------------------------------------
         # CACHE CHECK
