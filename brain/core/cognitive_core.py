@@ -357,16 +357,24 @@ class CognitiveCore:
         Extract structured weather parameters from a natural-language
         weather request.
 
+        The cognitive layer is responsible for identifying the actual
+        geographical location and forecast range before calling the
+        weather action.
+
         Examples:
+
             Weather in London
                 -> location=London, forecast_days=1
 
-            Weather in London tomorrow
-                -> location=London, forecast_days=2,
-                   forecast_target=tomorrow
+            What's the weather in Vizag?
+                -> location=Vizag, forecast_days=1
 
-            Weather in Tokyo for 5 days
-                -> location=Tokyo, forecast_days=5
+            Check the weather in London for the next 3 days
+                -> location=London, forecast_days=3
+
+            What's the weather in Vizag for the next 5 days
+            and tell me which days have rain
+                -> location=Vizag, forecast_days=5
 
             Will it rain in Mumbai tomorrow?
                 -> location=Mumbai, forecast_days=2,
@@ -382,10 +390,10 @@ class CognitiveCore:
                 "forecast_target": "today",
             }
 
-        working = text
+        working = re.sub(r"\s+", " ", text).strip()
 
         # ---------------------------------------------------------
-        # Detect forecast target
+        # 1. FORECAST TARGET
         # ---------------------------------------------------------
 
         forecast_target = "today"
@@ -401,7 +409,7 @@ class CognitiveCore:
             forecast_target = "today"
 
         # ---------------------------------------------------------
-        # Detect explicit forecast length
+        # 2. FORECAST LENGTH
         # ---------------------------------------------------------
 
         forecast_days = 1
@@ -418,48 +426,115 @@ class CognitiveCore:
             except (TypeError, ValueError):
                 forecast_days = 1
 
-        # Tomorrow requires at least two forecast days so that
-        # WeatherAction can access the second day.
         if forecast_target == "tomorrow":
             forecast_days = max(forecast_days, 2)
 
         forecast_days = max(1, min(forecast_days, 7))
 
         # ---------------------------------------------------------
-        # Remove temporal phrases before passing the query to
-        # WeatherAction.
-        # ---------------------------------------------------------
-
-        location_query = re.sub(
-            r"\b(?:tomorrow|today|right now|currently|current|now)\b",
-            "",
-            working,
-            flags=re.IGNORECASE,
-        )
-
-        location_query = re.sub(
-            r"\b(?:for|next)\s+\d+\s+days?\b",
-            "",
-            location_query,
-            flags=re.IGNORECASE,
-        )
-
-        location_query = re.sub(
-            r"\s+",
-            " ",
-            location_query,
-        ).strip(" ,.?")
-
-        # ---------------------------------------------------------
-        # Remove common weather question wording.
+        # 3. EXTRACT LOCATION FROM THE WEATHER SENTENCE
         #
-        # WeatherAction already performs its own extraction, but
-        # removing temporal language here prevents it from becoming
-        # part of the geocoding query.
+        # Important:
+        # Do NOT send the complete user sentence to geocoding.
+        # Find the geographical phrase first.
         # ---------------------------------------------------------
+
+        location = ""
+
+        # Common construction:
+        #
+        #   weather in London
+        #   weather in Vizag
+        #   temperature in New York
+        #   rain in Mumbai
+        #
+        # Capture everything after "in/at" until another part of
+        # the user's request begins.
+        location_match = re.search(
+            r"\b(?:in|at)\s+"
+            r"(.+?)"
+            r"(?="
+            r"\s*(?:,|\.|\?|;)\s*"
+            r"(?:and|but|tell|show|give|let|whether|if)"
+            r"|\s+\band\b\s+"
+            r"(?:tell|show|give|let|whether|if)"
+            r"|\s+\bfor\s+(?:the\s+)?(?:next\s+)?\d+\s+days?\b"
+            r"|\s+\b(?:today|tomorrow|tonight|right now|currently|now)\b"
+            r"|$"
+            r")",
+            working,
+            re.IGNORECASE,
+        )
+
+        if location_match:
+            location = location_match.group(1).strip()
+
+        # ---------------------------------------------------------
+        # 4. Handle malformed / alternate weather wording
+        # ---------------------------------------------------------
+
+        if not location:
+            location_match = re.search(
+                r"\b(?:weather|temperature|forecast)\s+"
+                r"(?:for|of)\s+"
+                r"(.+?)"
+                r"(?="
+                r"\s*(?:,|\.|\?|;)\s*"
+                r"(?:and|but|tell|show|give|let|whether|if)"
+                r"|\s+\band\b\s+"
+                r"(?:tell|show|give|let|whether|if)"
+                r"|\s+\bfor\s+(?:the\s+)?(?:next\s+)?\d+\s+days?\b"
+                r"|\s+\b(?:today|tomorrow|tonight|right now|currently|now)\b"
+                r"|$"
+                r")",
+                working,
+                re.IGNORECASE,
+            )
+
+            if location_match:
+                location = location_match.group(1).strip()
+
+        # ---------------------------------------------------------
+        # 5. Rain/snow construction
+        # ---------------------------------------------------------
+
+        if not location:
+            location_match = re.search(
+                r"\b(?:rain|raining|snow|snowing)\s+"
+                r"(?:in|at)\s+"
+                r"(.+?)"
+                r"(?="
+                r"\s*(?:,|\.|\?|;)"
+                r"|\s+\band\b\s+"
+                r"(?:tell|show|give|let|whether|if)"
+                r"|\s+\bfor\s+(?:the\s+)?(?:next\s+)?\d+\s+days?\b"
+                r"|\s+\b(?:today|tomorrow|tonight|right now|currently|now)\b"
+                r"|$"
+                r")",
+                working,
+                re.IGNORECASE,
+            )
+
+            if location_match:
+                location = location_match.group(1).strip()
+
+        # ---------------------------------------------------------
+        # 6. Final cleanup
+        # ---------------------------------------------------------
+
+        location = re.sub(r"\s+", " ", location)
+        location = location.strip(" ,.;:!?")
+
+        # Remove accidental leading weather words if they survived.
+        location = re.sub(
+            r"^(?:the\s+)?(?:weather|temperature|forecast)\s+",
+            "",
+            location,
+            flags=re.IGNORECASE,
+        ).strip()
 
         return {
-            "location": location_query,
+            "location": location,
             "forecast_days": forecast_days,
             "forecast_target": forecast_target,
         }
