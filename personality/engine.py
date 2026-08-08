@@ -291,34 +291,42 @@ class PersonalityEngine:
         return random.choice(responses)
 
     def _format_memory(self, data: Any) -> str:
+        """
+        Converts retrieved memory records into a natural ARIA response.
+
+        MemoryEngine is responsible for retrieval.
+        PersonalityEngine is responsible for presentation.
+        """
+
         data_dict = data if isinstance(data, dict) else {}
 
-        # If another memory component already produced a final response,
-        # preserve it exactly.
-        if "message" in data_dict:
-            message = data_dict["message"]
-
-            if isinstance(message, str) and message.strip():
-                return message.strip()
+        # If MemoryConversationManager already produced a natural response,
+        # preserve it.
+        message = data_dict.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
 
         memories = data_dict.get("memories", [])
 
         if not memories:
-            return "I don't have any relevant memories about you yet."
+            return "I don't have any relevant memories about you yet, Sir."
 
-        snippets = []
+        # ---------------------------------------------------------
+        # Extract and normalize memories
+        # ---------------------------------------------------------
+
+        normalized = {}
 
         for memory in memories:
-
             if not isinstance(memory, dict):
                 continue
 
-            key = (
+            key = str(
                 memory.get("key")
                 or memory.get("field")
                 or memory.get("category")
-                or "Detail"
-            )
+                or ""
+            ).strip()
 
             value = (
                 memory.get("value")
@@ -327,27 +335,132 @@ class PersonalityEngine:
                 or memory.get("summary")
             )
 
+            if not key or value is None:
+                continue
+
+            value = str(value).strip()
+
             if not value:
                 continue
 
-            readable_key = str(key)
+            # Prevent duplicate semantic fields.
+            normalized[key] = value
 
-            readable_key = (
-                readable_key
-                .replace("favorite_", "favorite ")
-                .replace("favourite_", "favorite ")
-                .replace("_", " ")
-                .strip()
+        if not normalized:
+            return "I don't have any relevant memories about you yet, Sir."
+
+        # ---------------------------------------------------------
+        # Important memories first
+        # ---------------------------------------------------------
+
+        priority = [
+            "name",
+            "current_degree",
+            "current_education_level",
+            "future_education_plan",
+            "planned_postgraduate_degree",
+            "planned_postgraduate_location",
+            "study_destination",
+            "intended_degree",
+            "backup_plan_country",
+            "alternative_country",
+            "favorite_color",
+            "favorite_language",
+            "favorite_superhero",
+            "favorite_movie",
+            "favorite_food",
+            "favorite_car",
+            "favorite_animal",
+            "favorite_planet",
+            "favorite_dinosaur",
+            "project_name",
+            "project_type",
+            "project",
+            "exam_preparation",
+        ]
+
+        ordered_keys = []
+
+        for key in priority:
+            if key in normalized and key not in ordered_keys:
+                ordered_keys.append(key)
+
+        # Add any remaining useful memories.
+        for key in normalized:
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+
+        # ---------------------------------------------------------
+        # Human-friendly labels
+        # ---------------------------------------------------------
+
+        labels = {
+            "name": "Name",
+            "current_degree": "Current degree",
+            "current_education_level": "Current education",
+            "future_education_plan": "Future education plan",
+            "planned_postgraduate_degree": "Planned postgraduate degree",
+            "planned_postgraduate_location": "Planned postgraduate location",
+            "study_destination": "Study destination",
+            "intended_degree": "Intended degree",
+            "backup_plan_country": "Backup country",
+            "alternative_country": "Alternative country",
+            "favorite_color": "Favorite color",
+            "favorite_colour": "Favorite color",
+            "favorite_test_color": "Favorite test color",
+            "favorite_language": "Favorite programming language",
+            "favorite_superhero": "Favorite superhero",
+            "favorite_movie": "Favorite movie",
+            "favorite_food": "Favorite food",
+            "favorite_car": "Favorite car",
+            "favorite_animal": "Favorite animal",
+            "favorite_planet": "Favorite planet",
+            "favorite_dinosaur": "Favorite dinosaur",
+            "project_name": "Project",
+            "project_type": "Project type",
+            "project": "Other project",
+            "exam_preparation": "Exam preparation",
+            "education_preference": "Education preference",
+            "education_priority": "Education priority",
+            "preferred_education_region": "Preferred education region",
+            "preferred_watch_material": "Preferred watch material",
+            "watch_budget": "Watch budget",
+            "favorite_shopping_platform": "Favorite shopping platform",
+            "intended_purchase": "Intended purchase",
+            "preferred_name": "Preferred form of address",
+        }
+
+        # ---------------------------------------------------------
+        # Ignore low-quality/internal memories
+        # ---------------------------------------------------------
+
+        ignored_keys = {
+            "user_likes",
+            "phase_3_test_animal",
+            "favorite_test_color",
+        }
+
+        lines = []
+
+        for key in ordered_keys:
+            if key in ignored_keys:
+                continue
+
+            value = normalized[key]
+            label = labels.get(
+                key,
+                key.replace("_", " ").capitalize()
             )
 
-            snippets.append(
-                f"• {readable_key.capitalize()}: {value}"
-            )
+            lines.append(f"• {label}: {value}")
 
-        if snippets:
-            return "\n".join(snippets)
+        if not lines:
+            return "I don't have any relevant memories about you yet, Sir."
 
-        return "I don't have any relevant memories about you yet."
+        return (
+            "Here's what I remember about you, Sir:\n\n"
+            + "\n".join(lines)
+        )
 
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
