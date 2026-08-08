@@ -663,10 +663,6 @@ class MemoryEngine:
 
         segment = self._normalize(segment)
 
-        # Stop preference extraction when the sentence changes direction.
-        # Example:
-        # "I like Saketh but don't call me that"
-        # -> ["Saketh"]
         segment = re.split(
             r"\s+(?:but|however|although|except)\s+",
             segment,
@@ -674,7 +670,6 @@ class MemoryEngine:
             flags=re.IGNORECASE
         )[0]
 
-        # Split natural lists.
         segment = re.sub(
             r"\s+\band\b\s+",
             ",",
@@ -688,7 +683,6 @@ class MemoryEngine:
 
             item = self._normalize(raw)
 
-            # Remove conversational filler.
             item = re.sub(
                 r"^(?:that|this|it|something)\s+",
                 "",
@@ -701,7 +695,6 @@ class MemoryEngine:
             if self._validate_value(item):
                 items.append(item)
 
-        # Preserve order while removing duplicates.
         unique_items = []
 
         for item in items:
@@ -836,7 +829,6 @@ class MemoryEngine:
         key = memory["key"]
         value = memory["value"]
 
-        # Check for existing memory to prevent duplicates and update instead
         existing = await self.get_memory(key)
 
         if existing is not None:
@@ -857,7 +849,6 @@ class MemoryEngine:
                 "action": "update"
             }
 
-        # Only if no existing memory is found should the code continue to insert
         imp_val = memory.get("importance", 0.5)
         if isinstance(imp_val, str):
             is_perm = imp_val in ("high", "critical")
@@ -1138,7 +1129,7 @@ class MemoryEngine:
     async def get_relevant_memories(
         self,
         query: str,
-        limit: int = 10
+        limit: int = 50
     ) -> list[dict]:
 
         if self.memory_col is None:
@@ -1148,6 +1139,28 @@ class MemoryEngine:
             lower = query.lower().strip()
 
             filter_query = None
+
+            # ---------------------------------------------------------
+            # BROAD PERSONAL MEMORY QUERY
+            # ---------------------------------------------------------
+            # Questions such as:
+            #   "What do you remember about me?"
+            #   "What do you know about me?"
+            #   "Tell me everything you remember about me"
+            # should retrieve the user's complete memory profile rather
+            # than relying on semantic ranking.
+
+            broad_memory_query = bool(
+                re.search(
+                    r"\b(?:what\s+do\s+you\s+remember\s+about\s+me|"
+                    r"what\s+do\s+you\s+know\s+about\s+me|"
+                    r"what\s+have\s+i\s+told\s+you\s+about\s+me|"
+                    r"tell\s+me\s+(?:everything|all)\s+you\s+remember\s+about\s+me|"
+                    r"what\s+do\s+you\s+remember\s+about\s+myself)\b",
+                    lower,
+                    re.IGNORECASE
+                )
+            )
 
             if re.search(
                 r"\b(?:what(?:'s| is) my name|who am i|do you know my name|tell me my name|remember my name|what's my name again|say my name)\b",
@@ -1189,7 +1202,7 @@ class MemoryEngine:
             ):
                 filter_query = {"key": "user_likes"}
 
-            if filter_query is None:
+            if filter_query is None and not broad_memory_query:
 
                 favorite_match = re.search(
                     r"(?:what(?:'s| is)|remember|recall)\s+"
@@ -1204,6 +1217,110 @@ class MemoryEngine:
                     filter_query = {
                         "key": self._normalize_key(subject)
                     }
+
+            if broad_memory_query:
+                cursor = self.memory_col.find({
+                    "category": {
+                        "$nin": [
+                            "document",
+                            "document_chunk"
+                        ]
+                    }
+                })
+
+                memories = await cursor.to_list(length=limit)
+
+                deduplicated = {}
+
+                for memory in memories:
+                    key = str(memory.get("key", "")).strip()
+                    value = memory.get("value")
+
+                    if not key or value in (None, ""):
+                        continue
+
+                    existing = deduplicated.get(key)
+
+                    if existing is None:
+                        deduplicated[key] = memory
+                        continue
+
+                    existing_updated = existing.get("updated_at", "")
+                    current_updated = memory.get("updated_at", "")
+
+                    if current_updated > existing_updated:
+                        deduplicated[key] = memory
+
+                memories = list(deduplicated.values())
+
+                memories.sort(
+                    key=lambda m: (
+                        float(m.get("importance", 0.5) or 0.5),
+                        m.get("updated_at", "")
+                    ),
+                    reverse=True
+                )
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+
+                matched_ids = [
+                    m["_id"]
+                    for m in memories
+                    if m.get("_id")
+                ]
+
+                if matched_ids:
+                    await self.memory_col.update_many(
+                        {
+                            "_id": {
+                                "$in": matched_ids
+                            }
+                        },
+                        {
+                            "$inc": {
+                                "access_count": 1
+                            },
+                            "$set": {
+                                "last_accessed": now_iso
+                            }
+                        }
+                    )
+
+                result = [
+                    {
+                        "key": m.get("key"),
+                        "value": m.get("value"),
+                        "category": m.get(
+                            "category",
+                            "general"
+                        ),
+                        "memory_type": m.get(
+                            "memory_type",
+                            "fact"
+                        ),
+                        "importance": m.get(
+                            "importance",
+                            0.5
+                        ),
+                        "confidence": m.get(
+                            "confidence",
+                            1.0
+                        ),
+                        "retrieval_score": 1.0,
+                        "updated_at": m.get(
+                            "updated_at"
+                        )
+                    }
+                    for m in memories
+                    if m.get("key") and m.get("value")
+                ]
+
+                logger.info(
+                    "[MemoryEngine] Broad personal-memory query retrieved %d memories.",
+                    len(result)
+                )
+
+                return result
 
             if filter_query is not None:
 
