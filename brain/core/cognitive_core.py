@@ -3,6 +3,7 @@
 import logging
 import asyncio
 import re
+import time
 from typing import Dict, Any, Optional, List
 
 from personality.response import SystemResponse
@@ -155,6 +156,90 @@ class CognitiveCore:
 
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
+
+    def _persist_execution_state(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        query: str = "",
+        plan: Any = None,
+        result: Any = None,
+        verification: Dict[str, Any] | None = None,
+        attempt: int = 0,
+        error: str | None = None,
+    ) -> None:
+        """
+        Persist resumable execution state.
+
+        This is deliberately best-effort:
+        state persistence must never crash the main cognitive pipeline.
+        """
+
+        if not self.state_manager or not session_id:
+            return
+
+        try:
+            state_payload = {
+                "execution": {
+                    "status": status,
+                    "query": query,
+                    "plan": plan,
+                    "result": result,
+                    "verification": verification or {},
+                    "attempt": attempt,
+                    "error": error,
+                    "updated_at": time.time(),
+                }
+            }
+
+            self.state_manager.update_state(
+                session_id,
+                **state_payload,
+            )
+
+            logger.debug(
+                "[CognitiveCore] Execution state persisted: "
+                "session=%s status=%s attempt=%s",
+                session_id,
+                status,
+                attempt,
+            )
+
+        except Exception as e:
+            logger.warning(
+                "[CognitiveCore] Execution state persistence skipped: %s",
+                e,
+            )
+
+    def _get_persisted_execution_state(
+        self,
+        session_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve the last persisted execution state.
+
+        Invalid or missing state is treated as empty state.
+        """
+
+        if not self.state_manager or not session_id:
+            return {}
+
+        try:
+            state = self.state_manager.get_state(session_id) or {}
+
+            execution = state.get("execution", {})
+
+            if isinstance(execution, dict):
+                return execution
+
+        except Exception as e:
+            logger.warning(
+                "[CognitiveCore] Could not restore execution state: %s",
+                e,
+            )
+
+        return {}
 
     def _extract_weather_params(self, query: str) -> Dict[str, Any]:
         """
@@ -611,6 +696,7 @@ class CognitiveCore:
         last_error = None
 
         max_attempts = max(1, min(int(max_attempts), 3))
+        session_id = context.get("session_id", "")
 
         for attempt in range(1, max_attempts + 1):
 
@@ -625,9 +711,26 @@ class CognitiveCore:
                 if not current_plan:
                     raise ValueError("No executable plan was produced.")
 
+                self._persist_execution_state(
+                    session_id,
+                    status="running",
+                    query=query,
+                    plan=current_plan,
+                    attempt=attempt,
+                )
+
                 last_result = await self.executor.execute_plan(
                     current_plan,
                     context,
+                )
+
+                self._persist_execution_state(
+                    session_id,
+                    status="executed",
+                    query=query,
+                    plan=current_plan,
+                    result=last_result,
+                    attempt=attempt,
                 )
 
             except asyncio.TimeoutError:
@@ -682,6 +785,25 @@ class CognitiveCore:
                         evaluation,
                         last_result,
                     )
+                )
+
+                self._persist_execution_state(
+                    session_id,
+                    status=verification.get(
+                        "status",
+                        "uncertain",
+                    ),
+                    query=query,
+                    plan=current_plan,
+                    result=last_result,
+                    verification=verification,
+                    attempt=attempt,
+                    error=(
+                        verification.get("reason")
+                        if verification.get("status")
+                        == "verified_failure"
+                        else None
+                    ),
                 )
 
                 # -------------------------------------------------
@@ -1068,6 +1190,7 @@ class CognitiveCore:
                     context["execution_verification"] = (
                         recovery.get("verification", {})
                     )
+                    context["execution_attempt"] = recovery.get("attempts", 1)
 
                     if recovery.get("success"):
                         logger.info(
@@ -1075,11 +1198,42 @@ class CognitiveCore:
                             "completed successfully after %d attempt(s).",
                             recovery.get("attempts", 1),
                         )
+                        self._persist_execution_state(
+                            session_id,
+                            status="completed",
+                            query=resolved_query,
+                            plan=plan,
+                            result=execution_result,
+                            verification=context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            attempt=context.get(
+                                "execution_attempt",
+                                0,
+                            ),
+                        )
                     else:
                         logger.warning(
                             "[CognitiveCore] Planner execution "
                             "could not be verified: %s",
                             recovery.get("error"),
+                        )
+                        self._persist_execution_state(
+                            session_id,
+                            status="failed",
+                            query=resolved_query,
+                            plan=plan,
+                            result=execution_result,
+                            verification=context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            attempt=context.get(
+                                "execution_attempt",
+                                0,
+                            ),
+                            error=recovery.get("error"),
                         )
                 else:
 
@@ -1109,6 +1263,7 @@ class CognitiveCore:
                 context["execution_verification"] = (
                     recovery.get("verification", {})
                 )
+                context["execution_attempt"] = recovery.get("attempts", 1)
 
                 if recovery.get("success"):
                     logger.info(
@@ -1116,11 +1271,42 @@ class CognitiveCore:
                         "completed successfully after %d attempt(s).",
                         recovery.get("attempts", 1),
                     )
+                    self._persist_execution_state(
+                        session_id,
+                        status="completed",
+                        query=resolved_query,
+                        plan=plan,
+                        result=execution_result,
+                        verification=context.get(
+                            "execution_verification",
+                            {},
+                        ),
+                        attempt=context.get(
+                            "execution_attempt",
+                            0,
+                        ),
+                    )
                 else:
                     logger.warning(
                         "[CognitiveCore] Task graph execution "
                         "could not be verified: %s",
                         recovery.get("error"),
+                    )
+                    self._persist_execution_state(
+                        session_id,
+                        status="failed",
+                        query=resolved_query,
+                        plan=plan,
+                        result=execution_result,
+                        verification=context.get(
+                            "execution_verification",
+                            {},
+                        ),
+                        attempt=context.get(
+                            "execution_attempt",
+                            0,
+                        ),
+                        error=recovery.get("error"),
                     )
                 if isinstance(reasoning, dict):
                     reasoning["execution_result"] = execution_result
@@ -1152,12 +1338,45 @@ class CognitiveCore:
                     context["execution_verification"] = (
                         recovery.get("verification", {})
                     )
+                    context["execution_attempt"] = recovery.get("attempts", 1)
 
                     if not recovery.get("success"):
                         logger.warning(
                             "[CognitiveCore] Reasoning plan "
                             "execution was not verified: %s",
                             recovery.get("error"),
+                        )
+                        self._persist_execution_state(
+                            session_id,
+                            status="failed",
+                            query=resolved_query,
+                            plan=reasoning.plan,
+                            result=result,
+                            verification=context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            attempt=context.get(
+                                "execution_attempt",
+                                0,
+                            ),
+                            error=recovery.get("error"),
+                        )
+                    else:
+                        self._persist_execution_state(
+                            session_id,
+                            status="completed",
+                            query=resolved_query,
+                            plan=reasoning.plan,
+                            result=result,
+                            verification=context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            attempt=context.get(
+                                "execution_attempt",
+                                0,
+                            ),
                         )
 
                     if result:
@@ -2472,10 +2691,33 @@ Execution Results:
                     or {}
                 )
 
+            persisted_execution = (
+                state.get("execution", {})
+                if isinstance(state, dict)
+                else {}
+            )
+
+            if not isinstance(
+                persisted_execution,
+                dict,
+            ):
+                persisted_execution = {}
+
+            if persisted_execution:
+                logger.info(
+                    "[CognitiveCore] Restored execution state: "
+                    "status=%s attempt=%s",
+                    persisted_execution.get("status"),
+                    persisted_execution.get("attempt", 0),
+                )
+
             # =================================================
             # 1.5 INITIALIZE UNIFIED EXECUTION CONTEXT
             # =================================================
             context = dict(base_context or {})
+            context["persisted_execution"] = (
+                persisted_execution
+            )
             context.update({
                 # Core identity / request
                 "query": query,
