@@ -1253,10 +1253,40 @@ class MemoryEngine:
 
                 memories = list(deduplicated.values())
 
+                def _importance_score(memory):
+                    value = memory.get("importance", 0.5)
+
+                    if isinstance(value, (int, float)):
+                        return float(value)
+
+                    if isinstance(value, str):
+                        normalized = value.strip().lower()
+
+                        importance_map = {
+                            "critical": 1.0,
+                            "very_high": 0.9,
+                            "high": 0.8,
+                            "medium": 0.6,
+                            "normal": 0.5,
+                            "low": 0.3,
+                            "very_low": 0.1,
+                        }
+
+                        if normalized in importance_map:
+                            return importance_map[normalized]
+
+                        try:
+                            return float(normalized)
+                        except (ValueError, TypeError):
+                            return 0.5
+
+                    return 0.5
+
+
                 memories.sort(
                     key=lambda m: (
-                        float(m.get("importance", 0.5) or 0.5),
-                        m.get("updated_at", "")
+                        _importance_score(m),
+                        str(m.get("updated_at", ""))
                     ),
                     reverse=True
                 )
