@@ -528,6 +528,276 @@ class CognitiveCore:
 
         return evidence
 
+    async def _execute_plan_with_recovery(
+        self,
+        *,
+        plan,
+        query: str,
+        context: Dict[str, Any],
+        max_attempts: int = 3,
+    ):
+        """
+        Execute a plan through a centralized recovery loop.
+
+        Recovery policy:
+        1. Execute the current plan.
+        2. Verify the result when possible.
+        3. Return immediately when the goal is completed.
+        4. If execution fails or verification says incomplete,
+           attempt intelligent replanning.
+        5. Never blindly execute the exact same plan indefinitely.
+        """
+
+        current_plan = plan
+        last_result = None
+        last_error = None
+
+        max_attempts = max(1, min(int(max_attempts), 3))
+
+        for attempt in range(1, max_attempts + 1):
+
+            logger.info(
+                "[Recovery] Execution attempt %d/%d for query=%r",
+                attempt,
+                max_attempts,
+                query,
+            )
+
+            try:
+                if not current_plan:
+                    raise ValueError("No executable plan was produced.")
+
+                last_result = await self.executor.execute_plan(
+                    current_plan,
+                    context,
+                )
+
+            except asyncio.TimeoutError:
+                last_error = "Executor timed out."
+
+                logger.warning(
+                    "[Recovery] Executor timeout on attempt %d/%d.",
+                    attempt,
+                    max_attempts,
+                )
+
+            except Exception as exc:
+                last_error = str(exc) or "Executor raised an unknown error."
+
+                logger.exception(
+                    "[Recovery] Executor failed on attempt %d/%d: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+
+            else:
+                # -------------------------------------------------
+                # VERIFY EXECUTION
+                # -------------------------------------------------
+
+                evaluation = None
+
+                if (
+                    self.reasoning_engine
+                    and hasattr(
+                        self.reasoning_engine,
+                        "evaluate_result",
+                    )
+                ):
+                    try:
+                        evaluation = (
+                            await self.reasoning_engine.evaluate_result(
+                                query=query,
+                                result=last_result,
+                            )
+                        )
+
+                    except Exception as exc:
+                        logger.warning(
+                            "[Recovery] Result verification failed: %s",
+                            exc,
+                        )
+
+                # -------------------------------------------------
+                # ACCEPT VERIFIED SUCCESS
+                # -------------------------------------------------
+
+                if isinstance(evaluation, dict):
+
+                    goal_completed = evaluation.get(
+                        "goal_completed"
+                    )
+
+                    if goal_completed is True:
+                        logger.info(
+                            "[Recovery] Goal verified successfully "
+                            "on attempt %d.",
+                            attempt,
+                        )
+
+                        return {
+                            "result": last_result,
+                            "plan": current_plan,
+                            "evaluation": evaluation,
+                            "attempts": attempt,
+                            "recovered": attempt > 1,
+                            "success": True,
+                        }
+
+                # -------------------------------------------------
+                # FALLBACK SUCCESS DETECTION
+                # -------------------------------------------------
+
+                if isinstance(last_result, dict):
+
+                    explicit_success = last_result.get(
+                        "success"
+                    )
+
+                    failed_tasks = last_result.get(
+                        "failed",
+                        [],
+                    )
+
+                    skipped_tasks = last_result.get(
+                        "skipped",
+                        [],
+                    )
+
+                    paused = bool(
+                        last_result.get(
+                            "paused",
+                            False,
+                        )
+                    )
+
+                    if (
+                        explicit_success is True
+                        and not failed_tasks
+                        and not skipped_tasks
+                        and not paused
+                    ):
+                        logger.info(
+                            "[Recovery] Executor reported "
+                            "successful completion on attempt %d.",
+                            attempt,
+                        )
+
+                        return {
+                            "result": last_result,
+                            "plan": current_plan,
+                            "evaluation": evaluation,
+                            "attempts": attempt,
+                            "recovered": attempt > 1,
+                            "success": True,
+                        }
+
+                # -------------------------------------------------
+                # RECORD FAILURE / INCOMPLETE EXECUTION
+                # -------------------------------------------------
+
+                last_error = (
+                    "Execution completed but the requested goal "
+                    "was not verified."
+                )
+
+                if isinstance(evaluation, dict):
+                    last_error = (
+                        evaluation.get("reason")
+                        or evaluation.get("error")
+                        or last_error
+                    )
+
+            # -----------------------------------------------------
+            # NO MORE RECOVERY ATTEMPTS
+            # -----------------------------------------------------
+
+            if attempt >= max_attempts:
+                break
+
+            # -----------------------------------------------------
+            # INTELLIGENT REPLANNING
+            # -----------------------------------------------------
+
+            recovery_context = dict(context)
+
+            recovery_context["recovery"] = {
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "previous_error": last_error,
+                "previous_result": last_result,
+            }
+
+            logger.info(
+                "[Recovery] Attempting replanning after failed "
+                "execution attempt %d.",
+                attempt,
+            )
+
+            try:
+
+                new_plan = None
+
+                if self.planner and hasattr(
+                    self.planner,
+                    "plan",
+                ):
+                    new_plan = await self.planner.plan(
+                        query,
+                        recovery_context,
+                    )
+
+                elif self.planner and hasattr(
+                    self.planner,
+                    "create_task_graph",
+                ):
+                    new_plan = self.planner.create_task_graph(
+                        query
+                    )
+
+                if new_plan is not None:
+                    current_plan = new_plan
+
+                    logger.info(
+                        "[Recovery] New recovery plan generated "
+                        "after attempt %d.",
+                        attempt,
+                    )
+
+                else:
+                    logger.warning(
+                        "[Recovery] Planner could not generate "
+                        "a recovery plan."
+                    )
+
+            except Exception as exc:
+                logger.exception(
+                    "[Recovery] Replanning failed: %s",
+                    exc,
+                )
+
+                # If replanning itself fails, preserve the original
+                # plan for one controlled retry rather than crashing
+                # the entire cognitive pipeline.
+
+        logger.error(
+            "[Recovery] Execution failed after %d attempt(s). "
+            "Last error: %s",
+            max_attempts,
+            last_error,
+        )
+
+        return {
+            "result": last_result,
+            "plan": current_plan,
+            "evaluation": None,
+            "attempts": max_attempts,
+            "recovered": False,
+            "success": False,
+            "error": last_error,
+        }
+
     async def _resolve_query(self, session_id: str, query: str) -> str:
         history = []
 
@@ -725,29 +995,27 @@ class CognitiveCore:
                         context,
                     )
 
-                    goal_completed = False
-                    attempt = 0
-                    max_attempts = 5
-                    while not goal_completed and attempt < max_attempts:
+                    recovery = await self._execute_plan_with_recovery(
+                        plan=plan,
+                        query=resolved_query,
+                        context=context,
+                        max_attempts=3,
+                    )
 
-                        result = await self.executor.execute_plan(
-                            plan,
-                            context,
+                    execution_result = recovery.get("result")
+
+                    if recovery.get("success"):
+                        logger.info(
+                            "[CognitiveCore] Planner execution "
+                            "completed successfully after %d attempt(s).",
+                            recovery.get("attempts", 1),
                         )
-
-                        evaluation = await self.reasoning_engine.evaluate_result(
-                            query=resolved_query,
-                            result=result,
+                    else:
+                        logger.warning(
+                            "[CognitiveCore] Planner execution "
+                            "could not be verified: %s",
+                            recovery.get("error"),
                         )
-
-                        goal_completed = evaluation.get(
-                            "goal_completed",
-                            True,
-                        )
-
-                        attempt += 1
-
-                    execution_result = result
                 else:
 
                     execution_result = await self.reasoning_engine.reason(
@@ -765,29 +1033,27 @@ class CognitiveCore:
         elif needs_execution and self.planner and self.executor:
             try:
                 plan = self.planner.create_task_graph(resolved_query)
-                goal_completed = False
-                attempt = 0
-                max_attempts = 5
-                while not goal_completed and attempt < max_attempts:
+                recovery = await self._execute_plan_with_recovery(
+                    plan=plan,
+                    query=resolved_query,
+                    context=context,
+                    max_attempts=3,
+                )
 
-                    result = await self.executor.execute_plan(
-                        plan,
-                        context=context,
+                execution_result = recovery.get("result")
+
+                if recovery.get("success"):
+                    logger.info(
+                        "[CognitiveCore] Task graph execution "
+                        "completed successfully after %d attempt(s).",
+                        recovery.get("attempts", 1),
                     )
-
-                    evaluation = await self.reasoning_engine.evaluate_result(
-                        query=resolved_query,
-                        result=result,
+                else:
+                    logger.warning(
+                        "[CognitiveCore] Task graph execution "
+                        "could not be verified: %s",
+                        recovery.get("error"),
                     )
-
-                    goal_completed = evaluation.get(
-                        "goal_completed",
-                        True,
-                    )
-
-                    attempt += 1
-
-                execution_result = result
                 if isinstance(reasoning, dict):
                     reasoning["execution_result"] = execution_result
                     reasoning["task_plan"] = plan
@@ -807,28 +1073,21 @@ class CognitiveCore:
             # Step 4: If reasoning generated a plan, execute it via the executor
             if not answer and reasoning and getattr(reasoning, "plan", None) and self.executor:
                 try:
-                    goal_completed = False
-                    attempt = 0
-                    max_attempts = 5
-                    while not goal_completed and attempt < max_attempts:
-                        result = await self.executor.execute_plan(
-                            reasoning.plan,
-                            context,
-                        )
-                        
-                        if self.reasoning_engine and hasattr(self.reasoning_engine, "evaluate_result"):
-                            evaluation = await self.reasoning_engine.evaluate_result(
-                                query=resolved_query,
-                                result=result,
-                            )
-                            goal_completed = evaluation.get(
-                                "goal_completed",
-                                True,
-                            )
-                        else:
-                            goal_completed = True
+                    recovery = await self._execute_plan_with_recovery(
+                        plan=reasoning.plan,
+                        query=resolved_query,
+                        context=context,
+                        max_attempts=3,
+                    )
 
-                        attempt += 1
+                    result = recovery.get("result")
+
+                    if not recovery.get("success"):
+                        logger.warning(
+                            "[CognitiveCore] Reasoning plan "
+                            "execution was not verified: %s",
+                            recovery.get("error"),
+                        )
 
                     if result:
                         answer = result.get("response") or result.get("message") or (result.get("task_outputs") and str(result.get("task_outputs")))
