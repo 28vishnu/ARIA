@@ -4,6 +4,7 @@ import logging
 import asyncio
 import re
 import time
+import uuid
 from typing import Dict, Any, Optional, List
 
 from personality.response import SystemResponse
@@ -157,9 +158,117 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
+    def _create_execution_id(self) -> str:
+        """
+        Create a unique identifier for one cognitive execution.
+
+        This prevents different executions from being confused with
+        one another when state is persisted or recovered.
+        """
+        return f"exec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+
+    def _normalize_execution_result(
+        self,
+        result: Any,
+    ) -> Dict[str, Any]:
+        """
+        Normalize executor output into a predictable structure.
+
+        The cognitive layer must never assume that every executor
+        implementation returns a perfect dictionary.
+        """
+
+        if isinstance(result, dict):
+            return result
+
+        if result is None:
+            return {
+                "success": False,
+                "error": "Executor returned no result.",
+            }
+
+        success = getattr(result, "success", None)
+        error = getattr(result, "error", None)
+        data = getattr(result, "data", None)
+
+        normalized = {
+            "success": (
+                bool(success)
+                if success is not None
+                else True
+            ),
+            "data": data,
+        }
+
+        if error:
+            normalized["error"] = str(error)
+
+        return normalized
+
+    def _validate_persisted_execution(
+        self,
+        execution: Any,
+    ) -> Dict[str, Any]:
+        """
+        Validate persisted execution state before it enters
+        the active cognitive context.
+        """
+
+        if not isinstance(execution, dict):
+            return {}
+
+        status = execution.get("status")
+
+        allowed_statuses = {
+            "running",
+            "executed",
+            "verified_success",
+            "verified_failure",
+            "completed",
+            "failed",
+        }
+
+        if status not in allowed_statuses:
+            return {}
+
+        attempt = execution.get("attempt", 0)
+
+        try:
+            attempt = int(attempt)
+        except (TypeError, ValueError):
+            attempt = 0
+
+        attempt = max(0, attempt)
+
+        return {
+            "execution_id": execution.get(
+                "execution_id"
+            ),
+            "status": status,
+            "query": str(
+                execution.get("query", "")
+            ),
+            "plan": execution.get("plan"),
+            "result": execution.get("result"),
+            "verification": (
+                execution.get("verification")
+                if isinstance(
+                    execution.get("verification"),
+                    dict,
+                )
+                else {}
+            ),
+            "attempt": attempt,
+            "error": execution.get("error"),
+            "updated_at": execution.get(
+                "updated_at"
+            ),
+        }
+
     def _persist_execution_state(
         self,
         session_id: str,
+        execution_id: str = "",
         *,
         status: str,
         query: str = "",
@@ -182,6 +291,7 @@ class CognitiveCore:
         try:
             state_payload = {
                 "execution": {
+                    "execution_id": execution_id,
                     "status": status,
                     "query": query,
                     "plan": plan,
@@ -200,8 +310,9 @@ class CognitiveCore:
 
             logger.debug(
                 "[CognitiveCore] Execution state persisted: "
-                "session=%s status=%s attempt=%s",
+                "session=%s execution_id=%s status=%s attempt=%s",
                 session_id,
+                execution_id,
                 status,
                 attempt,
             )
@@ -697,6 +808,7 @@ class CognitiveCore:
 
         max_attempts = max(1, min(int(max_attempts), 3))
         session_id = context.get("session_id", "")
+        execution_id = context.get("execution_id", "")
 
         for attempt in range(1, max_attempts + 1):
 
@@ -713,19 +825,22 @@ class CognitiveCore:
 
                 self._persist_execution_state(
                     session_id,
+                    execution_id=execution_id,
                     status="running",
                     query=query,
                     plan=current_plan,
                     attempt=attempt,
                 )
 
-                last_result = await self.executor.execute_plan(
+                raw_result = await self.executor.execute_plan(
                     current_plan,
                     context,
                 )
+                last_result = self._normalize_execution_result(raw_result)
 
                 self._persist_execution_state(
                     session_id,
+                    execution_id=execution_id,
                     status="executed",
                     query=query,
                     plan=current_plan,
@@ -789,6 +904,7 @@ class CognitiveCore:
 
                 self._persist_execution_state(
                     session_id,
+                    execution_id=execution_id,
                     status=verification.get(
                         "status",
                         "uncertain",
@@ -1170,7 +1286,30 @@ class CognitiveCore:
             "context -> reasoning -> decision -> execution"
         )
 
-        if decision and decision.use_planner and self.planner and self.executor:
+        execution_id = context.get("execution_id", "")
+        persisted_execution = context.get("persisted_execution", {})
+        previous_execution_id = persisted_execution.get("execution_id")
+        previous_status = persisted_execution.get("status")
+
+        if (
+            previous_execution_id
+            and previous_status == "completed"
+            and persisted_execution.get("query") == resolved_query
+        ):
+            previous_result = persisted_execution.get("result")
+
+            if previous_result:
+                logger.info(
+                    "[CognitiveCore] Reusing completed "
+                    "execution %s",
+                    previous_execution_id,
+                )
+                execution_result = previous_result
+                if isinstance(reasoning, dict):
+                    reasoning["execution_result"] = execution_result
+                elif reasoning is not None:
+                    setattr(reasoning, "execution_result", execution_result)
+        elif decision and decision.use_planner and self.planner and self.executor:
             try:
                 if decision.use_planner:
 
@@ -1200,6 +1339,7 @@ class CognitiveCore:
                         )
                         self._persist_execution_state(
                             session_id,
+                            execution_id=execution_id,
                             status="completed",
                             query=resolved_query,
                             plan=plan,
@@ -1221,6 +1361,7 @@ class CognitiveCore:
                         )
                         self._persist_execution_state(
                             session_id,
+                            execution_id=execution_id,
                             status="failed",
                             query=resolved_query,
                             plan=plan,
@@ -1273,6 +1414,7 @@ class CognitiveCore:
                     )
                     self._persist_execution_state(
                         session_id,
+                        execution_id=execution_id,
                         status="completed",
                         query=resolved_query,
                         plan=plan,
@@ -1294,6 +1436,7 @@ class CognitiveCore:
                     )
                     self._persist_execution_state(
                         session_id,
+                        execution_id=execution_id,
                         status="failed",
                         query=resolved_query,
                         plan=plan,
@@ -1348,6 +1491,7 @@ class CognitiveCore:
                         )
                         self._persist_execution_state(
                             session_id,
+                            execution_id=execution_id,
                             status="failed",
                             query=resolved_query,
                             plan=reasoning.plan,
@@ -1365,6 +1509,7 @@ class CognitiveCore:
                     else:
                         self._persist_execution_state(
                             session_id,
+                            execution_id=execution_id,
                             status="completed",
                             query=resolved_query,
                             plan=reasoning.plan,
@@ -2042,7 +2187,7 @@ Execution Results:
 
         try:
 
-            exec_result = (
+            raw_exec_result = (
                 await self.executor.execute_plan(
                     pending_plan,
                     ctx,
@@ -2050,6 +2195,7 @@ Execution Results:
                     confirmed_task_id=pending_task_id,
                 )
             )
+            exec_result = self._normalize_execution_result(raw_exec_result)
 
         except Exception as exc:
 
@@ -2391,6 +2537,8 @@ Execution Results:
         Main cognitive orchestration pipeline guided by ReasoningEngine.
         """
 
+        execution_id = self._create_execution_id()
+
         try:
             # =================================================
             # PHASE 1 — FAST ROUTER AS CLASSIFIER ONLY
@@ -2691,17 +2839,11 @@ Execution Results:
                     or {}
                 )
 
-            persisted_execution = (
+            persisted_execution = self._validate_persisted_execution(
                 state.get("execution", {})
                 if isinstance(state, dict)
                 else {}
             )
-
-            if not isinstance(
-                persisted_execution,
-                dict,
-            ):
-                persisted_execution = {}
 
             if persisted_execution:
                 logger.info(
@@ -2718,6 +2860,7 @@ Execution Results:
             context["persisted_execution"] = (
                 persisted_execution
             )
+            context["execution_id"] = execution_id
             context.update({
                 # Core identity / request
                 "query": query,
@@ -3383,6 +3526,23 @@ Execution Results:
                 exc,
             )
 
+            try:
+                self._persist_execution_state(
+                    session_id,
+                    execution_id=locals().get(
+                        "execution_id",
+                        "",
+                    ),
+                    status="failed",
+                    query=query,
+                    error=str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] Failed to persist "
+                    "fatal execution state."
+                )
+
             if self.event_bus:
                 try:
                     await self.event_bus.publish(
@@ -3402,5 +3562,8 @@ Execution Results:
                 success=False,
                 confidence=0.0,
                 source="cognitive_core",
-                error=str(exc),
+                data={},
+                error=(
+                    "I couldn't complete that operation safely, Sir."
+                ),
             )
