@@ -156,6 +156,118 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
+    def _extract_weather_params(self, query: str) -> Dict[str, Any]:
+        """
+        Extract structured weather parameters from a natural-language
+        weather request.
+
+        Examples:
+            Weather in London
+                -> location=London, forecast_days=1
+
+            Weather in London tomorrow
+                -> location=London, forecast_days=2,
+                   forecast_target=tomorrow
+
+            Weather in Tokyo for 5 days
+                -> location=Tokyo, forecast_days=5
+
+            Will it rain in Mumbai tomorrow?
+                -> location=Mumbai, forecast_days=2,
+                   forecast_target=tomorrow
+        """
+
+        text = str(query or "").strip()
+
+        if not text:
+            return {
+                "location": "",
+                "forecast_days": 1,
+                "forecast_target": "today",
+            }
+
+        working = text
+
+        # ---------------------------------------------------------
+        # Detect forecast target
+        # ---------------------------------------------------------
+
+        forecast_target = "today"
+
+        if re.search(r"\btomorrow\b", working, re.IGNORECASE):
+            forecast_target = "tomorrow"
+
+        elif re.search(
+            r"\b(?:today|right now|currently|current|now)\b",
+            working,
+            re.IGNORECASE,
+        ):
+            forecast_target = "today"
+
+        # ---------------------------------------------------------
+        # Detect explicit forecast length
+        # ---------------------------------------------------------
+
+        forecast_days = 1
+
+        days_match = re.search(
+            r"\b(?:for|next)\s+(\d+)\s+days?\b",
+            working,
+            re.IGNORECASE,
+        )
+
+        if days_match:
+            try:
+                forecast_days = int(days_match.group(1))
+            except (TypeError, ValueError):
+                forecast_days = 1
+
+        # Tomorrow requires at least two forecast days so that
+        # WeatherAction can access the second day.
+        if forecast_target == "tomorrow":
+            forecast_days = max(forecast_days, 2)
+
+        forecast_days = max(1, min(forecast_days, 7))
+
+        # ---------------------------------------------------------
+        # Remove temporal phrases before passing the query to
+        # WeatherAction.
+        # ---------------------------------------------------------
+
+        location_query = re.sub(
+            r"\b(?:tomorrow|today|right now|currently|current|now)\b",
+            "",
+            working,
+            flags=re.IGNORECASE,
+        )
+
+        location_query = re.sub(
+            r"\b(?:for|next)\s+\d+\s+days?\b",
+            "",
+            location_query,
+            flags=re.IGNORECASE,
+        )
+
+        location_query = re.sub(
+            r"\s+",
+            " ",
+            location_query,
+        ).strip(" ,.?")
+
+        # ---------------------------------------------------------
+        # Remove common weather question wording.
+        #
+        # WeatherAction already performs its own extraction, but
+        # removing temporal language here prevents it from becoming
+        # part of the geocoding query.
+        # ---------------------------------------------------------
+
+        return {
+            "location": location_query,
+            "forecast_days": forecast_days,
+            "forecast_target": forecast_target,
+        }
+
     def _extract_timezone(self, query: str) -> str:
         q = query.lower()
 
@@ -2074,14 +2186,22 @@ Execution Results:
                             error="Weather action manager is not available.",
                         )
 
-                    # Extract the location from the user's query.
-                    weather_query = query.strip()
+                    # -------------------------------------------------
+                    # Extract structured weather parameters
+                    # -------------------------------------------------
+
+                    weather_params = self._extract_weather_params(query)
+
+                    logger.info(
+                        "[WeatherRoute] location=%s | forecast_days=%s | target=%s",
+                        weather_params.get("location"),
+                        weather_params.get("forecast_days"),
+                        weather_params.get("forecast_target"),
+                    )
 
                     action_result = await self.action_manager.execute_action(
                         action_name="weather_action",
-                        params={
-                            "location": weather_query,
-                        },
+                        params=weather_params,
                         confirmed=True,
                     )
 
@@ -2111,6 +2231,9 @@ Execution Results:
                             "timezone": data.get("timezone"),
                             "current": data.get("current"),
                             "forecast": data.get("forecast"),
+                            "forecast_target": weather_params.get(
+                                "forecast_target"
+                            ),
                         },
                     )
 
