@@ -291,63 +291,34 @@ class PersonalityEngine:
         return random.choice(responses)
 
     def _format_memory(self, data: Any) -> str:
-        """
-        Convert retrieved memory records into a natural ARIA response.
-
-        Memory keys are internal database identifiers and should never be
-        exposed directly to the user.
-        """
-
         data_dict = data if isinstance(data, dict) else {}
 
-        # If a memory conversation manager already produced a natural reply,
-        # preserve it.
+        # If another memory component already produced a final response,
+        # preserve it exactly.
         if "message" in data_dict:
-            message = str(data_dict["message"]).strip()
+            message = data_dict["message"]
 
-            if message:
-                return message
+            if isinstance(message, str) and message.strip():
+                return message.strip()
 
         memories = data_dict.get("memories", [])
 
-        if not isinstance(memories, list):
-            memories = []
-
         if not memories:
-            return "I don't have any relevant information about you yet, Sir."
+            return "I don't have any relevant memories about you yet."
 
-        # Human-readable names for internal memory keys.
-        labels = {
-            "name": "Name",
-            "preferred_name": "Preferred name",
-            "address_by_name": "Addressing preference",
-            "birthday": "Birthday",
-            "field_of_study": "Field of study",
-            "user_likes": "Likes",
-            "general_preference": "General preference",
-            "favorite_color": "Favorite color",
-            "favorite_language": "Favorite language",
-            "favorite_superhero": "Favorite superhero",
-            "future_education_plan": "Future education plan",
-            "planned_postgraduate_degree": "Planned postgraduate degree",
-            "exam_preparation": "Exam preparation",
-            "project": "Project",
-            "career_goal": "Career goal",
-        }
-
-        formatted = []
+        snippets = []
 
         for memory in memories:
 
             if not isinstance(memory, dict):
                 continue
 
-            key = str(
+            key = (
                 memory.get("key")
                 or memory.get("field")
                 or memory.get("category")
-                or ""
-            ).strip()
+                or "Detail"
+            )
 
             value = (
                 memory.get("value")
@@ -356,44 +327,27 @@ class PersonalityEngine:
                 or memory.get("summary")
             )
 
-            if not key or value is None:
-                continue
-
-            value = str(value).strip()
-
             if not value:
                 continue
 
-            # Convert internal key to a human-readable label.
-            label = labels.get(key)
+            readable_key = str(key)
 
-            if label is None:
-                label = key.replace("_", " ").strip().capitalize()
-
-            # Handle list-valued memories naturally.
-            if isinstance(memory.get("value"), list):
-                values = [
-                    str(item).strip()
-                    for item in memory["value"]
-                    if str(item).strip()
-                ]
-
-                if not values:
-                    continue
-
-                value = ", ".join(values)
-
-            formatted.append(
-                f"• {label}: {value}"
+            readable_key = (
+                readable_key
+                .replace("favorite_", "favorite ")
+                .replace("favourite_", "favorite ")
+                .replace("_", " ")
+                .strip()
             )
 
-        if not formatted:
-            return "I don't have any relevant information about you yet, Sir."
+            snippets.append(
+                f"• {readable_key.capitalize()}: {value}"
+            )
 
-        return (
-            "Here's what I remember about you, Sir:\n\n"
-            + "\n".join(formatted)
-        )
+        if snippets:
+            return "\n".join(snippets)
+
+        return "I don't have any relevant memories about you yet."
 
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
