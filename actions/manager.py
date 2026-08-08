@@ -15,6 +15,9 @@ NON_RETRYABLE_ACTION_ERRORS = [
     "blocked",
     "invalid",
     "does not exist",
+    "rate-limited",
+    "rate limited",
+    "too many requests",
 ]
 
 class ActionManager:
