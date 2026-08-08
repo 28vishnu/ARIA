@@ -1,3 +1,5 @@
+# actions/weather_action.py
+
 import re
 import logging
 from typing import Any, Dict
@@ -140,6 +142,12 @@ class WeatherAction(BaseAction):
             # =====================================================
 
             forecast_days = params.get("forecast_days", 1)
+            forecast_target = str(
+                params.get("forecast_target", "today")
+            ).lower().strip()
+
+            if forecast_target not in ("today", "tomorrow"):
+                forecast_target = "today"
 
             try:
                 forecast_days = int(forecast_days)
@@ -404,8 +412,6 @@ class WeatherAction(BaseAction):
             dates = daily.get("time", [])
 
             if dates:
-                lines.append("")
-                lines.append("Forecast:")
 
                 max_temps = daily.get(
                     "temperature_2m_max",
@@ -437,55 +443,86 @@ class WeatherAction(BaseAction):
                     [],
                 )
 
-                for index, date in enumerate(dates):
+                # -------------------------------------------------
+                # Select requested forecast day
+                # -------------------------------------------------
 
-                    code = (
-                        daily_codes[index]
-                        if index < len(daily_codes)
-                        else None
-                    )
+                if forecast_target == "tomorrow":
+                    forecast_index = 1
+                else:
+                    forecast_index = 0
 
-                    description = self.WEATHER_CODES.get(
-                        code,
-                        "Unknown",
-                    )
+                # Protect against insufficient forecast data
+                if forecast_index >= len(dates):
+                    forecast_index = 0
 
-                    max_temp = (
-                        max_temps[index]
-                        if index < len(max_temps)
-                        else None
-                    )
+                date = dates[forecast_index]
 
-                    min_temp = (
-                        min_temps[index]
-                        if index < len(min_temps)
-                        else None
-                    )
+                code = (
+                    daily_codes[forecast_index]
+                    if forecast_index < len(daily_codes)
+                    else None
+                )
 
-                    precipitation_total = (
-                        precipitation_sums[index]
-                        if index < len(precipitation_sums)
-                        else None
-                    )
+                description = self.WEATHER_CODES.get(
+                    code,
+                    "Unknown",
+                )
 
+                max_temp = (
+                    max_temps[forecast_index]
+                    if forecast_index < len(max_temps)
+                    else None
+                )
+
+                min_temp = (
+                    min_temps[forecast_index]
+                    if forecast_index < len(min_temps)
+                    else None
+                )
+
+                precipitation_total = (
+                    precipitation_sums[forecast_index]
+                    if forecast_index < len(precipitation_sums)
+                    else None
+                )
+
+                # -------------------------------------------------
+                # Today's weather
+                # -------------------------------------------------
+
+                if forecast_target == "today":
+
+                    lines.append("")
+                    lines.append("Today's forecast:")
+
+                # -------------------------------------------------
+                # Tomorrow's weather
+                # -------------------------------------------------
+
+                else:
+
+                    lines.append("")
+                    lines.append("Tomorrow's forecast:")
+
+                lines.append(
+                    f"{date}: {description}, "
+                    f"{min_temp}°C–{max_temp}°C, "
+                    f"precipitation "
+                    f"{precipitation_total} mm"
+                )
+
+                # Sunrise / sunset for selected day
+
+                if forecast_index < len(sunrise):
                     lines.append(
-                        f"{date}: {description}, "
-                        f"{min_temp}°C–{max_temp}°C, "
-                        f"precipitation "
-                        f"{precipitation_total} mm"
+                        f"Sunrise: {sunrise[forecast_index]}"
                     )
 
-                    if index == 0:
-
-                        if index < len(sunrise):
-                            lines.append(
-                                f"Sunrise: {sunrise[index]}"
-                            )
-
-                        if index < len(sunset):
-                            lines.append(
-                                f"Sunset: {sunset[index]}"
-                            )
+                if forecast_index < len(sunset):
+                    lines.append(
+                        f"Sunset: {sunset[forecast_index]}"
+                    )
 
             message = "\n".join(lines)
 
@@ -513,6 +550,7 @@ class WeatherAction(BaseAction):
                     "timezone": timezone,
                     "current": current,
                     "forecast": daily,
+                    "forecast_target": forecast_target,
                 },
             )
 
