@@ -2,7 +2,9 @@
 
 import re
 import logging
+from datetime import datetime
 from typing import Any, Dict
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -46,7 +48,14 @@ class WeatherAction(BaseAction):
         "Get live weather and forecast information for any worldwide "
         "city or location. Supports natural-language weather queries, "
         "temperature, feels-like temperature, humidity, rain, "
-        "precipitation, wind, sunrise, sunset and forecasts."
+        "precipitation, wind, sunrise, sunset and forecasts. "
+        "WEATHER DATA RULE: "
+        "The weather draft is authoritative structured data. "
+        "Never invent weather conditions, temperatures, humidity, "
+        "rainfall, or trends for days that are not explicitly present "
+        "in the draft. "
+        "If multiple forecast days are present, preserve each day. "
+        "Do not replace a daily forecast with a vague summary."
     )
 
     permission_level = "safe"
@@ -444,85 +453,70 @@ class WeatherAction(BaseAction):
                 )
 
                 # -------------------------------------------------
-                # Select requested forecast day
+                # Select requested forecast indices based on days/target
                 # -------------------------------------------------
 
-                if forecast_target == "tomorrow":
-                    forecast_index = 1
-                else:
-                    forecast_index = 0
-
-                # Protect against insufficient forecast data
-                if forecast_index >= len(dates):
-                    forecast_index = 0
-
-                date = dates[forecast_index]
-
-                code = (
-                    daily_codes[forecast_index]
-                    if forecast_index < len(daily_codes)
-                    else None
-                )
-
-                description = self.WEATHER_CODES.get(
-                    code,
-                    "Unknown",
-                )
-
-                max_temp = (
-                    max_temps[forecast_index]
-                    if forecast_index < len(max_temps)
-                    else None
-                )
-
-                min_temp = (
-                    min_temps[forecast_index]
-                    if forecast_index < len(min_temps)
-                    else None
-                )
-
-                precipitation_total = (
-                    precipitation_sums[forecast_index]
-                    if forecast_index < len(precipitation_sums)
-                    else None
-                )
-
-                # -------------------------------------------------
-                # Today's weather
-                # -------------------------------------------------
-
-                if forecast_target == "today":
-
-                    lines.append("")
-                    lines.append("Today's forecast:")
-
-                # -------------------------------------------------
-                # Tomorrow's weather
-                # -------------------------------------------------
-
-                else:
-
-                    lines.append("")
-                    lines.append("Tomorrow's forecast:")
-
-                lines.append(
-                    f"{date}: {description}, "
-                    f"{min_temp}°C–{max_temp}°C, "
-                    f"precipitation "
-                    f"{precipitation_total} mm"
-                )
-
-                # Sunrise / sunset for selected day
-
-                if forecast_index < len(sunrise):
-                    lines.append(
-                        f"Sunrise: {sunrise[forecast_index]}"
+                if forecast_days > 1:
+                    selected_indices = range(
+                        min(forecast_days, len(dates))
                     )
 
-                if forecast_index < len(sunset):
-                    lines.append(
-                        f"Sunset: {sunset[forecast_index]}"
+                elif forecast_target == "tomorrow":
+                    selected_indices = [1] if len(dates) > 1 else [0]
+
+                else:
+                    selected_indices = [0]
+
+                lines.append("")
+                lines.append("Forecast:")
+
+                for index in selected_indices:
+                    date = dates[index]
+
+                    code = (
+                        daily_codes[index]
+                        if index < len(daily_codes)
+                        else None
                     )
+
+                    description = self.WEATHER_CODES.get(
+                        code,
+                        "Unknown",
+                    )
+
+                    max_temp = (
+                        max_temps[index]
+                        if index < len(max_temps)
+                        else None
+                    )
+
+                    min_temp = (
+                        min_temps[index]
+                        if index < len(min_temps)
+                        else None
+                    )
+
+                    precipitation_total = (
+                        precipitation_sums[index]
+                        if index < len(precipitation_sums)
+                        else None
+                    )
+
+                    lines.append(
+                        f"{date}: {description}, "
+                        f"{min_temp}°C–{max_temp}°C, "
+                        f"precipitation {precipitation_total} mm"
+                    )
+
+                    if index < len(sunrise):
+                        lines.append(
+                            f"Sunrise: {sunrise[index]}"
+                        )
+
+                    if index < len(sunset):
+                        lines.append(
+                            f"Sunset: {sunset[index]}"
+                        )
 
             message = "\n".join(lines)
 
@@ -643,7 +637,8 @@ class WeatherAction(BaseAction):
     ) -> Dict[str, Any]:
         """
         Convert MET Norway's response into the internal weather
-        structure used by ARIA.
+        structure used by ARIA, including daily forecasts and
+        converting UTC timestamps to the local timezone.
         """
 
         properties = data.get("properties", {})
@@ -684,6 +679,97 @@ class WeatherAction(BaseAction):
             .get("precipitation_amount", 0)
         )
 
+        raw_time = current_entry.get("time")
+        local_time_str = raw_time
+
+        if raw_time:
+            try:
+                # Parse MET Norway UTC timestamp (e.g. 2026-08-08T09:00:00Z)
+                dt_utc = datetime.fromisoformat(
+                    raw_time.replace("Z", "+00:00")
+                )
+                if timezone and timezone != "auto":
+                    tz = ZoneInfo(timezone)
+                    dt_local = dt_utc.astimezone(tz)
+                    local_time_str = dt_local.isoformat()
+                else:
+                    local_time_str = dt_utc.isoformat()
+            except Exception:
+                logger.exception(
+                    "[WeatherAction] Failed to convert MET time to local timezone."
+                )
+
+        # Aggregate daily data from MET Norway timeseries entries
+        daily_times: list[str] = []
+        daily_symbols: list[str] = []
+        daily_max_temps: list[float] = []
+        daily_min_temps: list[float] = []
+        daily_precips: list[float] = []
+        daily_sunrises: list[str] = []
+        daily_sunsets: list[str] = []
+
+        # Simple grouping by date string (YYYY-MM-DD)
+        date_buckets: Dict[str, Dict[str, Any]] = {}
+
+        for entry in timeseries:
+            t_str = entry.get("time")
+            if not t_str:
+                continue
+            try:
+                dt_entry = datetime.fromisoformat(t_str.replace("Z", "+00:00"))
+                if timezone and timezone != "auto":
+                    dt_entry = dt_entry.astimezone(ZoneInfo(timezone))
+                date_key = dt_entry.strftime("%Y-%m-%d")
+            except Exception:
+                date_key = t_str[:10]
+
+            if date_key not in date_buckets:
+                date_buckets[date_key] = {
+                    "temps": [],
+                    "precip": 0.0,
+                    "symbols": [],
+                }
+
+            details = entry.get("data", {}).get("instant", {}).get("details", {})
+            t_val = details.get("air_temperature")
+            if t_val is not None:
+                date_buckets[date_key]["temps"].append(t_val)
+
+            p_amt = (
+                entry.get("data", {})
+                .get("next_1_hours", {})
+                .get("details", {})
+                .get("precipitation_amount", 0.0)
+            )
+            if p_amt:
+                date_buckets[date_key]["precip"] += p_amt
+
+            sym = (
+                entry.get("data", {})
+                .get("next_1_hours", {})
+                .get("summary", {})
+                .get("symbol_code")
+            )
+            if sym:
+                date_buckets[date_key]["symbols"].append(sym)
+
+        for d_date, d_info in list(date_buckets.items()):
+            daily_times.append(d_date)
+            temps = d_info["temps"]
+            if temps:
+                daily_max_temps.append(max(temps))
+                daily_min_temps.append(min(temps))
+            else:
+                daily_max_temps.append(temperature)
+                daily_min_temps.append(temperature)
+
+            daily_precips.append(round(d_info["precip"], 1))
+
+            syms = d_info["symbols"]
+            daily_symbols.append(syms[0] if syms else symbol)
+            daily_sunrises.append("")
+            daily_sunsets.append("")
+
         return {
             "current": {
                 "temperature_2m": temperature,
@@ -696,19 +782,20 @@ class WeatherAction(BaseAction):
                 "wind_speed_10m": wind_speed,
                 "wind_direction_10m": wind_direction,
                 "surface_pressure": pressure,
-                "time": current_entry.get("time"),
+                "time": local_time_str,
             },
             "daily": {
-                "time": [],
+                "time": daily_times,
                 "weather_code": [],
-                "temperature_2m_max": [],
-                "temperature_2m_min": [],
-                "apparent_temperature_max": [],
-                "apparent_temperature_min": [],
-                "precipitation_sum": [],
-                "rain_sum": [],
-                "sunrise": [],
-                "sunset": [],
+                "temperature_2m_max": daily_max_temps,
+                "temperature_2m_min": daily_min_temps,
+                "apparent_temperature_max": daily_max_temps,
+                "apparent_temperature_min": daily_min_temps,
+                "precipitation_sum": daily_precips,
+                "rain_sum": daily_precips,
+                "sunrise": daily_sunrises,
+                "sunset": daily_sunsets,
+                "weather_symbol": daily_symbols,
             },
             "timezone": timezone,
             "_provider": "met_norway",
