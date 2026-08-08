@@ -156,6 +156,40 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
+    def _extract_timezone(self, query: str) -> str:
+        q = query.lower()
+
+        timezone_map = {
+            "tokyo": "Asia/Tokyo",
+            "japan": "Asia/Tokyo",
+            "delhi": "Asia/Kolkata",
+            "india": "Asia/Kolkata",
+            "mumbai": "Asia/Kolkata",
+            "kolkata": "Asia/Kolkata",
+            "london": "Europe/London",
+            "uk": "Europe/London",
+            "new york": "America/New_York",
+            "los angeles": "America/Los_Angeles",
+            "san francisco": "America/Los_Angeles",
+            "chicago": "America/Chicago",
+            "dubai": "Asia/Dubai",
+            "singapore": "Asia/Singapore",
+            "seoul": "Asia/Seoul",
+            "south korea": "Asia/Seoul",
+            "sydney": "Australia/Sydney",
+            "paris": "Europe/Paris",
+            "berlin": "Europe/Berlin",
+            "moscow": "Europe/Moscow",
+            "beijing": "Asia/Shanghai",
+            "china": "Asia/Shanghai",
+        }
+
+        for location, timezone in timezone_map.items():
+            if location in q:
+                return timezone
+
+        return "UTC"
+
     def _get_active_task_context(self, query: str = ""):
 
         if not self.task_manager:
@@ -1969,6 +2003,65 @@ Execution Results:
                         "message": "Hello, Sir. How can I help you today?",
                     },
                 )
+
+            if route.route == Route.TIME:
+                try:
+                    timezone = self._extract_timezone(query)
+
+                    if not self.action_manager:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="time_action",
+                            error="Time action manager is not available.",
+                        )
+
+                    action_result = await self.action_manager.execute_action(
+                        action_name="time_action",
+                        params={
+                            "timezone": timezone,
+                        },
+                        confirmed=True,
+                    )
+
+                    if not action_result.success:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="time_action",
+                            error=action_result.error,
+                        )
+
+                    data = action_result.data or {}
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="time_action",
+                        data={
+                            "timezone": data.get("timezone"),
+                            "date": data.get("date"),
+                            "time": data.get("time"),
+                            "utc_offset": data.get("utc_offset"),
+                            "message": (
+                                f"The current time in {data.get('timezone')} "
+                                f"is {data.get('time')}."
+                            ),
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[TimeAction] Time retrieval failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="time_action",
+                        error=f"Unable to retrieve time: {e}",
+                    )
 
             if route.route == Route.CODING:
 
