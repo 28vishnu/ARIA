@@ -165,10 +165,59 @@ class PersonalityEngine:
             reply = ConversationStyle.apply(reply)
             reply = ConversationStyle.follow_up(reply, user_text)
 
-            if source == ResponseSource.MEMORY:
-                return reply
+            # ---------------------------------------------------------
+            # FACTUAL / ROUTED RESPONSES MUST NOT BE REINTERPRETED
+            # ---------------------------------------------------------
+            #
+            # These responses already contain the authoritative result
+            # produced by ARIA's routing, memory, tools, planners, etc.
+            #
+            # The universal personality LLM is presentation-only and must
+            # never be allowed to replace a correct answer with a different
+            # answer or claim that known information is unknown.
+            #
+            # This is especially important for memory questions such as:
+            # "What is my favorite color?"
+            # "What is my favorite language?"
+            #
+            # Example:
+            #   Draft: "Your favorite color is blue."
+            #   MUST remain: "Your favorite color is blue."
+            #
+            # The personality layer must never turn it into:
+            #   "I don't have that information."
+            # ---------------------------------------------------------
 
-            # Universal ARIA personality pass.
+            protected_sources = {
+                ResponseSource.MEMORY,
+                ResponseSource.PROFILE,
+                ResponseSource.MEMORY_CONVERSATION,
+                ResponseSource.TIME,
+                ResponseSource.DATE,
+                ResponseSource.WEATHER,
+                ResponseSource.SEARCH,
+                ResponseSource.CALCULATOR,
+                ResponseSource.PLANNER,
+                ResponseSource.PLANNER_CONVERSATIONAL,
+                ResponseSource.GREETING,
+                "fast_router",
+                "execution_router",
+                "coding_engine",
+                "agent",
+                "action_manager",
+            }
+
+            if source in protected_sources:
+                return self._post_process(reply)
+
+            # ---------------------------------------------------------
+            # UNIVERSAL ARIA PERSONALITY PASS
+            # ---------------------------------------------------------
+            #
+            # Only genuinely conversational responses reach the LLM
+            # personality layer.
+            # ---------------------------------------------------------
+
             reply = await self._apply_aria_voice(
                 user_text=user_text,
                 reply=reply,
@@ -176,7 +225,7 @@ class PersonalityEngine:
 
             logger.info(
                 "[Personality] Reply before post_process: %r",
-                reply
+                reply,
             )
 
             return self._post_process(reply)
