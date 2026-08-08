@@ -1157,6 +1157,76 @@ class MemoryEngine:
 
         )
 
+    def _consolidate_broad_memories(self, memories):
+        """
+        Consolidate semantically duplicate memories for broad
+        personal-memory queries.
+        """
+
+        canonical_groups = {
+            "postgraduate_degree": {
+                "planned_postgraduate_degree",
+                "intended_degree",
+            },
+            "postgraduate_location": {
+                "planned_postgraduate_location",
+                "study_destination",
+            },
+            "backup_country": {
+                "backup_plan_country",
+                "alternative_country",
+            },
+        }
+
+        key_to_group = {}
+
+        for canonical, keys in canonical_groups.items():
+            for key in keys:
+                key_to_group[key] = canonical
+
+        consolidated = {}
+        output = []
+
+        for memory in memories:
+            key = memory.get("key")
+
+            if not key:
+                continue
+
+            group = key_to_group.get(key)
+
+            # Normal memory — keep it.
+            if group is None:
+                if key not in consolidated:
+                    consolidated[key] = memory
+                    output.append(memory)
+                continue
+
+            # First memory in this semantic group.
+            existing = consolidated.get(group)
+
+            if existing is None:
+                consolidated[group] = memory
+                output.append(memory)
+                continue
+
+            # If duplicate semantic memory exists,
+            # keep the most recently updated one.
+            existing_updated = str(
+                existing.get("updated_at") or ""
+            )
+
+            current_updated = str(
+                memory.get("updated_at") or ""
+            )
+
+            if current_updated > existing_updated:
+                index = output.index(existing)
+                output[index] = memory
+                consolidated[group] = memory
+
+        return output
+
     async def get_relevant_memories(
         self,
         query: str,
@@ -1347,41 +1417,14 @@ class MemoryEngine:
                         }
                     )
 
-                result = [
-                    {
-                        "key": m.get("key"),
-                        "value": m.get("value"),
-                        "category": m.get(
-                            "category",
-                            "general"
-                        ),
-                        "memory_type": m.get(
-                            "memory_type",
-                            "fact"
-                        ),
-                        "importance": m.get(
-                            "importance",
-                            0.5
-                        ),
-                        "confidence": m.get(
-                            "confidence",
-                            1.0
-                        ),
-                        "retrieval_score": 1.0,
-                        "updated_at": m.get(
-                            "updated_at"
-                        )
-                    }
-                    for m in memories
-                    if m.get("key") and m.get("value")
-                ]
+                memories = self._consolidate_broad_memories(memories)
 
                 logger.info(
-                    "[MemoryEngine] Broad personal-memory query retrieved %d memories.",
-                    len(result)
+                    "[MemoryEngine] Broad personal-memory query retrieved %d consolidated memories.",
+                    len(memories)
                 )
 
-                return result
+                return memories
 
             if filter_query is not None:
 
