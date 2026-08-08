@@ -388,6 +388,72 @@ class MemoryConversationManager:
             return None
 
         # -----------------------------------------------------
+        # GENERAL MEMORY SUMMARY
+        # -----------------------------------------------------
+        # Handle:
+        #   "What do you remember about me?"
+        #   "What do you know about me?"
+        #   "What have you remembered about me?"
+        #
+        # This must be deterministic. Do not send this request to
+        # the semantic LLM when ARIA already has the memories.
+        # -----------------------------------------------------
+
+        if self._contains_any(
+            q,
+            (
+                "what do you remember about me",
+                "what do you know about me",
+                "what have you remembered about me",
+                "what have you learned about me",
+                "tell me what you remember about me",
+                "tell me what you know about me",
+                "show me what you remember about me",
+                "show me what you know about me",
+                "what information do you remember about me",
+                "what information do you know about me",
+            )
+        ):
+            lines = []
+
+            # Keep the response useful and avoid exposing internal
+            # memory-engine fields such as retrieval scores.
+            seen = set()
+
+            for item in usable:
+                key = item["key"]
+                value = item["value"]
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+
+                # Convert internal memory keys into natural language.
+                readable_key = (
+                    key
+                    .replace("favorite_", "favorite ")
+                    .replace("favourite_", "favorite ")
+                    .replace("_", " ")
+                    .strip()
+                )
+
+                if not readable_key or not value:
+                    continue
+
+                lines.append(
+                    f"• {readable_key.capitalize()}: {value}"
+                )
+
+            if lines:
+                return (
+                    "Certainly, Sir. Here's what I remember about you:\n\n"
+                    + "\n".join(lines)
+                )
+
+            return "I don't have any personal details about you in memory yet, Sir."
+
+        # -----------------------------------------------------
         # NAME
         # -----------------------------------------------------
 
