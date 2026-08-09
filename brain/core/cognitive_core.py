@@ -1847,9 +1847,9 @@ Execution Results:
         if self.autonomous_learning:
             try:
                 await self.autonomous_learning.learn(
-                    session_id,
-                    resolved_query,
-                    answer,
+                    "chat",
+                    user=resolved_query,
+                    assistant=answer,
                 )
             except Exception as e:
                 logger.warning("Autonomous learning skipped: %s", e)
