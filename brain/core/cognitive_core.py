@@ -1,4 +1,3 @@
-import logging
 import asyncio
 import re
 import time
@@ -1294,6 +1293,27 @@ class CognitiveCore:
             context.setdefault("query", resolved_query)
             context.setdefault("session_id", session_id)
 
+        # Load deterministic conversation context for this session.
+        if self.conversation_manager:
+            try:
+                conversation_context = self.conversation_manager.get_context(
+                    session_id
+                )
+
+                context["conversation"] = conversation_context
+
+                logger.info(
+                    "[Conversation] Loaded context for session %s: %s",
+                    session_id,
+                    conversation_context,
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "[Conversation] Context retrieval skipped: %s",
+                    e,
+                )
+
         # Build working memory context with updated priority ordering
         working_memory_context = {}
         if self.working_memory:
@@ -1316,6 +1336,26 @@ class CognitiveCore:
             "memory": memory_context,
             "world": world_state,
         }
+
+        # =========================================================
+        # DETERMINISTIC PERSONAL CONTEXT RECALL
+        # =========================================================
+
+        conversation_context = context.get("conversation", {})
+
+        if self._looks_like_name_recall_request(query):
+            user_name = conversation_context.get("user_name")
+
+            if user_name:
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="conversation_memory",
+                    data={
+                        "response": f"Your name is {user_name}.",
+                        "message": f"Your name is {user_name}.",
+                    },
+                )
 
         # Step 2: Reuse precomputed reasoning result from process() instead of running reasoning twice
         reasoning = precomputed_reasoning
@@ -2013,6 +2053,18 @@ Execution Results:
             phrase in q
             for phrase in recall_phrases
         )
+
+    def _looks_like_name_recall_request(self, query: str) -> bool:
+        q = str(query or "").strip().lower()
+
+        return q in {
+            "what's my name",
+            "what is my name",
+            "whats my name",
+            "tell me my name",
+            "do you know my name",
+            "remember my name",
+        }
 
     def _looks_like_web_search_request(
         self,
