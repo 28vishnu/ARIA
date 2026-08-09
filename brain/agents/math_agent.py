@@ -1,19 +1,20 @@
 from typing import Dict, Any
 
 from brain.agents.base_agent import BaseAgent, AgentResponse
-from brain.tools.tool_manager import ToolManager
 
 
 class MathAgent(BaseAgent):
     """
     Handles mathematical, statistical, and algorithmic calculation requests.
+
+    Deterministic arithmetic must never depend on an LLM.
     """
 
     name = "math"
 
     description = "Mathematics, logic, and calculation agent."
 
-    version = "1.0.0"
+    version = "1.1.0"
 
     priority = 90
 
@@ -23,7 +24,7 @@ class MathAgent(BaseAgent):
         context: Dict[str, Any]
     ) -> float:
 
-        q = query.lower()
+        q = query.lower().strip()
 
         keywords = [
             "calculate",
@@ -37,10 +38,16 @@ class MathAgent(BaseAgent):
             "probability",
             "statistics",
             "sum of",
-            "square root"
+            "square root",
         ]
 
-        if any(word in q for word in keywords) or any(char in q for char in ["+", "-", "*", "/", "^", "="]):
+        if any(word in q for word in keywords):
+            return 0.95
+
+        if any(
+            char in q
+            for char in ["+", "-", "*", "/", "^", "=", "×", "÷"]
+        ):
             return 0.95
 
         return 0.0
@@ -51,52 +58,73 @@ class MathAgent(BaseAgent):
         context: Dict[str, Any]
     ) -> AgentResponse:
 
-        messages = [
-            {
-                "role": "system",
-                "content": "You are ARIA's mathematics and logic specialist. Solve the user's problem step-by-step with clear derivations."
-            },
-            {
-                "role": "user",
-                "content": query
-            }
-        ]
+        # =========================================================
+        # 1. DETERMINISTIC CALCULATOR
+        # =========================================================
 
-        tool_manager = context["app_state"].registry.get("tool_manager")
+        try:
+            app_state = context.get("app_state")
 
-        if tool_manager:
-            tool = tool_manager.get("calculator")
+            if app_state is not None:
+                registry = getattr(app_state, "registry", None)
 
-            if tool:
-                try:
-                    result = await tool.execute(query, context)
+                if registry is not None:
+                    tool_manager = registry.get("tool_manager")
 
-                    if (
-                        isinstance(result, dict)
-                        and result.get("success")
-                        and result.get("result") is not None
-                    ):
-                        return AgentResponse(
-                            success=True,
-                            confidence=1.0,
-                            agent=self.name,
-                            data={
-                                "response": str(result["result"])
-                            }
-                        )
+                    if tool_manager is not None:
+                        calculator = tool_manager.get("calculator")
 
-                except Exception:
-                    pass
+                        if calculator is not None:
+                            result = await calculator.execute(
+                                query,
+                                context
+                            )
 
-        llm_router = context["app_state"].registry.get("llm_router")
+                            if (
+                                isinstance(result, dict)
+                                and result.get("success")
+                                and result.get("result") is not None
+                            ):
+                                return AgentResponse(
+                                    success=True,
+                                    confidence=1.0,
+                                    agent=self.name,
+                                    data={
+                                        "response": str(
+                                            result["result"]
+                                        ),
+                                        "deterministic": True,
+                                    }
+                                )
 
-        answer = await llm_router.chat(messages)
+        except Exception:
+            # Do not allow calculator implementation errors
+            # to crash the cognitive pipeline.
+            pass
+
+        # =========================================================
+        # 2. IMPORTANT
+        # =========================================================
+        #
+        # Do NOT silently send deterministic arithmetic to the LLM.
+        #
+        # If the calculator cannot solve the request, report that
+        # the mathematical capability could not process it.
+        #
+        # Advanced mathematical reasoning can be handled later by
+        # the appropriate reasoning/LLM pathway rather than allowing
+        # basic arithmetic to become LLM-dependent.
+        # =========================================================
 
         return AgentResponse(
-            success=True,
-            confidence=1.0,
+            success=False,
+            confidence=0.0,
             agent=self.name,
             data={
-                "response": answer
+                "response": (
+                    "I couldn't evaluate that calculation "
+                    "with the available calculator."
+                ),
+                "deterministic": True,
             }
         )
