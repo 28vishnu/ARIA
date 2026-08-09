@@ -1,4 +1,3 @@
-# Brain/core/cognitive_core.py
 
 import logging
 import asyncio
@@ -2751,6 +2750,69 @@ Execution Results:
                         "message": "Hello, Sir. How can I help you today?",
                     },
                 )
+
+            if route.route == Route.CALCULATOR:
+                try:
+                    tool_manager = getattr(self, "tool_manager", None)
+
+                    if tool_manager is None:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="calculator",
+                            error="Calculator tool manager is unavailable."
+                        )
+
+                    tool = await tool_manager.select_tool(
+                        query,
+                        {
+                            "session": session_id,
+                            "source": "execution_router",
+                        }
+                    )
+
+                    if tool is None or getattr(tool, "name", None) != "calculator":
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="calculator",
+                            error="Calculator tool is unavailable."
+                        )
+
+                    result = await tool.execute(
+                        query,
+                        {
+                            "session": session_id,
+                            "source": "execution_router",
+                        }
+                    )
+
+                    if not result or not result.get("success"):
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="calculator",
+                            error=result.get("error", "Calculation failed.")
+                            if result else "Calculation failed."
+                        )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="calculator",
+                        data={
+                            "result": result["result"]
+                        }
+                    )
+
+                except Exception as e:
+                    logger.exception("[Calculator] Execution failed")
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="calculator",
+                        error=str(e)
+                    )
 
             if route.route == Route.TIME:
                 try:
