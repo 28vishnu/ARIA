@@ -272,13 +272,13 @@ class PersonalityEngine:
         error_msg = str(error_msg or "").strip()
         lowered = error_msg.lower()
 
-        title = self._address("warning")
+        try:
+            title = self._address("warning")
+        except Exception:
+            title = "Sir"
 
         if "no profile" in lowered or "no relevant" in lowered:
-            return (
-                f"I couldn't find anything matching that request, "
-                f"{title}."
-            )
+            return f"I couldn't find anything matching that request, {title}."
 
         if (
             "429" in lowered
@@ -288,19 +288,19 @@ class PersonalityEngine:
             or "all configured llm providers failed" in lowered
         ):
             return (
-                f"My AI services are temporarily rate-limited, "
-                f"{title}. Try again shortly."
+                f"My AI services are temporarily rate-limited, {title}. "
+                "Try again shortly."
             )
 
         if not error_msg:
             return (
-                f"I couldn't complete that request just now, "
-                f"{title}. Try again shortly."
+                f"I couldn't complete that request just now, {title}. "
+                "Try again shortly."
             )
 
         logger.error(
             "[Personality] Internal operation error: %s",
-            error_msg
+            error_msg,
         )
 
         return f"I couldn't complete that operation, {title}."
