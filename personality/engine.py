@@ -231,10 +231,20 @@ class PersonalityEngine:
             return self._post_process(reply)
 
         except Exception as e:
-            logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
-            reply = f"Operation completed, though a formatting error occurred, {self._address('warning')}."
-            reply = self._apply_addressing(reply, context="warning")
-            return self._post_process(reply)
+            logger.exception(
+                "[PersonalityEngine ERROR] Failed to format response: %s",
+                e,
+            )
+
+            try:
+                title = self._address("warning")
+            except Exception:
+                title = "Sir"
+
+            return (
+                f"Operation completed, though a formatting error occurred, "
+                f"{title}."
+            )
 
     def _address(
         self,
