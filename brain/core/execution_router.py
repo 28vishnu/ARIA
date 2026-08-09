@@ -129,6 +129,46 @@ def decide(query: str) -> RouteDecision:
     )):
         return RouteDecision(Route.MEMORY, 0.97)
 
+    # Calculator / deterministic mathematics
+    if (
+        any(word in q for word in (
+            "calculate",
+            "calculator",
+            "compute",
+            "solve",
+            "what is",
+        ))
+        and any(
+            symbol in q
+            for symbol in (
+                "+",
+                "-",
+                "*",
+                "/",
+                "%",
+                "^",
+                "×",
+                "÷",
+            )
+        )
+    ):
+        return RouteDecision(Route.CALCULATOR, 0.99)
+
+    # Direct arithmetic expression
+    if (
+        any(symbol in q for symbol in (
+            "+",
+            "*",
+            "/",
+            "%",
+            "^",
+            "×",
+            "÷",
+        ))
+        and any(char.isdigit() for char in q)
+    ):
+        return RouteDecision(Route.CALCULATOR, 0.99)
+
     # Planning
     if any(word in q for word in (
         "plan",
