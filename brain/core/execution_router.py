@@ -17,6 +17,7 @@ class Route(str, Enum):
     WEB = "web"
     TASK = "task"
     AUTOMATION = "automation"
+    CALCULATOR = "calculator"
 
 
 @dataclass
