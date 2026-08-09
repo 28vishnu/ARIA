@@ -1,4 +1,4 @@
-import re
+[source: 2]import re
 import json
 from typing import Any, Dict, List, Optional
 
@@ -294,22 +294,85 @@ class ConversationManager:
 
         last_result = session.get("last_calculation_result")
 
-        calculator_phrases = (
-            "divide that",
-            "multiply that",
-            "add that",
-            "subtract that",
-            "divide it",
-            "multiply it",
-            "add it",
-            "subtract it",
-        )
+        if last_result is not None:
+            # Reference-based operations:
+            # "divide that by 10"
+            # "multiply it by 2"
+            # "add that to 50"
+            # "subtract it by 5"
+            reference_match = re.match(
+                r"^\s*"
+                r"(divide|multiply|add|subtract)"
+                r"\s+(?:that|it)"
+                r"(.*)$",
+                cleaned,
+                re.IGNORECASE,
+            )
 
-        if any(lower.startswith(p) for p in calculator_phrases):
-            if last_result:
+            if reference_match:
+                operation = reference_match.group(1).lower()
+                remainder = reference_match.group(2).strip()
+
+                operation_symbol = {
+                    "divide": "/",
+                    "multiply": "*",
+                    "add": "+",
+                    "subtract": "-",
+                }[operation]
+
+                # Extract the numeric operand from the remainder.
+                operand_match = re.search(
+                    r"(?:by|with|to|from)?\s*"
+                    r"(-?\d+(?:\.\d+)?)",
+                    remainder,
+                    re.IGNORECASE,
+                )
+
+                if operand_match:
+                    operand = operand_match.group(1)
+
+                    return (
+                        f"{last_result} "
+                        f"{operation_symbol} "
+                        f"{operand}"
+                    )
+
+                return cleaned.replace(
+                    reference_match.group(0),
+                    f"{last_result}",
+                    1,
+                )
+
+            # Direct continuation:
+            # "add 50"
+            # "subtract 20"
+            # "multiply by 2"
+            # "divide by 10"
+            direct_match = re.match(
+                r"^\s*"
+                r"(add|subtract|multiply|divide)"
+                r"(?:\s+by)?\s+"
+                r"(-?\d+(?:\.\d+)?)"
+                r"\s*$",
+                cleaned,
+                re.IGNORECASE,
+            )
+
+            if direct_match:
+                operation = direct_match.group(1).lower()
+                operand = direct_match.group(2)
+
+                operation_symbol = {
+                    "divide": "/",
+                    "multiply": "*",
+                    "add": "+",
+                    "subtract": "-",
+                }[operation]
+
                 return (
-                    f"{cleaned} using the previous result: "
-                    f"{last_result}"
+                    f"{last_result} "
+                    f"{operation_symbol} "
+                    f"{operand}"
                 )
 
         # -------------------------------------------------
@@ -427,142 +490,3 @@ class ConversationManager:
         ]
 
         return " ".join(words)
-
-    def set_active_document(self, session_id: str, document: Any) -> None:
-        """
-        Store document id/name.
-        """
-        session = self.get_session(session_id)
-        session["active_document"] = document
-
-    def clear_active_document(self, session_id: str) -> None:
-        """
-        Clear active document.
-        """
-        session = self.get_session(session_id)
-        session["active_document"] = None
-
-    def set_active_plan(self, session_id: str, plan: Any) -> None:
-        """
-        Store active plan.
-        """
-        session = self.get_session(session_id)
-        session["active_plan"] = plan
-
-    def clear_active_plan(self, session_id: str) -> None:
-        """
-        Clear active plan.
-        """
-        session = self.get_session(session_id)
-        session["active_plan"] = None
-
-    def set_user_goal(
-        self,
-        session_id,
-        goal,
-    ):
-        session = self.get_session(session_id)
-        session["user_goal"] = goal
-
-    def set_pending_followup(
-        self,
-        session_id,
-        followup,
-    ):
-        session = self.get_session(session_id)
-        session["pending_followup"] = followup
-
-    def set_last_calculation(
-        self,
-        session_id: str,
-        expression: str,
-        result: Any,
-    ) -> None:
-        """
-        Store the most recent successful calculation and its result.
-        This allows follow-up mathematical commands such as:
-            "divide that by 10"
-            "add 50"
-            "multiply it by 2"
-        """
-        session = self.get_session(session_id)
-
-        session["last_calculation"] = expression
-        session["last_calculation_result"] = result
-
-    def clear_session(self, session_id: str) -> None:
-        """
-        Delete session entirely.
-        """
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-
-    def extract_topic(self, text: str) -> Optional[str]:
-        """
-        Lightweight topic extractor.
-        Used only when no entities are supplied.
-        """
-        if not text:
-            return None
-
-        stripped = text.strip()
-        if stripped and len(stripped.split()) <= 3:
-            return stripped.title()
-
-        return None
-
-    def extract_entities(self, text: str) -> List[str]:
-        """
-        Step 1: Regex finding capitalized words/phrases (e.g., Elon Musk, New York, OpenAI).
-        """
-        if not text:
-            return []
-
-        # Find sequences of capitalized words
-        pattern = r"\b[A-Z][a-zA-Z0-9_-]+(?:\s+[A-Z][a-zA-Z0-9_-]+)*\b"
-        matches = re.findall(pattern, text)
-
-        stop_words = {"What", "Who", "Where", "When", "Why", "How", "Is", "The", "A", "An", "And", "Or", "To", "In", "On", "Of", "For"}
-        filtered = [m for m in matches if m not in stop_words]
-
-        return filtered
-
-    async def extract_entities_async(self, text: str) -> List[str]:
-        """
-        Step 1: Regex finding capitalized entities.
-        Step 2: If regex fails or returns nothing, call llm_router to extract entities as JSON list.
-        """
-        entities = self.extract_entities(text)
-        if entities:
-            return entities
-
-        if self.llm_router and hasattr(self.llm_router, "chat"):
-            try:
-                messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Extract named entities (people, companies, places, programming languages, technologies) "
-                            "from the given text. Return ONLY a valid JSON list of strings, e.g., [\"Tesla\", \"Python\"]. "
-                            "If none are found, return []."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": text
-                    }
-                ]
-                response = await self.llm_router.chat(messages, task="entity_extraction")
-                if response:
-                    cleaned = response.strip()
-                    if cleaned.startswith("```json"):
-                        cleaned = cleaned[7:]
-                    if cleaned.endswith("```"):
-                        cleaned = cleaned[:-3]
-                    parsed = json.loads(cleaned.strip())
-                    if isinstance(parsed, list):
-                        return [str(item) for item in parsed]
-            except Exception:
-                pass
-
-        return []
