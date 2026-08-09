@@ -43,6 +43,10 @@ class ConversationManager:
                 "last_company": None,
                 "last_place": None,
                 "last_language": None,
+
+                # Calculation context
+                "last_calculation": None,
+                "last_calculation_result": None,
             }
         return self._sessions[session_id]
 
@@ -201,6 +205,8 @@ class ConversationManager:
             "last_company": session.get("last_company"),
             "last_place": session.get("last_place"),
             "last_language": session.get("last_language"),
+            "last_calculation": session.get("last_calculation"),
+            "last_calculation_result": session.get("last_calculation_result"),
         }
 
     def is_followup(self, query: str) -> bool:
@@ -465,6 +471,24 @@ class ConversationManager:
     ):
         session = self.get_session(session_id)
         session["pending_followup"] = followup
+
+    def set_last_calculation(
+        self,
+        session_id: str,
+        expression: str,
+        result: Any,
+    ) -> None:
+        """
+        Store the most recent successful calculation and its result.
+        This allows follow-up mathematical commands such as:
+            "divide that by 10"
+            "add 50"
+            "multiply it by 2"
+        """
+        session = self.get_session(session_id)
+
+        session["last_calculation"] = expression
+        session["last_calculation_result"] = result
 
     def clear_session(self, session_id: str) -> None:
         """
