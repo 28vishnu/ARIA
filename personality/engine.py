@@ -34,17 +34,13 @@ CORE PERSONALITY:
 - Be courteous, composed, intelligent, concise, and attentive.
 - Sound like you are speaking directly to one person.
 - Maintain a subtle sophisticated assistant personality.
-- Address the user as "Sir" naturally when appropriate.
-- Do not use "Sir" mechanically in every sentence.
+- Address the user naturally when appropriate.
 - Never sound robotic, cold, academic, or like a generic chatbot.
 - Never imitate or quote a specific fictional character.
 
 SHORT ANSWERS:
 - Even very short answers should retain ARIA's personality.
-- Prefer concise forms such as:
-  "Tokyo, Sir."
-  "That comes to 143.65, Sir."
-  "Certainly, Sir. Here's the key point..."
+- Prefer concise forms.
 - Do not unnecessarily expand a simple answer.
 
 CONVERSATION:
@@ -137,9 +133,9 @@ class PersonalityEngine:
 
             # Route to specific private formatters
             if source == ResponseSource.TIME and "time" in data:
-                reply = f"The current time is {data['time']}, Sir."
+                reply = f"The current time is {data['time']}."
             elif source == ResponseSource.DATE and "date" in data:
-                reply = f"Today is {data['date']}, Sir."
+                reply = f"Today is {data['date']}."
             elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
                 reply = str(data["message"])
             elif source == ResponseSource.CHAT and "response" in data:
@@ -152,7 +148,7 @@ class PersonalityEngine:
                 else:
                     reply = self._format_fallback(data)
             elif source == ResponseSource.CALCULATOR and "result" in data:
-                reply = f"The answer is {data['result']}, Sir."
+                reply = f"The answer is {data['result']}."
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
                 reply = self._format_greeting(user_text)
             elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
@@ -177,25 +173,6 @@ class PersonalityEngine:
             # ---------------------------------------------------------
             # FACTUAL / ROUTED RESPONSES MUST NOT BE REINTERPRETED
             # ---------------------------------------------------------
-            #
-            # These responses already contain the authoritative result
-            # produced by ARIA's routing, memory, tools, planners, etc.
-            #
-            # The universal personality LLM is presentation-only and must
-            # never be allowed to replace a correct answer with a different
-            # answer or claim that known information is unknown.
-            #
-            # This is especially important for memory questions such as:
-            # "What is my favorite color?"
-            # "What is my favorite language?"
-            #
-            # Example:
-            #   Draft: "Your favorite color is blue."
-            #   MUST remain: "Your favorite color is blue."
-            #
-            # The personality layer must never turn it into:
-            #   "I don't have that information."
-            # ---------------------------------------------------------
 
             protected_sources = {
                 ResponseSource.MEMORY,
@@ -217,14 +194,14 @@ class PersonalityEngine:
             }
 
             if source in protected_sources:
+                reply = self._apply_addressing(
+                    reply,
+                    context=self._addressing_context(source),
+                )
                 return self._post_process(reply)
 
             # ---------------------------------------------------------
             # UNIVERSAL ARIA PERSONALITY PASS
-            # ---------------------------------------------------------
-            #
-            # Only genuinely conversational responses reach the LLM
-            # personality layer.
             # ---------------------------------------------------------
 
             reply = await self._apply_aria_voice(
@@ -237,18 +214,26 @@ class PersonalityEngine:
                 reply,
             )
 
+            reply = self._apply_addressing(
+                reply,
+                context="normal",
+            )
+
             return self._post_process(reply)
 
         except Exception as e:
             logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
-            return "Operation completed, though a formatting error occurred, Sir."
+            reply = "Operation completed, though a formatting error occurred."
+            reply = self._apply_addressing(reply, context="normal")
+            return self._post_process(reply)
 
     def _format_error(self, error_msg: str) -> str:
         error_msg = str(error_msg or "").strip()
         lowered = error_msg.lower()
 
         if "no profile" in lowered or "no relevant" in lowered:
-            return "I couldn't find anything matching that request, Sir."
+            reply = "I couldn't find anything matching that request."
+            return self._post_process(self._apply_addressing(reply, context="normal"))
 
         if (
             "429" in lowered
@@ -257,39 +242,36 @@ class PersonalityEngine:
             or "quota" in lowered
             or "all configured llm providers failed" in lowered
         ):
-            return (
-                "My AI services are temporarily rate-limited, Sir. "
-                "Try again shortly."
-            )
+            reply = "My AI services are temporarily rate-limited. Try again shortly."
+            return self._post_process(self._apply_addressing(reply, context="normal"))
 
         if not error_msg:
-            return (
-                "I couldn't complete that request just now, Sir. "
-                "Try again shortly."
-            )
+            reply = "I couldn't complete that request just now. Try again shortly."
+            return self._post_process(self._apply_addressing(reply, context="normal"))
 
         logger.error(
             "[Personality] Internal operation error: %s",
             error_msg
         )
 
-        return "I couldn't complete that operation, Sir."
+        reply = "I couldn't complete that operation."
+        return self._post_process(self._apply_addressing(reply, context="normal"))
 
     def _format_greeting(self, user_text: str) -> str:
         query = user_text.lower()
         if "how are you" in query:
-            return "All systems operational and fully optimized, Sir. How may I assist you today?"
+            return "All systems operational and fully optimized. How may I assist you today?"
         elif "morning" in query:
-            return "Good morning, Sir. All operational parameters are nominal."
+            return "Good morning. All operational parameters are nominal."
         elif "evening" in query:
-            return "Good evening, Sir. Ready for your instructions."
+            return "Good evening. Ready for your instructions."
 
         responses = [
-            "Greetings, Sir. ARIA operational and ready.",
-            "Good to see you again, Sir.",
-            "At your service, Sir.",
+            "Greetings. ARIA operational and ready.",
+            "Good to see you again.",
+            "At your service.",
             "Systems online. How may I assist?",
-            "Ready whenever you are, Sir."
+            "Ready whenever you are."
         ]
         return random.choice(responses)
 
@@ -312,7 +294,7 @@ class PersonalityEngine:
         memories = data_dict.get("memories", [])
 
         if not memories:
-            return "I don't have any relevant memories about you yet, Sir."
+            return "I don't have any relevant memories about you yet."
 
         # ---------------------------------------------------------
         # Extract and normalize memories
@@ -350,7 +332,7 @@ class PersonalityEngine:
             normalized[key] = value
 
         if not normalized:
-            return "I don't have any relevant memories about you yet, Sir."
+            return "I don't have any relevant memories about you yet."
 
         # ---------------------------------------------------------
         # Important memories first
@@ -458,22 +440,19 @@ class PersonalityEngine:
             lines.append(f"• {label}: {value}")
 
         if not lines:
-            return "I don't have any relevant memories about you yet, Sir."
+            return "I don't have any relevant memories about you yet."
 
         return (
-            "Here's what I remember about you, Sir:\n\n"
+            "Here's what I remember about you:\n\n"
             + "\n".join(lines)
         )
 
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Task executed successfully, Sir."
+            return "Task executed successfully."
 
         # ---------------------------------------------------------
         # 1. USER-FACING FINAL RESPONSE
-        #
-        # CognitiveCore already extracts the final task's natural
-        # response into these top-level fields.
         # ---------------------------------------------------------
 
         response = data.get("response")
@@ -562,11 +541,11 @@ class PersonalityEngine:
         # 5. NOTHING USER-FACING WAS RETURNED
         # ---------------------------------------------------------
 
-        return "Execution completed successfully, Sir."
+        return "Execution completed successfully."
 
     def _format_action(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Action completed successfully, Sir."
+            return "Action completed successfully."
 
         action_name = data.get("action_name")
         result = data.get("result", {})
@@ -576,9 +555,9 @@ class PersonalityEngine:
                 message = result.get("message")
 
                 if message:
-                    return f"Notification dispatched: {message}, Sir."
+                    return f"Notification dispatched: {message}."
 
-            return "Notification dispatched successfully, Sir."
+            return "Notification dispatched successfully."
 
         # File actions
         if action_name == "file_action":
@@ -591,13 +570,13 @@ class PersonalityEngine:
                     if content:
                         return content
 
-                    return "The file is empty, Sir."
+                    return "The file is empty."
 
                 # WRITE
                 if result.get("status") == "written successfully":
-                    return "File written successfully, Sir."
+                    return "File written successfully."
 
-            return "File operation completed successfully, Sir."
+            return "File operation completed successfully."
 
         # Generic formatting for future actions
         if isinstance(result, dict):
@@ -607,7 +586,7 @@ class PersonalityEngine:
             if "response" in result:
                 return str(result["response"])
 
-        return "Action completed successfully, Sir."
+        return "Action completed successfully."
 
     def _format_fallback(self, data: Any) -> str:
 
@@ -694,6 +673,86 @@ class PersonalityEngine:
 
         return reply
 
+    def _addressing_context(self, source: str) -> str:
+        """
+        Determine the appropriate addressing style from the response source.
+        """
+
+        if source in {
+            ResponseSource.TIME,
+            ResponseSource.DATE,
+            ResponseSource.CALCULATOR,
+        }:
+            return "normal"
+
+        if source in {
+            ResponseSource.SEARCH,
+            ResponseSource.WEATHER,
+        }:
+            return "normal"
+
+        if source in {
+            ResponseSource.MEMORY,
+            ResponseSource.PROFILE,
+            ResponseSource.MEMORY_CONVERSATION,
+        }:
+            return "conversation"
+
+        if source in {
+            ResponseSource.GREETING,
+            ResponseSource.PLANNER_CONVERSATIONAL,
+        }:
+            return "greeting"
+
+        if source in {
+            ResponseSource.PLANNER,
+            "action_manager",
+            "agent",
+            "execution_router",
+        }:
+            return "technical"
+
+        return "normal"
+
+    def _apply_addressing(
+        self,
+        reply: str,
+        context: str = "normal",
+    ) -> str:
+        """
+        Apply ARIA's centralized form of address.
+
+        The addressing engine decides the title.
+        Personal names are never used.
+        """
+
+        reply = str(reply or "").strip()
+
+        if not reply:
+            return reply
+
+        title = self.addressing.get_address(context=context)
+
+        # Remove an existing ARIA title only when it is being used
+        # as a direct form of address.
+        reply = re.sub(
+            r",\s*(Sir|Master|Commander|Chief|Boss)(?=[.!?]|$)",
+            "",
+            reply,
+            flags=re.IGNORECASE,
+        )
+
+        # For short conversational responses, place the title naturally.
+        if "\n" not in reply:
+            if reply.endswith((".", "!", "?")):
+                reply = reply[:-1].rstrip()
+
+            return f"{reply}, {title}."
+
+        # For structured/multi-line responses, preserve the structure
+        # and add the address only at the end.
+        return f"{reply}\n\n{title}."
+
     def _post_process(self, reply: str) -> str:
         """
         Final presentation cleanup for all ARIA responses.
@@ -703,12 +762,12 @@ class PersonalityEngine:
         """
 
         if reply is None:
-            return "I couldn't generate a response, Sir."
+            return "I couldn't generate a response."
 
         reply = str(reply).strip()
 
         if not reply:
-            return "I couldn't generate a response, Sir."
+            return "I couldn't generate a response."
 
         # -----------------------------------------------------
         # Protect fenced code blocks
@@ -728,9 +787,6 @@ class PersonalityEngine:
 
         # -----------------------------------------------------
         # Clean Markdown headings
-        #
-        # ## Python Basics -> Python Basics
-        # ### Variables    -> Variables
         # -----------------------------------------------------
 
         reply = re.sub(
@@ -741,9 +797,6 @@ class PersonalityEngine:
 
         # -----------------------------------------------------
         # Remove Markdown bold/italic markers
-        #
-        # **Python** -> Python
-        # __Python__ -> Python
         # -----------------------------------------------------
 
         reply = re.sub(
@@ -777,14 +830,6 @@ class PersonalityEngine:
 
         # -----------------------------------------------------
         # Normalize bullets
-        #
-        # - item
-        # * item
-        # + item
-        #
-        # becomes:
-        #
-        # • item
         # -----------------------------------------------------
 
         reply = re.sub(
