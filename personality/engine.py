@@ -185,6 +185,7 @@ class PersonalityEngine:
 
             protected_sources = {
                 ResponseSource.MEMORY,
+                "memory",
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
                 ResponseSource.TIME,
