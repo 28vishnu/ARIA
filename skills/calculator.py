@@ -25,14 +25,60 @@ class CalculatorSkill(BaseSkill):
     requires_llm = False
 
     async def can_run(self, query: str, context: dict) -> float:
-        if bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', query)) and any(op in query for op in ['+', '-', '*', '/']):
+        normalized = (
+            query
+            .lower()
+            .replace("×", "*")
+            .replace("÷", "/")
+            .replace("−", "-")
+        )
+
+        if any(word in normalized for word in [
+            "calculate",
+            "solve",
+            "math",
+            "plus",
+            "minus",
+            "times",
+            "multiplied",
+            "divided",
+            "square root",
+        ]):
             return 0.99
+
+        if bool(re.match(r'^[\d\+\-\*\/\.\(\)\s]+$', normalized)):
+            return 0.99
+
         return 0.0
 
     async def execute(self, query: str, context: dict) -> SkillResponse:
         try:
-            node = ast.parse(query.strip(), mode='eval')
+            expression = query.strip()
+
+            # Normalize common human-friendly math symbols
+            expression = (
+                expression
+                .replace("×", "*")
+                .replace("÷", "/")
+                .replace("−", "-")
+                .replace("–", "-")
+                .replace("—", "-")
+            )
+
+            node = ast.parse(expression, mode="eval")
             result = _safe_eval(node.body)
-            return SkillResponse(success=True, confidence=0.99, source=self.name, data={"result": result})
+
+            return SkillResponse(
+                success=True,
+                confidence=0.99,
+                source=self.name,
+                data={"result": result}
+            )
+
         except Exception as e:
-            return SkillResponse(success=False, confidence=0.99, source=self.name, error=str(e))
+            return SkillResponse(
+                success=False,
+                confidence=0.99,
+                source=self.name,
+                error=str(e)
+            )
