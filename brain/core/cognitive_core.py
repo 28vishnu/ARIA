@@ -1,4 +1,4 @@
-import logging
+[source: 1]import logging
 import asyncio
 import re
 import time
@@ -2718,7 +2718,59 @@ Execution Results:
             # EXECUTION ROUTER
             # ============================================
 
-            route = decide(query)
+            # =================================================
+            # CALCULATION FOLLOW-UP ROUTING
+            # =================================================
+            calculation_followup = False
+
+            if self.conversation_manager:
+                try:
+                    session = self.conversation_manager.get_session(
+                        session_id
+                    )
+
+                    last_calculation_result = session.get(
+                        "last_calculation_result"
+                    )
+
+                    calculation_followup = (
+                        last_calculation_result is not None
+                        and bool(
+                            re.match(
+                                r"^\s*(?:"
+                                r"add|"
+                                r"subtract|"
+                                r"multiply|"
+                                r"divide"
+                                r")\b",
+                                query,
+                                re.IGNORECASE,
+                            )
+                        )
+                    )
+
+                    if calculation_followup:
+                        query = self.conversation_manager.resolve_followup(
+                            session_id,
+                            query,
+                        )
+
+                        logger.info(
+                            "[Calculator] Calculation follow-up resolved: %r",
+                            query,
+                        )
+
+                except Exception as e:
+                    logger.warning(
+                        "[Calculator] Follow-up detection skipped: %s",
+                        e,
+                    )
+
+            route = (
+                Route.CALCULATOR
+                if calculation_followup
+                else decide(query)
+            )
 
             logger.info(
                 "[ExecutionRouter] Route=%s Confidence=%.2f",
