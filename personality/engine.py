@@ -154,7 +154,10 @@ class PersonalityEngine:
                 else:
                     reply = self._format_fallback(data)
             elif source == ResponseSource.CALCULATOR and "result" in data:
-                reply = f"The answer is {data['result']}, Sir."
+                reply = (
+                    f"The answer is {data['result']}, "
+                    f"{self._address('technical')}."
+                )
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
                 reply = self._format_greeting(user_text)
             elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
@@ -229,8 +232,8 @@ class PersonalityEngine:
 
         except Exception as e:
             logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
-            reply = "Operation completed, though a formatting error occurred, Sir."
-            reply = self._apply_addressing(reply, context="normal")
+            reply = f"Operation completed, though a formatting error occurred, {self._address('warning')}."
+            reply = self._apply_addressing(reply, context="warning")
             return self._post_process(reply)
 
     def _address(
@@ -318,7 +321,7 @@ class PersonalityEngine:
             f"Greetings, {title}. ARIA operational and ready.",
             f"Good to see you again, {title}.",
             f"At your service, {title}.",
-            "Systems online. How may I assist?",
+            f"Systems online. How may I assist, {self._address('technical')}?",
             f"Ready whenever you are, {title}.",
         ]
 
@@ -604,7 +607,7 @@ class PersonalityEngine:
         # ---------------------------------------------------------
 
         return (
-            f"Execution completed successfully, "
+            f"Task executed successfully, "
             f"{self._address('normal')}."
         )
 
@@ -748,7 +751,7 @@ class PersonalityEngine:
             ResponseSource.DATE,
             ResponseSource.CALCULATOR,
         }:
-            return "normal"
+            return "technical"
 
         if source in {
             ResponseSource.SEARCH,
