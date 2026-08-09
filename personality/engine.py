@@ -508,7 +508,10 @@ class PersonalityEngine:
 
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Task executed successfully, Sir."
+            return (
+                f"Task executed successfully, "
+                f"{self._address('normal')}."
+            )
 
         # ---------------------------------------------------------
         # 1. USER-FACING FINAL RESPONSE
@@ -600,11 +603,14 @@ class PersonalityEngine:
         # 5. NOTHING USER-FACING WAS RETURNED
         # ---------------------------------------------------------
 
-        return "Execution completed successfully, Sir."
+        return (
+            f"Execution completed successfully, "
+            f"{self._address('normal')}."
+        )
 
     def _format_action(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Action completed successfully, Sir."
+            return f"Action completed successfully, {self._address('normal')}."
 
         action_name = data.get("action_name")
         result = data.get("result", {})
@@ -614,9 +620,9 @@ class PersonalityEngine:
                 message = result.get("message")
 
                 if message:
-                    return f"Notification dispatched: {message}, Sir."
+                    return f"Notification dispatched: {message}, {self._address('normal')}."
 
-            return "Notification dispatched successfully, Sir."
+            return f"Notification dispatched successfully, {self._address('normal')}."
 
         # File actions
         if action_name == "file_action":
@@ -629,13 +635,13 @@ class PersonalityEngine:
                     if content:
                         return content
 
-                    return "The file is empty, Sir."
+                    return f"The file is empty, {self._address('warning')}."
 
                 # WRITE
                 if result.get("status") == "written successfully":
-                    return "File written successfully, Sir."
+                    return f"File written successfully, {self._address('normal')}."
 
-            return "File operation completed successfully, Sir."
+            return f"File operation completed successfully, {self._address('normal')}."
 
         # Generic formatting for future actions
         if isinstance(result, dict):
@@ -645,7 +651,7 @@ class PersonalityEngine:
             if "response" in result:
                 return str(result["response"])
 
-        return "Action completed successfully, Sir."
+        return f"Action completed successfully, {self._address('normal')}."
 
     def _format_fallback(self, data: Any) -> str:
 
@@ -821,12 +827,12 @@ class PersonalityEngine:
         """
 
         if reply is None:
-            return "I couldn't generate a response, Sir."
+            return f"I couldn't generate a response, {self._address('warning')}."
 
         reply = str(reply).strip()
 
         if not reply:
-            return "I couldn't generate a response, Sir."
+            return f"I couldn't generate a response, {self._address('warning')}."
 
         # -----------------------------------------------------
         # Protect fenced code blocks
