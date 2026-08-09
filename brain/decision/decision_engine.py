@@ -49,9 +49,15 @@ class DecisionEngine:
         route = getattr(intent, "route", None)
 
         if route:
-            route = str(route).lower()
+            route = str(route).lower().strip()
 
-            if "memory" in route:
+            if "calculator" in route or "calculation" in route:
+                decision.action = "calculator"
+                decision.use_tools = True
+                decision.reasoning_mode = "calculator"
+                decision.selected_agents.append("calculator")
+
+            elif "memory" in route:
                 decision.use_memory = True
                 decision.reasoning_mode = "memory_first"
                 decision.selected_agents.append("memory")
