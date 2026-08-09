@@ -55,17 +55,20 @@ class LLMRouter:
 
     def is_allowed_for_llm(self, context: dict | None = None) -> bool:
         """
-        Determines whether the LLM is allowed to participate.
+        Determine whether the LLM may participate.
 
-        The LLM is a supporting intelligence layer.
-        It must never become ARIA's primary controller.
+        ARIA's brain remains the controller.
+        The LLM is used as the language/reasoning generation layer
+        when the selected route needs it.
+
+        Protected routes must be handled by ARIA's deterministic
+        systems instead of being delegated to the LLM.
         """
 
         context = context or {}
 
-        decision = context.get("decision_contract", {})
+        decision = context.get("decision_contract", {}) or {}
 
-        # Brain-controlled routes should not be delegated to the LLM.
         protected_routes = {
             "weather",
             "time",
@@ -80,15 +83,36 @@ class LLMRouter:
 
         route = decision.get("route")
 
+        if route:
+            route = str(route).lower().strip()
+
+        # Deterministic ARIA-controlled routes.
         if route in protected_routes:
             return False
 
-        # Explicit reasoning may use the LLM as a reasoning component.
+        # Explicit reasoning may use the LLM.
         if decision.get("requires_reasoning") is True:
             return True
 
         # Explicit conversational generation may use the LLM.
         if context.get("llm_required") is True:
+            return True
+
+        # Normal conversation is an allowed LLM generation route.
+        conversational_routes = {
+            "chat",
+            "conversation",
+            "general",
+            "assistant",
+            "knowledge_first",
+        }
+
+        if route in conversational_routes:
+            return True
+
+        # If no route was supplied, allow the LLM as the final
+        # language-generation fallback.
+        if route is None:
             return True
 
         return False
