@@ -188,6 +188,7 @@ class PersonalityEngine:
                 "memory",
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
+                "conversation_memory",
                 ResponseSource.TIME,
                 ResponseSource.DATE,
                 ResponseSource.WEATHER,
