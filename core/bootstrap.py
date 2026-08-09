@@ -61,6 +61,7 @@ from skills.document import DocumentSkill
 from skills.memory import MemorySkill
 from skills.profile import ProfileSkill
 from skills.research import ResearchSkill
+from skills.calculator import CalculatorSkill
 
 from actions.manager import ActionManager
 from actions.actions.file import FileAction
@@ -566,6 +567,7 @@ async def bootstrap_application() -> ServiceRegistry:
     skill_manager.register(MemorySkill())
     skill_manager.register(ProfileSkill())
     skill_manager.register(ResearchSkill())
+    skill_manager.register(CalculatorSkill())
 
     # Action Manager
     action_manager = ActionManager(
