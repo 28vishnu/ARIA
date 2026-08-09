@@ -292,7 +292,7 @@ class ConversationManager:
         # Calculator follow-ups
         # -------------------------------------------------
 
-        last_result = session.get("last_answer")
+        last_result = session.get("last_calculation_result")
 
         calculator_phrases = (
             "divide that",
