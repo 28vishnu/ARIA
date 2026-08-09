@@ -43,6 +43,7 @@ class ConversationManager:
                 "last_company": None,
                 "last_place": None,
                 "last_language": None,
+                "user_name": None,
 
                 # Calculation context
                 "last_calculation": None,
@@ -127,6 +128,18 @@ class ConversationManager:
         """
         session = self.get_session(session_id)
 
+        # Deterministically remember the user's name.
+        name_match = re.search(
+            r"\bmy\s+name\s+is\s+([A-Za-z][A-Za-z .'-]{1,50})\s*$",
+            user_message.strip(),
+            re.IGNORECASE,
+        )
+
+        if name_match:
+            name = name_match.group(1).strip()
+            name = re.sub(r"\s+", " ", name)
+            session["user_name"] = name
+
         session["last_user_message"] = user_message
         session["last_assistant_message"] = assistant_message
         session["last_question"] = user_message
@@ -193,6 +206,18 @@ class ConversationManager:
         Synchronous wrapper for turn update using regex/fallback entity extraction.
         """
         session = self.get_session(session_id)
+
+        # Deterministically remember the user's name.
+        name_match = re.search(
+            r"\bmy\s+name\s+is\s+([A-Za-z][A-Za-z .'-]{1,50})\s*$",
+            user_message.strip(),
+            re.IGNORECASE,
+        )
+
+        if name_match:
+            name = name_match.group(1).strip()
+            name = re.sub(r"\s+", " ", name)
+            session["user_name"] = name
 
         session["last_user_message"] = user_message
         session["last_assistant_message"] = assistant_message
@@ -269,6 +294,7 @@ class ConversationManager:
             "last_company": session.get("last_company"),
             "last_place": session.get("last_place"),
             "last_language": session.get("last_language"),
+            "user_name": session.get("user_name"),
             "last_calculation": session.get("last_calculation"),
             "last_calculation_result": session.get("last_calculation_result"),
         }
