@@ -2782,14 +2782,37 @@ Execution Results:
 
                     data = result.data or {}
 
+                    calculation_result = data.get("result")
+
+                    # Store the successful calculation for future follow-ups.
+                    if self.conversation_manager:
+                        try:
+                            self.conversation_manager.set_last_calculation(
+                                session_id=session_id,
+                                expression=query,
+                                result=calculation_result,
+                            )
+
+                            logger.info(
+                                "[Calculator] Stored calculation: %s = %s",
+                                query,
+                                calculation_result,
+                            )
+
+                        except Exception as e:
+                            logger.warning(
+                                "[Calculator] Could not store calculation context: %s",
+                                e,
+                            )
+
                     return SystemResponse(
                         success=True,
                         confidence=1.0,
                         source="calculator",
                         data={
-                            "response": str(data.get("result")),
-                            "message": str(data.get("result")),
-                            "result": data.get("result"),
+                            "response": str(calculation_result),
+                            "message": str(calculation_result),
+                            "result": calculation_result,
                         },
                     )
 
@@ -3042,12 +3065,21 @@ Execution Results:
             if self.conversation_manager:
                 try:
                     if self.conversation_manager.is_followup(query):
-                        query = self.conversation_manager.resolve_reference(
+                        query = self.conversation_manager.resolve_followup(
                             session_id,
                             query,
                         )
+
+                        logger.info(
+                            "[Conversation] Follow-up resolved: %r",
+                            query,
+                        )
+
                 except Exception as e:
-                    logger.warning("Conversation manager resolution skipped: %s", e)
+                    logger.warning(
+                        "Conversation manager follow-up resolution skipped: %s",
+                        e,
+                    )
 
             # =================================================
             # 2.5 COGNITIVE CONTROLLER ANALYSIS & CONTROLLED RETRIEVAL
