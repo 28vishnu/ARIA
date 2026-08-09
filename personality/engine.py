@@ -1,7 +1,7 @@
 import logging
 import random
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from personality.response import SystemResponse
 from personality.conversation_style import ConversationStyle
 from personality.addressing import AddressingEngine
@@ -133,9 +133,15 @@ class PersonalityEngine:
 
             # Route to specific private formatters
             if source == ResponseSource.TIME and "time" in data:
-                reply = f"The current time is {data['time']}."
+                reply = (
+                    f"The current time is {data['time']}, "
+                    f"{self._address('normal')}."
+                )
             elif source == ResponseSource.DATE and "date" in data:
-                reply = f"Today is {data['date']}."
+                reply = (
+                    f"Today is {data['date']}, "
+                    f"{self._address('normal')}."
+                )
             elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
                 reply = str(data["message"])
             elif source == ResponseSource.CHAT and "response" in data:
@@ -148,7 +154,7 @@ class PersonalityEngine:
                 else:
                     reply = self._format_fallback(data)
             elif source == ResponseSource.CALCULATOR and "result" in data:
-                reply = f"The answer is {data['result']}."
+                reply = f"The answer is {data['result']}, Sir."
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
                 reply = self._format_greeting(user_text)
             elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
@@ -223,16 +229,38 @@ class PersonalityEngine:
 
         except Exception as e:
             logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
-            reply = "Operation completed, though a formatting error occurred."
+            reply = "Operation completed, though a formatting error occurred, Sir."
             reply = self._apply_addressing(reply, context="normal")
             return self._post_process(reply)
+
+    def _address(
+        self,
+        context: str = "normal",
+        preferred: Optional[str] = None,
+    ) -> str:
+        """
+        Return ARIA's current form of address.
+
+        All user-facing titles must pass through AddressingEngine.
+        The user's personal name is never used.
+        """
+        try:
+            return self.addressing.get_address(
+                context=context,
+                preferred=preferred,
+            )
+        except Exception:
+            logger.exception(
+                "[Personality] Addressing engine failed."
+            )
+            return "Sir"
 
     def _format_error(self, error_msg: str) -> str:
         error_msg = str(error_msg or "").strip()
         lowered = error_msg.lower()
 
         if "no profile" in lowered or "no relevant" in lowered:
-            reply = "I couldn't find anything matching that request."
+            reply = "I couldn't find anything matching that request, Sir."
             return self._post_process(self._apply_addressing(reply, context="normal"))
 
         if (
@@ -242,11 +270,11 @@ class PersonalityEngine:
             or "quota" in lowered
             or "all configured llm providers failed" in lowered
         ):
-            reply = "My AI services are temporarily rate-limited. Try again shortly."
+            reply = "My AI services are temporarily rate-limited, Sir. Try again shortly."
             return self._post_process(self._apply_addressing(reply, context="normal"))
 
         if not error_msg:
-            reply = "I couldn't complete that request just now. Try again shortly."
+            reply = "I couldn't complete that request just now, Sir. Try again shortly."
             return self._post_process(self._apply_addressing(reply, context="normal"))
 
         logger.error(
@@ -254,25 +282,39 @@ class PersonalityEngine:
             error_msg
         )
 
-        reply = "I couldn't complete that operation."
+        reply = "I couldn't complete that operation, Sir."
         return self._post_process(self._apply_addressing(reply, context="normal"))
 
     def _format_greeting(self, user_text: str) -> str:
         query = user_text.lower()
+        title = self._address("greeting")
+
         if "how are you" in query:
-            return "All systems operational and fully optimized. How may I assist you today?"
-        elif "morning" in query:
-            return "Good morning. All operational parameters are nominal."
-        elif "evening" in query:
-            return "Good evening. Ready for your instructions."
+            return (
+                f"All systems operational and fully optimized, "
+                f"{title}. How may I assist you today?"
+            )
+
+        if "morning" in query:
+            return (
+                f"Good morning, {title}. "
+                "All operational parameters are nominal."
+            )
+
+        if "evening" in query:
+            return (
+                f"Good evening, {title}. "
+                "Ready for your instructions."
+            )
 
         responses = [
-            "Greetings. ARIA operational and ready.",
-            "Good to see you again.",
-            "At your service.",
+            f"Greetings, {title}. ARIA operational and ready.",
+            f"Good to see you again, {title}.",
+            f"At your service, {title}.",
             "Systems online. How may I assist?",
-            "Ready whenever you are."
+            f"Ready whenever you are, {title}.",
         ]
+
         return random.choice(responses)
 
     def _format_memory(self, data: Any) -> str:
@@ -294,7 +336,7 @@ class PersonalityEngine:
         memories = data_dict.get("memories", [])
 
         if not memories:
-            return "I don't have any relevant memories about you yet."
+            return "I don't have any relevant memories about you yet, Sir."
 
         # ---------------------------------------------------------
         # Extract and normalize memories
@@ -332,7 +374,7 @@ class PersonalityEngine:
             normalized[key] = value
 
         if not normalized:
-            return "I don't have any relevant memories about you yet."
+            return "I don't have any relevant memories about you yet, Sir."
 
         # ---------------------------------------------------------
         # Important memories first
@@ -440,16 +482,16 @@ class PersonalityEngine:
             lines.append(f"• {label}: {value}")
 
         if not lines:
-            return "I don't have any relevant memories about you yet."
+            return "I don't have any relevant memories about you yet, Sir."
 
         return (
-            "Here's what I remember about you:\n\n"
+            "Here's what I remember about you, Sir:\n\n"
             + "\n".join(lines)
         )
 
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Task executed successfully."
+            return "Task executed successfully, Sir."
 
         # ---------------------------------------------------------
         # 1. USER-FACING FINAL RESPONSE
@@ -541,11 +583,11 @@ class PersonalityEngine:
         # 5. NOTHING USER-FACING WAS RETURNED
         # ---------------------------------------------------------
 
-        return "Execution completed successfully."
+        return "Execution completed successfully, Sir."
 
     def _format_action(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Action completed successfully."
+            return "Action completed successfully, Sir."
 
         action_name = data.get("action_name")
         result = data.get("result", {})
@@ -555,9 +597,9 @@ class PersonalityEngine:
                 message = result.get("message")
 
                 if message:
-                    return f"Notification dispatched: {message}."
+                    return f"Notification dispatched: {message}, Sir."
 
-            return "Notification dispatched successfully."
+            return "Notification dispatched successfully, Sir."
 
         # File actions
         if action_name == "file_action":
@@ -570,13 +612,13 @@ class PersonalityEngine:
                     if content:
                         return content
 
-                    return "The file is empty."
+                    return "The file is empty, Sir."
 
                 # WRITE
                 if result.get("status") == "written successfully":
-                    return "File written successfully."
+                    return "File written successfully, Sir."
 
-            return "File operation completed successfully."
+            return "File operation completed successfully, Sir."
 
         # Generic formatting for future actions
         if isinstance(result, dict):
@@ -586,7 +628,7 @@ class PersonalityEngine:
             if "response" in result:
                 return str(result["response"])
 
-        return "Action completed successfully."
+        return "Action completed successfully, Sir."
 
     def _format_fallback(self, data: Any) -> str:
 
@@ -762,12 +804,12 @@ class PersonalityEngine:
         """
 
         if reply is None:
-            return "I couldn't generate a response."
+            return "I couldn't generate a response, Sir."
 
         reply = str(reply).strip()
 
         if not reply:
-            return "I couldn't generate a response."
+            return "I couldn't generate a response, Sir."
 
         # -----------------------------------------------------
         # Protect fenced code blocks
