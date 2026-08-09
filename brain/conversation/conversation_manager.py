@@ -50,6 +50,70 @@ class ConversationManager:
             }
         return self._sessions[session_id]
 
+    def set_last_calculation(self, session_id: str, calculation: str, result: Any) -> None:
+        """
+        Set the last calculation expression and result for follow-up resolution.
+        """
+        session = self.get_session(session_id)
+        session["last_calculation"] = calculation
+        session["last_calculation_result"] = result
+
+    def extract_entities(self, text: str) -> List[str]:
+        """
+        Extract simple named entities from conversation text.
+        """
+
+        if not text:
+            return []
+
+        pattern = (
+            r"\b[A-Z][a-zA-Z0-9_-]+"
+            r"(?:\s+[A-Z][a-zA-Z0-9_-]+)*\b"
+        )
+
+        matches = re.findall(pattern, text)
+
+        stop_words = {
+            "What",
+            "Who",
+            "Where",
+            "When",
+            "Why",
+            "How",
+            "Is",
+            "The",
+            "A",
+            "An",
+            "And",
+            "Or",
+            "To",
+            "In",
+            "On",
+            "Of",
+            "For",
+        }
+
+        return [
+            match
+            for match in matches
+            if match not in stop_words
+        ]
+
+    async def extract_entities_async(self, text: str) -> List[str]:
+        """
+        Asynchronous wrapper for entity extraction.
+        """
+        return self.extract_entities(text)
+
+    def extract_topic(self, text: str) -> Optional[str]:
+        """
+        Extract a basic topic or entity from text using fallback rules or regex.
+        """
+        ents = self.extract_entities(text)
+        if ents:
+            return ents[0]
+        return None
+
     async def update_turn_async(
         self,
         session_id: str,
@@ -295,11 +359,7 @@ class ConversationManager:
         last_result = session.get("last_calculation_result")
 
         if last_result is not None:
-            # Reference-based operations:
-            # "divide that by 10"
-            # "multiply it by 2"
-            # "add that to 50"
-            # "subtract it by 5"
+
             reference_match = re.match(
                 r"^\s*"
                 r"(divide|multiply|add|subtract)"
@@ -313,14 +373,13 @@ class ConversationManager:
                 operation = reference_match.group(1).lower()
                 remainder = reference_match.group(2).strip()
 
-                operation_symbol = {
+                symbols = {
                     "divide": "/",
                     "multiply": "*",
                     "add": "+",
                     "subtract": "-",
-                }[operation]
+                }
 
-                # Extract the numeric operand from the remainder.
                 operand_match = re.search(
                     r"(?:by|with|to|from)?\s*"
                     r"(-?\d+(?:\.\d+)?)",
@@ -333,21 +392,10 @@ class ConversationManager:
 
                     return (
                         f"{last_result} "
-                        f"{operation_symbol} "
+                        f"{symbols[operation]} "
                         f"{operand}"
                     )
 
-                return cleaned.replace(
-                    reference_match.group(0),
-                    f"{last_result}",
-                    1,
-                )
-
-            # Direct continuation:
-            # "add 50"
-            # "subtract 20"
-            # "multiply by 2"
-            # "divide by 10"
             direct_match = re.match(
                 r"^\s*"
                 r"(add|subtract|multiply|divide)"
@@ -362,16 +410,16 @@ class ConversationManager:
                 operation = direct_match.group(1).lower()
                 operand = direct_match.group(2)
 
-                operation_symbol = {
+                symbols = {
                     "divide": "/",
                     "multiply": "*",
                     "add": "+",
                     "subtract": "-",
-                }[operation]
+                }
 
                 return (
                     f"{last_result} "
-                    f"{operation_symbol} "
+                    f"{symbols[operation]} "
                     f"{operand}"
                 )
 
