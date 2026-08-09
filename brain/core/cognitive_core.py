@@ -1,4 +1,3 @@
-
 import logging
 import asyncio
 import re
@@ -2753,65 +2752,58 @@ Execution Results:
 
             if route.route == Route.CALCULATOR:
                 try:
-                    tool_manager = getattr(self, "tool_manager", None)
-
-                    if tool_manager is None:
+                    if not self.skill_manager:
                         return SystemResponse(
                             success=False,
                             confidence=1.0,
                             source="calculator",
-                            error="Calculator tool manager is unavailable."
+                            error="Calculator skill manager is unavailable.",
                         )
 
-                    tool = await tool_manager.select_tool(
+                    result = await self.skill_manager.execute_skill(
+                        "calculator",
                         query,
                         {
                             "session": session_id,
                             "source": "execution_router",
-                        }
+                        },
                     )
 
-                    if tool is None or getattr(tool, "name", None) != "calculator":
+                    if not result or not result.success:
                         return SystemResponse(
                             success=False,
                             confidence=1.0,
                             source="calculator",
-                            error="Calculator tool is unavailable."
+                            error=(
+                                getattr(result, "error", None)
+                                or "Calculation failed."
+                            ),
                         )
 
-                    result = await tool.execute(
-                        query,
-                        {
-                            "session": session_id,
-                            "source": "execution_router",
-                        }
-                    )
-
-                    if not result or not result.get("success"):
-                        return SystemResponse(
-                            success=False,
-                            confidence=1.0,
-                            source="calculator",
-                            error=result.get("error", "Calculation failed.")
-                            if result else "Calculation failed."
-                        )
+                    data = result.data or {}
 
                     return SystemResponse(
                         success=True,
                         confidence=1.0,
                         source="calculator",
                         data={
-                            "result": result["result"]
-                        }
+                            "response": str(data.get("result")),
+                            "message": str(data.get("result")),
+                            "result": data.get("result"),
+                        },
                     )
 
                 except Exception as e:
-                    logger.exception("[Calculator] Execution failed")
+                    logger.exception(
+                        "[Calculator] Execution failed: %s",
+                        e,
+                    )
+
                     return SystemResponse(
                         success=False,
                         confidence=0.0,
                         source="calculator",
-                        error=str(e)
+                        error=str(e),
                     )
 
             if route.route == Route.TIME:
