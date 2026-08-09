@@ -4,6 +4,7 @@ import re
 from typing import Dict, Any
 from personality.response import SystemResponse
 from personality.conversation_style import ConversationStyle
+from personality.addressing import AddressingEngine
 
 logger = logging.getLogger("aria")
 
@@ -91,6 +92,8 @@ Return ONLY the final user-facing response.
 class PersonalityEngine:
     def __init__(self, llm_router=None):
         self.llm_router = llm_router
+        self.addressing = AddressingEngine()
+
         self.conversation_style = {
             "tone": "assistant",
             "verbosity": "balanced",
