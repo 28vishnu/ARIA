@@ -163,7 +163,7 @@ class SelfReflection:
         query,
     ):
         self.statistics["improvements"] += 1
-        if self.learning and hasattr(self.learning, "learn"):
+        if self.learning is not None and hasattr(self.learning, "learn"):
             await self.learning.learn(f"Failure or Gap: {query}", source="reflection_failure")
 
     # =========================================================
@@ -176,7 +176,7 @@ class SelfReflection:
         answer,
     ):
         self.statistics["improvements"] += 1
-        if self.learning and hasattr(self.learning, "learn"):
+        if self.learning is not None and hasattr(self.learning, "learn"):
             await self.learning.learn(f"Success Q: {query} A: {answer}", source="reflection_success")
 
     # =========================================================
