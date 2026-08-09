@@ -51,12 +51,24 @@ class ConversationManager:
             }
         return self._sessions[session_id]
 
-    def set_last_calculation(self, session_id: str, calculation: str, result: Any) -> None:
+    def set_last_calculation(
+        self,
+        session_id: str,
+        expression: str,
+        result: Any,
+    ) -> None:
         """
-        Set the last calculation expression and result for follow-up resolution.
+        Store the most recent successful calculation and its result.
+        This is used for calculator follow-ups such as:
+
+            "Divide that by 10"
+            "Add 50"
+            "Multiply it by 2"
+            "Subtract 25"
         """
         session = self.get_session(session_id)
-        session["last_calculation"] = calculation
+
+        session["last_calculation"] = expression
         session["last_calculation_result"] = result
 
     def extract_entities(self, text: str) -> List[str]:
