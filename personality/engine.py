@@ -259,9 +259,13 @@ class PersonalityEngine:
         error_msg = str(error_msg or "").strip()
         lowered = error_msg.lower()
 
+        title = self._address("warning")
+
         if "no profile" in lowered or "no relevant" in lowered:
-            reply = "I couldn't find anything matching that request, Sir."
-            return self._post_process(self._apply_addressing(reply, context="normal"))
+            return (
+                f"I couldn't find anything matching that request, "
+                f"{title}."
+            )
 
         if (
             "429" in lowered
@@ -270,20 +274,23 @@ class PersonalityEngine:
             or "quota" in lowered
             or "all configured llm providers failed" in lowered
         ):
-            reply = "My AI services are temporarily rate-limited, Sir. Try again shortly."
-            return self._post_process(self._apply_addressing(reply, context="normal"))
+            return (
+                f"My AI services are temporarily rate-limited, "
+                f"{title}. Try again shortly."
+            )
 
         if not error_msg:
-            reply = "I couldn't complete that request just now, Sir. Try again shortly."
-            return self._post_process(self._apply_addressing(reply, context="normal"))
+            return (
+                f"I couldn't complete that request just now, "
+                f"{title}. Try again shortly."
+            )
 
         logger.error(
             "[Personality] Internal operation error: %s",
             error_msg
         )
 
-        reply = "I couldn't complete that operation, Sir."
-        return self._post_process(self._apply_addressing(reply, context="normal"))
+        return f"I couldn't complete that operation, {title}."
 
     def _format_greeting(self, user_text: str) -> str:
         query = user_text.lower()
@@ -336,7 +343,10 @@ class PersonalityEngine:
         memories = data_dict.get("memories", [])
 
         if not memories:
-            return "I don't have any relevant memories about you yet, Sir."
+            return (
+                f"I don't have any relevant memories about you yet, "
+                f"{self._address('normal')}."
+            )
 
         # ---------------------------------------------------------
         # Extract and normalize memories
@@ -374,7 +384,10 @@ class PersonalityEngine:
             normalized[key] = value
 
         if not normalized:
-            return "I don't have any relevant memories about you yet, Sir."
+            return (
+                f"I don't have any relevant memories about you yet, "
+                f"{self._address('normal')}."
+            )
 
         # ---------------------------------------------------------
         # Important memories first
@@ -482,10 +495,14 @@ class PersonalityEngine:
             lines.append(f"• {label}: {value}")
 
         if not lines:
-            return "I don't have any relevant memories about you yet, Sir."
+            return (
+                f"I don't have any relevant memories about you yet, "
+                f"{self._address('normal')}."
+            )
 
         return (
-            "Here's what I remember about you, Sir:\n\n"
+            f"Here's what I remember about you, "
+            f"{self._address('normal')}:\n\n"
             + "\n".join(lines)
         )
 
