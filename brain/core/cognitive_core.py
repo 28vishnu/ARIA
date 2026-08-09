@@ -2666,6 +2666,45 @@ Execution Results:
         execution_id = self._create_execution_id()
 
         try:
+            # =========================================================
+            # DETERMINISTIC USER NAME RECALL
+            # =========================================================
+
+            if re.fullmatch(
+                r"\s*(?:what(?:'s| is)|whats)\s+my\s+name\s*\??\s*",
+                query,
+                re.IGNORECASE,
+            ):
+                if self.conversation_manager:
+                    try:
+                        conversation_context = (
+                            self.conversation_manager.get_context(session_id)
+                        )
+
+                        user_name = conversation_context.get("user_name")
+
+                        if user_name:
+                            logger.info(
+                                "[Conversation] Deterministic name recall: %s",
+                                user_name,
+                            )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=1.0,
+                                source="conversation_memory",
+                                data={
+                                    "response": f"Your name is {user_name}.",
+                                    "message": f"Your name is {user_name}.",
+                                },
+                            )
+
+                    except Exception as e:
+                        logger.warning(
+                            "[Conversation] Name recall failed: %s",
+                            e,
+                        )
+
             # =================================================
             # PHASE 1 — FAST ROUTER AS CLASSIFIER ONLY
             # =================================================
