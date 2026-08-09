@@ -74,7 +74,7 @@ class SelfReflection:
         """
         Check historical failure patterns to prevent recurring mistakes.
         """
-        if self.database and hasattr(self.database, "search"):
+        if self.database is not None and hasattr(self.database, "search"):
             res = await self.database.search(query)
             if res:
                 return False
@@ -137,7 +137,7 @@ class SelfReflection:
         knowledge_id,
     ):
         self.statistics["confidence_updates"] += 1
-        if self.database and hasattr(self.database, "update"):
+        if self.database is not None and hasattr(self.database, "update"):
             # Placeholder for confidence increase
             pass
 
@@ -150,7 +150,7 @@ class SelfReflection:
         knowledge_id,
     ):
         self.statistics["confidence_updates"] += 1
-        if self.database and hasattr(self.database, "update"):
+        if self.database is not None and hasattr(self.database, "update"):
             # Placeholder for confidence reduction
             pass
 
