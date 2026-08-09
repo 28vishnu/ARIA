@@ -6,9 +6,10 @@ class AddressingEngine:
     """
     Centralized ARIA addressing system.
 
-    ARIA must never use the user's personal name as an honorific.
-    Titles are selected naturally and can be expanded later without
-    modifying every response formatter.
+    ARIA never addresses the user by personal name.
+
+    Titles vary naturally according to context while avoiding
+    repetitive consecutive addressing.
     """
 
     TITLES = (
@@ -19,20 +20,71 @@ class AddressingEngine:
         "Boss",
     )
 
-    # More formal titles for situations where ARIA should sound composed.
     FORMAL_TITLES = (
         "Sir",
         "Master",
         "Commander",
     )
 
-    # Casual but respectful titles.
     CASUAL_TITLES = (
         "Sir",
         "Master",
         "Chief",
         "Boss",
     )
+
+    CONTEXT_PREFERENCES = {
+        "normal": (
+            "Sir",
+            "Master",
+            "Commander",
+            "Chief",
+            "Boss",
+        ),
+        "technical": (
+            "Sir",
+            "Commander",
+            "Master",
+        ),
+        "security": (
+            "Sir",
+            "Commander",
+            "Master",
+        ),
+        "warning": (
+            "Sir",
+            "Commander",
+            "Master",
+        ),
+        "important": (
+            "Sir",
+            "Master",
+            "Commander",
+        ),
+        "confirmation": (
+            "Sir",
+            "Commander",
+            "Master",
+        ),
+        "greeting": (
+            "Sir",
+            "Master",
+            "Chief",
+            "Boss",
+        ),
+        "conversation": (
+            "Sir",
+            "Master",
+            "Chief",
+            "Boss",
+        ),
+        "casual": (
+            "Sir",
+            "Master",
+            "Chief",
+            "Boss",
+        ),
+    }
 
     def __init__(self):
         self._last_title: Optional[str] = None
@@ -43,12 +95,13 @@ class AddressingEngine:
         preferred: Optional[str] = None,
     ) -> str:
         """
-        Return a natural form of address.
+        Select a natural form of address.
 
-        IMPORTANT:
-        - Never use the user's name.
-        - Avoid repeating the same title consecutively.
-        - A valid explicit preference takes priority.
+        Personal names are NEVER used.
+
+        An explicit valid preference wins.
+        Otherwise the context determines the candidate titles.
+        The previous title is avoided whenever possible.
         """
 
         if preferred:
@@ -60,25 +113,10 @@ class AddressingEngine:
 
         context = str(context or "normal").lower().strip()
 
-        if context in {
-            "formal",
-            "technical",
-            "security",
-            "warning",
-            "important",
-            "confirmation",
-        }:
-            candidates = self.FORMAL_TITLES
-
-        elif context in {
-            "casual",
-            "greeting",
-            "conversation",
-        }:
-            candidates = self.CASUAL_TITLES
-
-        else:
-            candidates = self.TITLES
+        candidates = self.CONTEXT_PREFERENCES.get(
+            context,
+            self.TITLES,
+        )
 
         available = [
             title
@@ -99,5 +137,4 @@ class AddressingEngine:
         return title in self.TITLES
 
     def reset(self):
-        """Reset title history."""
         self._last_title = None
