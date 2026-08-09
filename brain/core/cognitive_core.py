@@ -2718,9 +2718,18 @@ Execution Results:
             # EXECUTION ROUTER
             # ============================================
 
-            # =================================================
-            # CALCULATION FOLLOW-UP ROUTING
-            # =================================================
+            # Calculator continuation must be resolved before
+            # the generic router sees the query.
+            #
+            # Examples:
+            #   "Divide that by 10"
+            #   "Add 50"
+            #   "Multiply it by 2"
+            #   "Subtract 25"
+            #
+            # These are not standalone chat requests.
+            # They continue the previous calculator result.
+
             calculation_followup = False
 
             if self.conversation_manager:
@@ -2733,36 +2742,29 @@ Execution Results:
                         "last_calculation_result"
                     )
 
-                    calculation_followup = (
+                    if (
                         last_calculation_result is not None
-                        and bool(
-                            re.match(
-                                r"^\s*(?:"
-                                r"add|"
-                                r"subtract|"
-                                r"multiply|"
-                                r"divide"
-                                r")\b",
-                                query,
-                                re.IGNORECASE,
-                            )
+                        and re.match(
+                            r"^\s*(add|subtract|multiply|divide)\b",
+                            query,
+                            re.IGNORECASE,
                         )
-                    )
+                    ):
+                        calculation_followup = True
 
-                    if calculation_followup:
                         query = self.conversation_manager.resolve_followup(
                             session_id,
                             query,
                         )
 
                         logger.info(
-                            "[Calculator] Calculation follow-up resolved: %r",
+                            "[Calculator] Follow-up resolved: %r",
                             query,
                         )
 
                 except Exception as e:
                     logger.warning(
-                        "[Calculator] Follow-up detection skipped: %s",
+                        "[Calculator] Follow-up resolution skipped: %s",
                         e,
                     )
 
