@@ -244,6 +244,119 @@ class ConversationManager:
 
         return False
 
+    def resolve_followup(
+        self,
+        session_id: str,
+        query: str,
+    ) -> str:
+        """
+        Resolve a new user query against the previous conversation turn.
+
+        This is intentionally lightweight and deterministic.
+        It does not call the LLM.
+
+        Examples:
+            "What about tomorrow?"
+            "Divide that by 10"
+            "What about India?"
+            "Explain it"
+        """
+
+        if not query:
+            return query
+
+        session = self.get_session(session_id)
+
+        previous_user = session.get("last_user_message")
+        previous_assistant = session.get("last_assistant_message")
+        subject = (
+            session.get("last_subject")
+            or session.get("current_topic")
+            or session.get("last_entity")
+        )
+
+        cleaned = query.strip()
+
+        if not previous_user and not previous_assistant:
+            return cleaned
+
+        lower = cleaned.lower()
+
+        # -------------------------------------------------
+        # Calculator follow-ups
+        # -------------------------------------------------
+
+        last_result = session.get("last_answer")
+
+        calculator_phrases = (
+            "divide that",
+            "multiply that",
+            "add that",
+            "subtract that",
+            "divide it",
+            "multiply it",
+            "add it",
+            "subtract it",
+        )
+
+        if any(lower.startswith(p) for p in calculator_phrases):
+            if last_result:
+                return (
+                    f"{cleaned} using the previous result: "
+                    f"{last_result}"
+                )
+
+        # -------------------------------------------------
+        # Weather / location follow-ups
+        # -------------------------------------------------
+
+        weather_phrases = (
+            "what about tomorrow",
+            "what about today",
+            "what about the next day",
+            "and tomorrow",
+            "tomorrow",
+        )
+
+        if lower in weather_phrases and subject:
+            return f"{cleaned} for {subject}"
+
+        # -------------------------------------------------
+        # Pronoun references
+        # -------------------------------------------------
+
+        if subject:
+            words = cleaned.split()
+
+            resolved_words = []
+
+            for word in words:
+                punctuation = ""
+
+                while word and word[-1] in ".,!?":
+                    punctuation = word[-1] + punctuation
+                    word = word[:-1]
+
+                if word.lower() in {
+                    "it",
+                    "this",
+                    "that",
+                    "there",
+                    "they",
+                    "them",
+                }:
+                    resolved_words.append(
+                        subject + punctuation
+                    )
+                else:
+                    resolved_words.append(
+                        word + punctuation
+                    )
+
+            return " ".join(resolved_words)
+
+        return cleaned
+
     def resolve_reference(self, session_id: str, query: str) -> str:
         """
         Resolve simple contextual references using the last subject or current topic of the session.
