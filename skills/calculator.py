@@ -62,6 +62,55 @@ def _normalize_expression(query: str) -> str:
     return expression.strip()
 
 
+def _resolve_followup_expression(query: str, context: dict) -> str:
+    """
+    Resolve a natural-language mathematical follow-up against
+    ARIA's previously calculated result.
+
+    This is generic capability logic. It does not contain
+    task-specific values or examples.
+    """
+    if not isinstance(context, dict):
+        return _normalize_expression(query)
+
+    last_result = context.get("last_result")
+
+    if last_result is None:
+        return _normalize_expression(query)
+
+    text = query.strip().lower()
+
+    number_match = re.search(
+        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)",
+        text,
+    )
+
+    if not number_match:
+        return _normalize_expression(query)
+
+    value = number_match.group(0)
+
+    if re.search(r"\b(add|plus)\b", text):
+        return f"({repr(last_result)}) + ({value})"
+
+    if re.search(r"\b(subtract|minus)\b", text):
+        return f"({repr(last_result)}) - ({value})"
+
+    if re.search(r"\b(multiply|times)\b", text):
+        return f"({repr(last_result)}) * ({value})"
+
+    if re.search(r"\b(divide|divided)\b", text):
+        return f"({repr(last_result)}) / ({value})"
+
+    if re.search(r"\b(modulo|remainder)\b", text):
+        return f"({repr(last_result)}) % ({value})"
+
+    if re.search(r"\b(power)\b", text):
+        return f"({repr(last_result)}) ** ({value})"
+
+    return _normalize_expression(query)
+
+
 class CalculatorSkill(BaseSkill):
     name = "calculator"
     description = "Performs safe mathematical calculations."
@@ -96,6 +145,18 @@ class CalculatorSkill(BaseSkill):
         ):
             return 0.99
 
+        # Generic mathematical follow-up.
+        # If ARIA has a previous calculation result, allow calculator
+        # operations expressed in natural language to use it.
+        last_result = context.get("last_result") if isinstance(context, dict) else None
+
+        if last_result is not None and re.search(
+            r"\b(add|plus|subtract|minus|multiply|times|divide|divided|modulo|remainder|power|squared|cubed)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            return 0.99
+
         return 0.0
 
     async def execute(
@@ -105,7 +166,7 @@ class CalculatorSkill(BaseSkill):
     ) -> SkillResponse:
 
         try:
-            expression = _normalize_expression(query)
+            expression = _resolve_followup_expression(query, context)
 
             node = ast.parse(expression, mode="eval")
 
