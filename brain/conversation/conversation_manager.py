@@ -55,6 +55,14 @@ class ConversationManager:
                 "last_result_source": None,
                 "last_result_operation": None,
             }
+        else:
+            session = self._sessions[session_id]
+            session.setdefault("working_context", {})
+            session.setdefault("last_result", None)
+            session.setdefault("last_result_source", None)
+            session.setdefault("last_result_operation", None)
+            session.setdefault("conversation_history", [])
+
         return self._sessions[session_id]
 
     def extract_entities(self, text: str) -> List[str]:
@@ -126,7 +134,6 @@ class ConversationManager:
         """
         session = self.get_session(session_id)
 
-        # Deterministically remember the user's name.
         name_match = re.search(
             r"\bmy\s+name\s+is\s+([A-Za-z][A-Za-z .'-]{1,50})\s*$",
             user_message.strip(),
@@ -173,7 +180,6 @@ class ConversationManager:
 
         session["last_entity"] = new_topic
 
-        # Classify entity categories
         if new_topic:
             lower_topic = new_topic.lower()
             languages = {"python", "java", "javascript", "c++", "c", "r", "go", "rust", "typescript"}
@@ -214,7 +220,6 @@ class ConversationManager:
         """
         session = self.get_session(session_id)
 
-        # Deterministically remember the user's name.
         name_match = re.search(
             r"\bmy\s+name\s+is\s+([A-Za-z][A-Za-z .'-]{1,50})\s*$",
             user_message.strip(),
@@ -330,7 +335,6 @@ class ConversationManager:
                 {}
             ),
 
-            # Generic structured result context
             "last_result": session.get("last_result"),
             "last_result_source": session.get("last_result_source"),
             "last_result_operation": session.get("last_result_operation"),
@@ -346,11 +350,9 @@ class ConversationManager:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Store the latest structured result for contextual follow-up reasoning.
+        Store the latest structured result for contextual reasoning.
 
-        This is capability-independent. The result may come from a calculator,
-        tool, workflow, coding operation, search, document operation, or any
-        other subsystem that produces a meaningful structured result.
+        Capability-independent. Any subsystem may publish a meaningful result.
         """
         session = self.get_session(session_id)
 
