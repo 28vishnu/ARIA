@@ -60,6 +60,27 @@ CODING_TECH = (
     "code",
 )
 
+CONTEXTUAL_CALCULATOR_PHRASES = (
+    "add ",
+    "plus ",
+    "subtract ",
+    "minus ",
+    "multiply ",
+    "times ",
+    "divide ",
+    "divided by ",
+    "multiply by ",
+    "times by ",
+    "add by ",
+    "subtract by ",
+    "increase by ",
+    "decrease by ",
+    "double ",
+    "triple ",
+    "half ",
+    "half of ",
+)
+
 
 def decide(query: str) -> RouteDecision:
     q = query.lower().strip()
@@ -168,6 +189,23 @@ def decide(query: str) -> RouteDecision:
         and any(char.isdigit() for char in q)
     ):
         return RouteDecision(Route.CALCULATOR, 0.99)
+
+    # Contextual calculator follow-up
+    #
+    # Examples:
+    #   "Add 50"
+    #   "Subtract 20"
+    #   "Multiply by 4"
+    #   "Divide that by 10"
+    #
+    # These requests may not contain mathematical symbols because
+    # the operand comes from the previous conversational result.
+
+    if any(
+        phrase in q
+        for phrase in CONTEXTUAL_CALCULATOR_PHRASES
+    ):
+        return RouteDecision(Route.CALCULATOR, 0.98)
 
     # Planning
     if any(word in q for word in (
