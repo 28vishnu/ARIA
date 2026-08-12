@@ -2810,61 +2810,7 @@ Execution Results:
             # EXECUTION ROUTER
             # ============================================
 
-            # Calculator continuation must be resolved before
-            # the generic router sees the query.
-            #
-            # Examples:
-            #   "Divide that by 10"
-            #   "Add 50"
-            #   "Multiply it by 2"
-            #   "Subtract 25"
-            #
-            # These are not standalone chat requests.
-            # They continue the previous calculator result.
-
-            calculation_followup = False
-
-            if self.conversation_manager:
-                try:
-                    session = self.conversation_manager.get_session(
-                        session_id
-                    )
-
-                    last_calculation_result = session.get(
-                        "last_calculation_result"
-                    )
-
-                    if (
-                        last_calculation_result is not None
-                        and re.match(
-                            r"^\s*(add|subtract|multiply|divide)\b",
-                            query,
-                            re.IGNORECASE,
-                        )
-                    ):
-                        calculation_followup = True
-
-                        query = self.conversation_manager.resolve_followup(
-                            session_id,
-                            query,
-                        )
-
-                        logger.info(
-                            "[Calculator] Follow-up resolved: %r",
-                            query,
-                        )
-
-                except Exception as e:
-                    logger.warning(
-                        "[Calculator] Follow-up resolution skipped: %s",
-                        e,
-                    )
-
-            route = (
-                Route.CALCULATOR
-                if calculation_followup
-                else decide(query)
-            )
+            route = decide(query)
 
             logger.info(
                 "[ExecutionRouter] Route=%s Confidence=%.2f",
@@ -2912,6 +2858,7 @@ Execution Results:
                         {
                             "session": session_id,
                             "source": "execution_router",
+                            "cognitive_context": context,
                         },
                     )
 
@@ -3205,25 +3152,55 @@ Execution Results:
             })
 
             # =================================================
-            # 2. RESOLVE FOLLOW-UP REFERENCES
+            # 2. RESOLVE CONTEXT THROUGH THE REASONING LAYER
             # =================================================
 
-            if self.conversation_manager:
+            if self.reasoning_engine:
                 try:
-                    if self.conversation_manager.is_followup(query):
-                        query = self.conversation_manager.resolve_followup(
-                            session_id,
-                            query,
+                    conversation_context = {}
+
+                    if self.conversation_manager:
+                        conversation_context = (
+                            self.conversation_manager.get_context(
+                                session_id
+                            )
+                            or {}
                         )
 
+                    existing_conversation = context.get(
+                        "conversation",
+                        {},
+                    )
+
+                    if isinstance(existing_conversation, dict):
+                        merged_conversation = {
+                            **conversation_context,
+                            **existing_conversation,
+                        }
+                    else:
+                        merged_conversation = conversation_context
+
+                    context["conversation"] = merged_conversation
+
+                    resolved_query = await self.reasoning_engine.resolve_references(
+                        query,
+                        context,
+                    )
+
+                    if resolved_query and resolved_query != query:
                         logger.info(
-                            "[Conversation] Follow-up resolved: %r",
+                            "[CognitiveCore] Contextual query resolved: %r -> %r",
                             query,
+                            resolved_query,
                         )
+
+                        query = resolved_query
+
+                    context["query"] = query
 
                 except Exception as e:
                     logger.warning(
-                        "Conversation manager follow-up resolution skipped: %s",
+                        "[CognitiveCore] Context resolution skipped: %s",
                         e,
                     )
 
