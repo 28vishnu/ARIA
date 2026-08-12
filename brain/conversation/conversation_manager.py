@@ -1,5 +1,4 @@
 import re
-json
 from typing import Any, Dict, List, Optional
 
 
@@ -48,6 +47,13 @@ class ConversationManager:
                 # Generic conversational state
                 "working_context": {},
                 "conversation_history": [],
+
+                # Generic previous-result context.
+                # This is capability-independent: calculator, coding,
+                # tools, workflows, searches, etc. may store structured results here.
+                "last_result": None,
+                "last_result_source": None,
+                "last_result_operation": None,
             }
         return self._sessions[session_id]
 
@@ -323,7 +329,78 @@ class ConversationManager:
                 "working_context",
                 {}
             ),
+
+            # Generic structured result context
+            "last_result": session.get("last_result"),
+            "last_result_source": session.get("last_result_source"),
+            "last_result_operation": session.get("last_result_operation"),
         }
+
+    def set_last_result(
+        self,
+        session_id: str,
+        result: Any,
+        *,
+        source: Optional[str] = None,
+        operation: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Store the latest structured result for contextual follow-up reasoning.
+
+        This is capability-independent. The result may come from a calculator,
+        tool, workflow, coding operation, search, document operation, or any
+        other subsystem that produces a meaningful structured result.
+        """
+        session = self.get_session(session_id)
+
+        session["last_result"] = {
+            "value": result,
+            "source": source,
+            "operation": operation,
+            "metadata": metadata or {},
+        }
+
+        session["last_result_source"] = source
+        session["last_result_operation"] = operation
+
+    def get_last_result(
+        self,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Return the latest structured result for this conversation.
+        """
+        session = self.get_session(session_id)
+
+        result = session.get("last_result")
+
+        if not isinstance(result, dict):
+            return None
+
+        return result
+
+    def set_last_calculation(
+        self,
+        session_id: str,
+        expression: str,
+        result: Any,
+    ) -> None:
+        """
+        Backward-compatible calculator helper.
+
+        Calculator-specific code may continue calling this method, but the
+        actual storage is handled by the generic result mechanism.
+        """
+        self.set_last_result(
+            session_id,
+            result,
+            source="calculator",
+            operation=expression,
+            metadata={
+                "expression": expression,
+            },
+        )
 
     def is_followup(self, query: str) -> bool:
         """
