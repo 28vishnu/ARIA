@@ -1,5 +1,5 @@
 import re
-import json
+json
 from typing import Any, Dict, List, Optional
 
 
@@ -45,31 +45,11 @@ class ConversationManager:
                 "last_language": None,
                 "user_name": None,
 
-                # Calculation context
-                "last_calculation": None,
-                "last_calculation_result": None,
+                # Generic conversational state
+                "working_context": {},
+                "conversation_history": [],
             }
         return self._sessions[session_id]
-
-    def set_last_calculation(
-        self,
-        session_id: str,
-        expression: str,
-        result: Any,
-    ) -> None:
-        """
-        Store the most recent successful calculation and its result.
-        This is used for calculator follow-ups such as:
-
-            "Divide that by 10"
-            "Add 50"
-            "Multiply it by 2"
-            "Subtract 25"
-        """
-        session = self.get_session(session_id)
-
-        session["last_calculation"] = expression
-        session["last_calculation_result"] = result
 
     def extract_entities(self, text: str) -> List[str]:
         """
@@ -157,6 +137,15 @@ class ConversationManager:
         session["last_question"] = user_message
         session["last_answer"] = assistant_message
         session["turn_count"] = session.get("turn_count", 0) + 1
+        history = session.setdefault("conversation_history", [])
+
+        history.append({
+            "user": user_message,
+            "assistant": assistant_message,
+        })
+
+        if len(history) > 20:
+            del history[:-20]
 
         if intent is not None:
             session["current_intent"] = intent
@@ -236,6 +225,15 @@ class ConversationManager:
         session["last_question"] = user_message
         session["last_answer"] = assistant_message
         session["turn_count"] = session.get("turn_count", 0) + 1
+        history = session.setdefault("conversation_history", [])
+
+        history.append({
+            "user": user_message,
+            "assistant": assistant_message,
+        })
+
+        if len(history) > 20:
+            del history[:-20]
 
         if intent is not None:
             session["current_intent"] = intent
@@ -286,29 +284,45 @@ class ConversationManager:
 
     def get_context(self, session_id: str) -> Dict[str, Any]:
         """
-        Return current formatted conversation context for the session.
+        Return the complete conversational context for the session.
         """
+
         session = self.get_session(session_id)
+
         return {
             "topic": session.get("current_topic"),
             "previous_topic": session.get("previous_topic"),
             "last_subject": session.get("last_subject"),
             "current_intent": session.get("current_intent"),
-            "entities": session.get("entities"),
+            "entities": session.get("entities", []),
+
             "last_user": session.get("last_user_message"),
             "last_assistant": session.get("last_assistant_message"),
+
             "document": session.get("active_document"),
             "plan": session.get("active_plan"),
             "user_goal": session.get("user_goal"),
             "pending_followup": session.get("pending_followup"),
-            "conversation_summary": session.get("conversation_summary"),
+
+            "conversation_summary": session.get(
+                "conversation_summary",
+                ""
+            ),
+
             "last_person": session.get("last_person"),
             "last_company": session.get("last_company"),
             "last_place": session.get("last_place"),
             "last_language": session.get("last_language"),
-            "user_name": session.get("user_name"),
-            "last_calculation": session.get("last_calculation"),
-            "last_calculation_result": session.get("last_calculation_result"),
+
+            "conversation_history": session.get(
+                "conversation_history",
+                []
+            ),
+
+            "working_context": session.get(
+                "working_context",
+                {}
+            ),
         }
 
     def is_followup(self, query: str) -> bool:
@@ -358,16 +372,13 @@ class ConversationManager:
         query: str,
     ) -> str:
         """
-        Resolve a new user query against the previous conversation turn.
+        Lightweight fallback for conversational references.
 
-        This is intentionally lightweight and deterministic.
-        It does not call the LLM.
+        The ConversationManager does not decide what a reference means.
+        Higher-level reasoning owns semantic interpretation.
 
-        Examples:
-            "What about tomorrow?"
-            "Divide that by 10"
-            "What about India?"
-            "Explain it"
+        This method only supplies the most recent conversational subject
+        when a higher-level reasoning system is unavailable.
         """
 
         if not query:
@@ -375,8 +386,6 @@ class ConversationManager:
 
         session = self.get_session(session_id)
 
-        previous_user = session.get("last_user_message")
-        previous_assistant = session.get("last_assistant_message")
         subject = (
             session.get("last_subject")
             or session.get("current_topic")
@@ -385,130 +394,16 @@ class ConversationManager:
 
         cleaned = query.strip()
 
-        if not previous_user and not previous_assistant:
+        if not subject:
             return cleaned
 
         lower = cleaned.lower()
 
-        # -------------------------------------------------
-        # Calculator follow-ups
-        # -------------------------------------------------
+        if lower == "continue":
+            return f"Continue explaining {subject}"
 
-        last_result = session.get("last_calculation_result")
-
-        if last_result is not None:
-
-            reference_match = re.match(
-                r"^\s*"
-                r"(divide|multiply|add|subtract)"
-                r"\s+(?:that|it)"
-                r"(.*)$",
-                cleaned,
-                re.IGNORECASE,
-            )
-
-            if reference_match:
-                operation = reference_match.group(1).lower()
-                remainder = reference_match.group(2).strip()
-
-                symbols = {
-                    "divide": "/",
-                    "multiply": "*",
-                    "add": "+",
-                    "subtract": "-",
-                }
-
-                operand_match = re.search(
-                    r"(?:by|with|to|from)?\s*"
-                    r"(-?\d+(?:\.\d+)?)",
-                    remainder,
-                    re.IGNORECASE,
-                )
-
-                if operand_match:
-                    operand = operand_match.group(1)
-
-                    return (
-                        f"{last_result} "
-                        f"{symbols[operation]} "
-                        f"{operand}"
-                    )
-
-            direct_match = re.match(
-                r"^\s*"
-                r"(add|subtract|multiply|divide)"
-                r"(?:\s+by)?\s+"
-                r"(-?\d+(?:\.\d+)?)"
-                r"\s*$",
-                cleaned,
-                re.IGNORECASE,
-            )
-
-            if direct_match:
-                operation = direct_match.group(1).lower()
-                operand = direct_match.group(2)
-
-                symbols = {
-                    "divide": "/",
-                    "multiply": "*",
-                    "add": "+",
-                    "subtract": "-",
-                }
-
-                return (
-                    f"{last_result} "
-                    f"{symbols[operation]} "
-                    f"{operand}"
-                )
-
-        # -------------------------------------------------
-        # Weather / location follow-ups
-        # -------------------------------------------------
-
-        weather_phrases = (
-            "what about tomorrow",
-            "what about today",
-            "what about the next day",
-            "and tomorrow",
-            "tomorrow",
-        )
-
-        if lower in weather_phrases and subject:
-            return f"{cleaned} for {subject}"
-
-        # -------------------------------------------------
-        # Pronoun references
-        # -------------------------------------------------
-
-        if subject:
-            words = cleaned.split()
-
-            resolved_words = []
-
-            for word in words:
-                punctuation = ""
-
-                while word and word[-1] in ".,!?":
-                    punctuation = word[-1] + punctuation
-                    word = word[:-1]
-
-                if word.lower() in {
-                    "it",
-                    "this",
-                    "that",
-                    "there",
-                    "they",
-                    "them",
-                }:
-                    resolved_words.append(
-                        subject + punctuation
-                    )
-                else:
-                    resolved_words.append(
-                        word + punctuation
-                    )
-
-            return " ".join(resolved_words)
+        if lower == "more":
+            return f"Tell me more about {subject}"
 
         return cleaned
 
