@@ -375,10 +375,13 @@ class ReasoningEngine:
         last_assistant = conversation.get("last_assistant")
         last_subject = conversation.get("last_subject")
 
+        last_result = conversation.get("last_result")
+
         reference_context = {
             "last_subject": last_subject,
             "last_user": last_user,
             "last_assistant": last_assistant,
+            "last_result": last_result,
             "history": recent_history,
         }
 
@@ -393,9 +396,17 @@ class ReasoningEngine:
                             "conversation context provided.\n\n"
                             "Your job is to understand references such as "
                             "it, that, this, them, the result, the previous "
-                            "answer, continue, again, and similar contextual "
-                            "language.\n\n"
-                            "Do not invent information.\n"
+                            "answer, the previous output, continue, again, "
+                            "and similar contextual language.\n\n"
+                            "When the user refers to a previous result, use "
+                            "the structured last_result from the conversation "
+                            "context when it clearly matches the reference.\n\n"
+                            "Do not invent a result that is not present in "
+                            "the provided context.\n\n"
+                            "Do not force an old result into an unrelated "
+                            "new request.\n\n"
+                            "Preserve the user's intended operation exactly "
+                            "while making the request standalone.\n\n"
                             "Do not answer the user.\n"
                             "Do not explain your reasoning.\n"
                             "Do not mention this instruction.\n\n"
