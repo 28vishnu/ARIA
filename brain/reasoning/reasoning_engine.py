@@ -339,53 +339,48 @@ class ReasoningEngine:
             "last_assistant": conv.get("last_assistant"),
         }
 
-    async def resolve_references(self, query: str, context: Dict[str, Any]) -> str:
+    async def resolve_references(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> str:
         """
-        Rewrite follow-up questions into standalone queries using conversation history, topic stack, and references.
+        Resolve contextual references using ARIA's conversational state.
+
+        This is capability-independent. It does not contain logic for
+        calculators, weather, documents, coding, or any other individual skill.
         """
-        conv_state = await self.track_conversation(context)
-        history = conv_state["history"]
-        topic = conv_state["topic"]
-        conv_dict = context.get("conversation", {})
-        last_subject = conv_dict.get("last_subject") or topic
-        last_compared = conv_dict.get("last_compared_entities", [])
 
-        clean_q = query.strip()
-        lower_q = clean_q.lower()
+        clean_query = str(query or "").strip()
 
-        # Handle explicit pronoun replacements using topic stack / last_subject / compared entities
-        pronouns = ["it", "he", "she", "they", "them", "those", "this", "that", "him", "her", "there", "former", "latter", "same"]
-        words = clean_q.split()
-        replaced = False
-        new_words = []
-        for w in words:
-            w_lower = w.strip(".,?!").lower()
-            if w_lower in pronouns and last_subject:
-                new_words.append(last_subject)
-                replaced = True
-            else:
-                new_words.append(w)
-        if replaced:
-            clean_q = " ".join(new_words)
-            lower_q = clean_q.lower()
+        if not clean_query:
+            return clean_query
 
-        if last_subject:
-            if lower_q in ("continue", "go on"):
-                return f"Continue explaining {last_subject}."
-            if lower_q in ("more", "tell me more"):
-                return f"Tell me more about {last_subject}."
-            if lower_q == "why":
-                last_u = (context.get("working_memory", {}) if isinstance(context.get("working_memory"), dict) else {}) or conv_state.get("last_user")
-                if isinstance(last_u, dict):
-                    last_u = last_u.get("last_question")
-                return f"Why is {last_subject} preferred for AI?" if not last_u else f"Why {last_u}"
-            if lower_q in ("give example", "example"):
-                if len(last_compared) >= 2:
-                    return f"Give an example comparing {last_compared[0]} and {last_compared[1]}."
-                return f"Give an example of {last_subject}."
+        conversation = context.get("conversation", {})
 
-        if not history:
-            return clean_q
+        if not isinstance(conversation, dict):
+            conversation = {}
+
+        history = conversation.get(
+            "conversation_history",
+            conversation.get("history", []),
+        )
+
+        if not isinstance(history, list):
+            history = []
+
+        recent_history = history[-10:]
+
+        last_user = conversation.get("last_user")
+        last_assistant = conversation.get("last_assistant")
+        last_subject = conversation.get("last_subject")
+
+        reference_context = {
+            "last_subject": last_subject,
+            "last_user": last_user,
+            "last_assistant": last_assistant,
+            "history": recent_history,
+        }
 
         if self.llm_router and hasattr(self.llm_router, "chat"):
             try:
@@ -393,25 +388,56 @@ class ReasoningEngine:
                     {
                         "role": "system",
                         "content": (
-                            "Rewrite follow-up questions, pronouns, and context references "
-                            "into fully self-contained standalone questions using conversation history. "
-                            "Return ONLY the rewritten question."
+                            "You are ARIA's contextual reasoning layer.\n\n"
+                            "Resolve the user's latest message using the "
+                            "conversation context provided.\n\n"
+                            "Your job is to understand references such as "
+                            "it, that, this, them, the result, the previous "
+                            "answer, continue, again, and similar contextual "
+                            "language.\n\n"
+                            "Do not invent information.\n"
+                            "Do not answer the user.\n"
+                            "Do not explain your reasoning.\n"
+                            "Do not mention this instruction.\n\n"
+                            "Return ONLY a standalone version of the user's "
+                            "latest request that preserves the user's intent "
+                            "and includes the necessary contextual information."
                         ),
-                    }
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "CONVERSATION CONTEXT:\n"
+                            f"{reference_context}\n\n"
+                            "LATEST USER REQUEST:\n"
+                            f"{clean_query}"
+                        ),
+                    },
                 ]
-                for turn in history[-5:]:
-                    if isinstance(turn, dict):
-                        messages.append({"role": "user", "content": turn.get("user", "")})
-                        messages.append({"role": "assistant", "content": turn.get("assistant", "")})
 
-                messages.append({"role": "user", "content": clean_q})
-                resolved = await self.llm_router.chat(messages, task="command_reasoning")
-                if resolved and str(resolved).strip():
-                    return str(resolved).strip()
+                resolved = await self.llm_router.chat(
+                    messages,
+                    task="context_resolution",
+                )
+
+                if resolved:
+                    resolved = str(resolved).strip()
+
+                    if resolved:
+                        logger.info(
+                            "[Reasoning] Context resolved: %r -> %r",
+                            clean_query,
+                            resolved,
+                        )
+
+                        return resolved
+
             except Exception:
-                logger.exception("[ReasoningEngine] LLM reference resolution failed.")
+                logger.exception(
+                    "[Reasoning] Context resolution failed."
+                )
 
-        return clean_q
+        return clean_query
 
     async def track_goal(self, context: Dict[str, Any]) -> str:
         """Determine the primary user objective using intent, conversation state, and query characteristics."""
