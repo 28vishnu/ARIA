@@ -350,6 +350,45 @@ class CognitiveCore:
 
         return {}
 
+    def _store_generic_result(
+        self,
+        session_id: str,
+        result: Any,
+        *,
+        source: str = "execution",
+        operation: Optional[str] = None,
+    ) -> None:
+        """
+        Store a meaningful structured execution result for future
+        conversational reference resolution.
+
+        This is intentionally capability-independent.
+        """
+        if not self.conversation_manager:
+            return
+
+        if result is None:
+            return
+
+        try:
+            self.conversation_manager.set_last_result(
+                session_id=session_id,
+                result=result,
+                source=source,
+                operation=operation,
+            )
+
+            logger.info(
+                "[CognitiveCore] Stored generic result "
+                "for future contextual reasoning."
+            )
+
+        except Exception as e:
+            logger.warning(
+                "[CognitiveCore] Could not store generic result: %s",
+                e,
+            )
+
     def _extract_weather_params(self, query: str) -> Dict[str, Any]:
         """
         Extract structured weather parameters from a natural-language
@@ -1269,6 +1308,38 @@ class CognitiveCore:
         execution_result = None
         plan = None
 
+        # ---------------------------------------------------------
+        # Step 0: Load deterministic conversation context FIRST.
+        #
+        # Reference resolution depends on the previous conversational
+        # state, including generic structured results.
+        # ---------------------------------------------------------
+        if self.conversation_manager:
+            try:
+                conversation_context = self.conversation_manager.get_context(
+                    session_id
+                )
+
+                context["conversation"] = conversation_context
+
+                logger.info(
+                    "[Conversation] Loaded context for reference resolution "
+                    "for session %s: %s",
+                    session_id,
+                    conversation_context,
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "[Conversation] Context retrieval before reference "
+                    "resolution skipped: %s",
+                    e,
+                )
+
+        # ---------------------------------------------------------
+        # Step 1: Resolve conversational references using the
+        # complete session context.
+        # ---------------------------------------------------------
         if self.reasoning_engine:
             resolved_query = await self.reasoning_engine.resolve_references(
                 query,
@@ -1277,7 +1348,7 @@ class CognitiveCore:
         else:
             resolved_query = query
 
-        # Step 1: Build context first via context_builder if available
+        # Step 2: Build context via context_builder if available.
         if self.context_builder:
             try:
                 context = await self.context_builder.build(
@@ -1451,6 +1522,17 @@ class CognitiveCore:
                             "completed successfully after %d attempt(s).",
                             recovery.get("attempts", 1),
                         )
+                        result_to_store = execution_result
+                        if hasattr(execution_result, "data"):
+                            result_to_store = execution_result.data
+
+                        self._store_generic_result(
+                            session_id,
+                            result_to_store,
+                            source="execution",
+                            operation=resolved_query,
+                        )
+
                         self._persist_execution_state(
                             session_id,
                             execution_id=execution_id,
@@ -1526,6 +1608,17 @@ class CognitiveCore:
                         "completed successfully after %d attempt(s).",
                         recovery.get("attempts", 1),
                     )
+                    result_to_store = execution_result
+                    if hasattr(execution_result, "data"):
+                        result_to_store = execution_result.data
+
+                    self._store_generic_result(
+                        session_id,
+                        result_to_store,
+                        source="execution",
+                        operation=resolved_query,
+                    )
+
                     self._persist_execution_state(
                         session_id,
                         execution_id=execution_id,
@@ -1621,6 +1714,17 @@ class CognitiveCore:
                             error=recovery.get("error"),
                         )
                     else:
+                        result_to_store = result
+                        if hasattr(result, "data"):
+                            result_to_store = result.data
+
+                        self._store_generic_result(
+                            session_id,
+                            result_to_store,
+                            source="execution",
+                            operation=resolved_query,
+                        )
+
                         self._persist_execution_state(
                             session_id,
                             execution_id=execution_id,
@@ -2880,10 +2984,14 @@ Execution Results:
                     # Store the successful calculation for future follow-ups.
                     if self.conversation_manager:
                         try:
-                            self.conversation_manager.set_last_calculation(
+                            self.conversation_manager.set_last_result(
                                 session_id=session_id,
-                                expression=query,
                                 result=calculation_result,
+                                source="calculator",
+                                operation=query,
+                                metadata={
+                                    "expression": query,
+                                },
                             )
 
                             logger.info(
