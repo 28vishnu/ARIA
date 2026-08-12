@@ -39,6 +39,49 @@ class DecisionEngine:
         self.self_reflection = self_reflection
         self.decision_history = []
 
+    def _looks_like_calculator_request(self, query: str, context: Dict[str, Any]) -> bool:
+        q = query.lower().strip()
+
+        calculator_words = (
+            "calculate",
+            "calculator",
+            "compute",
+            "solve",
+            "add ",
+            "plus ",
+            "subtract ",
+            "minus ",
+            "multiply ",
+            "times ",
+            "divide ",
+            "divided by ",
+            "multiply by ",
+            "divide by ",
+            "increase by ",
+            "decrease by ",
+            "double ",
+            "triple ",
+            "half ",
+        )
+
+        if any(word in q for word in calculator_words):
+            return True
+
+        # Direct mathematical expression
+        if any(symbol in q for symbol in (
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "^",
+            "×",
+            "÷",
+        )):
+            return any(char.isdigit() for char in q)
+
+        return False
+
     async def decide(self, query: str, intent, context) -> Decision:
         decision = Decision(
             action="chat",
@@ -86,6 +129,26 @@ class DecisionEngine:
                 decision.use_tools = True
                 decision.reasoning_mode = "vision"
                 decision.selected_agents.append("vision")
+
+        # ---------------------------------------------------------
+        # DETERMINISTIC CAPABILITY OVERRIDE
+        # ---------------------------------------------------------
+        # Intent analysis is probabilistic.
+        # Deterministic capabilities must not be lost simply because
+        # the intent classifier called the request "chat".
+
+        if self._looks_like_calculator_request(query, context):
+            decision.action = "calculator"
+            decision.use_tools = True
+            decision.reasoning_mode = "calculator"
+
+            if "calculator" not in decision.selected_agents:
+                decision.selected_agents.append("calculator")
+
+            decision.confidence = max(
+                decision.confidence,
+                0.98,
+            )
 
         # Remove duplicates
         decision.selected_agents = list(dict.fromkeys(decision.selected_agents))
