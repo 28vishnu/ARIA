@@ -389,6 +389,158 @@ class CognitiveCore:
                 e,
             )
 
+    async def _resolve_calculator_query(
+        self,
+        query: str,
+        session_id: str,
+    ) -> str:
+        """
+        Resolve conversational calculator follow-ups before
+        sending the query to the calculator skill.
+        """
+
+        text = str(query or "").strip()
+
+        if not text:
+            return text
+
+        # ---------------------------------------------------------
+        # 1. Get previous conversational context
+        # ---------------------------------------------------------
+        conversation_context = {}
+
+        if self.conversation_manager:
+            try:
+                conversation_context = (
+                    self.conversation_manager.get_context(session_id)
+                    or {}
+                )
+            except Exception as e:
+                logger.warning(
+                    "[CalculatorContext] Conversation retrieval skipped: %s",
+                    e,
+                )
+
+        # ---------------------------------------------------------
+        # 2. Extract the previous calculator result
+        # ---------------------------------------------------------
+        previous_result = None
+
+        if isinstance(conversation_context, dict):
+            previous_result = conversation_context.get("last_result")
+
+            if previous_result is None:
+                previous_result = conversation_context.get(
+                    "last_calculation"
+                )
+
+        # ---------------------------------------------------------
+        # 3. Resolve common calculator follow-ups
+        # ---------------------------------------------------------
+        if previous_result is not None:
+            result_text = str(previous_result).strip()
+
+            divide_match = re.search(
+                r"\bdivide\s+(?:the\s+)?result\s+by\s+(-?\d+(?:\.\d+)?)\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if divide_match:
+                divisor = divide_match.group(1)
+
+                resolved = f"{result_text} / {divisor}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+            multiply_match = re.search(
+                r"\b(?:multiply|times)\s+(?:the\s+)?result\s+by\s+(-?\d+(?:\.\d+)?)\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if multiply_match:
+                multiplier = multiply_match.group(1)
+
+                resolved = f"{result_text} * {multiplier}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+            add_match = re.search(
+                r"\badd\s+(-?\d+(?:\.\d+)?)\s+to\s+(?:the\s+)?result\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if add_match:
+                value = add_match.group(1)
+
+                resolved = f"{result_text} + {value}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+            subtract_match = re.search(
+                r"\bsubtract\s+(-?\d+(?:\.\d+)?)\s+from\s+(?:the\s+)?result\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if subtract_match:
+                value = subtract_match.group(1)
+
+                resolved = f"{result_text} - {value}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+        # ---------------------------------------------------------
+        # 4. Normalize percentage calculations
+        # ---------------------------------------------------------
+        percentage_match = re.search(
+            r"(?:what\s+is\s+)?(-?\d+(?:\.\d+)?)\s*%\s*(?:of)\s*(-?\d+(?:\.\d+)?)",
+            text,
+            re.IGNORECASE,
+        )
+
+        if percentage_match:
+            percentage = percentage_match.group(1)
+            number = percentage_match.group(2)
+
+            resolved = f"({percentage} / 100) * {number}"
+
+            logger.info(
+                "[CalculatorContext] Normalized percentage %r -> %r",
+                text,
+                resolved,
+            )
+
+            return resolved
+
+        return text
+
     def _extract_weather_params(self, query: str) -> Dict[str, Any]:
         """
         Extract structured weather parameters from a natural-language
@@ -2956,14 +3108,20 @@ Execution Results:
                             error="Calculator skill manager is unavailable.",
                         )
 
+                    calculator_query = await self._resolve_calculator_query(
+                        query=query,
+                        session_id=session_id,
+                    )
+
                     result = await self.skill_manager.execute_skill(
                         "calculator",
-                        query,
+                        calculator_query,
                         {
                             "session": session_id,
                             "source": "execution_router",
                             "cognitive_context": {
-                                "query": query,
+                                "query": calculator_query,
+                                "original_query": query,
                                 "session_id": session_id,
                                 "user_id": user_id,
                             },
@@ -2992,15 +3150,16 @@ Execution Results:
                                 session_id=session_id,
                                 result=calculation_result,
                                 source="calculator",
-                                operation=query,
+                                operation=calculator_query,
                                 metadata={
-                                    "expression": query,
+                                    "expression": calculator_query,
+                                    "original_query": query,
                                 },
                             )
 
                             logger.info(
                                 "[Calculator] Stored calculation: %s = %s",
-                                query,
+                                calculator_query,
                                 calculation_result,
                             )
 
