@@ -2962,7 +2962,11 @@ Execution Results:
                         {
                             "session": session_id,
                             "source": "execution_router",
-                            "cognitive_context": context,
+                            "cognitive_context": {
+                                "query": query,
+                                "session_id": session_id,
+                                "user_id": user_id,
+                            },
                         },
                     )
 
