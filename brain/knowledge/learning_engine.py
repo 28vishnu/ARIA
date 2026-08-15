@@ -104,12 +104,8 @@ class LearningEngine:
 
         existing = await self.database.search(text)
 
-        if existing is not None:
-            try:
-                if len(existing) > 0:
-                    return
-            except TypeError:
-                pass
+        if existing:
+            return
 
         # ---------------------------------------------------------
         # Store learned knowledge
