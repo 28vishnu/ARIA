@@ -325,19 +325,25 @@ class ReasoningEngine:
     async def track_conversation(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Track conversation turns, history, active topic, previous topic, entities, and dialogue stage."""
         conv = context.get("conversation", {})
-        topic = conv.get("topic")
-        previous_topic = conv.get("previous_topic")
-        entities = conv.get("entities", [])
         history = conv.get("history", [])
 
         turn_count = len(history)
         dialogue_stage = "greeting" if turn_count <= 1 else "ongoing"
 
+        active_topic = conv.get("active_topic") or conv.get("topic")
+        active_entities = conv.get("active_entities", conv.get("entities", []))
+        active_comparison = conv.get("active_comparison", False)
+        active_subject = conv.get("active_subject", conv.get("last_subject"))
+
         return {
             "history": history,
-            "topic": topic,
-            "previous_topic": previous_topic,
-            "entities": entities,
+            "active_topic": active_topic,
+            "active_entities": active_entities,
+            "active_comparison": active_comparison,
+            "active_subject": active_subject,
+            "topic": active_topic,
+            "previous_topic": conv.get("previous_topic"),
+            "entities": active_entities,
             "dialogue_stage": dialogue_stage,
             "last_user": conv.get("last_user"),
             "last_assistant": conv.get("last_assistant"),
@@ -396,69 +402,56 @@ class ReasoningEngine:
                         "role": "system",
                         "content": (
                             "You are ARIA's contextual reasoning layer.\n\n"
-                            "Your job is to understand the user's latest message in the context of\n"
-                            "the ongoing conversation and rewrite it as a standalone request when\n"
-                            "context is necessary.\n\n"
-                            "Think semantically, not by exact keyword matching.\n\n"
-                            "You must understand:\n\n"
-                            "- pronouns: it, this, that, they, them, their\n"
-                            "- references: the result, the answer, the previous one, the first one\n"
-                            "- follow-ups: why, how, what about, how about, tell me more\n"
-                            "- comparisons: compare them, which is better, which one\n"
-                            "- continuation: continue, explain further, go deeper\n"
-                            "- topic transitions: AMD after NVIDIA, Germany after Italy, etc.\n"
-                            "- omitted subjects when the previous conversation makes the subject clear\n\n"
-                            "IMPORTANT:\n\n"
-                            "A short follow-up does NOT automatically mean the previous topic should\n"
-                            "be discarded.\n\n"
-                            "If the latest message introduces a new entity while referring to the\n"
-                            "previous topic, preserve BOTH.\n\n"
-                            "Example:\n\n"
-                            "Previous:\n"
-                            '"What is the latest information about NVIDIA?"\n\n'
-                            "Latest:\n"
-                            '"What about AMD?"\n\n'
-                            "Interpretation:\n"
-                            '"What information is available about AMD in comparison with NVIDIA\'s\n'
-                            'latest developments?"\n\n'
-                            "Do NOT ask for clarification when the relationship can reasonably be\n"
-                            "understood from the conversation.\n\n"
-                            "Another example:\n\n"
-                            "Previous:\n"
-                            '"Tell me about studying in Italy after my B.Tech."\n\n'
-                            "Latest:\n"
-                            '"What about Germany?"\n\n'
-                            "Interpretation:\n"
-                            '"How does Germany compare as an alternative to studying in Italy after\n'
-                            'my B.Tech?"\n\n'
-                            "Another example:\n\n"
-                            "Previous:\n"
-                            '"125 × 48"\n\n'
-                            "Latest:\n"
-                            '"Divide the result by 10"\n\n'
-                            "Interpretation:\n"
-                            '"6000 / 10"\n\n'
-                            "Another example:\n\n"
-                            "Previous:\n"
-                            '"Explain NVIDIA\'s AI technology."\n\n'
-                            "Latest:\n"
-                            '"What about AMD?"\n\n'
-                            "Interpretation:\n"
-                            '"Compare AMD\'s AI technology with NVIDIA\'s AI technology."\n\n'
-                            "Another example:\n\n"
-                            "Previous:\n"
-                            '"Tell me about the first university."\n\n'
-                            "Latest:\n"
-                            '"What about the second one?"\n\n'
-                            "Interpretation:\n"
-                            '"Tell me about the second university from the previously discussed list."\n\n'
-                            "Use the most recent relevant context first.\n\n"
-                            "Do not force unrelated old topics into the request.\n\n"
-                            "Do not invent facts.\n\n"
-                            "Do not answer the user.\n\n"
-                            "Do not explain your reasoning.\n\n"
-                            "Return ONLY the standalone rewritten request.\n\n"
-                            "If the latest request is already standalone, return it unchanged."
+                            "Your job is to understand the user's latest message "
+                            "using the current conversation, not merely match keywords.\n\n"
+                            "Treat the conversation as a continuous dialogue.\n"
+                            "Determine what the user is currently talking about before "
+                            "resolving references.\n\n"
+                            "IMPORTANT:\n"
+                            "- The latest conversational topic has priority over old memories.\n"
+                            "- The latest coherent topic has priority over unrelated memory retrieval.\n"
+                            "- Never replace the current conversation topic with an unrelated "
+                            "memory merely because the memory contains similar words.\n"
+                            "- User memory is background context, NOT the current conversation.\n\n"
+                            "Resolve references such as:\n"
+                            "- it\n"
+                            "- that\n"
+                            "- this\n"
+                            "- them\n"
+                            "- the result\n"
+                            "- the previous answer\n"
+                            "- which one\n"
+                            "- which is better\n"
+                            "- why\n"
+                            "- how about X\n"
+                            "- what about X\n"
+                            "- what about it\n"
+                            "- continue\n"
+                            "- again\n\n"
+                            "For follow-up questions, identify the active subject from the "
+                            "most recent coherent exchange.\n\n"
+                            "Example:\n"
+                            "User: What is NVIDIA doing in AI?\n"
+                            "User: What about AMD?\n"
+                            "User: How about Intel?\n"
+                            "User: Which one is better?\n"
+                            "Correct interpretation: compare NVIDIA, AMD and Intel "
+                            "with respect to AI.\n\n"
+                            "Another example:\n"
+                            "User: Tell me about NVIDIA.\n"
+                            "User: What about AMD?\n"
+                            "Correct interpretation: provide information about AMD in "
+                            "the context of the NVIDIA discussion.\n\n"
+                            "Another example:\n"
+                            "User: Which GPU is better?\n"
+                            "User: Why?\n"
+                            "Correct interpretation: explain why the previously discussed "
+                            "GPU comparison leads to the previous recommendation.\n\n"
+                            "Do NOT use unrelated memories to resolve conversational "
+                            "references.\n"
+                            "Do NOT answer the user.\n"
+                            "Do NOT explain your reasoning.\n"
+                            "Return ONLY the standalone resolved request."
                         ),
                     },
                     {
@@ -618,10 +611,10 @@ class ReasoningEngine:
     async def build_reasoning_trace(self, steps: List[str]) -> str:
         return " -> ".join(steps)
 
-    async def retrieve_context(self, query: str) -> Dict[str, Any]:
+    async def retrieve_context(self, query: str, requires_memory: bool = True) -> Dict[str, Any]:
         memories_task = (
             asyncio.create_task(self.memory_router.recall(query))
-            if self.memory_router and hasattr(self.memory_router, "recall")
+            if requires_memory and self.memory_router and hasattr(self.memory_router, "recall")
             else asyncio.create_task(asyncio.sleep(0))
         )
 
@@ -799,8 +792,6 @@ Return JSON:
 
         decision = context.get("decision")
 
-        # Cognitive decision can refine the strategy,
-        # but must not destroy a stronger semantic strategy.
         if decision:
             if getattr(decision, "use_memory", False):
                 strategy = "memory_first"
@@ -878,9 +869,6 @@ Return JSON:
         raw_query = user_query
         reasoning_steps = []
 
-        active_context = context.get("active_context", {})
-        working = context.get("working_memory", {})
-
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
 
@@ -915,8 +903,6 @@ Return JSON:
         else:
             mode = strategy
 
-        # Never let an empty/default cognitive mode erase
-        # a stronger semantic strategy selected above.
         if mode in (None, "", "knowledge_first", "fast"):
             mode = strategy
 
@@ -928,8 +914,6 @@ Return JSON:
             else []
         )
 
-        # If the cognitive layer did not choose agents,
-        # allow the reasoning engine to derive specialists.
         if not selected_agents:
             selected_agents = self.choose_best_agents(
                 query,
@@ -960,8 +944,6 @@ Return JSON:
             else strategy == "research_first"
         )
 
-        # Semantic strategy is authoritative when the request
-        # clearly requires current external information.
         if strategy == "research_first":
             requires_web = True
 
@@ -972,14 +954,15 @@ Return JSON:
             f"tools={requires_tools}"
         )
 
-        retrieval = await self.retrieve_context(query)
+        # Architectural fix: Perform query understanding and core conversation check 
+        # before retrieving memories, preventing memory hijacking of the current topic.
+        retrieval = await self.retrieve_context(query, requires_memory=requires_memory)
         raw_memories = retrieval["memories"] if requires_memory else []
         knowledge = retrieval["knowledge"] if requires_documents else []
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
         reasoning_steps.append("Retrieved context evidence")
 
-        # Convert retrieved raw memories into memory_summary string representation for clean prompt integration
         memory_summary_parts = []
         for m in raw_memories:
             content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
@@ -992,7 +975,6 @@ Return JSON:
         evidence = await self.multi_hop_reasoning(query, merged_evidence)
         ranked_evidence = await self.rank_evidence(evidence)
 
-        # Advanced Reasoning Steps
         hypotheses = await self.generate_hypotheses(query, ranked_evidence)
         reasoning_steps.append(f"Generated {len(hypotheses)} hypotheses")
 
@@ -1131,7 +1113,6 @@ Return JSON:
 
         reasoning_time = round(time.time() - start_time, 3)
 
-        # Detailed Subsystem Usage Indicators
         memory_used = bool(memories)
         graph_used = bool(graph_results)
         world_used = bool(world_state)
