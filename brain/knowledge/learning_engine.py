@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("aria")
 
@@ -39,22 +39,81 @@ class LearningEngine:
 
     async def learn(
         self,
-        text: str,
+        text: Any,
         source="conversation",
+        **kwargs,
     ):
+        """
+        Universal learning entry point.
+
+        Accepts normal text as well as structured learning metadata.
+        The engine converts structured input into learnable text rather
+        than allowing dictionaries to reach string/regex operations.
+        """
+
+        # ---------------------------------------------------------
+        # Normalize reflection / structured learning calls
+        # ---------------------------------------------------------
+
+        if text is None:
+            return
+
+        if kwargs:
+            reflection = kwargs.get("reflection")
+
+            if reflection:
+                text = reflection
+                source = "reflection"
+
+        # ---------------------------------------------------------
+        # Safely normalize structured data
+        # ---------------------------------------------------------
+
+        if isinstance(text, dict):
+            parts = []
+
+            for key, value in text.items():
+                if value is None:
+                    continue
+
+                if isinstance(value, (dict, list, tuple, set)):
+                    value = str(value)
+
+                parts.append(f"{key}: {value}")
+
+            text = "\n".join(parts)
+
+        elif not isinstance(text, str):
+            text = str(text)
+
+        text = text.strip()
 
         if not text:
             return
 
-        text = text.strip()
+        # ---------------------------------------------------------
+        # Ignore useless conversation
+        # ---------------------------------------------------------
 
         if not self._should_learn(text):
             return
 
+        # ---------------------------------------------------------
+        # Avoid duplicate knowledge
+        # ---------------------------------------------------------
+
         existing = await self.database.search(text)
 
-        if existing:
-            return
+        if existing is not None:
+            try:
+                if len(existing) > 0:
+                    return
+            except TypeError:
+                pass
+
+        # ---------------------------------------------------------
+        # Store learned knowledge
+        # ---------------------------------------------------------
 
         title = self._generate_title(text)
 
@@ -64,7 +123,12 @@ class LearningEngine:
             source=source,
         )
 
-        await self.builder.learn(text)
+        # ---------------------------------------------------------
+        # Update knowledge graph
+        # ---------------------------------------------------------
+
+        if self.builder is not None:
+            await self.builder.learn(text)
 
         self.learned_count += 1
 
@@ -85,18 +149,20 @@ class LearningEngine:
         if not summary:
             return
 
+        if not isinstance(summary, str):
+            summary = str(summary)
+
         await self.database.store(
-            title=filename,
+            title=str(filename),
             content=summary,
-            source="document"
+            source="document",
         )
 
-        await self.builder.learn(summary)
+        if self.builder is not None:
+            await self.builder.learn(summary)
 
         if entities:
-
             for entity in entities:
-
                 await self.graph.add_entity(entity)
 
         self.learned_count += 1
@@ -150,15 +216,25 @@ class LearningEngine:
         self,
         memory,
     ):
+        """
+        Convert a memory record into normalized learnable text.
+        """
 
         if not memory:
             return
 
-        text = f"{memory.get('key')} : {memory.get('value')}"
+        if isinstance(memory, dict):
+            key = memory.get("key")
+            value = memory.get("value")
+
+            text = f"{key}: {value}"
+
+        else:
+            text = str(memory)
 
         await self.learn(
             text,
-            source="memory"
+            source="memory",
         )
 
     ############################################################
@@ -168,12 +244,34 @@ class LearningEngine:
         user,
         assistant,
     ):
+        """
+        Learn from a completed conversation while safely handling
+        structured assistant outputs.
+        """
 
-        text = user + "\n" + assistant
+        if user is None and assistant is None:
+            return
+
+        user_text = (
+            user
+            if isinstance(user, str)
+            else str(user or "")
+        )
+
+        assistant_text = (
+            assistant
+            if isinstance(assistant, str)
+            else str(assistant or "")
+        )
+
+        text = (
+            f"User: {user_text}\n"
+            f"Assistant: {assistant_text}"
+        )
 
         await self.learn(
             text,
-            source="conversation"
+            source="conversation",
         )
 
     ############################################################
