@@ -948,7 +948,7 @@ class CognitiveCore:
 
                 elif tool == "planner" and self.planner:
 
-                    evidence["plan"] = await self.planner.plan(
+                    evidence["plan"] = await self.planner.create_plan(
                         query=query,
                         context=context,
                     )
@@ -1297,19 +1297,11 @@ class CognitiveCore:
 
                 if self.planner and hasattr(
                     self.planner,
-                    "plan",
+                    "create_plan",
                 ):
-                    new_plan = await self.planner.plan(
+                    new_plan = await self.planner.create_plan(
                         query,
                         recovery_context,
-                    )
-
-                elif self.planner and hasattr(
-                    self.planner,
-                    "create_task_graph",
-                ):
-                    new_plan = self.planner.create_task_graph(
-                        query
                     )
 
                 if new_plan is not None:
@@ -1449,7 +1441,7 @@ class CognitiveCore:
         answer = None
         source = "cognitive_core"
         confidence = 0.0
-        decision = None
+        decision = context.get("decision")
         execution_result = None
         plan = None
 
@@ -1586,35 +1578,16 @@ class CognitiveCore:
             context["reasoning"] = reasoning
 
         # =========================================================
-        # REASONING -> DECISION -> AGENTS -> PLANNER -> EXECUTOR
+        # EDIT 3A & 3B — DECISION ACTION HANDLING & FALLBACK
         # =========================================================
-
-        decision = context.get("decision")
-        selected_agents = []
-        needs_execution = False
-
-        if reasoning:
-            selected_agents = getattr(reasoning, "selected_agents", []) or []
-
-        needs_execution = any(
-            agent != "chat"
-            for agent in selected_agents
-        )
-
-        logger.info(
-            "[CognitiveCore] Selected agents: %s",
-            selected_agents
-        )
-
-        logger.info(
-            "[CognitiveCore] Execution required: %s",
-            needs_execution
-        )
-
-        logger.info(
-            "[CognitiveCore] Canonical pipeline active: "
-            "context -> reasoning -> decision -> execution"
-        )
+        if decision and getattr(decision, "action", None) in {
+            "chat",
+            "memory",
+            "skill",
+        }:
+            logger.debug(
+                "[CognitiveCore] Direct decision already handled."
+            )
 
         execution_id = context.get("execution_id", "")
         persisted_execution = context.get("persisted_execution", {})
@@ -1639,15 +1612,27 @@ class CognitiveCore:
                     reasoning["execution_result"] = execution_result
                 elif reasoning is not None:
                     setattr(reasoning, "execution_result", execution_result)
-        elif decision and decision.use_planner and self.planner and self.executor:
-            try:
-                if decision.use_planner:
+        elif decision and getattr(decision, "action", None) == "planner":
+            plan = None
 
-                    plan = await self.planner.plan(
-                        resolved_query,
-                        context,
-                    )
+            if self.planner and hasattr(
+                self.planner,
+                "create_plan",
+            ):
+                plan = await self.planner.create_plan(
+                    resolved_query,
+                    context,
+                )
 
+            if plan and getattr(
+                plan,
+                "tasks",
+                None,
+            ):
+                if self.executor and hasattr(
+                    self.executor,
+                    "execute_plan",
+                ):
                     recovery = await self._execute_plan_with_recovery(
                         plan=plan,
                         query=resolved_query,
@@ -1656,161 +1641,29 @@ class CognitiveCore:
                     )
 
                     execution_result = recovery.get("result")
-                    context["execution_verification"] = (
-                        recovery.get("verification", {})
+                    success = (
+                        recovery.get("success", True)
+                        if isinstance(recovery, dict)
+                        else True
                     )
-                    context["execution_attempt"] = recovery.get("attempts", 1)
 
-                    if recovery.get("success"):
-                        logger.info(
-                            "[CognitiveCore] Planner execution "
-                            "completed successfully after %d attempt(s).",
-                            recovery.get("attempts", 1),
-                        )
-                        result_to_store = execution_result
-                        if hasattr(execution_result, "data"):
-                            result_to_store = execution_result.data
-
-                        self._store_generic_result(
-                            session_id,
-                            result_to_store,
-                            source="execution",
-                            operation=resolved_query,
-                        )
-
-                        self._persist_execution_state(
-                            session_id,
-                            execution_id=execution_id,
-                            status="completed",
-                            query=resolved_query,
-                            plan=plan,
-                            result=execution_result,
-                            verification=context.get(
-                                "execution_verification",
+                    return SystemResponse(
+                        success=success,
+                        confidence=getattr(
+                            plan,
+                            "confidence",
+                            0.85,
+                        ),
+                        data=(
+                            execution_result.get(
+                                "task_outputs",
                                 {},
-                            ),
-                            attempt=context.get(
-                                "execution_attempt",
-                                0,
-                            ),
-                        )
-                    else:
-                        logger.warning(
-                            "[CognitiveCore] Planner execution "
-                            "could not be verified: %s",
-                            recovery.get("error"),
-                        )
-                        self._persist_execution_state(
-                            session_id,
-                            execution_id=execution_id,
-                            status="failed",
-                            query=resolved_query,
-                            plan=plan,
-                            result=execution_result,
-                            verification=context.get(
-                                "execution_verification",
-                                {},
-                            ),
-                            attempt=context.get(
-                                "execution_attempt",
-                                0,
-                            ),
-                            error=recovery.get("error"),
-                        )
-                else:
-
-                    execution_result = await self.reasoning_engine.reason(
-                        resolved_query,
-                        context,
-                    )
-                if isinstance(reasoning, dict):
-                    reasoning["execution_result"] = execution_result
-                    reasoning["task_plan"] = plan
-                elif reasoning is not None:
-                    setattr(reasoning, "execution_result", execution_result)
-                    setattr(reasoning, "task_plan", plan)
-            except Exception as e:
-                logger.warning("Planner/Executor execution failed: %s", e)
-        elif needs_execution and self.planner and self.executor:
-            try:
-                plan = self.planner.create_task_graph(resolved_query)
-                recovery = await self._execute_plan_with_recovery(
-                    plan=plan,
-                    query=resolved_query,
-                    context=context,
-                    max_attempts=3,
-                )
-
-                execution_result = recovery.get("result")
-                context["execution_verification"] = (
-                    recovery.get("verification", {})
-                )
-                context["execution_attempt"] = recovery.get("attempts", 1)
-
-                if recovery.get("success"):
-                    logger.info(
-                        "[CognitiveCore] Task graph execution "
-                        "completed successfully after %d attempt(s).",
-                        recovery.get("attempts", 1),
-                    )
-                    result_to_store = execution_result
-                    if hasattr(execution_result, "data"):
-                        result_to_store = execution_result.data
-
-                    self._store_generic_result(
-                        session_id,
-                        result_to_store,
-                        source="execution",
-                        operation=resolved_query,
-                    )
-
-                    self._persist_execution_state(
-                        session_id,
-                        execution_id=execution_id,
-                        status="completed",
-                        query=resolved_query,
-                        plan=plan,
-                        result=execution_result,
-                        verification=context.get(
-                            "execution_verification",
-                            {},
+                            )
+                            if isinstance(execution_result, dict)
+                            else execution_result
                         ),
-                        attempt=context.get(
-                            "execution_attempt",
-                            0,
-                        ),
+                        source="planner_executor",
                     )
-                else:
-                    logger.warning(
-                        "[CognitiveCore] Task graph execution "
-                        "could not be verified: %s",
-                        recovery.get("error"),
-                    )
-                    self._persist_execution_state(
-                        session_id,
-                        execution_id=execution_id,
-                        status="failed",
-                        query=resolved_query,
-                        plan=plan,
-                        result=execution_result,
-                        verification=context.get(
-                            "execution_verification",
-                            {},
-                        ),
-                        attempt=context.get(
-                            "execution_attempt",
-                            0,
-                        ),
-                        error=recovery.get("error"),
-                    )
-                if isinstance(reasoning, dict):
-                    reasoning["execution_result"] = execution_result
-                    reasoning["task_plan"] = plan
-                elif reasoning is not None:
-                    setattr(reasoning, "execution_result", execution_result)
-                    setattr(reasoning, "task_plan", plan)
-            except Exception as e:
-                logger.warning("Planner/Executor execution failed: %s", e)
 
         try:
             # Step 3: If reasoning already contains an answer
@@ -1901,7 +1754,7 @@ class CognitiveCore:
 
                 # Memory Subsystem
                 mem_res = None
-                if decision and decision.use_memory and self.memory_router and hasattr(self.memory_router, "answer"):
+                if decision and getattr(decision, "use_memory", False) and self.memory_router and hasattr(self.memory_router, "answer"):
                     try:
                         mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
                     except Exception as e:
@@ -1960,7 +1813,7 @@ class CognitiveCore:
                 # World Model Subsystem
                 if not answer:
                     world_res = None
-                    if decision and decision.use_world_model and self.world_model and hasattr(self.world_model, "search"):
+                    if decision and getattr(decision, "use_world_model", False) and self.world_model and hasattr(self.world_model, "search"):
                         try:
                             world_res = await asyncio.to_thread(self.world_model.search, resolved_query)
                         except Exception as e:
@@ -3820,7 +3673,7 @@ Execution Results:
             memories = evidence.get("memory", [])
 
             if not memories:
-                if decision and decision.use_memory:
+                if decision and getattr(decision, "use_memory", False):
                     if self.memory_engine:
                         try:
                             memories = await self.memory_engine.retrieve(query) or []
