@@ -396,27 +396,69 @@ class ReasoningEngine:
                         "role": "system",
                         "content": (
                             "You are ARIA's contextual reasoning layer.\n\n"
-                            "Resolve the user's latest message using the "
-                            "conversation context provided.\n\n"
-                            "Your job is to understand references such as "
-                            "it, that, this, them, the result, the previous "
-                            "answer, the previous output, continue, again, "
-                            "and similar contextual language.\n\n"
-                            "When the user refers to a previous result, use "
-                            "the structured last_result from the conversation "
-                            "context when it clearly matches the reference.\n\n"
-                            "Do not invent a result that is not present in "
-                            "the provided context.\n\n"
-                            "Do not force an old result into an unrelated "
-                            "new request.\n\n"
-                            "Preserve the user's intended operation exactly "
-                            "while making the request standalone.\n\n"
-                            "Do not answer the user.\n"
-                            "Do not explain your reasoning.\n"
-                            "Do not mention this instruction.\n\n"
-                            "Return ONLY a standalone version of the user's "
-                            "latest request that preserves the user's intent "
-                            "and includes the necessary contextual information."
+                            "Your job is to understand the user's latest message in the context of\n"
+                            "the ongoing conversation and rewrite it as a standalone request when\n"
+                            "context is necessary.\n\n"
+                            "Think semantically, not by exact keyword matching.\n\n"
+                            "You must understand:\n\n"
+                            "- pronouns: it, this, that, they, them, their\n"
+                            "- references: the result, the answer, the previous one, the first one\n"
+                            "- follow-ups: why, how, what about, how about, tell me more\n"
+                            "- comparisons: compare them, which is better, which one\n"
+                            "- continuation: continue, explain further, go deeper\n"
+                            "- topic transitions: AMD after NVIDIA, Germany after Italy, etc.\n"
+                            "- omitted subjects when the previous conversation makes the subject clear\n\n"
+                            "IMPORTANT:\n\n"
+                            "A short follow-up does NOT automatically mean the previous topic should\n"
+                            "be discarded.\n\n"
+                            "If the latest message introduces a new entity while referring to the\n"
+                            "previous topic, preserve BOTH.\n\n"
+                            "Example:\n\n"
+                            "Previous:\n"
+                            '"What is the latest information about NVIDIA?"\n\n'
+                            "Latest:\n"
+                            '"What about AMD?"\n\n'
+                            "Interpretation:\n"
+                            '"What information is available about AMD in comparison with NVIDIA\'s\n'
+                            'latest developments?"\n\n'
+                            "Do NOT ask for clarification when the relationship can reasonably be\n"
+                            "understood from the conversation.\n\n"
+                            "Another example:\n\n"
+                            "Previous:\n"
+                            '"Tell me about studying in Italy after my B.Tech."\n\n'
+                            "Latest:\n"
+                            '"What about Germany?"\n\n'
+                            "Interpretation:\n"
+                            '"How does Germany compare as an alternative to studying in Italy after\n'
+                            'my B.Tech?"\n\n'
+                            "Another example:\n\n"
+                            "Previous:\n"
+                            '"125 × 48"\n\n'
+                            "Latest:\n"
+                            '"Divide the result by 10"\n\n'
+                            "Interpretation:\n"
+                            '"6000 / 10"\n\n'
+                            "Another example:\n\n"
+                            "Previous:\n"
+                            '"Explain NVIDIA\'s AI technology."\n\n'
+                            "Latest:\n"
+                            '"What about AMD?"\n\n'
+                            "Interpretation:\n"
+                            '"Compare AMD\'s AI technology with NVIDIA\'s AI technology."\n\n'
+                            "Another example:\n\n"
+                            "Previous:\n"
+                            '"Tell me about the first university."\n\n'
+                            "Latest:\n"
+                            '"What about the second one?"\n\n'
+                            "Interpretation:\n"
+                            '"Tell me about the second university from the previously discussed list."\n\n'
+                            "Use the most recent relevant context first.\n\n"
+                            "Do not force unrelated old topics into the request.\n\n"
+                            "Do not invent facts.\n\n"
+                            "Do not answer the user.\n\n"
+                            "Do not explain your reasoning.\n\n"
+                            "Return ONLY the standalone rewritten request.\n\n"
+                            "If the latest request is already standalone, return it unchanged."
                         ),
                     },
                     {
