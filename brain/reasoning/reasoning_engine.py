@@ -322,31 +322,94 @@ class ReasoningEngine:
         )
         return unique_agents
 
-    async def track_conversation(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Track conversation turns, history, active topic, previous topic, entities, and dialogue stage."""
+    async def track_conversation(
+        self,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Build structured conversational working state.
+
+        Conversation state has priority over long-term memory.
+        This method does not answer the user; it only describes the
+        current dialogue state.
+        """
         conv = context.get("conversation", {})
-        history = conv.get("history", [])
 
-        turn_count = len(history)
-        dialogue_stage = "greeting" if turn_count <= 1 else "ongoing"
+        if not isinstance(conv, dict):
+            conv = {}
 
-        active_topic = conv.get("active_topic") or conv.get("topic")
-        active_entities = conv.get("active_entities", conv.get("entities", []))
-        active_comparison = conv.get("active_comparison", False)
-        active_subject = conv.get("active_subject", conv.get("last_subject"))
+        history = conv.get(
+            "conversation_history",
+            conv.get("history", []),
+        )
+
+        if not isinstance(history, list):
+            history = []
+
+        active_topic = (
+            conv.get("active_topic")
+            or conv.get("topic")
+            or context.get("topic")
+        )
+
+        previous_topic = (
+            conv.get("previous_topic")
+            or context.get("previous_topic")
+        )
+
+        active_entities = conv.get(
+            "active_entities",
+            conv.get("entities", []),
+        )
+
+        if not isinstance(active_entities, list):
+            active_entities = []
+
+        compared_entities = conv.get(
+            "last_compared_entities",
+            conv.get("compared_entities", []),
+        )
+
+        if not isinstance(compared_entities, list):
+            compared_entities = []
+
+        active_subject = (
+            conv.get("active_subject")
+            or conv.get("last_subject")
+            or context.get("active_subject")
+        )
+
+        active_comparison = bool(
+            conv.get("active_comparison")
+            or len(compared_entities) >= 2
+        )
+
+        last_user = conv.get("last_user")
+        last_assistant = conv.get("last_assistant")
+        last_result = conv.get("last_result")
 
         return {
             "history": history,
+            "recent_history": history[-10:],
+
             "active_topic": active_topic,
-            "active_entities": active_entities,
-            "active_comparison": active_comparison,
+            "previous_topic": previous_topic,
+
             "active_subject": active_subject,
-            "topic": active_topic,
-            "previous_topic": conv.get("previous_topic"),
-            "entities": active_entities,
-            "dialogue_stage": dialogue_stage,
-            "last_user": conv.get("last_user"),
-            "last_assistant": conv.get("last_assistant"),
+
+            "active_entities": active_entities,
+            "compared_entities": compared_entities,
+            "active_comparison": active_comparison,
+
+            "last_user": last_user,
+            "last_assistant": last_assistant,
+            "last_result": last_result,
+
+            "dialogue_stage": (
+                "greeting"
+                if len(history) <= 1
+                else "ongoing"
+            ),
         }
 
     async def resolve_references(
@@ -355,10 +418,10 @@ class ReasoningEngine:
         context: Dict[str, Any],
     ) -> str:
         """
-        Resolve contextual references using ARIA's conversational state.
+        Convert a contextual user message into a standalone request.
 
-        This is capability-independent. It does not contain logic for
-        calculators, weather, documents, coding, or any other individual skill.
+        This is a reasoning operation only.
+        It must never answer the user.
         """
 
         clean_query = str(query or "").strip()
@@ -366,33 +429,28 @@ class ReasoningEngine:
         if not clean_query:
             return clean_query
 
-        conversation = context.get("conversation", {})
-
-        if not isinstance(conversation, dict):
-            conversation = {}
-
-        history = conversation.get(
-            "conversation_history",
-            conversation.get("history", []),
-        )
-
-        if not isinstance(history, list):
-            history = []
-
-        recent_history = history[-10:]
-
-        last_user = conversation.get("last_user")
-        last_assistant = conversation.get("last_assistant")
-        last_subject = conversation.get("last_subject")
-
-        last_result = conversation.get("last_result")
+        conversation_state = await self.track_conversation(context)
 
         reference_context = {
-            "last_subject": last_subject,
-            "last_user": last_user,
-            "last_assistant": last_assistant,
-            "last_result": last_result,
-            "history": recent_history,
+            "active_topic": conversation_state.get("active_topic"),
+            "previous_topic": conversation_state.get("previous_topic"),
+            "active_subject": conversation_state.get("active_subject"),
+            "active_entities": conversation_state.get("active_entities", []),
+            "compared_entities": conversation_state.get(
+                "compared_entities",
+                [],
+            ),
+            "active_comparison": conversation_state.get(
+                "active_comparison",
+                False,
+            ),
+            "last_user": conversation_state.get("last_user"),
+            "last_assistant": conversation_state.get("last_assistant"),
+            "last_result": conversation_state.get("last_result"),
+            "recent_history": conversation_state.get(
+                "recent_history",
+                [],
+            ),
         }
 
         if self.llm_router and hasattr(self.llm_router, "chat"):
@@ -400,64 +458,55 @@ class ReasoningEngine:
                 messages = [
                     {
                         "role": "system",
-                        "content": (
-                            "You are ARIA's contextual reasoning layer.\n\n"
-                            "Your job is to understand the user's latest message "
-                            "using the current conversation, not merely match keywords.\n\n"
-                            "Treat the conversation as a continuous dialogue.\n"
-                            "Determine what the user is currently talking about before "
-                            "resolving references.\n\n"
-                            "IMPORTANT:\n"
-                            "- The latest conversational topic has priority over old memories.\n"
-                            "- The latest coherent topic has priority over unrelated memory retrieval.\n"
-                            "- Never replace the current conversation topic with an unrelated "
-                            "memory merely because the memory contains similar words.\n"
-                            "- User memory is background context, NOT the current conversation.\n\n"
-                            "Resolve references such as:\n"
-                            "- it\n"
-                            "- that\n"
-                            "- this\n"
-                            "- them\n"
-                            "- the result\n"
-                            "- the previous answer\n"
-                            "- which one\n"
-                            "- which is better\n"
-                            "- why\n"
-                            "- how about X\n"
-                            "- what about X\n"
-                            "- what about it\n"
-                            "- continue\n"
-                            "- again\n\n"
-                            "For follow-up questions, identify the active subject from the "
-                            "most recent coherent exchange.\n\n"
-                            "Example:\n"
-                            "User: What is NVIDIA doing in AI?\n"
-                            "User: What about AMD?\n"
-                            "User: How about Intel?\n"
-                            "User: Which one is better?\n"
-                            "Correct interpretation: compare NVIDIA, AMD and Intel "
-                            "with respect to AI.\n\n"
-                            "Another example:\n"
-                            "User: Tell me about NVIDIA.\n"
-                            "User: What about AMD?\n"
-                            "Correct interpretation: provide information about AMD in "
-                            "the context of the NVIDIA discussion.\n\n"
-                            "Another example:\n"
-                            "User: Which GPU is better?\n"
-                            "User: Why?\n"
-                            "Correct interpretation: explain why the previously discussed "
-                            "GPU comparison leads to the previous recommendation.\n\n"
-                            "Do NOT use unrelated memories to resolve conversational "
-                            "references.\n"
-                            "Do NOT answer the user.\n"
-                            "Do NOT explain your reasoning.\n"
-                            "Return ONLY the standalone resolved request."
-                        ),
+                        "content": """
+You are ARIA's conversational reference-resolution layer.
+
+Your task is ONLY to rewrite the latest user request into a
+standalone request when contextual information is required.
+
+Do NOT answer the request.
+Do NOT explain your reasoning.
+Do NOT invent information.
+
+Priority order:
+
+1. Latest coherent conversation
+2. Explicit entities in the latest request
+3. Active comparison state
+4. Recent conversation history
+5. Long-term memory only when explicitly relevant
+
+Never allow unrelated long-term memory to replace the active
+conversation.
+
+If the user says:
+- "it"
+- "that"
+- "this"
+- "them"
+- "which one"
+- "which is better"
+- "why"
+- "continue"
+- "more"
+- "what about X"
+
+resolve it from the current conversational state.
+
+If multiple entities are currently being compared, preserve ALL
+relevant comparison entities.
+
+For example, if the dialogue contains several entities in the
+same comparison, "which one is better?" means continue that
+comparison rather than selecting an unrelated remembered entity.
+
+Return ONLY the standalone request.
+""",
                     },
                     {
                         "role": "user",
                         "content": (
-                            "CONVERSATION CONTEXT:\n"
+                            "STRUCTURED CONVERSATION STATE:\n"
                             f"{reference_context}\n\n"
                             "LATEST USER REQUEST:\n"
                             f"{clean_query}"
@@ -521,17 +570,81 @@ class ReasoningEngine:
             return True
         return False
 
-    async def build_working_memory(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Build rich working memory context."""
+    async def build_working_memory(
+        self,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Construct short-lived reasoning state for the current turn.
+
+        Working memory is not long-term memory.
+        """
+
         conv = context.get("conversation", {})
-        history = conv.get("history", [])
+
+        if not isinstance(conv, dict):
+            conv = {}
+
+        history = conv.get(
+            "conversation_history",
+            conv.get("history", []),
+        )
+
+        if not isinstance(history, list):
+            history = []
+
         return {
-            "retrieved_memories": context.get("memory", []),
-            "recent_conversation": history[-5:] if isinstance(history, list) else [],
-            "active_document": context.get("document", {}),
-            "detected_entities": conv.get("entities", []),
-            "current_goal": context.get("current_goal"),
-            "current_topic": conv.get("topic"),
+            "current_query": context.get("query", ""),
+
+            "retrieved_memories": context.get(
+                "memory",
+                [],
+            ),
+
+            "recent_conversation": history[-8:],
+
+            "active_document": (
+                context.get("document")
+                or context.get("active_document")
+                or {}
+            ),
+
+            "active_topic": (
+                conv.get("active_topic")
+                or conv.get("topic")
+            ),
+
+            "previous_topic": conv.get(
+                "previous_topic"
+            ),
+
+            "active_subject": (
+                conv.get("active_subject")
+                or conv.get("last_subject")
+            ),
+
+            "active_entities": conv.get(
+                "active_entities",
+                conv.get("entities", []),
+            ),
+
+            "compared_entities": conv.get(
+                "last_compared_entities",
+                conv.get("compared_entities", []),
+            ),
+
+            "active_comparison": bool(
+                conv.get("active_comparison")
+            ),
+
+            "current_goal": context.get(
+                "current_goal"
+            ),
+
+            "resolved_query": context.get(
+                "resolved_query",
+                context.get("query", ""),
+            ),
         }
 
     async def generate_hypotheses(self, query: str, evidence: List[Dict[str, Any]]) -> List[str]:
@@ -611,9 +724,25 @@ class ReasoningEngine:
     async def build_reasoning_trace(self, steps: List[str]) -> str:
         return " -> ".join(steps)
 
-    async def retrieve_context(self, query: str, requires_memory: bool = True) -> Dict[str, Any]:
+    async def retrieve_context(
+        self,
+        query: str,
+        requires_memory: bool = True,
+        conversation_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        memory_query = query
+
+        if conversation_state:
+            context["conversation_state_for_memory"] = {
+                "active_topic": conversation_state.get("active_topic"),
+                "active_subject": conversation_state.get("active_subject"),
+                "active_entities": conversation_state.get("active_entities", []),
+                "compared_entities": conversation_state.get("compared_entities", []),
+                "active_comparison": conversation_state.get("active_comparison", False),
+            }
+
         memories_task = (
-            asyncio.create_task(self.memory_router.recall(query))
+            asyncio.create_task(self.memory_router.recall(memory_query))
             if requires_memory and self.memory_router and hasattr(self.memory_router, "recall")
             else asyncio.create_task(asyncio.sleep(0))
         )
@@ -872,8 +1001,18 @@ Return JSON:
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
 
-        query = await self.resolve_references(raw_query, context)
-        reasoning_steps.append("Resolved conversational references")
+        query = await self.resolve_references(
+            raw_query,
+            context,
+        )
+
+        context["raw_query"] = raw_query
+        context["resolved_query"] = query
+        context["conversation_state"] = conv_tracking
+
+        reasoning_steps.append(
+            "Resolved conversational references"
+        )
 
         requires_clarification = await self.needs_clarification(query, context)
         if requires_clarification:
@@ -956,7 +1095,11 @@ Return JSON:
 
         # Architectural fix: Perform query understanding and core conversation check 
         # before retrieving memories, preventing memory hijacking of the current topic.
-        retrieval = await self.retrieve_context(query, requires_memory=requires_memory)
+        retrieval = await self.retrieve_context(
+            query,
+            requires_memory=requires_memory,
+            conversation_state=conv_tracking,
+        )
         raw_memories = retrieval["memories"] if requires_memory else []
         knowledge = retrieval["knowledge"] if requires_documents else []
         graph_results = retrieval["graph"]
