@@ -407,32 +407,25 @@ class CognitiveCore:
         # ---------------------------------------------------------
         # 1. Get previous conversational context
         # ---------------------------------------------------------
-        conversation_context = {}
+        structured_result = None
 
         if self.conversation_manager:
             try:
-                conversation_context = (
-                    self.conversation_manager.get_context(session_id)
-                    or {}
+                structured_result = (
+                    self.conversation_manager.get_last_result(session_id)
                 )
             except Exception as e:
                 logger.warning(
-                    "[CalculatorContext] Conversation retrieval skipped: %s",
+                    "[CalculatorContext] Last-result retrieval skipped: %s",
                     e,
                 )
 
-        # ---------------------------------------------------------
-        # 2. Extract the previous calculator result
-        # ---------------------------------------------------------
         previous_result = None
 
-        if isinstance(conversation_context, dict):
-            previous_result = conversation_context.get("last_result")
-
-            if previous_result is None:
-                previous_result = conversation_context.get(
-                    "last_calculation"
-                )
+        if isinstance(structured_result, dict):
+            previous_result = structured_result.get("value")
+        else:
+            previous_result = structured_result
 
         # ---------------------------------------------------------
         # 3. Resolve common calculator follow-ups
@@ -446,10 +439,10 @@ class CognitiveCore:
                 re.IGNORECASE,
             )
 
-            if divide_match:
+            if divide_match and previous_result is not None:
                 divisor = divide_match.group(1)
 
-                resolved = f"{result_text} / {divisor}"
+                resolved = f"{previous_result} / {divisor}"
 
                 logger.info(
                     "[CalculatorContext] Resolved %r -> %r",
