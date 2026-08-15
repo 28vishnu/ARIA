@@ -39,15 +39,143 @@ class SelfReflection:
     # ADVANCED REFLECTION METHODS (NEW)
     # =========================================================
 
-    async def reflect_on_response(self, response: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _has_results(
+        self,
+        result: Any,
+    ) -> bool:
         """
-        Evaluate generated response quality, tone, correctness, and completeness.
+        Safely inspect database search results without calling bool()
+        on collection/cursor objects.
         """
-        self.statistics["reflection_evaluations"] += 1
+
+        if result is None:
+            return False
+
+        if isinstance(
+            result,
+            (list, tuple, set, dict, str),
+        ):
+            return len(result) > 0
+
+        if hasattr(result, "to_list"):
+            try:
+                items = await result.to_list(length=1)
+                return bool(items)
+            except Exception:
+                logger.exception(
+                    "[SelfReflection] Failed to inspect cursor."
+                )
+                return False
+
+        if hasattr(result, "__aiter__"):
+            try:
+                async for _ in result:
+                    return True
+            except Exception:
+                logger.exception(
+                    "[SelfReflection] Failed to inspect async result."
+                )
+                return False
+
+        return False
+
+    async def reflect_on_response(
+        self,
+        response: Any,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Evaluate response quality using observable signals.
+
+        This does not generate the final response.
+        """
+
+        self.statistics[
+            "reflection_evaluations"
+        ] += 1
+
+        text = str(response or "").strip()
+
+        issues = []
+
+        if not text:
+            issues.append("empty_response")
+
+        if len(text) < 10:
+            issues.append("too_short")
+
+        query = str(
+            context.get(
+                "query",
+                "",
+            )
+        ).strip()
+
+        resolved_query = str(
+            context.get(
+                "resolved_query",
+                query,
+            )
+        ).strip()
+
+        if query and not resolved_query:
+            issues.append(
+                "missing_resolved_context"
+            )
+
+        confidence = context.get(
+            "confidence",
+            0.5,
+        )
+
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        quality_score = 1.0
+
+        quality_score -= (
+            0.35
+            if "empty_response" in issues
+            else 0.0
+        )
+
+        quality_score -= (
+            0.15
+            if "too_short" in issues
+            else 0.0
+        )
+
+        quality_score -= (
+            0.15
+            if "missing_resolved_context" in issues
+            else 0.0
+        )
+
+        quality_score = max(
+            0.0,
+            min(quality_score, 1.0),
+        )
+
+        if quality_score >= 0.85:
+            quality = "high"
+        elif quality_score >= 0.60:
+            quality = "medium"
+        else:
+            quality = "low"
+
         return {
-            "quality": "high",
-            "complete": bool(response),
-            "critique": "Response meets structural and content criteria."
+            "quality": quality,
+            "quality_score": round(
+                quality_score,
+                3,
+            ),
+            "complete": not bool(issues),
+            "issues": issues,
+            "confidence": confidence,
+            "query": query,
+            "resolved_query": resolved_query,
         }
 
     async def reflect_on_plan(self, plan: Any, execution_results: Dict[str, Any]) -> Dict[str, Any]:
@@ -70,15 +198,34 @@ class SelfReflection:
             "confidence_assessment": conf,
         }
 
-    async def detect_repeated_mistakes(self, query: str) -> bool:
+    async def detect_repeated_mistakes(
+        self,
+        query: str,
+    ) -> bool:
         """
-        Check historical failure patterns to prevent recurring mistakes.
+        Determine whether a similar failure has occurred before.
         """
-        if self.database is not None and hasattr(self.database, "search"):
-            res = await self.database.search(query)
-            if res:
-                return False
-        return False
+
+        if (
+            self.database is None
+            or not hasattr(self.database, "search")
+        ):
+            return False
+
+        try:
+            result = await self.database.search(
+                query
+            )
+
+            return await self._has_results(
+                result
+            )
+
+        except Exception:
+            logger.exception(
+                "[SelfReflection] Repeated-mistake detection failed."
+            )
+            return False
 
     async def suggest_improvements(self, evaluation_data: Dict[str, Any]) -> List[str]:
         """
