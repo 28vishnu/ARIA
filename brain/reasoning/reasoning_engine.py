@@ -281,7 +281,11 @@ class ReasoningEngine:
             "find",
             "compare",
             "search",
-            "history"
+            "latest",
+            "news",
+            "current",
+            "recent",
+            "today"
         ]):
             agents.append("research")
 
@@ -753,6 +757,8 @@ Return JSON:
 
         decision = context.get("decision")
 
+        # Cognitive decision can refine the strategy,
+        # but must not destroy a stronger semantic strategy.
         if decision:
             if getattr(decision, "use_memory", False):
                 strategy = "memory_first"
@@ -765,18 +771,10 @@ Return JSON:
 
             elif getattr(decision, "use_world_model", False):
                 strategy = "knowledge_first"
-        else:
-            if getattr(decision, "use_memory", False):
-                strategy = "memory_first"
-
-            elif getattr(decision, "use_planner", False):
-                strategy = "planning"
 
             elif getattr(decision, "use_reasoning", False):
-                strategy = "deep_reasoning"
-
-            else:
-                strategy = "fast"
+                if strategy == "knowledge_first":
+                    strategy = "deep_reasoning"
 
         context["reasoning_strategy"] = strategy
 
@@ -871,20 +869,66 @@ Return JSON:
             ).get("cognitive_decision")
 
         if decision:
-            mode = decision.reasoning_mode
+            mode = decision.reasoning_mode or strategy
         else:
-            mode = "knowledge_first"
+            mode = strategy
+
+        # Never let an empty/default cognitive mode erase
+        # a stronger semantic strategy selected above.
+        if mode in (None, "", "knowledge_first", "fast"):
+            mode = strategy
+
         reasoning_steps.append(f"Chosen reasoning mode: {mode}")
 
-        selected_agents = decision.selected_agents if decision else []
+        selected_agents = (
+            list(decision.selected_agents)
+            if decision and getattr(decision, "selected_agents", None)
+            else []
+        )
+
+        # If the cognitive layer did not choose agents,
+        # allow the reasoning engine to derive specialists.
+        if not selected_agents:
+            selected_agents = self.choose_best_agents(
+                query,
+                getattr(context.get("intent"), "name", None)
+            )
 
         reasoning_steps.append(f"Selected best agents: {selected_agents}")
 
-        requires_planning = decision.use_planner if decision else False
+        requires_planning = (
+            decision.use_planner
+            if decision
+            else strategy == "planning_first"
+        )
         requires_tools = decision.use_tools if decision else False
-        requires_memory = decision.use_memory if decision else True
-        requires_documents = decision.use_documents if decision else False
-        requires_web = getattr(decision, "use_web", False) if decision else False
+        requires_memory = (
+            decision.use_memory
+            if decision
+            else strategy == "memory_first"
+        )
+        requires_documents = (
+            decision.use_documents
+            if decision
+            else strategy == "document_first"
+        )
+        requires_web = (
+            getattr(decision, "use_web", False)
+            if decision
+            else strategy == "research_first"
+        )
+
+        # Semantic strategy is authoritative when the request
+        # clearly requires current external information.
+        if strategy == "research_first":
+            requires_web = True
+
+        reasoning_steps.append(
+            f"Capabilities: web={requires_web}, "
+            f"memory={requires_memory}, "
+            f"planning={requires_planning}, "
+            f"tools={requires_tools}"
+        )
 
         retrieval = await self.retrieve_context(query)
         raw_memories = retrieval["memories"] if requires_memory else []
