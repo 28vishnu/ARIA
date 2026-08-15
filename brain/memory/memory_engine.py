@@ -1236,10 +1236,136 @@ class MemoryEngine:
 
         return output
 
+    def _memory_relevance_score(
+        self,
+        memory: Dict[str, Any],
+        query: str,
+        conversation_state: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        """
+        Rank long-term memories against the current request.
+
+        Conversation relevance is deliberately stronger than generic
+        semantic similarity so unrelated memories do not hijack the
+        active topic.
+        """
+
+        text_parts = [
+            memory.get("key", ""),
+            memory.get("value", ""),
+            memory.get("summary", ""),
+            " ".join(memory.get("topics", []) or []),
+            " ".join(memory.get("entities", []) or []),
+            " ".join(memory.get("tags", []) or []),
+        ]
+
+        memory_text = " ".join(
+            str(part)
+            for part in text_parts
+            if part
+        ).lower()
+
+        query_text = str(query or "").lower()
+
+        query_tokens = {
+            token
+            for token in re.findall(
+                r"\b[a-z0-9_]+\b",
+                query_text,
+            )
+            if len(token) > 2
+        }
+
+        memory_tokens = {
+            token
+            for token in re.findall(
+                r"\b[a-z0-9_]+\b",
+                memory_text,
+            )
+            if len(token) > 2
+        }
+
+        overlap = len(
+            query_tokens & memory_tokens
+        )
+
+        score = overlap * 0.20
+
+        if conversation_state:
+            active_topic = str(
+                conversation_state.get(
+                    "active_topic",
+                    ""
+                )
+            ).lower()
+
+            active_subject = str(
+                conversation_state.get(
+                    "active_subject",
+                    ""
+                )
+            ).lower()
+
+            entities = conversation_state.get(
+                "active_entities",
+                [],
+            )
+
+            compared = conversation_state.get(
+                "compared_entities",
+                [],
+            )
+
+            current_entities = [
+                str(entity).lower()
+                for entity in (
+                    entities + compared
+                    if isinstance(entities, list)
+                    and isinstance(compared, list)
+                    else []
+                )
+            ]
+
+            if active_topic and active_topic in memory_text:
+                score += 0.40
+
+            if active_subject and active_subject in memory_text:
+                score += 0.35
+
+            for entity in current_entities:
+                if entity and entity in memory_text:
+                    score += 0.25
+
+        importance = memory.get(
+            "importance",
+            0.5,
+        )
+
+        confidence = memory.get(
+            "confidence",
+            0.5,
+        )
+
+        try:
+            importance = float(importance)
+        except (TypeError, ValueError):
+            importance = 0.5
+
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        score += importance * 0.10
+        score += confidence * 0.10
+
+        return score
+
     async def get_relevant_memories(
         self,
         query: str,
-        limit: int = 50
+        limit: int = 50,
+        conversation_state: Optional[Dict[str, Any]] = None,
     ) -> list[dict]:
 
         if self.memory_col is None:
@@ -1428,6 +1554,23 @@ class MemoryEngine:
 
                 memories = self._consolidate_broad_memories(memories)
 
+                conversation_state = (
+                    conversation_state
+                    if isinstance(conversation_state, dict)
+                    else {}
+                )
+
+                memories.sort(
+                    key=lambda memory: self._memory_relevance_score(
+                        memory,
+                        query,
+                        conversation_state,
+                    ),
+                    reverse=True,
+                )
+
+                memories = memories[:limit]
+
                 logger.info(
                     "[MemoryEngine] Broad personal-memory query retrieved %d consolidated memories.",
                     len(memories)
@@ -1474,7 +1617,7 @@ class MemoryEngine:
                             }
                         )
 
-                    return [
+                    filtered_memories = [
                         {
                             "key": m.get("key"),
                             "value": m.get("value"),
@@ -1502,6 +1645,23 @@ class MemoryEngine:
                         for m in memories
                         if m.get("key") and m.get("value")
                     ]
+
+                    conversation_state = (
+                        conversation_state
+                        if isinstance(conversation_state, dict)
+                        else {}
+                    )
+
+                    filtered_memories.sort(
+                        key=lambda memory: self._memory_relevance_score(
+                            memory,
+                            query,
+                            conversation_state,
+                        ),
+                        reverse=True,
+                    )
+
+                    return filtered_memories[:limit]
 
             cursor = self.memory_col.find({
                 "category": {
@@ -1888,6 +2048,23 @@ class MemoryEngine:
 
                 if len(final_memories) >= limit:
                     break
+
+            conversation_state = (
+                conversation_state
+                if isinstance(conversation_state, dict)
+                else {}
+            )
+
+            final_memories.sort(
+                key=lambda memory: self._memory_relevance_score(
+                    memory,
+                    query,
+                    conversation_state,
+                ),
+                reverse=True,
+            )
+
+            final_memories = final_memories[:limit]
 
             returned_keys = [
                 m["key"]
