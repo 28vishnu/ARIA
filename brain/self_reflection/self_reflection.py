@@ -248,7 +248,7 @@ class SelfReflection:
     ):
         self.statistics["reviews"] += 1
 
-        if not answer:
+        if answer is None or str(answer).strip() == "":
             self.statistics["mistakes"] += 1
             await self.learn_from_failure(query)
             return False
@@ -264,11 +264,6 @@ class SelfReflection:
 
         if any(phrase in lower_answer for phrase in gap_phrases):
             self.statistics["knowledge_gaps"] += 1
-            await self.database.store(
-                title="Knowledge Gap",
-                content=query,
-                source="reflection",
-            )
             await self.learn_from_failure(query)
             return False
 
@@ -311,7 +306,10 @@ class SelfReflection:
     ):
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
-            await self.learning.learn(f"Failure or Gap: {query}", source="reflection_failure")
+            await self.learning.learn(
+                "reflection",
+                reflection=f"Failure or Gap: {query}",
+            )
 
     # =========================================================
     # 7. LEARN FROM SUCCESS
@@ -324,7 +322,10 @@ class SelfReflection:
     ):
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
-            await self.learning.learn(f"Success Q: {query} A: {answer}", source="reflection_success")
+            await self.learning.learn(
+                "reflection",
+                reflection=f"Success Q: {query} A: {answer}",
+            )
 
     # =========================================================
     # 8. DETECT DUPLICATE KNOWLEDGE
