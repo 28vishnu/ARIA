@@ -32,6 +32,7 @@ class ConversationManager:
                 "pending_followup": None,
                 "conversation_summary": "",
                 "last_compared_entities": [],
+                "active_comparison": False,
                 "last_question": None,
                 "last_answer": None,
                 "active_task": None,
@@ -62,6 +63,8 @@ class ConversationManager:
             session.setdefault("last_result_source", None)
             session.setdefault("last_result_operation", None)
             session.setdefault("conversation_history", [])
+            session.setdefault("last_compared_entities", [])
+            session.setdefault("active_comparison", False)
 
         return self._sessions[session_id]
 
@@ -121,6 +124,86 @@ class ConversationManager:
             return ents[0]
         return None
 
+    def _update_comparison_state(
+        self,
+        session: Dict[str, Any],
+        user_message: str,
+        entities: List[str],
+    ) -> None:
+        """
+        Preserve comparison state across conversational turns.
+
+        Supports:
+          - compare X and Y
+          - comparing X and Y
+          - X vs Y
+          - X versus Y
+          - comparison between X and Y
+        """
+
+        text = str(user_message or "").strip().lower()
+
+        comparison_signal = bool(
+            re.search(
+                r"\b(compare|comparing|comparison|versus|vs\.?)\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
+
+        between_signal = bool(
+            re.search(
+                r"\bbetween\b.+\band\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
+
+        if (comparison_signal or between_signal) and len(entities) >= 2:
+            session["last_compared_entities"] = entities[:]
+            session["active_comparison"] = True
+
+    def _clean_entities(
+        self,
+        entities: Optional[List[Any]],
+    ) -> List[str]:
+        if not entities:
+            return []
+
+        invalid = {
+            "what",
+            "which",
+            "who",
+            "where",
+            "when",
+            "why",
+            "how",
+            "is",
+            "are",
+            "was",
+            "were",
+            "the",
+            "this",
+            "that",
+            "it",
+        }
+
+        result = []
+
+        for entity in entities:
+            value = str(entity).strip()
+
+            if not value:
+                continue
+
+            if value.lower() in invalid:
+                continue
+
+            if value not in result:
+                result.append(value)
+
+        return result
+
     async def update_turn_async(
         self,
         session_id: str,
@@ -164,16 +247,32 @@ class ConversationManager:
             session["current_intent"] = intent
 
         if entities:
-            session["entities"] = entities
-            new_topic = str(entities[0]) if isinstance(entities, list) and entities else str(entities)
+            extracted_ents = self._clean_entities(entities)
         else:
-            extracted_ents = await self.extract_entities_async(user_message)
-            if extracted_ents:
-                session["entities"] = extracted_ents
-                new_topic = extracted_ents[0]
-            else:
-                session["entities"] = []
-                new_topic = self.extract_topic(user_message)
+            extracted_ents = await self.extract_entities_async(
+                user_message
+            )
+
+            extracted_ents = self._clean_entities(
+                extracted_ents
+            )
+
+        if extracted_ents:
+            session["entities"] = extracted_ents
+            new_topic = extracted_ents[0]
+        else:
+            # Preserve previous state for follow-up questions.
+            session["entities"] = session.get(
+                "entities",
+                [],
+            )
+            new_topic = None
+
+        self._update_comparison_state(
+            session,
+            user_message,
+            extracted_ents,
+        )
 
         if not new_topic:
             new_topic = session.get("current_topic")
@@ -195,11 +294,6 @@ class ConversationManager:
                 session["last_place"] = new_topic
             elif lower_topic in persons or len(new_topic.split()) == 2:
                 session["last_person"] = new_topic
-
-        if "compare" in user_message.lower():
-            extracted = await self.extract_entities_async(user_message)
-            if len(extracted) >= 2:
-                session["last_compared_entities"] = extracted
 
         if new_topic:
             if new_topic != session.get("current_topic"):
@@ -250,16 +344,32 @@ class ConversationManager:
             session["current_intent"] = intent
 
         if entities:
-            session["entities"] = entities
-            new_topic = str(entities[0]) if isinstance(entities, list) and entities else str(entities)
+            extracted_ents = self._clean_entities(entities)
         else:
-            extracted_ents = self.extract_entities(user_message)
-            if extracted_ents:
-                session["entities"] = extracted_ents
-                new_topic = extracted_ents[0]
-            else:
-                session["entities"] = []
-                new_topic = self.extract_topic(user_message)
+            extracted_ents = self.extract_entities(
+                user_message
+            )
+
+            extracted_ents = self._clean_entities(
+                extracted_ents
+            )
+
+        if extracted_ents:
+            session["entities"] = extracted_ents
+            new_topic = extracted_ents[0]
+        else:
+            # Preserve previous state for follow-up questions.
+            session["entities"] = session.get(
+                "entities",
+                [],
+            )
+            new_topic = None
+
+        self._update_comparison_state(
+            session,
+            user_message,
+            extracted_ents,
+        )
 
         if not new_topic:
             new_topic = session.get("current_topic")
@@ -282,11 +392,6 @@ class ConversationManager:
             elif lower_topic in persons or len(new_topic.split()) == 2:
                 session["last_person"] = new_topic
 
-        if "compare" in user_message.lower():
-            extracted = self.extract_entities(user_message)
-            if len(extracted) >= 2:
-                session["last_compared_entities"] = extracted
-
         if new_topic:
             if new_topic != session.get("current_topic"):
                 session["previous_topic"] = session.get("current_topic")
@@ -306,6 +411,23 @@ class ConversationManager:
             "last_subject": session.get("last_subject"),
             "current_intent": session.get("current_intent"),
             "entities": session.get("entities", []),
+            "active_entities": session.get(
+                "entities",
+                [],
+            ),
+            "last_compared_entities": session.get(
+                "last_compared_entities",
+                [],
+            ),
+            "active_comparison": bool(
+                session.get(
+                    "active_comparison",
+                    False,
+                )
+            ),
+            "user_name": session.get(
+                "user_name"
+            ),
 
             "last_user": session.get("last_user_message"),
             "last_assistant": session.get("last_assistant_message"),
@@ -550,3 +672,4 @@ class ConversationManager:
         ]
 
         return " ".join(words)
+```[cite: 16]
