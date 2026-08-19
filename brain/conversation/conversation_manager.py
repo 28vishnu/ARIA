@@ -672,4 +672,3 @@ class ConversationManager:
         ]
 
         return " ".join(words)
-```[cite: 16]
