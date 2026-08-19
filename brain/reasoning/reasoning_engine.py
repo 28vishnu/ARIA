@@ -777,18 +777,62 @@ Return ONLY the standalone request.
         memories = []
         for m in (raw_memories if isinstance(raw_memories, list) else [raw_memories] if raw_memories else []):
             content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
-            memories.append({"source": "memory", "confidence": 0.95, "importance": 85, "content": content})
+            if isinstance(m, dict):
+                memories.append({
+                    "source": "memory",
+                    "confidence": float(m.get("confidence", 0.5)),
+                    "importance": float(m.get("importance", 50)),
+                    "content": content,
+                    "metadata": m.get("metadata", {}),
+                })
+            else:
+                memories.append({
+                    "source": "memory",
+                    "confidence": 0.5,
+                    "importance": 50,
+                    "content": content,
+                    "metadata": {},
+                })
 
         knowledge = []
         for k in (raw_knowledge if isinstance(raw_knowledge, list) else [raw_knowledge] if raw_knowledge else []):
             content = k.get("content", str(k)) if isinstance(k, dict) else str(k)
-            confidence = k.get("confidence", 0.91) if isinstance(k, dict) else 0.91
-            importance = k.get("importance", 50) if isinstance(k, dict) else 50
-            knowledge.append({"source": "knowledge_database", "confidence": confidence, "importance": importance, "content": content})
+            if isinstance(k, dict):
+                knowledge.append({
+                    "source": "knowledge_database",
+                    "confidence": float(k.get("confidence", 0.5)),
+                    "importance": float(k.get("importance", 50)),
+                    "content": content,
+                    "metadata": k.get("metadata", {}),
+                })
+            else:
+                knowledge.append({
+                    "source": "knowledge_database",
+                    "confidence": 0.5,
+                    "importance": 50,
+                    "content": content,
+                    "metadata": {},
+                })
 
         graph = []
         for g in (raw_graph if isinstance(raw_graph, list) else [raw_graph] if raw_graph else []):
-            graph.append({"source": "knowledge_graph", "confidence": 0.88, "importance": 60, "content": str(g)})
+            content = g.get("content", str(g)) if isinstance(g, dict) else str(g)
+            if isinstance(g, dict):
+                graph.append({
+                    "source": "knowledge_graph",
+                    "confidence": float(g.get("confidence", 0.5)),
+                    "importance": float(g.get("importance", 50)),
+                    "content": content,
+                    "metadata": g.get("metadata", {}),
+                })
+            else:
+                graph.append({
+                    "source": "knowledge_graph",
+                    "confidence": 0.5,
+                    "importance": 50,
+                    "content": content,
+                    "metadata": {},
+                })
 
         world = {}
         if isinstance(raw_world, dict):
@@ -798,8 +842,46 @@ Return ONLY the standalone request.
 
         return {"memories": memories, "knowledge": knowledge, "graph": graph, "world": world}
 
-    async def multi_hop_reasoning(self, query: str, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return list(evidence)
+    async def multi_hop_reasoning(
+        self,
+        query: str,
+        evidence: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Prepare evidence for multi-hop reasoning.
+
+        Phase 0 deliberately keeps this non-generative.
+        Advanced hypothesis expansion, contradiction analysis,
+        tool-assisted reasoning and iterative reasoning belong
+        to later phases.
+        """
+
+        if not evidence:
+            return []
+
+        normalized = []
+
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+
+            content = str(item.get("content", "")).strip()
+
+            if not content:
+                continue
+
+            normalized.append({
+                **item,
+                "query": query,
+                "confidence": float(
+                    item.get("confidence", 0.5)
+                ),
+                "importance": float(
+                    item.get("importance", 50)
+                ),
+            })
+
+        return normalized
 
     async def merge_evidence(self, memories: List[Dict[str, Any]], knowledge: List[Dict[str, Any]], graph: List[Dict[str, Any]], world: Dict[str, Any]) -> List[Dict[str, Any]]:
         all_items = memories + knowledge + graph
@@ -817,9 +899,46 @@ Return ONLY the standalone request.
                 unique_evidence.append(item)
         return unique_evidence
 
-    async def rank_evidence(self, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        source_priority = {"memory": 4, "knowledge_database": 3, "knowledge_graph": 2, "world_model": 1}
-        return sorted(evidence, key=lambda item: (source_priority.get(item.get("source", "unknown"), 0), item.get("confidence", 0.5), item.get("importance", 50)), reverse=True)
+    async def rank_evidence(
+        self,
+        evidence: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Rank evidence by actual confidence, importance and relevance.
+
+        Source type is only a secondary tie-breaker.
+        The reasoning engine must never assume that one source is
+        automatically more truthful than another.
+        """
+
+        source_priority = {
+            "knowledge_database": 3,
+            "knowledge_graph": 2,
+            "world_model": 2,
+            "memory": 1,
+        }
+
+        def score(item):
+            confidence = float(item.get("confidence", 0.5))
+            importance = float(item.get("importance", 50))
+            relevance = float(item.get("relevance", 0.5))
+            source = source_priority.get(
+                item.get("source", "unknown"),
+                0,
+            )
+
+            return (
+                confidence * 0.50
+                + relevance * 0.30
+                + (importance / 100.0) * 0.15
+                + source * 0.05
+            )
+
+        return sorted(
+            evidence,
+            key=score,
+            reverse=True,
+        )
 
     async def detect_conflicts(self, evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
         sources_found = set(item.get("source") for item in evidence)
@@ -1084,26 +1203,16 @@ Return JSON:
             f"tools={requires_tools}"
         )
 
-        # Architectural fix: Perform query understanding and core conversation check 
-        # before retrieving memories, preventing memory hijacking of the current topic.
         retrieval = await self.retrieve_context(
             query,
             requires_memory=requires_memory,
             conversation_state=conv_tracking,
         )
-        raw_memories = retrieval["memories"] if requires_memory else []
-        knowledge = retrieval["knowledge"] if requires_documents else []
+        memories = retrieval["memories"] if requires_memory else []
+        knowledge = retrieval["knowledge"]
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
         reasoning_steps.append("Retrieved context evidence")
-
-        memory_summary_parts = []
-        for m in raw_memories:
-            content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
-            memory_summary_parts.append(content)
-        memory_summary = ". ".join(memory_summary_parts)
-
-        memories = [{"source": "memory", "confidence": 0.95, "importance": 85, "content": memory_summary}] if memory_summary else []
 
         merged_evidence = await self.merge_evidence(memories, knowledge, graph_results, world_state)
         evidence = await self.multi_hop_reasoning(query, merged_evidence)
