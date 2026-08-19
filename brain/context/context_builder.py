@@ -321,13 +321,45 @@ class ContextBuilder:
                 "history": recent_conversation,
 
                 "topic": conversation_context.get("topic"),
-                "previous_topic": conversation_context.get("previous_topic"),
-                "entities": conversation_context.get("entities", []),
+                "previous_topic": conversation_context.get(
+                    "previous_topic"
+                ),
+
+                "entities": conversation_context.get(
+                    "entities",
+                    [],
+                ),
+
+                "active_entities": conversation_context.get(
+                    "active_entities",
+                    conversation_context.get(
+                        "entities",
+                        [],
+                    ),
+                ),
+
+                "compared_entities": conversation_context.get(
+                    "last_compared_entities",
+                    [],
+                ),
+
+                "active_comparison": conversation_context.get(
+                    "active_comparison",
+                    False,
+                ),
+
                 "last_question": last_question,
                 "last_answer": last_answer,
-                "last_subject": conversation_context.get("last_subject"),
+                "last_subject": conversation_context.get(
+                    "last_subject"
+                ),
+
                 "pending_reference": conversation_context.get("pending_reference"),
-                "last_compared_entities": conversation_context.get("last_compared_entities", []),
+                "last_compared_entities": conversation_context.get(
+                    "last_compared_entities",
+                    [],
+                ),
+
                 "follow_up": looks_like_follow_up,
                 "active_document": active_document,
                 "last_plan": state_data.get("last_plan"),
@@ -365,3 +397,4 @@ class ContextBuilder:
         })
 
         return ctx
+```[cite: 17]
