@@ -530,44 +530,82 @@ class Executor:
                 "error": str(e)
             }
 
-    async def execute_plan(
-        self,
-        plan,
-        context,
-    ):
+    async def execute(self, task, context=None):
+        """
+        Canonical compatibility gateway.
+
+        This method exists so older planner integrations can execute
+        individual steps without creating a second executor.
+        """
+        return await self.execute_task(task, context)
+
+    async def execute_plan(self, plan, context=None):
+        """
+        Compatibility execution path for legacy planner callers.
+
+        The canonical ExecutionPlan path remains _execute_full_plan_object().
+        """
+        context = context or {}
+
+        if isinstance(plan, ExecutionPlan):
+            return await self._execute_full_plan_object(
+                plan,
+                context,
+            )
 
         results = []
 
         while True:
-
             step = self.planner.next_step(plan)
 
             if step is None:
                 break
 
-            for retry in range(3):
+            result = None
+            last_error = None
 
+            for attempt in range(3):
                 try:
-
                     result = await self.execute(
                         step,
                         context,
                     )
 
-                    break
+                    if result.get("success", False):
+                        break
 
-                except Exception:
+                except Exception as exc:
+                    last_error = exc
+                    logger.exception(
+                        "[Executor] Planner step failed."
+                    )
 
-                    if retry == 2:
-                        raise
+                if attempt < 2:
+                    await asyncio.sleep(0.25)
 
-            step["status"] = "completed"
+            if result is None:
+                result = {
+                    "success": False,
+                    "error": str(last_error or "Task execution failed."),
+                }
 
+            step["status"] = (
+                "completed"
+                if result.get("success")
+                else "failed"
+            )
             step["result"] = result
 
             results.append(result)
 
-        plan.completed = True
+            if not result.get("success"):
+                break
+
+        if hasattr(plan, "completed"):
+            plan.completed = all(
+                result.get("success", False)
+                for result in results
+            )
 
         return results
 
@@ -1009,8 +1047,9 @@ class Executor:
                                 )
                             )
 
-                        # Rollback completed tasks on failure
-                        await self.rollback_workflow(plan, completed)
+                        # Rollback completed tasks on failure if transactional
+                        if base_context.get("transactional", False):
+                            await self.rollback_workflow(plan, completed)
 
                         # Failure Recovery via Planner & Replanning
                         if failed:
@@ -1123,6 +1162,16 @@ class Executor:
         plan,
         base_context,
     ) -> Dict[str, Any]:
+        if self.skill_manager is None:
+            return {
+                "success": False,
+                "paused": False,
+                "requires_confirmation": False,
+                "data": {},
+                "error": "Skill manager is unavailable.",
+                "source": task.skill,
+            }
+
         attempt = 0
         max_attempts = task.max_retries + 1
         last_error = None
@@ -1168,7 +1217,7 @@ class Executor:
                 logger.warning(
                     "[Executor] Retrying skill task %s (%d/%d)",
                     task.id,
-                    attempt + 1,
+                    attempt,
                     max_attempts,
                 )
                 if self.event_bus:
@@ -1176,7 +1225,11 @@ class Executor:
                         Event(
                             type=event_types.TASK_RETRY,
                             source="executor",
-                            data={"task_id": task.id, "attempt": attempt + 1},
+                            data={
+                                "task_id": task.id,
+                                "attempt": attempt,
+                                "max_attempts": max_attempts,
+                            },
                         )
                     )
 
@@ -1262,6 +1315,22 @@ class Executor:
             "data": action_result.data or {},
             "error": action_result.error,
             "source": task.action_name,
+        }
+
+    def health(self) -> Dict[str, Any]:
+        """
+        Return a lightweight executor health snapshot.
+        """
+        return {
+            "status": "healthy",
+            "skill_manager": self.skill_manager is not None,
+            "action_manager": self.action_manager is not None,
+            "planner": self.planner is not None,
+            "event_bus": self.event_bus is not None,
+            "active_workflows": len(self._active_workflows),
+            "paused_workflows": len(self.paused_workflows),
+            "queue_size": self.task_queue.qsize(),
+            "statistics": dict(self.statistics),
         }
 
     def last_execution(self):
