@@ -184,27 +184,6 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
     # ---------------------------------------------------------
-    # Conversation Manager, Goal Manager & Task Manager
-    # ---------------------------------------------------------
-    conversation_manager = ConversationManager()
-    goal_manager = GoalManager()
-    task_manager = TaskManager()
-
-    registry.register(
-        "conversation_manager",
-        conversation_manager
-    )
-    registry.register(
-        "goal_manager",
-        goal_manager
-    )
-    registry.register(
-        "task_manager",
-        task_manager,
-    )
-    logger.info("[BOOT TEST] ConversationManager, GoalManager, and TaskManager configured")
-
-    # ---------------------------------------------------------
     # ChromaDB
     # ---------------------------------------------------------
 
@@ -410,6 +389,35 @@ async def bootstrap_application() -> ServiceRegistry:
 
     register_event_listeners()
 
+    # ---------------------------------------------------------
+    # Runtime Conversation Intelligence
+    # ---------------------------------------------------------
+
+    conversation_manager = ConversationManager(
+        llm_router=llm_router
+    )
+
+    registry.register(
+        "conversation_manager",
+        conversation_manager
+    )
+
+    logger.info(
+        "[BOOT TEST] ConversationManager configured"
+    )
+
+    goal_manager = GoalManager()
+    task_manager = TaskManager()
+
+    registry.register(
+        "goal_manager",
+        goal_manager
+    )
+    registry.register(
+        "task_manager",
+        task_manager,
+    )
+
     context_builder = ContextBuilder(
         state_manager=state_manager,
         world_model=world_model,
@@ -437,7 +445,6 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("autonomous_learning", autonomous_learning)
     registry.register("event_bus", event_bus)
     registry.register("context_builder", context_builder)
-    registry.register("conversation_manager", conversation_manager)
 
     logger.info(
         "[BOOT TEST] 7 - DocumentIntelligence created"
