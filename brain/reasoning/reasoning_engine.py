@@ -732,15 +732,6 @@ Return ONLY the standalone request.
     ) -> Dict[str, Any]:
         memory_query = query
 
-        if conversation_state:
-            context["conversation_state_for_memory"] = {
-                "active_topic": conversation_state.get("active_topic"),
-                "active_subject": conversation_state.get("active_subject"),
-                "active_entities": conversation_state.get("active_entities", []),
-                "compared_entities": conversation_state.get("compared_entities", []),
-                "active_comparison": conversation_state.get("active_comparison", False),
-            }
-
         memories_task = (
             asyncio.create_task(self.memory_router.recall(memory_query))
             if requires_memory and self.memory_router and hasattr(self.memory_router, "recall")
