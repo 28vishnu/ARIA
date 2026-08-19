@@ -114,13 +114,6 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
 
     session = ctx.session_manager.get_or_create_session(session_id)
-    base_context = {
-        "app_state": app_state,
-        "session": session,
-        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
-        "document_intelligence": registry.get("document_intelligence") if registry.has("document_intelligence") else None
-    }
-
     conversation_manager = registry.get("conversation_manager")
 
     resolved_text = user_text
@@ -131,6 +124,21 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
             query=user_text,
         )
 
+    base_context = {
+        "app_state": app_state,
+        "session": session,
+        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
+        "document_intelligence": (
+            registry.get("document_intelligence")
+            if registry.has("document_intelligence")
+            else None
+        ),
+    }
+
+    # ---------------------------------------------------------
+    # 5. COGNITIVE CORE
+    # ---------------------------------------------------------
+
     sys_res = await ctx.cognitive_core.process(
         query=resolved_text,
         session_id=session_id,
@@ -138,7 +146,28 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         base_context=base_context,
     )
 
-    # Preserve structured document actions for the transport layer.
+    # ---------------------------------------------------------
+    # 6. UPDATE CONVERSATIONAL STATE
+    #
+    # This must happen after the answer exists so the next
+    # turn can use the completed turn as context.
+    # ---------------------------------------------------------
+
+    if conversation_manager:
+
+        assistant_text = str(sys_res)
+
+        conversation_manager.update_turn(
+            session_id=session_id,
+            user_message=user_text,
+            assistant_message=assistant_text,
+            intent=None,
+        )
+
+    # ---------------------------------------------------------
+    # 7. STRUCTURED DOCUMENT ACTIONS
+    # ---------------------------------------------------------
+
     if (
         sys_res
         and isinstance(sys_res.data, dict)
@@ -146,10 +175,14 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
     ):
         return sys_res
 
+    # ---------------------------------------------------------
+    # 8. PERSONALITY LAYER
+    # ---------------------------------------------------------
+
     return await ctx.personality_engine.apply_personality(
         session_id,
         resolved_text,
-        sys_res
+        sys_res,
     )
 
 @app.post("/telegram-webhook")
@@ -917,19 +950,6 @@ async def telegram_webhook(req: Request):
                 "[Conversation] Stored completed turn "
                 "for session %s.",
                 chat_id
-            )
-
-        conversation_manager = req.app.state.registry.get("conversation_manager")
-
-        if conversation_manager:
-            # Simple entity extraction fallback based on common words or capitalized words in text
-            extracted_entities = [word for word in text.split() if word and word[0].isupper()]
-            conversation_manager.update_turn(
-                session_id=str(chat_id),
-                user_message=text,
-                assistant_message=reply_text,
-                intent=None,
-                entities=extracted_entities
             )
 
     return {
