@@ -1445,6 +1445,10 @@ class CognitiveCore:
         execution_result = None
         plan = None
 
+        context.setdefault("session_id", session_id)
+        context.setdefault("execution_id", self._create_execution_id())
+        context.setdefault("query", query)
+
         # ---------------------------------------------------------
         # Step 0: Load deterministic conversation context FIRST.
         #
@@ -1484,6 +1488,9 @@ class CognitiveCore:
             )
         else:
             resolved_query = query
+
+        context["original_query"] = query
+        context["resolved_query"] = resolved_query
 
         # Step 2: Build context via context_builder if available.
         if self.context_builder:
@@ -1537,14 +1544,25 @@ class CognitiveCore:
         memory_context = context.get("memory", [])
         world_state = context.get("world", {})
 
-        # Re-prioritize context fields according to new hierarchy
-        context = {
+        # ---------------------------------------------------------
+        # Preserve the complete cognitive context.
+        #
+        # Do NOT reconstruct the dictionary from a small whitelist.
+        # ContextBuilder, ReasoningEngine, DecisionEngine, execution
+        # recovery and downstream systems may add important fields.
+        # ---------------------------------------------------------
+
+        context = dict(context)
+
+        context.update({
             "query": resolved_query,
+            "session_id": session_id,
+            "user_id": context.get("user_id", session_id),
             "working_memory": working_memory_context,
             "conversation": conversation_context,
             "memory": memory_context,
             "world": world_state,
-        }
+        })
 
         # =========================================================
         # DETERMINISTIC PERSONAL CONTEXT RECALL
