@@ -48,6 +48,7 @@ class ConversationManager:
                 # Generic conversational state
                 "working_context": {},
                 "conversation_history": [],
+                "state_version": 1,
 
                 # Generic previous-result context.
                 # This is capability-independent: calculator, coding,
@@ -65,6 +66,7 @@ class ConversationManager:
             session.setdefault("conversation_history", [])
             session.setdefault("last_compared_entities", [])
             session.setdefault("active_comparison", False)
+            session.setdefault("state_version", 1)
 
         return self._sessions[session_id]
 
@@ -117,12 +119,58 @@ class ConversationManager:
 
     def extract_topic(self, text: str) -> Optional[str]:
         """
-        Extract a basic topic or entity from text using fallback rules or regex.
+        Extract the most useful conversational topic.
+
+        This is deliberately a lightweight fallback.
+        Semantic interpretation belongs to the reasoning/context layers.
         """
-        ents = self.extract_entities(text)
-        if ents:
-            return ents[0]
-        return None
+
+        if not text:
+            return None
+
+        text = str(text).strip()
+
+        # Explicit comparison subjects should take priority.
+        comparison_patterns = [
+            r"\bbetween\s+(.+?)\s+and\s+(.+?)(?:[?.!,]|$)",
+            r"\bcompare\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!,]|$)",
+            r"\bcomparing\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!,]|$)",
+        ]
+
+        for pattern in comparison_patterns:
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+                left = match.group(1).strip()
+                right = match.group(2).strip()
+
+                left = re.sub(r"\s+", " ", left).strip(" .,!?:;")
+                right = re.sub(r"\s+", " ", right).strip(" .,!?:;")
+
+                if left and right:
+                    return f"{left} vs {right}"
+
+        # Prefer meaningful extracted entities.
+        entities = self._clean_entities(
+            self.extract_entities(text)
+        )
+
+        if entities:
+            return entities[0]
+
+        # Remove common question framing before fallback.
+        cleaned = re.sub(
+            r"^(what|who|where|when|why|how|which|can|could|would|is|are)\b",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip(" ?.,!")
+
+        return cleaned or None
 
     def _update_comparison_state(
         self,
@@ -356,7 +404,7 @@ class ConversationManager:
                 session["last_company"] = new_topic
             elif lower_topic in places:
                 session["last_place"] = new_topic
-            elif lower_topic in persons or len(new_topic.split()) == 2:
+            elif lower_topic in persons:
                 session["last_person"] = new_topic
 
         if new_topic:
@@ -453,7 +501,7 @@ class ConversationManager:
                 session["last_company"] = new_topic
             elif lower_topic in places:
                 session["last_place"] = new_topic
-            elif lower_topic in persons or len(new_topic.split()) == 2:
+            elif lower_topic in persons:
                 session["last_person"] = new_topic
 
         if new_topic:
@@ -480,6 +528,10 @@ class ConversationManager:
                 [],
             ),
             "last_compared_entities": session.get(
+                "last_compared_entities",
+                [],
+            ),
+            "compared_entities": session.get(
                 "last_compared_entities",
                 [],
             ),
