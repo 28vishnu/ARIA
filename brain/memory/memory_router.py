@@ -33,6 +33,58 @@ class MemoryRouter:
         self._last_remembered_time = 0.0
         self._duplicate_window = 5.0  # seconds
 
+    def _filter_relevant_memories(
+        self,
+        memories: Optional[List[Dict[str, Any]]],
+        reasoning_result: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter personal memories without allowing weak memories
+        to contaminate the active conversation.
+
+        The reasoning layer remains responsible for deciding whether
+        personal memory should be consulted at all.
+        """
+
+        if not memories:
+            return []
+
+        threshold = 12.0
+
+        if reasoning_result is not None:
+            confidence = getattr(
+                reasoning_result,
+                "confidence",
+                0.5,
+            )
+
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = 0.5
+
+            # Higher-confidence reasoning can tolerate slightly
+            # weaker retrieval; uncertain reasoning remains conservative.
+            if confidence >= 0.85:
+                threshold = 10.0
+            elif confidence < 0.40:
+                threshold = 14.0
+
+        filtered = []
+
+        for memory in memories:
+            try:
+                score = float(
+                    memory.get("retrieval_score", 0.0)
+                )
+            except (TypeError, ValueError):
+                score = 0.0
+
+            if score >= threshold:
+                filtered.append(memory)
+
+        return filtered
+
     # =====================================================
     # Working Memory
     # =====================================================
@@ -116,12 +168,10 @@ class MemoryRouter:
         if memories is None:
             return []
 
-        filtered = []
-        for memory in memories:
-            score = memory.get("retrieval_score", 0)
-            if score >= 12:
-                filtered.append(memory)
-        return filtered
+        return self._filter_relevant_memories(
+            memories,
+            reasoning_result=reasoning_result,
+        )
 
     # =====================================================
     # Long-Term Continuous Learning & Reasoning Patterns
@@ -204,13 +254,12 @@ class MemoryRouter:
                     limit
                 )
             )
-            filtered_pm = []
-            if pm:
-                for memory in pm:
-                    score = memory.get("retrieval_score", 0)
-                    if score >= 12:
-                        filtered_pm.append(memory)
-            result["personal_memory"] = filtered_pm
+            result["personal_memory"] = (
+                self._filter_relevant_memories(
+                    pm,
+                    reasoning_result=reasoning_result,
+                )
+            )
 
         # Knowledge Engine (respects reasoning flag for documents)
         should_recall_docs = True
