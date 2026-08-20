@@ -1239,7 +1239,7 @@ Return JSON:
             conversation_state=conv_tracking,
         )
         raw_memories = retrieval["memories"] if requires_memory else []
-        knowledge = retrieval["knowledge"] if requires_documents else []
+        knowledge = retrieval["knowledge"]
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
         reasoning_steps.append("Retrieved context evidence")
@@ -1483,7 +1483,7 @@ Return JSON:
         )
 
         if self.working_memory:
-            topic_str = conv_tracking.get("topic")
+            topic_str = conv_tracking.get("active_topic", conv_tracking.get("topic", ""))
             if topic_str and confidence > 0.7 and hasattr(self.working_memory, "set_topic"):
                 self.working_memory.set_topic(topic_str)
             if hasattr(self.working_memory, "remember_exchange"):
@@ -1514,7 +1514,10 @@ Return JSON:
             requires_planning=requires_planning,
             requires_clarification=requires_clarification,
             resolved_query=query,
-            topic=conv_tracking.get("topic", ""),
+            topic=conv_tracking.get(
+                "active_topic",
+                conv_tracking.get("topic", ""),
+            ),
             working_memory=working_memory,
             response_strategy=response_strategy,
             reasoning_mode=mode,
