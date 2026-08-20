@@ -134,11 +134,15 @@ class ConversationManager:
         Preserve comparison state across conversational turns.
 
         Supports:
-          - compare X and Y
-          - comparing X and Y
-          - X vs Y
-          - X versus Y
-          - comparison between X and Y
+        - compare X and Y
+        - comparing X and Y
+        - X vs Y
+        - X versus Y
+        - comparison between X and Y
+
+        Once a comparison is established, keep it available for
+        short follow-up questions until a clearly different topic
+        replaces it.
         """
 
         text = str(user_message or "").strip().lower()
@@ -159,9 +163,69 @@ class ConversationManager:
             )
         )
 
-        if (comparison_signal or between_signal) and len(entities) >= 2:
-            session["last_compared_entities"] = entities[:]
+        cleaned_entities = self._clean_entities(entities)
+
+        # ---------------------------------------------------------
+        # Establish a new comparison
+        # ---------------------------------------------------------
+
+        if (
+            (comparison_signal or between_signal)
+            and len(cleaned_entities) >= 2
+        ):
+            session["last_compared_entities"] = (
+                cleaned_entities[:]
+            )
             session["active_comparison"] = True
+            return
+
+        # ---------------------------------------------------------
+        # Preserve an existing comparison during follow-ups
+        # ---------------------------------------------------------
+
+        existing = session.get(
+            "last_compared_entities",
+            [],
+        )
+
+        if (
+            session.get("active_comparison")
+            and len(existing) >= 2
+        ):
+            followup_patterns = (
+                "which one",
+                "which is better",
+                "which is easier",
+                "what about",
+                "how about",
+                "why",
+                "continue",
+                "more",
+                "tell me more",
+                "which would you choose",
+                "what would you choose",
+                "give example",
+                "explain",
+            )
+
+            is_followup = any(
+                text == pattern
+                or text.startswith(pattern + " ")
+                or text.startswith(pattern + ",")
+                for pattern in followup_patterns
+            )
+
+            if is_followup:
+                return
+
+        # ---------------------------------------------------------
+        # A new explicit comparison can replace the old one.
+        # Otherwise leave the existing comparison state untouched.
+        # ---------------------------------------------------------
+
+        if comparison_signal or between_signal:
+            session["active_comparison"] = False
+            session["last_compared_entities"] = []
 
     def _clean_entities(
         self,
