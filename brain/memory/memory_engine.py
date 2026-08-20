@@ -2127,30 +2127,23 @@ class MemoryEngine:
 
             final_memories = final_memories[:limit]
 
-            returned_keys = [
-                m["key"]
-                for m in final_memories[:1]
-            ]
+            selected = final_memories[:1]
+            # Record access for every memory actually used by retrieval.
+            # This keeps long-term memory importance and recency signals
+            # accurate without artificially favoring only the first result.
+            for memory in selected:
+                memory_id = memory.get("_id")
 
-            if returned_keys:
+                if not memory_id:
+                    continue
 
-                await self.memory_col.update_many(
-                    {
-                        "key": {
-                            "$in": returned_keys
-                        }
-                    },
-                    {
-                        "$inc": {
-                            "access_count": 1
-                        },
-                        "$set": {
-                            "last_accessed": datetime.now(
-                                timezone.utc
-                            ).isoformat()
-                        }
-                    }
-                )
+                try:
+                    await self.record_access(memory_id)
+                except Exception:
+                    logger.exception(
+                        "[MemoryEngine] Failed to record memory access: %s",
+                        memory_id,
+                    )
 
             logger.info(
                 "[MemoryEngine] Retrieved %d relevant memories for query: %s",
@@ -2168,9 +2161,25 @@ class MemoryEngine:
 
             return []
 
-    async def retrieve(self, query: str) -> list[dict]:
+    async def retrieve(
+        self,
+        query: str,
+        conversation_state: Optional[Dict[str, Any]] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """
+        Public memory-retrieval entry point.
 
-        return await self.get_relevant_memories(query)
+        Keeps conversational context available to the retrieval layer
+        so long-term memory is ranked according to the active dialogue
+        instead of being treated as an isolated query.
+        """
+
+        return await self.get_relevant_memories(
+            query=query,
+            limit=limit,
+            conversation_state=conversation_state,
+        )
 
     # =========================================================
     # DELETE MEMORY
