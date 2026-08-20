@@ -104,7 +104,8 @@ class LearningEngine:
             source=source,
         )
 
-        await self.builder.learn(text)
+        if self.builder:
+            await self.builder.learn(text)
 
         self.learned_count += 1
         self.statistics["learned"] += 1
@@ -137,7 +138,8 @@ class LearningEngine:
             },
         )
 
-        await self.builder.learn(summary)
+        if self.builder:
+            await self.builder.learn(summary)
 
         if entities:
 
@@ -328,15 +330,14 @@ class LearningEngine:
         if not profile:
             return
 
+        if not self.graph:
+            return
+
         for key, value in profile.items():
-
             await self.graph.add_fact(
-
                 "User",
-
                 key,
-
-                value
+                value,
             )
 
     ############################################################
@@ -429,7 +430,8 @@ class LearningEngine:
             },
         )
 
-        await self.builder.learn(new_content)
+        if self.builder:
+            await self.builder.learn(new_content)
 
         self.learned_count += 1
         self.statistics["updates"] += 1
