@@ -868,83 +868,378 @@ Return ONLY the standalone request.
         requires_memory: bool = True,
         conversation_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """
+        Retrieve context from ARIA's independent knowledge systems.
+
+        Each subsystem is isolated so a slow or failing source does not
+        block the entire reasoning pipeline.
+        """
+
         memory_query = query
 
         if conversation_state:
-            context = getattr(self, "_temp_context", {})
+            context = getattr(
+                self,
+                "_temp_context",
+                {},
+            )
+
             context["conversation_state_for_memory"] = {
-                "active_topic": conversation_state.get("active_topic"),
-                "active_subject": conversation_state.get("active_subject"),
-                "active_entities": conversation_state.get("active_entities", []),
-                "compared_entities": conversation_state.get("compared_entities", []),
-                "active_comparison": conversation_state.get("active_comparison", False),
+                "active_topic": conversation_state.get(
+                    "active_topic"
+                ),
+                "active_subject": conversation_state.get(
+                    "active_subject"
+                ),
+                "active_entities": conversation_state.get(
+                    "active_entities",
+                    [],
+                ),
+                "compared_entities": conversation_state.get(
+                    "compared_entities",
+                    [],
+                ),
+                "active_comparison": conversation_state.get(
+                    "active_comparison",
+                    False,
+                ),
             }
 
-        memories_task = (
-            asyncio.create_task(self.memory_router.recall(memory_query))
-            if requires_memory and self.memory_router and hasattr(self.memory_router, "recall")
-            else asyncio.create_task(asyncio.sleep(0))
-        )
+        async def safe_call(
+            operation,
+            default,
+            timeout=8.0,
+            name="retrieval",
+        ):
+            """
+            Execute one retrieval source with timeout and failure
+            isolation.
+            """
 
-        knowledge_task = asyncio.create_task(asyncio.sleep(0))
+            if operation is None:
+                return default
+
+            try:
+                return await asyncio.wait_for(
+                    operation,
+                    timeout=timeout,
+                )
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[ReasoningEngine] %s timed out after %.1fs",
+                    name,
+                    timeout,
+                )
+                return default
+
+            except Exception:
+                logger.exception(
+                    "[ReasoningEngine] %s failed",
+                    name,
+                )
+                return default
+
+        # ---------------------------------------------------------
+        # MEMORY
+        # ---------------------------------------------------------
+
+        memory_operation = None
+
+        if (
+            requires_memory
+            and self.memory_router
+            and hasattr(
+                self.memory_router,
+                "recall",
+            )
+        ):
+            memory_operation = self.memory_router.recall(
+                memory_query
+            )
+
+        # ---------------------------------------------------------
+        # KNOWLEDGE DATABASE
+        # ---------------------------------------------------------
+
+        knowledge_operation = None
+
         if self.knowledge_database:
-            if hasattr(self.knowledge_database, "retrieve"):
-                knowledge_task = asyncio.create_task(self.knowledge_database.retrieve(query))
-            elif hasattr(self.knowledge_database, "search"):
-                knowledge_task = asyncio.create_task(self.knowledge_database.search(query))
-            elif hasattr(self.knowledge_database, "answer"):
-                knowledge_task = asyncio.create_task(self.knowledge_database.answer(question=query))
 
-        graph_task = (
-            asyncio.create_task(self.knowledge_graph.search(query))
-            if self.knowledge_graph and hasattr(self.knowledge_graph, "search")
-            else asyncio.create_task(asyncio.sleep(0))
-        )
+            if hasattr(
+                self.knowledge_database,
+                "retrieve",
+            ):
+                knowledge_operation = (
+                    self.knowledge_database.retrieve(
+                        query
+                    )
+                )
 
-        world_task = asyncio.create_task(asyncio.sleep(0))
-        if self.world_model and hasattr(self.world_model, "search"):
-            world_task = asyncio.create_task(
-                asyncio.to_thread(
-                    self.world_model.search,
-                    query,
+            elif hasattr(
+                self.knowledge_database,
+                "search",
+            ):
+                knowledge_operation = (
+                    self.knowledge_database.search(
+                        query
+                    )
+                )
+
+            elif hasattr(
+                self.knowledge_database,
+                "answer",
+            ):
+                knowledge_operation = (
+                    self.knowledge_database.answer(
+                        question=query
+                    )
+                )
+
+        # ---------------------------------------------------------
+        # KNOWLEDGE GRAPH
+        # ---------------------------------------------------------
+
+        graph_operation = None
+
+        if (
+            self.knowledge_graph
+            and hasattr(
+                self.knowledge_graph,
+                "search",
+            )
+        ):
+            graph_operation = (
+                self.knowledge_graph.search(
+                    query
                 )
             )
 
-        results = await asyncio.gather(
-            memories_task,
-            knowledge_task,
-            graph_task,
-            world_task,
-            return_exceptions=True,
+        # ---------------------------------------------------------
+        # WORLD MODEL
+        # ---------------------------------------------------------
+
+        world_operation = None
+
+        if (
+            self.world_model
+            and hasattr(
+                self.world_model,
+                "search",
+            )
+        ):
+            world_operation = asyncio.to_thread(
+                self.world_model.search,
+                query,
+            )
+
+        # ---------------------------------------------------------
+        # RUN ALL SOURCES IN PARALLEL
+        # ---------------------------------------------------------
+
+        raw_memories, raw_knowledge, raw_graph, raw_world = (
+            await asyncio.gather(
+
+                safe_call(
+                    memory_operation,
+                    [],
+                    name="memory retrieval",
+                ),
+
+                safe_call(
+                    knowledge_operation,
+                    [],
+                    name="knowledge retrieval",
+                ),
+
+                safe_call(
+                    graph_operation,
+                    [],
+                    name="graph retrieval",
+                ),
+
+                safe_call(
+                    world_operation,
+                    {},
+                    name="world-model retrieval",
+                ),
+            )
         )
 
-        raw_memories, raw_knowledge, raw_graph, raw_world = [
-            r if not isinstance(r, Exception) else [] for r in results
-        ]
+        # ---------------------------------------------------------
+        # NORMALIZE MEMORY
+        # ---------------------------------------------------------
 
         memories = []
-        for m in (raw_memories if isinstance(raw_memories, list) else [raw_memories] if raw_memories else []):
-            content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
-            memories.append({"source": "memory", "confidence": 0.95, "importance": 85, "content": content})
+
+        memory_items = (
+            raw_memories
+            if isinstance(raw_memories, list)
+            else (
+                [raw_memories]
+                if raw_memories
+                else []
+            )
+        )
+
+        for item in memory_items:
+
+            content = (
+                item.get(
+                    "content",
+                    str(item),
+                )
+                if isinstance(item, dict)
+                else str(item)
+            )
+
+            if not content:
+                continue
+
+            memories.append({
+                "source": "memory",
+                "confidence": (
+                    item.get(
+                        "confidence",
+                        0.95,
+                    )
+                    if isinstance(item, dict)
+                    else 0.95
+                ),
+                "importance": (
+                    item.get(
+                        "importance",
+                        85,
+                    )
+                    if isinstance(item, dict)
+                    else 85
+                ),
+                "content": content,
+            })
+
+        # ---------------------------------------------------------
+        # NORMALIZE KNOWLEDGE
+        # ---------------------------------------------------------
 
         knowledge = []
-        for k in (raw_knowledge if isinstance(raw_knowledge, list) else [raw_knowledge] if raw_knowledge else []):
-            content = k.get("content", str(k)) if isinstance(k, dict) else str(k)
-            confidence = k.get("confidence", 0.91) if isinstance(k, dict) else 0.91
-            importance = k.get("importance", 50) if isinstance(k, dict) else 50
-            knowledge.append({"source": "knowledge_database", "confidence": confidence, "importance": importance, "content": content})
+
+        knowledge_items = (
+            raw_knowledge
+            if isinstance(raw_knowledge, list)
+            else (
+                [raw_knowledge]
+                if raw_knowledge
+                else []
+            )
+        )
+
+        for item in knowledge_items:
+
+            content = (
+                item.get(
+                    "content",
+                    str(item),
+                )
+                if isinstance(item, dict)
+                else str(item)
+            )
+
+            if not content:
+                continue
+
+            knowledge.append({
+                "source": "knowledge_database",
+                "confidence": (
+                    item.get(
+                        "confidence",
+                        0.91,
+                    )
+                    if isinstance(item, dict)
+                    else 0.91
+                ),
+                "importance": (
+                    item.get(
+                        "importance",
+                        50,
+                    )
+                    if isinstance(item, dict)
+                    else 50
+                ),
+                "content": content,
+            })
+
+        # ---------------------------------------------------------
+        # NORMALIZE GRAPH
+        # ---------------------------------------------------------
 
         graph = []
-        for g in (raw_graph if isinstance(raw_graph, list) else [raw_graph] if raw_graph else []):
-            graph.append({"source": "knowledge_graph", "confidence": 0.88, "importance": 60, "content": str(g)})
+
+        graph_items = (
+            raw_graph
+            if isinstance(raw_graph, list)
+            else (
+                [raw_graph]
+                if raw_graph
+                else []
+            )
+        )
+
+        for item in graph_items:
+
+            content = (
+                item.get(
+                    "content",
+                    str(item),
+                )
+                if isinstance(item, dict)
+                else str(item)
+            )
+
+            if not content:
+                continue
+
+            graph.append({
+                "source": "knowledge_graph",
+                "confidence": (
+                    item.get(
+                        "confidence",
+                        0.88,
+                    )
+                    if isinstance(item, dict)
+                    else 0.88
+                ),
+                "importance": (
+                    item.get(
+                        "importance",
+                        60,
+                    )
+                    if isinstance(item, dict)
+                    else 60
+                ),
+                "content": content,
+            })
+
+        # ---------------------------------------------------------
+        # NORMALIZE WORLD MODEL
+        # ---------------------------------------------------------
 
         world = {}
-        if isinstance(raw_world, dict):
-            for cat, items in raw_world.items():
-                if items:
-                    world[cat] = items
 
-        return {"memories": memories, "knowledge": knowledge, "graph": graph, "world": world}
+        if isinstance(
+            raw_world,
+            dict,
+        ):
+            for category, items in raw_world.items():
+
+                if items:
+                    world[category] = items
+
+        return {
+            "memories": memories,
+            "knowledge": knowledge,
+            "graph": graph,
+            "world": world,
+        }
 
     async def multi_hop_reasoning(self, query: str, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return list(evidence)
