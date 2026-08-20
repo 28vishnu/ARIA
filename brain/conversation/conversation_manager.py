@@ -119,58 +119,12 @@ class ConversationManager:
 
     def extract_topic(self, text: str) -> Optional[str]:
         """
-        Extract the most useful conversational topic.
-
-        This is deliberately a lightweight fallback.
-        Semantic interpretation belongs to the reasoning/context layers.
+        Extract a basic topic or entity from text using fallback rules or regex.
         """
-
-        if not text:
-            return None
-
-        text = str(text).strip()
-
-        # Explicit comparison subjects should take priority.
-        comparison_patterns = [
-            r"\bbetween\s+(.+?)\s+and\s+(.+?)(?:[?.!,]|$)",
-            r"\bcompare\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!,]|$)",
-            r"\bcomparing\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!,]|$)",
-        ]
-
-        for pattern in comparison_patterns:
-            match = re.search(
-                pattern,
-                text,
-                flags=re.IGNORECASE,
-            )
-
-            if match:
-                left = match.group(1).strip()
-                right = match.group(2).strip()
-
-                left = re.sub(r"\s+", " ", left).strip(" .,!?:;")
-                right = re.sub(r"\s+", " ", right).strip(" .,!?:;")
-
-                if left and right:
-                    return f"{left} vs {right}"
-
-        # Prefer meaningful extracted entities.
-        entities = self._clean_entities(
-            self.extract_entities(text)
-        )
-
-        if entities:
-            return entities[0]
-
-        # Remove common question framing before fallback.
-        cleaned = re.sub(
-            r"^(what|who|where|when|why|how|which|can|could|would|is|are)\b",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        ).strip(" ?.,!")
-
-        return cleaned or None
+        ents = self.extract_entities(text)
+        if ents:
+            return ents[0]
+        return None
 
     def _update_comparison_state(
         self,
@@ -225,6 +179,12 @@ class ConversationManager:
                 cleaned_entities[:]
             )
             session["active_comparison"] = True
+
+            session["last_subject"] = {
+                "type": "comparison",
+                "entities": cleaned_entities[:],
+            }
+
             return
 
         # ---------------------------------------------------------
@@ -270,6 +230,13 @@ class ConversationManager:
         # A new explicit comparison can replace the old one.
         # Otherwise leave the existing comparison state untouched.
         # ---------------------------------------------------------
+
+        if (
+            comparison_signal or between_signal
+        ) and len(cleaned_entities) < 2:
+            # Do not destroy a valid existing comparison merely because
+            # the current message contains comparison language.
+            return
 
         if comparison_signal or between_signal:
             session["active_comparison"] = False
@@ -386,10 +353,30 @@ class ConversationManager:
             extracted_ents,
         )
 
-        if not new_topic:
-            new_topic = session.get("current_topic")
+        if (
+            session.get("active_comparison")
+            and len(session.get("last_compared_entities", [])) >= 2
+        ):
+            compared = session["last_compared_entities"]
 
-        session["last_entity"] = new_topic
+            session["last_entity"] = compared[-1]
+
+            if session.get("current_topic") != "comparison":
+                session["previous_topic"] = session.get("current_topic")
+                session["current_topic"] = "comparison"
+
+            session["last_subject"] = {
+                "type": "comparison",
+                "entities": compared[:],
+            }
+
+            new_topic = "comparison"
+
+        else:
+            if not new_topic:
+                new_topic = session.get("current_topic")
+
+            session["last_entity"] = new_topic
 
         if new_topic:
             lower_topic = new_topic.lower()
@@ -411,7 +398,8 @@ class ConversationManager:
             if new_topic != session.get("current_topic"):
                 session["previous_topic"] = session.get("current_topic")
                 session["current_topic"] = new_topic
-            session["last_subject"] = new_topic
+            if not isinstance(session.get("last_subject"), dict):
+                session["last_subject"] = new_topic
 
     def update_turn(
         self,
@@ -483,10 +471,30 @@ class ConversationManager:
             extracted_ents,
         )
 
-        if not new_topic:
-            new_topic = session.get("current_topic")
+        if (
+            session.get("active_comparison")
+            and len(session.get("last_compared_entities", [])) >= 2
+        ):
+            compared = session["last_compared_entities"]
 
-        session["last_entity"] = new_topic
+            session["last_entity"] = compared[-1]
+
+            if session.get("current_topic") != "comparison":
+                session["previous_topic"] = session.get("current_topic")
+                session["current_topic"] = "comparison"
+
+            session["last_subject"] = {
+                "type": "comparison",
+                "entities": compared[:],
+            }
+
+            new_topic = "comparison"
+
+        else:
+            if not new_topic:
+                new_topic = session.get("current_topic")
+
+            session["last_entity"] = new_topic
 
         if new_topic:
             lower_topic = new_topic.lower()
@@ -508,7 +516,8 @@ class ConversationManager:
             if new_topic != session.get("current_topic"):
                 session["previous_topic"] = session.get("current_topic")
                 session["current_topic"] = new_topic
-            session["last_subject"] = new_topic
+            if not isinstance(session.get("last_subject"), dict):
+                session["last_subject"] = new_topic
 
     def get_context(self, session_id: str) -> Dict[str, Any]:
         """
@@ -521,6 +530,16 @@ class ConversationManager:
             "topic": session.get("current_topic"),
             "previous_topic": session.get("previous_topic"),
             "last_subject": session.get("last_subject"),
+            "subject_type": (
+                session.get("last_subject", {}).get("type")
+                if isinstance(session.get("last_subject"), dict)
+                else None
+            ),
+            "subject_entities": (
+                session.get("last_subject", {}).get("entities", [])
+                if isinstance(session.get("last_subject"), dict)
+                else []
+            ),
             "current_intent": session.get("current_intent"),
             "entities": session.get("entities", []),
             "active_entities": session.get(
@@ -732,9 +751,34 @@ class ConversationManager:
             return query
 
         session = self.get_session(session_id)
+        compared = session.get(
+            "last_compared_entities",
+            [],
+        )
+
+        active_comparison = bool(
+            session.get("active_comparison")
+            and len(compared) >= 2
+        )
+
         subject = session.get("last_subject") or session.get("current_topic")
         cleaned = query.strip()
         lower = cleaned.lower()
+
+        if active_comparison:
+            if lower in {
+                "which one",
+                "which is better",
+                "which is easier",
+                "what about performance",
+                "what about jobs",
+                "which would you choose",
+            }:
+                a, b = compared[0], compared[1]
+
+                return (
+                    f"{cleaned} between {a} and {b}."
+                )
 
         if lower == "give example":
             compared = session.get("last_compared_entities", [])
