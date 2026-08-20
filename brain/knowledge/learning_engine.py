@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger("aria")
 
@@ -34,82 +34,66 @@ class LearningEngine:
         self.llm_router = llm_router
         self.event_bus = event_bus
         self.learned_count = 0
+        self.statistics = {
+            "learned": 0,
+            "duplicates": 0,
+            "updates": 0,
+            "rejected": 0,
+            "contradictions": 0,
+            "documents": 0,
+            "web_sources": 0,
+            "conversations": 0,
+            "concepts": 0,
+            "relationships": 0,
+        }
 
     ############################################################
 
     async def learn(
         self,
-        text: Any,
+        text: str,
         source="conversation",
-        **kwargs,
     ):
-        """
-        Universal learning entry point.
-
-        Accepts normal text as well as structured learning metadata.
-        The engine converts structured input into learnable text rather
-        than allowing dictionaries to reach string/regex operations.
-        """
-
-        # ---------------------------------------------------------
-        # Normalize reflection / structured learning calls
-        # ---------------------------------------------------------
-
-        if text is None:
-            return
-
-        if kwargs:
-            reflection = kwargs.get("reflection")
-
-            if reflection:
-                text = reflection
-                source = "reflection"
-
-        # ---------------------------------------------------------
-        # Safely normalize structured data
-        # ---------------------------------------------------------
-
-        if isinstance(text, dict):
-            parts = []
-
-            for key, value in text.items():
-                if value is None:
-                    continue
-
-                if isinstance(value, (dict, list, tuple, set)):
-                    value = str(value)
-
-                parts.append(f"{key}: {value}")
-
-            text = "\n".join(parts)
-
-        elif not isinstance(text, str):
-            text = str(text)
-
-        text = text.strip()
 
         if not text:
             return
 
-        # ---------------------------------------------------------
-        # Ignore useless conversation
-        # ---------------------------------------------------------
+        text = text.strip()
 
         if not self._should_learn(text):
             return
 
-        # ---------------------------------------------------------
-        # Avoid duplicate knowledge
-        # ---------------------------------------------------------
-
-        existing = await self.database.search(text)
+        existing = await self.database.search(
+            text,
+            limit=5,
+        )
 
         if existing:
-            return
+            best_match = existing[0]
 
-        # ---------------------------------------------------------
-        # Store learned knowledge
-        # ---------------------------------------------------------
+            similarity = self._estimate_similarity(
+                text,
+                best_match.get("content", ""),
+            )
+
+            if similarity >= 0.90:
+                self.statistics["duplicates"] += 1
+
+                logger.info(
+                    "[LearningEngine] Duplicate knowledge rejected: %s",
+                    text[:100],
+                )
+
+                return best_match
+
+            if similarity >= 0.65:
+                self.statistics["updates"] += 1
+
+                return await self._merge_knowledge(
+                    existing=best_match,
+                    new_content=text,
+                    source=source,
+                )
 
         title = self._generate_title(text)
 
@@ -119,14 +103,10 @@ class LearningEngine:
             source=source,
         )
 
-        # ---------------------------------------------------------
-        # Update knowledge graph
-        # ---------------------------------------------------------
-
-        if self.builder is not None:
-            await self.builder.learn(text)
+        await self.builder.learn(text)
 
         self.learned_count += 1
+        self.statistics["learned"] += 1
 
         logger.info(
             "[LearningEngine] Learned: %s",
@@ -145,28 +125,34 @@ class LearningEngine:
         if not summary:
             return
 
-        if not isinstance(summary, str):
-            summary = str(summary)
-
-        await self.database.store(
-            title=str(filename),
+        record = await self.database.store(
+            title=filename,
             content=summary,
             source="document",
+            metadata={
+                "filename": filename,
+                "entities": entities or [],
+                "learned_at": datetime.utcnow(),
+            },
         )
 
-        if self.builder is not None:
-            await self.builder.learn(summary)
+        await self.builder.learn(summary)
 
         if entities:
+
             for entity in entities:
+
                 await self.graph.add_entity(entity)
 
         self.learned_count += 1
+        self.statistics["documents"] += 1
 
         logger.info(
             "[LearningEngine] Learned document %s",
             filename,
         )
+
+        return record
 
     ############################################################
 
@@ -174,20 +160,64 @@ class LearningEngine:
         self,
         query,
         answer,
+        metadata=None,
     ):
+        """
+        Learn information obtained from external sources.
+
+        External information is stored as sourced knowledge rather
+        than being treated as unquestionable truth.
+        """
+
+        if not query or not answer:
+            return
+
+        query = str(query).strip()
+        answer = str(answer).strip()
 
         if not answer:
             return
 
-        await self.database.store(
-            title=query,
-            content=answer,
-            source="web"
+        metadata = metadata or {}
+
+        existing = await self.database.search(
+            query,
+            limit=5,
         )
 
-        await self.builder.learn(answer)
+        if existing:
+            similarity = self._estimate_similarity(
+                answer,
+                existing[0].get("content", ""),
+            )
+
+            if similarity >= 0.90:
+                self.statistics["duplicates"] += 1
+                return existing[0]
+
+        record = await self.database.store(
+            title=query,
+            content=answer,
+            source="web",
+            metadata={
+                **metadata,
+                "query": query,
+                "learned_at": datetime.utcnow(),
+            },
+        )
+
+        if self.builder:
+            await self.builder.learn(answer)
 
         self.learned_count += 1
+        self.statistics["web_sources"] += 1
+
+        logger.info(
+            "[LearningEngine] Learned web knowledge: %s",
+            query,
+        )
+
+        return record
 
     ############################################################
 
@@ -212,25 +242,15 @@ class LearningEngine:
         self,
         memory,
     ):
-        """
-        Convert a memory record into normalized learnable text.
-        """
 
         if not memory:
             return
 
-        if isinstance(memory, dict):
-            key = memory.get("key")
-            value = memory.get("value")
-
-            text = f"{key}: {value}"
-
-        else:
-            text = str(memory)
+        text = f"{memory.get('key')} : {memory.get('value')}"
 
         await self.learn(
             text,
-            source="memory",
+            source="memory"
         )
 
     ############################################################
@@ -240,34 +260,12 @@ class LearningEngine:
         user,
         assistant,
     ):
-        """
-        Learn from a completed conversation while safely handling
-        structured assistant outputs.
-        """
 
-        if user is None and assistant is None:
-            return
-
-        user_text = (
-            user
-            if isinstance(user, str)
-            else str(user or "")
-        )
-
-        assistant_text = (
-            assistant
-            if isinstance(assistant, str)
-            else str(assistant or "")
-        )
-
-        text = (
-            f"User: {user_text}\n"
-            f"Assistant: {assistant_text}"
-        )
+        text = user + "\n" + assistant
 
         await self.learn(
             text,
-            source="conversation",
+            source="conversation"
         )
 
     ############################################################
@@ -297,6 +295,7 @@ class LearningEngine:
             )
 
         self.learned_count += 1
+        self.statistics["concepts"] += 1
 
     ############################################################
 
@@ -304,10 +303,19 @@ class LearningEngine:
         self,
         text,
     ):
+        """
+        Extract and persist relationships without generating
+        conversational output.
+        """
 
-        if self.builder:
+        if not text or not self.builder:
+            return
 
-            await self.builder.learn(text)
+        result = await self.builder.learn(text)
+
+        self.statistics["relationships"] += 1
+
+        return result
 
     ############################################################
 
@@ -341,6 +349,96 @@ class LearningEngine:
         await self.memory.process_and_store(
             summary
         )
+
+    ############################################################
+
+    def _estimate_similarity(
+        self,
+        first: str,
+        second: str,
+    ) -> float:
+        """
+        Lightweight lexical similarity used before deeper
+        semantic/vector evaluation.
+
+        This is intentionally not the final intelligence layer.
+        It prevents obvious duplicate knowledge from being stored.
+        """
+
+        first_words = {
+            word.lower()
+            for word in re.findall(r"\w+", first)
+            if len(word) > 2
+        }
+
+        second_words = {
+            word.lower()
+            for word in re.findall(r"\w+", second)
+            if len(word) > 2
+        }
+
+        if not first_words or not second_words:
+            return 0.0
+
+        intersection = first_words & second_words
+        union = first_words | second_words
+
+        return len(intersection) / len(union)
+
+    ############################################################
+
+    async def _merge_knowledge(
+        self,
+        existing: Dict[str, Any],
+        new_content: str,
+        source: str,
+    ):
+        """
+        Merge new information into existing knowledge instead of
+        blindly creating another record.
+        """
+
+        knowledge_id = existing.get("_id")
+
+        if not knowledge_id:
+            return await self.database.store(
+                title=self._generate_title(new_content),
+                content=new_content,
+                source=source,
+            )
+
+        old_content = existing.get("content", "")
+
+        if new_content.strip() == old_content.strip():
+            self.statistics["duplicates"] += 1
+            return existing
+
+        merged_content = (
+            f"{old_content}\n\n"
+            f"[Additional information from {source}]\n"
+            f"{new_content}"
+        )
+
+        await self.database.update(
+            knowledge_id,
+            {
+                "content": merged_content,
+                "summary": merged_content[:250],
+                "source": source,
+            },
+        )
+
+        await self.builder.learn(new_content)
+
+        self.learned_count += 1
+        self.statistics["updates"] += 1
+
+        logger.info(
+            "[LearningEngine] Knowledge updated: %s",
+            existing.get("title", knowledge_id),
+        )
+
+        return existing
 
     ############################################################
 
@@ -399,3 +497,15 @@ class LearningEngine:
             return "Knowledge"
 
         return " ".join(words[:6])
+
+    ############################################################
+
+    def statistics_summary(self) -> Dict[str, Any]:
+        """
+        Return learning telemetry for ARIA's internal monitoring.
+        """
+
+        return {
+            **self.statistics,
+            "learned_count": self.learned_count,
+        }
