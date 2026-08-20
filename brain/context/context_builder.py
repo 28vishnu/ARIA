@@ -286,9 +286,14 @@ class ContextBuilder:
         # -----------------------------------------------------
 
         ctx.update({
+            "context_version": 2,
             "query": clean_query,
             "session_id": session_id,
             "user_id": user_id,
+            "user_identity": {
+                "user_id": user_id,
+                "name": conversation_context.get("user_name"),
+            },
 
             # Persistent knowledge
             "memory": memory_items,
@@ -308,7 +313,11 @@ class ContextBuilder:
 
             # Active context situation object
             "active_context": {
-                "topic": conversation_context.get("topic") or working_topic,
+                "topic": (
+                    conversation_context.get("topic")
+                    or conversation_context.get("current_topic")
+                    or working_topic
+                ),
                 "goal": working_goal,
                 "entities": working_entities,
                 "document": active_document or working_document,
@@ -317,10 +326,15 @@ class ContextBuilder:
             # Conversation understanding
             "conversation": {
                 "previous_query": previous_query,
+                "current_query": clean_query,
                 "last_assistant_response": last_assistant_response,
                 "history": recent_conversation,
 
-                "topic": conversation_context.get("topic"),
+                "topic": (
+                    conversation_context.get("topic")
+                    or conversation_context.get("current_topic")
+                    or working_topic
+                ),
                 "previous_topic": conversation_context.get(
                     "previous_topic"
                 ),
@@ -339,8 +353,11 @@ class ContextBuilder:
                 ),
 
                 "compared_entities": conversation_context.get(
-                    "last_compared_entities",
-                    [],
+                    "compared_entities",
+                    conversation_context.get(
+                        "last_compared_entities",
+                        [],
+                    ),
                 ),
 
                 "active_comparison": conversation_context.get(
@@ -350,6 +367,18 @@ class ContextBuilder:
 
                 "last_question": last_question,
                 "last_answer": last_answer,
+                "user_name": conversation_context.get(
+                    "user_name"
+                ),
+                "last_result": conversation_context.get(
+                    "last_result"
+                ),
+                "last_result_source": conversation_context.get(
+                    "last_result_source"
+                ),
+                "last_result_operation": conversation_context.get(
+                    "last_result_operation"
+                ),
                 "last_subject": conversation_context.get(
                     "last_subject"
                 ),
@@ -380,6 +409,15 @@ class ContextBuilder:
             "knowledge": {
                 "has_relevant_memory": has_relevant_memory,
                 "memory_count": len(memory_items),
+            },
+
+            "capabilities": {
+                "conversation": True,
+                "memory": bool(self.memory_router or memory_items),
+                "knowledge_graph": bool(self.knowledge_graph),
+                "world_model": bool(self.world_model),
+                "working_memory": bool(self.working_memory),
+                "documents": document_active,
             },
 
             # Document state
