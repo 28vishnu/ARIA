@@ -104,9 +104,21 @@ class KnowledgeDatabase:
 
             "access_count": 0,
 
+            # Retrieval / learning metadata
+            "retrieval_count": 0,
+            "last_accessed_at": None,
+
+            # Knowledge quality / provenance
+            "verification_status": "unverified",
+            "source_quality": 0.5,
+
+            # Learning state
+            "successful_uses": 0,
+            "failed_uses": 0,
+
         }
 
-        if self.collection is not None:
+        if self.collection:
 
             await self.collection.update_one(
                 {
@@ -120,7 +132,7 @@ class KnowledgeDatabase:
             )
 
         # 1. Automatic Embedding Storage
-        if embedding and self.vector_db is not None:
+        if embedding and self.vector_db:
             await self.store_embedding(
                 record["_id"],
                 embedding,
@@ -291,6 +303,40 @@ class KnowledgeDatabase:
             }
         )
 
+    async def record_usage_result(
+        self,
+        knowledge_id: str,
+        success: bool,
+    ):
+        """
+        Record whether retrieved knowledge contributed
+        successfully to an interaction.
+
+        This is a learning signal, not an answer generator.
+        """
+
+        if self.collection is None:
+            return
+
+        field = (
+            "successful_uses"
+            if success
+            else "failed_uses"
+        )
+
+        await self.collection.update_one(
+            {"_id": knowledge_id},
+            {
+                "$inc": {
+                    field: 1,
+                },
+                "$set": {
+                    "last_accessed_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                },
+            },
+        )
+
     ############################################################
     # Knowledge Ranking
     ############################################################
@@ -299,19 +345,111 @@ class KnowledgeDatabase:
         self,
         results: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        # Sort using confidence, importance, access_count, updated_at
+        """
+        Rank retrieved knowledge using multiple quality signals.
+
+        This method does NOT generate answers.
+        It only determines which knowledge is most useful
+        to the reasoning layer.
+        """
+
+        def safe_float(value, default=0.0):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
         def sort_key(item):
-            conf = item.get("confidence", 0.60)
-            imp = item.get("importance", 50)
-            acc = item.get("access_count", 0)
-            updated = item.get("updated_at", datetime.utcnow())
+            confidence = safe_float(
+                item.get("confidence", 0.60),
+                0.60,
+            )
+
+            importance = safe_float(
+                item.get("importance", 50),
+                50,
+            ) / 100.0
+
+            access_count = safe_float(
+                item.get("access_count", 0),
+                0,
+            )
+
+            successful_uses = safe_float(
+                item.get("successful_uses", 0),
+                0,
+            )
+
+            failed_uses = safe_float(
+                item.get("failed_uses", 0),
+                0,
+            )
+
+            total_uses = successful_uses + failed_uses
+
+            success_rate = (
+                successful_uses / total_uses
+                if total_uses > 0
+                else 0.5
+            )
+
+            source_quality = safe_float(
+                item.get("source_quality", 0.5),
+                0.5,
+            )
+
+            verification_status = item.get(
+                "verification_status",
+                "unverified",
+            )
+
+            verification_bonus = {
+                "verified": 1.0,
+                "partially_verified": 0.7,
+                "unverified": 0.4,
+                "disputed": 0.1,
+            }.get(
+                verification_status,
+                0.4,
+            )
+
+            updated = item.get(
+                "updated_at",
+                datetime.utcnow(),
+            )
+
             if isinstance(updated, datetime):
                 updated_ts = updated.timestamp()
             else:
                 updated_ts = 0.0
-            return (conf, imp, acc, updated_ts)
 
-        return sorted(results, key=sort_key, reverse=True)
+            # Normalize recency so it has a small influence.
+            now_ts = datetime.utcnow().timestamp()
+
+            age_seconds = max(
+                0.0,
+                now_ts - updated_ts,
+            )
+
+            recency_score = 1.0 / (
+                1.0 + age_seconds / 86400.0
+            )
+
+            return (
+                confidence * 0.30
+                + importance * 0.15
+                + success_rate * 0.15
+                + source_quality * 0.15
+                + verification_bonus * 0.15
+                + recency_score * 0.05
+                + min(access_count / 100.0, 1.0) * 0.05
+            )
+
+        return sorted(
+            results,
+            key=sort_key,
+            reverse=True,
+        )
 
     ############################################################
     # Related Knowledge & Find Related
@@ -502,13 +640,23 @@ class KnowledgeDatabase:
         results.extend(text_results)
 
         # 2. Semantic Search
-        if embedding and self.vector_db is not None:
+        if embedding and self.vector_db:
             semantic_res = await self.semantic_search(embedding, limit=limit)
             # Extract IDs from semantic search and fetch from mongo
             ids = []
-            if semantic_res and "ids" in semantic_res and semantic_res["ids"]:
-                ids = semantic_res["ids"][0]
-            if ids and self.collection is not None:
+
+            if isinstance(semantic_res, dict):
+                raw_ids = semantic_res.get("ids")
+
+                if isinstance(raw_ids, list):
+                    if raw_ids and isinstance(
+                        raw_ids[0],
+                        list,
+                    ):
+                        ids = raw_ids[0]
+                    else:
+                        ids = raw_ids
+            if ids and self.collection:
                 cursor = self.collection.find({"_id": {"$in": ids}, "active": True})
                 sem_docs = await cursor.to_list(limit)
                 results.extend(sem_docs)
@@ -529,5 +677,24 @@ class KnowledgeDatabase:
                 unique_results.append(r)
 
         # Rank and limit
-        ranked = await self.rank_results(unique_results)
-        return ranked[:limit]
+        ranked = await self.rank_results(
+            unique_results
+        )
+
+        selected = ranked[:limit]
+
+        # Record which knowledge was actually retrieved.
+        for item in selected:
+            knowledge_id = item.get("_id")
+
+            if knowledge_id:
+                try:
+                    await self.increment_access(
+                        knowledge_id
+                    )
+                except Exception:
+                    logger.exception(
+                        "[KnowledgeDB] Failed to update access metadata."
+                    )
+
+        return selected
