@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
 import logging
 import asyncio
 
@@ -37,6 +38,90 @@ class KnowledgeManager:
         self.web_search = web_search
         self.llm_router = llm_router
         self.event_bus = event_bus
+
+    ###########################################################
+    # Evidence Normalization
+    ###########################################################
+
+    def _normalize_evidence(
+        self,
+        item: Dict[str, Any],
+        default_source: str = "unknown",
+    ) -> Dict[str, Any]:
+        """
+        Normalize every knowledge result into a common evidence format.
+
+        This allows ARIA to compare evidence from memory, documents,
+        databases, graphs, web sources, tools, and future knowledge
+        providers using the same structure.
+        """
+
+        if not isinstance(item, dict):
+            item = {
+                "content": str(item),
+            }
+
+        content = str(
+            item.get("content", "")
+        ).strip()
+
+        source = item.get(
+            "source",
+            default_source,
+        )
+
+        try:
+            confidence = float(
+                item.get("confidence", 0.5)
+            )
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        try:
+            importance = float(
+                item.get("importance", 50)
+            )
+        except (TypeError, ValueError):
+            importance = 50.0
+
+        confidence = max(
+            0.0,
+            min(confidence, 1.0),
+        )
+
+        importance = max(
+            0.0,
+            min(importance, 100.0),
+        )
+
+        return {
+            **item,
+            "content": content,
+            "source": source,
+            "confidence": confidence,
+            "importance": importance,
+
+            # Evidence/provenance fields
+            "evidence_type": item.get(
+                "evidence_type",
+                "retrieved",
+            ),
+            "provenance": item.get(
+                "provenance",
+                source,
+            ),
+            "freshness": item.get(
+                "freshness",
+                0.5,
+            ),
+            "relevance": item.get(
+                "relevance",
+                0.5,
+            ),
+            "verified": bool(
+                item.get("verified", False)
+            ),
+        }
 
     ###########################################################
     # Unified Search Entrypoint
@@ -205,51 +290,172 @@ class KnowledgeManager:
         self,
         *sources,
     ) -> List[Dict[str, Any]]:
+        """
+        Merge evidence from all available knowledge systems.
+
+        Every result is normalized into a common evidence structure.
+        Exact duplicates are removed while preserving provenance.
+        """
+
         flattened = []
-        seen = set()
+        seen = {}
+
         for source_list in sources:
+
             if not source_list:
                 continue
+
             if not isinstance(source_list, list):
                 source_list = [source_list]
-            for item in source_list:
-                if isinstance(item, dict):
-                    content = item.get("content", "")
-                else:
-                    content = str(item)
-                    item = {
-                        "source": "unknown",
-                        "confidence": 0.5,
-                        "importance": 50,
-                        "content": content,
+
+            for raw_item in source_list:
+
+                item = self._normalize_evidence(
+                    raw_item
+                    if isinstance(raw_item, dict)
+                    else {
+                        "content": str(raw_item)
                     }
-                if content not in seen:
-                    seen.add(content)
-                    flattened.append(item)
+                )
+
+                content = item.get(
+                    "content",
+                    "",
+                ).strip()
+
+                if not content:
+                    continue
+
+                key = content.lower()
+
+                if key in seen:
+                    existing = seen[key]
+
+                    existing_sources = existing.setdefault(
+                        "supporting_sources",
+                        [],
+                    )
+
+                    source = item.get(
+                        "source",
+                        "unknown",
+                    )
+
+                    if source not in existing_sources:
+                        existing_sources.append(source)
+
+                    # Multiple independent sources increase
+                    # evidence strength without blindly forcing
+                    # confidence to 1.0.
+                    existing["evidence_count"] = (
+                        existing.get(
+                            "evidence_count",
+                            1,
+                        ) + 1
+                    )
+
+                    continue
+
+                item["supporting_sources"] = [
+                    item.get(
+                        "source",
+                        "unknown",
+                    )
+                ]
+
+                item["evidence_count"] = 1
+
+                seen[key] = item
+                flattened.append(item)
+
         return flattened
 
     async def rank_results(
         self,
         results: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        source_priority = {
-            "document": 7,
-            "working_memory": 6,
-            "memory": 5,
-            "knowledge_database": 4,
-            "knowledge_graph": 3,
-            "world_model": 2,
-            "skill": 1,
-        }
+        """
+        Rank evidence using multiple quality signals.
+
+        Ranking is deliberately not based solely on source type.
+        """
+
+        def clamp(value, minimum=0.0, maximum=1.0):
+            return max(
+                minimum,
+                min(float(value), maximum),
+            )
 
         def sort_key(item):
-            src = item.get("source", "unknown")
-            prio = source_priority.get(src, 0)
-            conf = item.get("confidence", 0.5)
-            imp = item.get("importance", 50)
-            return (prio, conf, imp)
 
-        return sorted(results, key=sort_key, reverse=True)
+            confidence = clamp(
+                item.get(
+                    "confidence",
+                    0.5,
+                )
+            )
+
+            relevance = clamp(
+                item.get(
+                    "relevance",
+                    0.5,
+                )
+            )
+
+            freshness = clamp(
+                item.get(
+                    "freshness",
+                    0.5,
+                )
+            )
+
+            importance = clamp(
+                item.get(
+                    "importance",
+                    50,
+                ) / 100.0
+            )
+
+            evidence_count = min(
+                int(
+                    item.get(
+                        "evidence_count",
+                        1,
+                    )
+                ),
+                5,
+            ) / 5.0
+
+            verified = 1.0 if item.get(
+                "verified",
+                False,
+            ) else 0.0
+
+            score = (
+                confidence * 0.30
+                + relevance * 0.30
+                + freshness * 0.10
+                + importance * 0.10
+                + evidence_count * 0.10
+                + verified * 0.10
+            )
+
+            return score
+
+        for item in results:
+            item["evidence_score"] = round(
+                sort_key(item),
+                4,
+            )
+
+        return sorted(
+            results,
+            key=lambda item: item.get(
+                "evidence_score",
+                0.0,
+            ),
+            reverse=True,
+        )
 
     async def retrieve(
         self,
