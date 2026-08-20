@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import time
+import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -322,6 +323,57 @@ class ReasoningEngine:
         )
         return unique_agents
 
+    def _extract_comparison_entities(
+        self,
+        query: str,
+        existing_entities: Optional[List[str]] = None,
+    ) -> List[str]:
+        """
+        Detect entities explicitly being compared in the current request.
+
+        This is intentionally lightweight. It preserves explicit comparison
+        state without allowing long-term memory to hijack the conversation.
+        """
+
+        entities = list(existing_entities or [])
+        text = str(query or "").strip()
+
+        if not text:
+            return list(dict.fromkeys(entities))
+
+        comparison_patterns = [
+            r"\bbetween\s+(.+?)\s+and\s+(.+?)(?:[?.!,]|$)",
+            r"\bcompare\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!,]|$)",
+            r"\b(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?:[?.!,]|$)",
+        ]
+
+        for pattern in comparison_patterns:
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            if not match:
+                continue
+
+            left = match.group(1).strip()
+            right = match.group(2).strip()
+
+            for value in (left, right):
+                value = re.sub(
+                    r"\s+",
+                    " ",
+                    value,
+                ).strip(" .,!?:;")
+
+                if value and len(value) <= 100:
+                    entities.append(value)
+
+            break
+
+        return list(dict.fromkeys(entities))
+
     async def track_conversation(
         self,
         context: Dict[str, Any],
@@ -373,6 +425,43 @@ class ReasoningEngine:
         if not isinstance(compared_entities, list):
             compared_entities = []
 
+        # Recover comparison entities from the recent conversation
+        # when the conversation manager did not explicitly persist them.
+        recent_comparison_entities = []
+
+        for item in history[-10:]:
+            if not isinstance(item, dict):
+                continue
+
+            previous_user = str(
+                item.get("user", "")
+            ).strip()
+
+            if previous_user:
+                recent_comparison_entities = (
+                    self._extract_comparison_entities(
+                        previous_user,
+                        recent_comparison_entities,
+                    )
+                )
+
+        current_query = str(
+            context.get("query", "")
+        ).strip()
+
+        compared_entities = self._extract_comparison_entities(
+            current_query,
+            compared_entities,
+        )
+
+        if recent_comparison_entities:
+            compared_entities = list(
+                dict.fromkeys(
+                    recent_comparison_entities
+                    + compared_entities
+                )
+            )
+
         active_subject = (
             conv.get("active_subject")
             or conv.get("last_subject")
@@ -383,6 +472,12 @@ class ReasoningEngine:
             conv.get("active_comparison")
             or len(compared_entities) >= 2
         )
+
+        # A comparison remains active while the user is asking
+        # follow-up questions about the same compared entities.
+        if active_comparison:
+            active_topic = active_topic or "comparison"
+            active_subject = active_subject or compared_entities
 
         last_user = conv.get("last_user")
         last_assistant = conv.get("last_assistant")
@@ -430,6 +525,49 @@ class ReasoningEngine:
             return clean_query
 
         conversation_state = await self.track_conversation(context)
+
+        # Deterministic comparison resolution for short follow-ups.
+        # This prevents the LLM from losing an already-established
+        # comparison when the latest message contains pronouns or
+        # phrases such as "which one", "what about performance", etc.
+
+        followup_patterns = (
+            "which one",
+            "which is better",
+            "which is easier",
+            "what about",
+            "how about",
+            "why",
+            "tell me more",
+            "continue",
+            "which would you choose",
+            "what would you choose",
+        )
+
+        lower_query = clean_query.lower()
+
+        if (
+            conversation_state.get("active_comparison")
+            and conversation_state.get("compared_entities")
+            and any(
+                phrase in lower_query
+                for phrase in followup_patterns
+            )
+        ):
+            entities = conversation_state["compared_entities"]
+
+            if len(entities) >= 2:
+                comparison = " and ".join(entities)
+
+                logger.info(
+                    "[Reasoning] Preserving active comparison: %s",
+                    comparison,
+                )
+
+                return (
+                    f"{clean_query} "
+                    f"Compare the relevant options: {comparison}."
+                )
 
         reference_context = {
             "active_topic": conversation_state.get("active_topic"),
@@ -732,6 +870,16 @@ Return ONLY the standalone request.
     ) -> Dict[str, Any]:
         memory_query = query
 
+        if conversation_state:
+            context = getattr(self, "_temp_context", {})
+            context["conversation_state_for_memory"] = {
+                "active_topic": conversation_state.get("active_topic"),
+                "active_subject": conversation_state.get("active_subject"),
+                "active_entities": conversation_state.get("active_entities", []),
+                "compared_entities": conversation_state.get("compared_entities", []),
+                "active_comparison": conversation_state.get("active_comparison", False),
+            }
+
         memories_task = (
             asyncio.create_task(self.memory_router.recall(memory_query))
             if requires_memory and self.memory_router and hasattr(self.memory_router, "recall")
@@ -777,62 +925,18 @@ Return ONLY the standalone request.
         memories = []
         for m in (raw_memories if isinstance(raw_memories, list) else [raw_memories] if raw_memories else []):
             content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
-            if isinstance(m, dict):
-                memories.append({
-                    "source": "memory",
-                    "confidence": float(m.get("confidence", 0.5)),
-                    "importance": float(m.get("importance", 50)),
-                    "content": content,
-                    "metadata": m.get("metadata", {}),
-                })
-            else:
-                memories.append({
-                    "source": "memory",
-                    "confidence": 0.5,
-                    "importance": 50,
-                    "content": content,
-                    "metadata": {},
-                })
+            memories.append({"source": "memory", "confidence": 0.95, "importance": 85, "content": content})
 
         knowledge = []
         for k in (raw_knowledge if isinstance(raw_knowledge, list) else [raw_knowledge] if raw_knowledge else []):
             content = k.get("content", str(k)) if isinstance(k, dict) else str(k)
-            if isinstance(k, dict):
-                knowledge.append({
-                    "source": "knowledge_database",
-                    "confidence": float(k.get("confidence", 0.5)),
-                    "importance": float(k.get("importance", 50)),
-                    "content": content,
-                    "metadata": k.get("metadata", {}),
-                })
-            else:
-                knowledge.append({
-                    "source": "knowledge_database",
-                    "confidence": 0.5,
-                    "importance": 50,
-                    "content": content,
-                    "metadata": {},
-                })
+            confidence = k.get("confidence", 0.91) if isinstance(k, dict) else 0.91
+            importance = k.get("importance", 50) if isinstance(k, dict) else 50
+            knowledge.append({"source": "knowledge_database", "confidence": confidence, "importance": importance, "content": content})
 
         graph = []
         for g in (raw_graph if isinstance(raw_graph, list) else [raw_graph] if raw_graph else []):
-            content = g.get("content", str(g)) if isinstance(g, dict) else str(g)
-            if isinstance(g, dict):
-                graph.append({
-                    "source": "knowledge_graph",
-                    "confidence": float(g.get("confidence", 0.5)),
-                    "importance": float(g.get("importance", 50)),
-                    "content": content,
-                    "metadata": g.get("metadata", {}),
-                })
-            else:
-                graph.append({
-                    "source": "knowledge_graph",
-                    "confidence": 0.5,
-                    "importance": 50,
-                    "content": content,
-                    "metadata": {},
-                })
+            graph.append({"source": "knowledge_graph", "confidence": 0.88, "importance": 60, "content": str(g)})
 
         world = {}
         if isinstance(raw_world, dict):
@@ -842,46 +946,8 @@ Return ONLY the standalone request.
 
         return {"memories": memories, "knowledge": knowledge, "graph": graph, "world": world}
 
-    async def multi_hop_reasoning(
-        self,
-        query: str,
-        evidence: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """
-        Prepare evidence for multi-hop reasoning.
-
-        Phase 0 deliberately keeps this non-generative.
-        Advanced hypothesis expansion, contradiction analysis,
-        tool-assisted reasoning and iterative reasoning belong
-        to later phases.
-        """
-
-        if not evidence:
-            return []
-
-        normalized = []
-
-        for item in evidence:
-            if not isinstance(item, dict):
-                continue
-
-            content = str(item.get("content", "")).strip()
-
-            if not content:
-                continue
-
-            normalized.append({
-                **item,
-                "query": query,
-                "confidence": float(
-                    item.get("confidence", 0.5)
-                ),
-                "importance": float(
-                    item.get("importance", 50)
-                ),
-            })
-
-        return normalized
+    async def multi_hop_reasoning(self, query: str, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return list(evidence)
 
     async def merge_evidence(self, memories: List[Dict[str, Any]], knowledge: List[Dict[str, Any]], graph: List[Dict[str, Any]], world: Dict[str, Any]) -> List[Dict[str, Any]]:
         all_items = memories + knowledge + graph
@@ -899,46 +965,9 @@ Return ONLY the standalone request.
                 unique_evidence.append(item)
         return unique_evidence
 
-    async def rank_evidence(
-        self,
-        evidence: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """
-        Rank evidence by actual confidence, importance and relevance.
-
-        Source type is only a secondary tie-breaker.
-        The reasoning engine must never assume that one source is
-        automatically more truthful than another.
-        """
-
-        source_priority = {
-            "knowledge_database": 3,
-            "knowledge_graph": 2,
-            "world_model": 2,
-            "memory": 1,
-        }
-
-        def score(item):
-            confidence = float(item.get("confidence", 0.5))
-            importance = float(item.get("importance", 50))
-            relevance = float(item.get("relevance", 0.5))
-            source = source_priority.get(
-                item.get("source", "unknown"),
-                0,
-            )
-
-            return (
-                confidence * 0.50
-                + relevance * 0.30
-                + (importance / 100.0) * 0.15
-                + source * 0.05
-            )
-
-        return sorted(
-            evidence,
-            key=score,
-            reverse=True,
-        )
+    async def rank_evidence(self, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        source_priority = {"memory": 4, "knowledge_database": 3, "knowledge_graph": 2, "world_model": 1}
+        return sorted(evidence, key=lambda item: (source_priority.get(item.get("source", "unknown"), 0), item.get("confidence", 0.5), item.get("importance", 50)), reverse=True)
 
     async def detect_conflicts(self, evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
         sources_found = set(item.get("source") for item in evidence)
@@ -1014,6 +1043,7 @@ Return JSON:
         Core decision pipeline determining precisely what sub-pipelines are required
         and returning a comprehensive ReasoningResult object.
         """
+        self._temp_context = context
         user_query = str(context.get("query", "")).strip()
 
         semantic_context = self._build_semantic_context()
@@ -1208,11 +1238,19 @@ Return JSON:
             requires_memory=requires_memory,
             conversation_state=conv_tracking,
         )
-        memories = retrieval["memories"] if requires_memory else []
-        knowledge = retrieval["knowledge"]
+        raw_memories = retrieval["memories"] if requires_memory else []
+        knowledge = retrieval["knowledge"] if requires_documents else []
         graph_results = retrieval["graph"]
         world_state = retrieval["world"]
         reasoning_steps.append("Retrieved context evidence")
+
+        memory_summary_parts = []
+        for m in raw_memories:
+            content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
+            memory_summary_parts.append(content)
+        memory_summary = ". ".join(memory_summary_parts)
+
+        memories = [{"source": "memory", "confidence": 0.95, "importance": 85, "content": memory_summary}] if memory_summary else []
 
         merged_evidence = await self.merge_evidence(memories, knowledge, graph_results, world_state)
         evidence = await self.multi_hop_reasoning(query, merged_evidence)
