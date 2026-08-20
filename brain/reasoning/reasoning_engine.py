@@ -969,11 +969,152 @@ Return ONLY the standalone request.
         source_priority = {"memory": 4, "knowledge_database": 3, "knowledge_graph": 2, "world_model": 1}
         return sorted(evidence, key=lambda item: (source_priority.get(item.get("source", "unknown"), 0), item.get("confidence", 0.5), item.get("importance", 50)), reverse=True)
 
-    async def detect_conflicts(self, evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
-        sources_found = set(item.get("source") for item in evidence)
-        if len(sources_found) > 1 and len(evidence) > 2:
-            return {"conflict": False, "sources": list(sources_found)}
-        return {"conflict": False, "sources": []}
+    async def detect_conflicts(
+        self,
+        evidence: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Detect disagreements between independent evidence sources.
+
+        ARIA must never assume that multiple sources automatically agree.
+        Conflicts are surfaced to the higher-level response system so that
+        ARIA can verify, qualify, or prefer stronger evidence.
+        """
+
+        if not evidence:
+            return {
+                "conflict": False,
+                "sources": [],
+                "conflicts": [],
+                "confidence": 0.0,
+            }
+
+        sources = list(
+            dict.fromkeys(
+                item.get("source", "unknown")
+                for item in evidence
+            )
+        )
+
+        conflicts = []
+
+        # ---------------------------------------------------------
+        # Group evidence by normalized subject/topic when available
+        # ---------------------------------------------------------
+
+        grouped = {}
+
+        for item in evidence:
+            content = str(
+                item.get("content", "")
+            ).strip()
+
+            if not content:
+                continue
+
+            subject = str(
+                item.get("subject")
+                or item.get("topic")
+                or ""
+            ).strip().lower()
+
+            if not subject:
+                # Conservative fallback: use the first meaningful
+                # portion of the evidence as its comparison key.
+                subject = re.sub(
+                    r"\s+",
+                    " ",
+                    content[:120].lower(),
+                )
+
+            grouped.setdefault(
+                subject,
+                []
+            ).append(item)
+
+        # ---------------------------------------------------------
+        # Detect explicit contradictory signals
+        # ---------------------------------------------------------
+
+        contradiction_pairs = [
+            ("true", "false"),
+            ("yes", "no"),
+            ("enabled", "disabled"),
+            ("active", "inactive"),
+            ("available", "unavailable"),
+            ("supports", "does not support"),
+            ("supported", "unsupported"),
+            ("increase", "decrease"),
+            ("increases", "decreases"),
+            ("higher", "lower"),
+            ("before", "after"),
+        ]
+
+        for subject, items in grouped.items():
+
+            if len(items) < 2:
+                continue
+
+            normalized = [
+                re.sub(
+                    r"\s+",
+                    " ",
+                    str(item.get("content", "")).lower(),
+                )
+                for item in items
+            ]
+
+            for left_index in range(len(normalized)):
+                for right_index in range(
+                    left_index + 1,
+                    len(normalized),
+                ):
+                    left = normalized[left_index]
+                    right = normalized[right_index]
+
+                    for positive, negative in contradiction_pairs:
+
+                        if (
+                            positive in left
+                            and negative in right
+                        ) or (
+                            negative in left
+                            and positive in right
+                        ):
+                            conflicts.append({
+                                "subject": subject,
+                                "source_a": items[left_index].get(
+                                    "source",
+                                    "unknown",
+                                ),
+                                "source_b": items[right_index].get(
+                                    "source",
+                                    "unknown",
+                                ),
+                                "type": "explicit_contradiction",
+                            })
+
+                            break
+
+        # ---------------------------------------------------------
+        # Calculate conflict confidence
+        # ---------------------------------------------------------
+
+        conflict_detected = bool(conflicts)
+
+        if conflict_detected:
+            confidence = 0.45
+        elif len(sources) >= 2:
+            confidence = 0.80
+        else:
+            confidence = 0.65
+
+        return {
+            "conflict": conflict_detected,
+            "sources": sources,
+            "conflicts": conflicts,
+            "confidence": confidence,
+        }
 
     async def choose_agents(self, query: str, context: Dict[str, Any]) -> List[Any]:
         if not self.agent_manager or not hasattr(self.agent_manager, "agents"):
