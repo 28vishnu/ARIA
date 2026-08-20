@@ -90,9 +90,59 @@ class MemoryEngine:
 
     async def prefetch(self, route, session_id):
         """
-        Prepare only the memory needed for this route.
+        Prepare memory required by the current route.
+
+        Prefetch is intentionally lightweight. It does not generate
+        responses and does not mutate long-term memory. It prepares
+        route/session context so downstream reasoning can retrieve
+        the correct memories without repeatedly rebuilding state.
         """
-        return
+
+        if not route:
+            return {}
+
+        route_name = getattr(route, "name", None)
+
+        if route_name is None:
+            route_name = str(route)
+
+        route_name = str(route_name).lower().strip()
+
+        context = {
+            "route": route_name,
+            "session_id": session_id,
+            "memory_available": self.memory_col is not None,
+        }
+
+        # Personal-memory routes benefit from recent conversation context.
+        if any(
+            token in route_name
+            for token in (
+                "memory",
+                "conversation",
+                "chat",
+                "personal",
+                "profile",
+            )
+        ):
+            context["recent_context"] = self.recent_context(limit=5)
+
+        # Keep the prepared state available to the working-memory layer
+        # when one is connected.
+        if self.working_memory is not None:
+            try:
+                semantic = self.working_memory.semantic()
+
+                context["semantic_memory_available"] = semantic is not None
+            except Exception:
+                logger.exception(
+                    "[MemoryEngine] Semantic memory prefetch failed."
+                )
+                context["semantic_memory_available"] = False
+        else:
+            context["semantic_memory_available"] = False
+
+        return context
 
     def _update_semantic_memory(
         self,
