@@ -305,6 +305,14 @@ async def bootstrap_application() -> ServiceRegistry:
         event_bus=event_bus,
     )
 
+    # Connect LearningEngine to MemoryEngine
+    if memory_engine is not None:
+        memory_engine.learning_engine = learning_engine
+
+        logger.info(
+            "[Bootstrap] LearningEngine connected to MemoryEngine."
+        )
+
     knowledge_manager = KnowledgeManager(
         document_ai=doc_intelligence,
         memory_engine=memory_engine,
