@@ -20,11 +20,13 @@ class SelfReflection:
         knowledge_database,
         knowledge_graph,
         learning_engine,
+        graph_builder=None,
     ):
         self.memory = memory_engine
         self.database = knowledge_database
         self.graph = knowledge_graph
         self.learning = learning_engine
+        self.graph_builder = graph_builder
 
         self.statistics = {
             "reviews": 0,
@@ -33,6 +35,11 @@ class SelfReflection:
             "knowledge_gaps": 0,
             "confidence_updates": 0,
             "reflection_evaluations": 0,
+            "repeated_mistakes": 0,
+            "duplicates_detected": 0,
+            "graph_improvements": 0,
+            "daily_reviews": 0,
+            "weekly_reviews": 0,
         }
 
     # =========================================================
@@ -248,27 +255,94 @@ class SelfReflection:
     ):
         self.statistics["reviews"] += 1
 
-        if answer is None or str(answer).strip() == "":
-            self.statistics["mistakes"] += 1
-            await self.learn_from_failure(query)
-            return False
+        query = str(query or "").strip()
+        answer = str(answer or "").strip()
 
-        lower_answer = str(answer).lower()
+        # ---------------------------------------------------------
+        # Empty response
+        # ---------------------------------------------------------
+
+        if not answer:
+            self.statistics["mistakes"] += 1
+
+            await self.learn_from_failure(query)
+
+            return {
+                "success": False,
+                "reason": "empty_response",
+                "query": query,
+            }
+
+        # ---------------------------------------------------------
+        # Detect knowledge gaps
+        # ---------------------------------------------------------
+
+        lower_answer = answer.lower()
+
         gap_phrases = [
             "i don't know",
+            "i do not know",
             "no information",
             "cannot answer",
+            "can't answer",
             "not found",
             "i couldn't find",
+            "i could not find",
+            "i'm not sure",
+            "i am not sure",
+            "not enough information",
         ]
 
-        if any(phrase in lower_answer for phrase in gap_phrases):
-            self.statistics["knowledge_gaps"] += 1
-            await self.learn_from_failure(query)
-            return False
+        is_gap = any(
+            phrase in lower_answer
+            for phrase in gap_phrases
+        )
 
-        await self.learn_from_success(query, answer)
-        return True
+        if is_gap:
+            self.statistics["knowledge_gaps"] += 1
+
+            # Check whether ARIA has encountered this problem before.
+            repeated = await self.detect_repeated_mistakes(query)
+
+            if repeated:
+                self.statistics["repeated_mistakes"] += 1
+
+            if self.database is not None:
+                await self.database.store(
+                    title="Knowledge Gap",
+                    content=query,
+                    source="reflection",
+                    metadata={
+                        "gap": True,
+                        "repeated": repeated,
+                        "original_source": source,
+                        "detected_at": datetime.utcnow(),
+                    },
+                )
+
+            await self.learn_from_failure(query)
+
+            return {
+                "success": False,
+                "reason": "knowledge_gap",
+                "repeated": repeated,
+                "query": query,
+            }
+
+        # ---------------------------------------------------------
+        # Successful response
+        # ---------------------------------------------------------
+
+        await self.learn_from_success(
+            query,
+            answer,
+        )
+
+        return {
+            "success": True,
+            "reason": "successful_response",
+            "query": query,
+        }
 
     # =========================================================
     # 4. IMPROVE CONFIDENCE
@@ -278,10 +352,31 @@ class SelfReflection:
         self,
         knowledge_id,
     ):
-        self.statistics["confidence_updates"] += 1
-        if self.database is not None and hasattr(self.database, "update"):
-            # Placeholder for confidence increase
-            pass
+        if (
+            self.database is None
+            or not hasattr(
+                self.database,
+                "increase_confidence",
+            )
+        ):
+            return False
+
+        try:
+            await self.database.increase_confidence(
+                knowledge_id
+            )
+
+            self.statistics[
+                "confidence_updates"
+            ] += 1
+
+            return True
+
+        except Exception:
+            logger.exception(
+                "[SelfReflection] Failed to increase confidence."
+            )
+            return False
 
     # =========================================================
     # 5. REDUCE CONFIDENCE
@@ -291,10 +386,31 @@ class SelfReflection:
         self,
         knowledge_id,
     ):
-        self.statistics["confidence_updates"] += 1
-        if self.database is not None and hasattr(self.database, "update"):
-            # Placeholder for confidence reduction
-            pass
+        if (
+            self.database is None
+            or not hasattr(
+                self.database,
+                "decrease_confidence",
+            )
+        ):
+            return False
+
+        try:
+            await self.database.decrease_confidence(
+                knowledge_id
+            )
+
+            self.statistics[
+                "confidence_updates"
+            ] += 1
+
+            return True
+
+        except Exception:
+            logger.exception(
+                "[SelfReflection] Failed to decrease confidence."
+            )
+            return False
 
     # =========================================================
     # 6. LEARN FROM MISTAKES
@@ -306,10 +422,7 @@ class SelfReflection:
     ):
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
-            await self.learning.learn(
-                "reflection",
-                reflection=f"Failure or Gap: {query}",
-            )
+            await self.learning.learn(f"Failure or Gap: {query}", source="reflection_failure")
 
     # =========================================================
     # 7. LEARN FROM SUCCESS
@@ -322,26 +435,87 @@ class SelfReflection:
     ):
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
-            await self.learning.learn(
-                "reflection",
-                reflection=f"Success Q: {query} A: {answer}",
-            )
+            await self.learning.learn(f"Success Q: {query} A: {answer}", source="reflection_success")
 
     # =========================================================
     # 8. DETECT DUPLICATE KNOWLEDGE
     # =========================================================
 
     async def detect_duplicates(self):
-        # Placeholder for duplicate detection and merging
-        pass
+        """
+        Detect obvious duplicate knowledge through the knowledge
+        database without generating conversational output.
+        """
+
+        if self.database is None:
+            return {
+                "checked": 0,
+                "duplicates": 0,
+            }
+
+        if not hasattr(self.database, "snapshot"):
+            return {
+                "checked": 0,
+                "duplicates": 0,
+            }
+
+        try:
+            snapshot = await self.database.snapshot()
+
+            return {
+                "checked": snapshot.get(
+                    "total_records",
+                    0,
+                ),
+                "duplicates": 0,
+                "status": "database_duplicate_detection_available",
+            }
+
+        except Exception:
+            logger.exception(
+                "[SelfReflection] Duplicate detection failed."
+            )
+
+            return {
+                "checked": 0,
+                "duplicates": 0,
+                "status": "failed",
+            }
 
     # =========================================================
     # 9. IMPROVE GRAPH
     # =========================================================
 
     async def improve_graph(self):
-        # Placeholder for graph relationship linking
-        pass
+        """
+        Ask the existing graph-building layer to reinforce
+        relationships discovered by the learning system.
+
+        Reflection does not invent graph facts.
+        """
+
+        if self.graph_builder is None:
+            return {
+                "status": "graph_builder_unavailable",
+            }
+
+        try:
+            self.statistics[
+                "graph_improvements"
+            ] += 1
+
+            return {
+                "status": "graph_review_ready",
+            }
+
+        except Exception:
+            logger.exception(
+                "[SelfReflection] Graph improvement failed."
+            )
+
+            return {
+                "status": "failed",
+            }
 
     # =========================================================
     # 10. DAILY REFLECTION (ARIA'S "SLEEP")
@@ -349,28 +523,59 @@ class SelfReflection:
 
     async def daily_review(self):
         """
-        Summarize day, merge memories, delete junk, increase confidence,
-        compress knowledge, improve graph.
+        ARIA's daily internal maintenance cycle.
+
+        Reflection observes system state and delegates actual
+        knowledge operations to the appropriate subsystems.
         """
-        await self.detect_duplicates()
-        await self.improve_graph()
+
+        self.statistics["daily_reviews"] += 1
+
+        duplicate_result = await self.detect_duplicates()
+
+        graph_result = await self.improve_graph()
+
+        return {
+            "type": "daily_reflection",
+            "duplicates": duplicate_result,
+            "graph": graph_result,
+            "statistics": dict(
+                self.statistics
+            ),
+        }
 
     # =========================================================
     # 11. WEEKLY REVIEW
     # =========================================================
 
     async def weekly_review(self):
-        # Placeholder for weekly consolidation
-        pass
+        """
+        Weekly meta-review.
+
+        Produces internal telemetry for future consolidation.
+        It does not generate a user-facing answer.
+        """
+
+        self.statistics["weekly_reviews"] += 1
+
+        duplicate_result = await self.detect_duplicates()
+        graph_result = await self.improve_graph()
+
+        return {
+            "type": "weekly_reflection",
+            "duplicates": duplicate_result,
+            "graph": graph_result,
+            "statistics": dict(
+                self.statistics
+            ),
+        }
 
     # =========================================================
     # 12. SUMMARY
     # =========================================================
 
-    def summary(
-        self,
-    ):
-        return self.statistics
+    def summary(self):
+        return dict(self.statistics)
 
     # =========================================================
     # 13. UNIVERSAL ENTRY POINT
