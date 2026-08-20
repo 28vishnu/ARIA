@@ -34,10 +34,21 @@ IMPORTANCE = {
 
 class MemoryEngine:
 
-    def __init__(self, mongo_db, llm_router=None, working_memory=None):
+    def __init__(
+        self,
+        mongo_db,
+        llm_router=None,
+        working_memory=None,
+        learning_engine=None,
+    ):
         self.db = mongo_db
         self.llm_router = llm_router
-        self.working_memory = working_memory if working_memory is not None else None
+        self.working_memory = (
+            working_memory
+            if working_memory is not None
+            else None
+        )
+        self.learning_engine = learning_engine
 
         self.memory_col = (
             mongo_db["personal_memory"]
