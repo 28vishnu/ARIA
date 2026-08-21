@@ -191,172 +191,250 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
 # TELEGRAM RESPONSE FORMATTER
 # =============================================================
 
-def format_telegram_response(text: str) -> str:
+def markdown_to_telegram_html(text: str) -> str:
     """
-    Convert ARIA Markdown-style output into Telegram HTML.
+    Convert ARIA Markdown into clean Telegram HTML.
 
-    Features:
-    - Markdown comparison tables -> Telegram-friendly comparison cards
-    - Markdown blockquotes -> Telegram blockquotes
-    - **bold** -> <b>bold</b>
-    - *italic* -> <i>italic</i>
-    - `inline code` -> <code>inline code</code>
-    - fenced code -> <pre><code>...</code></pre>
-
-    Important:
-    - Never allow Markdown tables to reach Telegram unchanged.
-    - Never allow HTML supplied by the model/user to break Telegram parsing.
-    - Preserve fenced code exactly.
+    Goals:
+    - Real Telegram bold/italic
+    - No visible Markdown markers
+    - Proper blockquotes
+    - Proper code blocks
+    - Clean mobile-friendly lists
+    - Preserve comparison structure
     """
 
     if not text:
         return ""
 
-    text = str(text).strip()
+    text = str(text).replace("\r\n", "\n").replace("\r", "\n")
 
-    # =========================================================
-    # 1. PROTECT FENCED CODE BLOCKS
-    # =========================================================
+    # ---------------------------------------------------------
+    # 1. PROTECT CODE BLOCKS
+    # ---------------------------------------------------------
 
-    code_blocks = []
+    protected = []
 
-    def protect_code(match):
-        language = match.group(1) or ""
-        code = match.group(2).strip()
-
-        placeholder = f"__ARIA_CODE_BLOCK_{len(code_blocks)}__"
-
-        code_blocks.append(
-            f"<pre><code>{html.escape(code)}</code></pre>"
-        )
-
-        return placeholder
+    def protect(match):
+        index = len(protected)
+        protected.append(match.group(0))
+        return f"__ARIA_PROTECTED_{index}__"
 
     text = re.sub(
-        r"```([^\n]*)\n?(.*?)```",
-        protect_code,
+        r"```(?:[\w+#.-]+)?\n?.*?```",
+        protect,
         text,
         flags=re.DOTALL,
     )
 
-    # =========================================================
-    # 2. CONVERT MARKDOWN TABLES
+    # ---------------------------------------------------------
+    # 2. PROTECT INLINE CODE
+    # ---------------------------------------------------------
+
+    text = re.sub(
+        r"`([^`\n]+)`",
+        protect,
+        text,
+    )
+
+    # ---------------------------------------------------------
+    # 3. ESCAPE HTML
+    # ---------------------------------------------------------
+
+    text = html.escape(text, quote=False)
+
+    # ---------------------------------------------------------
+    # 4. MARKDOWN BOLD
     #
-    # Telegram does not reliably render Markdown tables.
-    # =========================================================
+    # **TCP**
+    # -> <b>TCP</b>
+    #
+    # Do this AFTER escaping and before restoring protected
+    # content.
+    # ---------------------------------------------------------
 
-    lines = text.splitlines()
-    output = []
-    table_rows = []
+    text = re.sub(
+        r"\*\*(.+?)\*\*",
+        r"<b>\1</b>",
+        text,
+        flags=re.DOTALL,
+    )
 
-    def is_table_separator(cells):
-        if not cells:
-            return False
+    # ---------------------------------------------------------
+    # 5. MARKDOWN ITALIC
+    # ---------------------------------------------------------
 
-        return all(
-            re.fullmatch(r":?-{3,}:?", cell.strip())
-            for cell in cells
-        )
+    text = re.sub(
+        r"(?<!\*)\*([^*\n]+?)\*(?!\*)",
+        r"<i>\1</i>",
+        text,
+    )
 
-    def parse_table_row(line):
+    # ---------------------------------------------------------
+    # 6. HEADINGS
+    # ---------------------------------------------------------
+
+    text = re.sub(
+        r"(?m)^\s*#{1,6}\s+(.+?)\s*$",
+        r"<b>\1</b>",
+        text,
+    )
+
+    # ---------------------------------------------------------
+    # 7. BLOCKQUOTES
+    #
+    # > Important point
+    # ---------------------------------------------------------
+
+    lines = text.split("\n")
+    formatted_lines = []
+
+    for line in lines:
+
         stripped = line.strip()
 
-        if "|" not in stripped:
-            return None
+        if stripped.startswith("&gt;"):
+            quote = stripped[4:].strip()
 
-        if not (
-            stripped.count("|") >= 2
-            and (
-                stripped.startswith("|")
-                or stripped.endswith("|")
-            )
-        ):
-            return None
+            if quote:
+                formatted_lines.append(
+                    f"<blockquote>{quote}</blockquote>"
+                )
+            else:
+                formatted_lines.append(
+                    "<blockquote> </blockquote>"
+                )
 
-        cells = [
-            cell.strip()
-            for cell in stripped.strip("|").split("|")
-        ]
+        else:
+            formatted_lines.append(line)
 
-        if len(cells) < 2:
-            return None
+    text = "\n".join(formatted_lines)
 
-        return cells
+    # ---------------------------------------------------------
+    # 8. CLEAN MARKDOWN BULLETS
+    #
+    # Keep bullets readable on Telegram.
+    # ---------------------------------------------------------
+
+    text = re.sub(
+        r"(?m)^\s*[-*]\s+",
+        "• ",
+        text,
+    )
+
+    # ---------------------------------------------------------
+    # 9. CLEAN NUMBERED LISTS
+    # ---------------------------------------------------------
+
+    text = re.sub(
+        r"(?m)^\s*(\d+)\.\s+",
+        r"\1. ",
+        text,
+    )
+
+    # ---------------------------------------------------------
+    # 10. CLEAN COMPARISON TABLES
+    #
+    # Telegram has no native Markdown table support.
+    #
+    # If a Markdown table somehow reaches this function,
+    # convert it into a readable mobile comparison instead
+    # of showing broken pipes.
+    # ---------------------------------------------------------
+
+    lines = text.split("\n")
+    output = []
+
+    table_rows = []
+    in_table = False
 
     def flush_table():
+
         nonlocal table_rows
 
         if not table_rows:
             return
 
-        cleaned_rows = []
+        rows = []
 
         for row in table_rows:
-            cells = parse_table_row(row)
 
-            if not cells:
+            cells = [
+                cell.strip()
+                for cell in row.strip().strip("|").split("|")
+            ]
+
+            # Ignore Markdown separator rows.
+            if cells and all(
+                re.fullmatch(r":?-{3,}:?", cell or "")
+                for cell in cells
+            ):
                 continue
 
-            if is_table_separator(cells):
-                continue
-
-            cleaned_rows.append(cells)
+            rows.append(cells)
 
         table_rows = []
 
-        if not cleaned_rows:
+        if not rows:
             return
 
+        headers = rows[0]
+
         # -----------------------------------------------------
-        # Single-row table
+        # 2-COLUMN TABLE
         # -----------------------------------------------------
 
-        if len(cleaned_rows) == 1:
-            output.append(
-                "\n".join(
-                    f"<b>{html.escape(cell)}</b>"
-                    for cell in cleaned_rows[0]
-                    if cell.strip()
+        if len(headers) == 2:
+
+            comparison = []
+
+            for row in rows[1:]:
+
+                if len(row) < 2:
+                    continue
+
+                feature = row[0].strip()
+                value = row[1].strip()
+
+                if not feature:
+                    continue
+
+                comparison.append(
+                    f"<b>▸ {feature}</b>\n"
+                    f"  {value}"
                 )
-            )
-            return
 
-        headers = cleaned_rows[0]
-        data_rows = cleaned_rows[1:]
+            if comparison:
+                output.append(
+                    "\n\n".join(comparison)
+                )
+
+            return
 
         # -----------------------------------------------------
         # 3+ COLUMN COMPARISON
         #
-        # Telegram does not support native Markdown tables.
-        # Render a compact, mobile-friendly comparison card
-        # instead of converting each row into:
-        #
-        # Feature
-        # TCP: ...
-        # UDP: ...
-        #
-        # This keeps the table structure visually clear on
-        # Telegram phones while preserving the columns.
+        # Mobile-friendly Telegram layout.
         # -----------------------------------------------------
 
         if len(headers) >= 3:
 
             comparison = []
 
-            # Title
-            comparison.append(
-                "⚖️ <b>"
-                + " vs ".join(
-                    html.escape(header.strip())
-                    for header in headers[1:]
-                    if header.strip()
+            names = [
+                h.strip()
+                for h in headers[1:]
+                if h.strip()
+            ]
+
+            if names:
+                comparison.append(
+                    "⚖️ <b>"
+                    + " vs ".join(names)
+                    + "</b>"
                 )
-                + "</b>"
-            )
 
-            comparison.append("")
-
-            for row in data_rows:
+            for row in rows[1:]:
 
                 if not row:
                     continue
@@ -366,12 +444,10 @@ def format_telegram_response(text: str) -> str:
                 if not feature:
                     continue
 
-                # Feature heading
                 comparison.append(
-                    f"<b>▸ {html.escape(feature)}</b>"
+                    f"<b>▸ {feature}</b>"
                 )
 
-                # Each comparison value
                 for index in range(1, len(headers)):
 
                     header = headers[index].strip()
@@ -382,15 +458,14 @@ def format_telegram_response(text: str) -> str:
                     value = (
                         row[index].strip()
                         if index < len(row)
-                        else ""
+                        else "—"
                     )
 
                     if not value:
                         value = "—"
 
                     comparison.append(
-                        f"  <b>{html.escape(header)}:</b> "
-                        f"{html.escape(value)}"
+                        f"  <b>{header}:</b> {value}"
                     )
 
                 comparison.append("")
@@ -400,118 +475,97 @@ def format_telegram_response(text: str) -> str:
                     "\n".join(comparison).strip()
                 )
 
-        # -----------------------------------------------------
-        # 2-COLUMN TABLE
-        # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # 11. DETECT / CONVERT TABLES
+    # ---------------------------------------------------------
 
-        else:
-
-            comparison = []
-
-            for row in data_rows:
-
-                if len(row) < 2:
-                    continue
-
-                label = row[0].strip()
-                value = row[1].strip()
-
-                if not label:
-                    continue
-
-                if not value:
-                    value = "—"
-
-                comparison.append(
-                    f"<b>{html.escape(label)}</b>: "
-                    f"{html.escape(value)}"
-                )
-
-            if comparison:
-                output.append(
-                    "\n".join(comparison).strip()
-                )
-
-    # Detect table blocks.
     for line in lines:
 
         stripped = line.strip()
 
-        parsed = parse_table_row(stripped)
-
-        if parsed is not None:
+        if (
+            stripped.startswith("|")
+            and stripped.endswith("|")
+            and "|" in stripped[1:-1]
+        ):
             table_rows.append(line)
+            in_table = True
             continue
 
-        if table_rows:
+        if in_table:
             flush_table()
+            in_table = False
 
         output.append(line)
 
-    if table_rows:
+    if in_table:
         flush_table()
 
     text = "\n".join(output)
 
-    # =========================================================
-    # 3. ESCAPE HTML
-    # =========================================================
+    # ---------------------------------------------------------
+    # 12. RESTORE PROTECTED CODE
+    # ---------------------------------------------------------
 
-    generated_html = []
+    for index, original in enumerate(protected):
 
-    def protect_generated_html(match):
-        placeholder = (
-            f"__ARIA_GENERATED_HTML_{len(generated_html)}__"
+        placeholder = f"__ARIA_PROTECTED_{index}__"
+
+        if original.startswith("```"):
+
+            match = re.match(
+                r"```(?:([\w+#.-]+))?\n?(.*?)```$",
+                original,
+                flags=re.DOTALL,
+            )
+
+            if match:
+
+                language = match.group(1) or ""
+                code = match.group(2)
+
+                code_html = html.escape(
+                    code,
+                    quote=False,
+                )
+
+                replacement = (
+                    f"<pre><code>{code_html}</code></pre>"
+                )
+
+            else:
+                replacement = (
+                    f"<pre><code>"
+                    f"{html.escape(original)}"
+                    f"</code></pre>"
+                )
+
+        else:
+
+            code = original[1:-1]
+
+            replacement = (
+                f"<code>"
+                f"{html.escape(code, quote=False)}"
+                f"</code>"
+            )
+
+        text = text.replace(
+            placeholder,
+            replacement,
         )
 
-        generated_html.append(match.group(0))
+    # ---------------------------------------------------------
+    # 13. FINAL CLEANUP
+    # ---------------------------------------------------------
 
-        return placeholder
-
+    # Remove accidental remaining Markdown emphasis markers.
     text = re.sub(
-        r"<(?:b|i|code|blockquote)(?:\s[^>]*)?>.*?</(?:b|i|code|blockquote)>",
-        protect_generated_html,
-        text,
-        flags=re.DOTALL,
-    )
-
-    text = html.escape(text)
-
-    # =========================================================
-    # CLEAN REMAINING MARKDOWN BOLD MARKERS
-    # =========================================================
-
-    text = re.sub(
-        r"\*\*(.+?)\*\*",
+        r"\*\*(.*?)\*\*",
         r"<b>\1</b>",
         text,
         flags=re.DOTALL,
     )
-
-    # =========================================================
-    # 4. RESTORE MARKDOWN BLOCKQUOTES
-    # =========================================================
-
-    text = re.sub(
-        r"(?m)^&gt;\s?(.*)$",
-        r"<blockquote>\1</blockquote>",
-        text,
-    )
-
-    # =========================================================
-    # 5. BOLD
-    # =========================================================
-
-    text = re.sub(
-        r"\*\*(.+?)\*\*",
-        r"<b>\1</b>",
-        text,
-        flags=re.DOTALL,
-    )
-
-    # =========================================================
-    # 6. ITALIC
-    # =========================================================
 
     text = re.sub(
         r"(?<!\*)\*([^*\n]+?)\*(?!\*)",
@@ -519,57 +573,20 @@ def format_telegram_response(text: str) -> str:
         text,
     )
 
-    # =========================================================
-    # 7. INLINE CODE
-    # =========================================================
-
-    text = re.sub(
-        r"`([^`\n]+)`",
-        r"<code>\1</code>",
-        text,
-    )
-
-    # =========================================================
-    # 8. RESTORE GENERATED HTML
-    # =========================================================
-
-    for index, fragment in enumerate(generated_html):
-
-        placeholder = (
-            f"__ARIA_GENERATED_HTML_{index}__"
-        )
-
-        text = text.replace(
-            placeholder,
-            fragment,
-        )
-
-    # =========================================================
-    # 9. RESTORE FENCED CODE BLOCKS
-    # =========================================================
-
-    for index, code_block in enumerate(code_blocks):
-
-        placeholder = (
-            f"__ARIA_CODE_BLOCK_{index}__"
-        )
-
-        text = text.replace(
-            placeholder,
-            code_block,
-        )
-
-    # =========================================================
-    # 10. CLEAN EXCESSIVE BLANK LINES
-    # =========================================================
-
+    # Collapse excessive blank lines.
     text = re.sub(
         r"\n{3,}",
         "\n\n",
         text,
-    ).strip()
+    )
 
-    return text
+    return text.strip()
+
+def format_telegram_response(text: str) -> str:
+    """
+    Wrapper alias pointing to markdown_to_telegram_html.
+    """
+    return markdown_to_telegram_html(text)
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
@@ -654,7 +671,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": "Alright, Sir. Document selection cancelled."
@@ -740,7 +757,7 @@ async def telegram_webhook(req: Request):
                     )
 
                     telegram_response = await http_client.post(
-                        f"https://api.telegram.org/bot{token}/sendDocument",
+                        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
                         json={
                             "chat_id": chat_id,
                             "document": telegram_file_id,
@@ -773,7 +790,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
@@ -810,7 +827,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": "Cancelled, Sir."
@@ -868,7 +885,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": message
@@ -901,7 +918,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -924,14 +941,14 @@ async def telegram_webhook(req: Request):
 
         # Get Telegram file information
         file_info = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
+            f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/getFile",
             params={"file_id": file_id}
         )
 
         file_path = file_info.json()["result"]["file_path"]
 
         download_url = (
-            f"https://api.telegram.org/file/bot"
+            f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot)"
             f"{token}/{file_path}"
         )
 
@@ -1079,7 +1096,7 @@ async def telegram_webhook(req: Request):
             if not documents:
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1175,7 +1192,7 @@ async def telegram_webhook(req: Request):
                 }
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1196,7 +1213,7 @@ async def telegram_webhook(req: Request):
             if not best_document:
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1228,7 +1245,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1249,7 +1266,7 @@ async def telegram_webhook(req: Request):
             # -------------------------------------------------
 
             telegram_response = await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendDocument",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
                 json={
                     "chat_id": chat_id,
                     "document": telegram_file_id,
@@ -1275,7 +1292,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
@@ -1305,7 +1322,7 @@ async def telegram_webhook(req: Request):
     )
 
     telegram_response = await http_client.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
+        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": telegram_text,
