@@ -993,8 +993,7 @@ async def telegram_webhook(req: Request):
         file_path = file_info.json()["result"]["file_path"]
 
         download_url = (
-            f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot)"
-            f"{token}/{file_path}"
+            f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot){token}/{file_path}"
         )
 
         os.makedirs("uploads", exist_ok=True)
@@ -1375,7 +1374,7 @@ async def telegram_webhook(req: Request):
             "chat_id": chat_id,
             "text": telegram_text,
             "parse_mode": "HTML",
-        }
+        },
     )
 
     # ---------------------------------------------------------
