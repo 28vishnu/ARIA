@@ -858,8 +858,46 @@ class ConversationManager:
             "which performs",
             "what about",
             "how about",
-            "why",
         )
+
+        # Check the immediately previous user message.
+        # This is important because a new topic may have been asked
+        # immediately before the current follow-up, while the old
+        # comparison state is still active until update_turn() runs.
+        previous_user_message = str(
+            session.get("last_user_message") or ""
+        ).strip()
+
+        previous_entities = self._clean_entities(
+            self.extract_entities(previous_user_message)
+        )
+
+        previous_has_new_topic = bool(
+            previous_entities
+            and not any(
+                entity.lower() in {
+                    item.lower() for item in compared
+                }
+                for entity in previous_entities
+            )
+        )
+
+        # If the previous user turn clearly introduced a new subject,
+        # never attach the current follow-up to the old comparison.
+        #
+        # Example:
+        #   What is TCP?
+        #   What is UDP?
+        #   Which one is faster?
+        #   What is photosynthesis?
+        #   Why is it important?
+        #
+        # The last question must resolve to photosynthesis, NOT TCP/UDP.
+        if previous_has_new_topic:
+            active_comparison = False
+            compared = []
+            session["active_comparison"] = False
+            session["last_compared_entities"] = []
 
         is_comparison_followup = (
             lower in {
