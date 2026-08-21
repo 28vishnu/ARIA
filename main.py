@@ -93,7 +93,7 @@ async def add_request_metadata(request: Request, call_next):
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("[GlobalExceptionHandler] Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"success": False, "error": "An internal system error occurred, Sir.", "detail": str(exc)})
+    return JSONResponse(status_code=500, content={"success": False, "error": "An internal system error occurred.", "detail": str(exc)})
 
 def build_request_context(session_id: str, request_id: str, registry) -> RequestContext:
     return RequestContext(
@@ -589,6 +589,59 @@ def format_telegram_response(text: str) -> str:
     """
     return markdown_to_telegram_html(text)
 
+def get_telegram_status_message(text: str) -> str:
+    """
+    Select a concise temporary status based on the user's request.
+    These messages are temporary and disappear before the final answer.
+    """
+
+    query = (text or "").lower().strip()
+
+    if any(word in query for word in (
+        "search", "find", "latest", "news", "current",
+        "today", "recent", "look up", "online"
+    )):
+        return "Searching for the relevant information..."
+
+    if any(word in query for word in (
+        "buy", "purchase", "price", "cost", "product",
+        "shop", "shopping", "amazon", "flipkart"
+    )):
+        return "Looking for the relevant options..."
+
+    if any(word in query for word in (
+        "pdf", "document", "file", "paper", "notes"
+    )):
+        return "Checking the relevant documents..."
+
+    if any(word in query for word in (
+        "calculate", "how much", "percentage", "convert",
+        "multiply", "divide", "sum"
+    )):
+        return "Working that out..."
+
+    if any(word in query for word in (
+        "remember", "forgot", "what do you know about me",
+        "my name", "what's my"
+    )):
+        return "Checking what I remember..."
+
+    if any(word in query for word in (
+        "code", "python", "javascript", "program", "error",
+        "bug", "function", "api"
+    )):
+        return "Working through the code..."
+
+    if any(word in query for word in (
+        "compare", "difference", "versus", "vs", "which one"
+    )):
+        return "Comparing the relevant points..."
+
+    if len(query) > 120:
+        return "Working through your request..."
+
+    return "Thinking..."
+
 @app.post("/telegram-webhook")
 async def telegram_webhook(req: Request):
     request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
@@ -636,7 +689,7 @@ async def telegram_webhook(req: Request):
         chat_id=chat_id,
     )
 
-    await status.start("Reading your request...")
+    await status.start(get_telegram_status_message(text))
 
     # ---------------------------------------------------------
     # HANDLE PENDING DOCUMENT CONFIRMATION
@@ -679,10 +732,10 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
-                        "text": "Alright, Sir. Document selection cancelled."
+                        "text": "Alright. Document selection cancelled."
                     }
                 )
 
@@ -762,7 +815,7 @@ async def telegram_webhook(req: Request):
 
                     await status.delete()
                     telegram_response = await http_client.post(
-                        f"https://api.telegram.org/bot{token}/sendDocument",
+                        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
                         json={
                             "chat_id": chat_id,
                             "document": telegram_file_id,
@@ -792,11 +845,11 @@ async def telegram_webhook(req: Request):
 
             await status.delete()
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
-                        "I couldn't identify which document you meant, Sir. "
+                        "I couldn't identify which document you meant. "
                         "Please choose one of these:\n\n"
                         + "\n".join(
                             f"• {name}"
@@ -826,10 +879,10 @@ async def telegram_webhook(req: Request):
 
             await status.delete()
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
-                    "text": "Cancelled, Sir."
+                    "text": "Cancelled."
                 }
             )
 
@@ -874,14 +927,14 @@ async def telegram_webhook(req: Request):
                 )
 
                 message = (
-                    f"Deleted {filename}, Sir."
+                    f"Deleted {filename}."
                     if deleted
-                    else "I couldn't delete that document, Sir."
+                    else "I couldn't delete that document."
                 )
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": message
@@ -911,12 +964,12 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
                             f"Deleted {deleted_count} stored "
-                            f"document(s), Sir."
+                            f"document(s)."
                         )
                     }
                 )
@@ -927,20 +980,20 @@ async def telegram_webhook(req: Request):
 
     # Handle document upload
     if "document" in msg:
-        await status.update("Understanding the request...")
+        await status.update("Working on it...")
         document = msg["document"]
         file_id = document["file_id"]
 
         # Get Telegram file information
         file_info = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
+            f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/getFile",
             params={"file_id": file_id}
         )
 
         file_path = file_info.json()["result"]["file_path"]
 
         download_url = (
-            f"https://api.telegram.org/file/bot"
+            f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot)"
             f"{token}/{file_path}"
         )
 
@@ -973,7 +1026,7 @@ async def telegram_webhook(req: Request):
             or Path(local_path).name
         )
 
-        await status.update("Reasoning...")
+        await status.update("Working on it...")
         result = await document_ai.process_document(
             file_path=local_path,
             session_id=session_id,
@@ -1047,7 +1100,7 @@ async def telegram_webhook(req: Request):
             "document_ready": True,
         }
 
-    await status.update("Understanding the request...")
+    await status.update("Working on it...")
     result = await process_task(
         text,
         str(chat_id),
@@ -1090,12 +1143,10 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
-                        "text": (
-                            "I couldn't find that document, Sir."
-                        )
+                        "text": "I couldn't find that document."
                     }
                 )
 
@@ -1187,11 +1238,11 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
-                            "I found multiple documents, Sir. "
+                            "I found multiple documents. "
                             "Which one would you like?\n\n"
                             + "\n".join(
                                 f"• {name}"
@@ -1209,13 +1260,10 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
-                        "text": (
-                            "I couldn't identify the requested "
-                            "document, Sir."
-                        )
+                        "text": "I couldn't identify the requested document."
                     }
                 )
 
@@ -1242,11 +1290,11 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
-                            "I found the document record, Sir, "
+                            "I found the document record, "
                             "but its original Telegram file reference "
                             "is unavailable."
                         )
@@ -1264,7 +1312,7 @@ async def telegram_webhook(req: Request):
 
             await status.delete()
             telegram_response = await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendDocument",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
                 json={
                     "chat_id": chat_id,
                     "document": telegram_file_id,
@@ -1290,11 +1338,11 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
-                        "I found the document, Sir, but Telegram "
+                        "I found the document, but Telegram "
                         "couldn't send it."
                     )
                 }
@@ -1308,7 +1356,7 @@ async def telegram_webhook(req: Request):
     # NORMAL TEXT RESPONSE
     # ---------------------------------------------------------
 
-    await status.update("Preparing the response...")
+    await status.update("Finishing the response...")
     reply_text = str(result)
 
     telegram_text = format_telegram_response(
@@ -1322,7 +1370,7 @@ async def telegram_webhook(req: Request):
 
     await status.delete()
     telegram_response = await http_client.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
+        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": telegram_text,
