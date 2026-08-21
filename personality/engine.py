@@ -58,11 +58,19 @@ DOCUMENTS:
 - Preserve useful Markdown structure when it improves readability.
 - Use **bold** for important terms and key points.
 - Use headings for major sections.
-- Use bullets for lists.
-- Use comparison tables when they genuinely improve clarity.
-- For important conclusions, warnings, or key statements, use a short quote-style block.
+- Use bullets for ordinary lists.
+- Use Markdown comparison tables when the user asks for differences,
+  comparisons, pros/cons, feature comparisons, or side-by-side information.
+- Keep comparison tables in standard Markdown table format.
+- NEVER replace a Markdown table with plain-text aligned columns.
+- For important conclusions, warnings, definitions, or key statements,
+  use a short Markdown blockquote beginning with `>`.
+- Use blockquotes selectively: normally 1–3 important points, not every bullet.
+- Important points should be concise and meaningful.
+- Preserve fenced code blocks exactly.
+- Preserve Markdown tables exactly.
+- Preserve `> quote` blocks exactly.
 - Do not overuse formatting.
-- Preserve code blocks exactly.
 - Summarize rather than reproduce when the user asks for a summary.
 - Preserve only information relevant to the user's request.
 - Do not announce "Document processed successfully" unless that information
@@ -923,108 +931,6 @@ class PersonalityEngine:
             "• ",
             reply,
         )
-
-        # ---------------------------------------------------------
-        # Normalize Markdown tables
-        #
-        # Telegram does not render Markdown tables properly.
-        # Convert simple tables into aligned plain-text rows.
-        # ---------------------------------------------------------
-
-        lines = reply.splitlines()
-
-        if any(
-            "|" in line
-            for line in lines
-        ):
-            table_lines = []
-            normal_lines = []
-
-            in_table = False
-
-            for line in lines:
-                stripped = line.strip()
-
-                if "|" in stripped:
-                    cells = [
-                        cell.strip()
-                        for cell in stripped.strip("|").split("|")
-                    ]
-
-                    # Ignore Markdown separator rows.
-                    if all(
-                        re.fullmatch(r":?-{3,}:?", cell)
-                        for cell in cells
-                    ):
-                        continue
-
-                    if len(cells) >= 2:
-                        table_lines.append(cells)
-                        in_table = True
-                        continue
-
-                if in_table and table_lines:
-                    # Flush table before normal text.
-                    widths = [
-                        max(
-                            len(row[i])
-                            for row in table_lines
-                            if i < len(row)
-                        )
-                        for i in range(
-                            max(len(row) for row in table_lines)
-                        )
-                    ]
-
-                    formatted_table = []
-
-                    for row in table_lines:
-                        formatted_table.append(
-                            "  ".join(
-                                (
-                                    row[i]
-                                    if i < len(row)
-                                    else ""
-                                ).ljust(widths[i])
-                                for i in range(len(widths))
-                            ).rstrip()
-                        )
-
-                    normal_lines.extend(formatted_table)
-
-                    table_lines = []
-                    in_table = False
-
-                normal_lines.append(line)
-
-            # Flush trailing table.
-            if table_lines:
-                widths = [
-                    max(
-                        len(row[i])
-                        for row in table_lines
-                        if i < len(row)
-                    )
-                    for i in range(
-                        max(len(row) for row in table_lines)
-                    )
-                ]
-
-                for row in table_lines:
-                    normal_lines.append(
-                        "  ".join(
-                            (
-                                row[i]
-                                if i < len(row)
-                                else ""
-                            ).ljust(widths[i])
-                            for i in range(len(widths))
-                        ).rstrip()
-                    )
-
-            lines = normal_lines
-
-        reply = "\n".join(lines)
 
         # ---------------------------------------------------------
         # Clean excessive blank lines
