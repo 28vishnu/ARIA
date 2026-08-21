@@ -863,6 +863,29 @@ class PersonalityEngine:
             return f"I couldn't generate a response, {self._address('warning')}."
 
         # ---------------------------------------------------------
+        # PRESERVE TELEGRAM MARKDOWN STRUCTURES
+        # ---------------------------------------------------------
+        # ARIA may generate:
+        #   > important point
+        #   | Feature | TCP | UDP |
+        #
+        # These structures must survive the final cleanup stage.
+
+        # Normalize blockquotes without removing them.
+        reply = re.sub(
+            r"(?m)^\s*>\s?",
+            "> ",
+            reply,
+        )
+
+        # Preserve Markdown table separator spacing.
+        reply = re.sub(
+            r"(?m)^\s*\|(.+)\|\s*$",
+            lambda m: "|" + m.group(1).strip() + "|",
+            reply,
+        )
+
+        # ---------------------------------------------------------
         # Protect fenced code blocks
         # ---------------------------------------------------------
 
@@ -923,11 +946,11 @@ class PersonalityEngine:
         )
 
         # ---------------------------------------------------------
-        # Normalize bullets
+        # Normalize ordinary bullets only
         # ---------------------------------------------------------
 
         reply = re.sub(
-            r"(?m)^\s*[-*+]\s+",
+            r"(?m)^(?!\s*[>|])\s*[-*+]\s+",
             "• ",
             reply,
         )
