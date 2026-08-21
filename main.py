@@ -326,12 +326,24 @@ def format_telegram_response(text: str) -> str:
 
         # -----------------------------------------------------
         # 3+ COLUMN COMPARISON
+        #
+        # Telegram does not support native Markdown tables.
+        # Render a compact, mobile-friendly comparison card
+        # instead of converting each row into:
+        #
+        # Feature
+        # TCP: ...
+        # UDP: ...
+        #
+        # This keeps the table structure visually clear on
+        # Telegram phones while preserving the columns.
         # -----------------------------------------------------
 
         if len(headers) >= 3:
 
             comparison = []
 
+            # Title
             comparison.append(
                 "⚖️ <b>"
                 + " vs ".join(
@@ -354,10 +366,12 @@ def format_telegram_response(text: str) -> str:
                 if not feature:
                     continue
 
+                # Feature heading
                 comparison.append(
-                    f"<b>{html.escape(feature)}</b>"
+                    f"<b>▸ {html.escape(feature)}</b>"
                 )
 
+                # Each comparison value
                 for index in range(1, len(headers)):
 
                     header = headers[index].strip()
@@ -375,15 +389,16 @@ def format_telegram_response(text: str) -> str:
                         value = "—"
 
                     comparison.append(
-                        f"{html.escape(header)}: "
+                        f"  <b>{html.escape(header)}:</b> "
                         f"{html.escape(value)}"
                     )
 
                 comparison.append("")
 
-            output.append(
-                "\n".join(comparison).strip()
-            )
+            if comparison:
+                output.append(
+                    "\n".join(comparison).strip()
+                )
 
         # -----------------------------------------------------
         # 2-COLUMN TABLE
