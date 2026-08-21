@@ -454,8 +454,7 @@ class ConversationManager:
 
             self._remember_topic(session, new_topic)
 
-            if not isinstance(session.get("last_subject"), dict):
-                session["last_subject"] = new_topic
+            session["last_subject"] = new_topic
 
     def update_turn(
         self,
@@ -575,8 +574,7 @@ class ConversationManager:
 
             self._remember_topic(session, new_topic)
 
-            if not isinstance(session.get("last_subject"), dict):
-                session["last_subject"] = new_topic
+            session["last_subject"] = new_topic
 
     def get_context(self, session_id: str) -> Dict[str, Any]:
         """
@@ -1016,7 +1014,11 @@ class ConversationManager:
         # ---------------------------------------------------------
         # 3. Other lightweight references.
         # ---------------------------------------------------------
-        subject = session.get("last_subject") or session.get("current_topic")
+        subject = (
+            session.get("current_topic")
+            or session.get("last_subject")
+            or session.get("last_entity")
+        )
 
         if isinstance(subject, dict):
             subject_entities = subject.get("entities") or []
