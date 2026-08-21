@@ -460,12 +460,7 @@ class LLMRouter:
                     break
 
         if configured_providers == 0:
-
-            return {
-                "success": False,
-                "provider": None,
-                "response": None,
-            }
+            return None
 
         logger.error(
             "[LLMRouter] All available LLM providers failed: %s",
@@ -474,11 +469,7 @@ class LLMRouter:
             else "all configured providers were in cooldown"
         )
 
-        return {
-            "success": False,
-            "provider": None,
-            "response": None,
-        }
+        return None
 
     # =========================================================
     # GROQ
