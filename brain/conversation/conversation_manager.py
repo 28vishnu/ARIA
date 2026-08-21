@@ -751,39 +751,123 @@ class ConversationManager:
 
     def resolve_reference(self, session_id: str, query: str) -> str:
         """
-        Resolve simple contextual references using the last subject or current topic of the session.
+        Resolve conversational references before the cognitive core sees them.
+
+        Important:
+        - A follow-up such as "Which one is faster?" must inherit the
+          comparison established by the conversation, even when the
+          comparison was implicit (for example, "What is TCP?" followed
+          by "What is UDP?").
+        - Short follow-ups such as "Why?", "What about gaming?", and
+          "Which one is easier?" must retain the active subject.
+        - Never turn an unrelated word such as "Compare" into an entity.
         """
         if not query:
             return query
 
         session = self.get_session(session_id)
-        compared = session.get(
-            "last_compared_entities",
-            [],
-        )
-
-        active_comparison = bool(
-            session.get("active_comparison")
-            and len(compared) >= 2
-        )
-
-        subject = session.get("last_subject") or session.get("current_topic")
         cleaned = query.strip()
         lower = cleaned.lower()
 
+        compared = self._clean_entities(
+            session.get("last_compared_entities", [])
+        )
+
+        active_comparison = bool(
+            session.get("active_comparison") and len(compared) >= 2
+        )
+
+        # ---------------------------------------------------------
+        # 1. Recover an implicit comparison from recent turns.
+        #
+        # Example:
+        #   User: What is TCP?
+        #   User: What is UDP?
+        #   User: Which one is faster?
+        #
+        # update_turn() runs after the current answer, so the current
+        # follow-up cannot rely on comparison state being created for
+        # the current turn. Recover the two most recent distinct
+        # entities from adjacent recent user turns instead.
+        # ---------------------------------------------------------
+        comparison_followup_starters = (
+            "which one",
+            "which is",
+            "which would",
+            "which has",
+            "which performs",
+            "what about",
+            "how about",
+            "why",
+        )
+
+        is_comparison_followup = (
+            lower in {
+                "which one",
+                "which is better",
+                "which is faster",
+                "which is slower",
+                "which is easier",
+                "which is safer",
+                "which is cheaper",
+                "which is more reliable",
+                "which would you choose",
+                "what about performance",
+                "what about jobs",
+                "why",
+            }
+            or lower.startswith(comparison_followup_starters)
+        )
+
+        if not active_comparison and is_comparison_followup:
+            history = session.get("conversation_history", [])
+            recent_entity_turns = []
+
+            for turn in reversed(history[-8:]):
+                if not isinstance(turn, dict):
+                    continue
+
+                user_message = str(turn.get("user", "")).strip()
+                if not user_message:
+                    continue
+
+                entities = self._clean_entities(
+                    self.extract_entities(user_message)
+                )
+
+                # Keep only the first useful entity from each turn.
+                # This avoids treating "Compare" or question words as
+                # comparison candidates.
+                if entities:
+                    entity = entities[0]
+
+                    if not any(
+                        entity.lower() == existing.lower()
+                        for existing in recent_entity_turns
+                    ):
+                        recent_entity_turns.append(entity)
+
+                if len(recent_entity_turns) >= 2:
+                    break
+
+            if len(recent_entity_turns) >= 2:
+                compared = list(reversed(recent_entity_turns[:2]))
+                active_comparison = True
+
+                # Persist the recovered comparison so the next follow-up
+                # does not need to reconstruct it again.
+                session["last_compared_entities"] = compared[:]
+                session["active_comparison"] = True
+                session["last_subject"] = {
+                    "type": "comparison",
+                    "entities": compared[:],
+                }
+
+        # ---------------------------------------------------------
+        # 2. Resolve direct comparison follow-ups.
+        # ---------------------------------------------------------
         if active_comparison:
             a, b = compared[0], compared[1]
-
-            # Direct comparison follow-ups.
-            comparison_patterns = (
-                "which one",
-                "which is",
-                "which would",
-                "which has",
-                "which performs",
-                "what about",
-                "how about",
-            )
 
             if (
                 lower in {
@@ -799,17 +883,54 @@ class ConversationManager:
                     "what about performance",
                     "what about jobs",
                 }
-                or lower.startswith(comparison_patterns)
+                or lower.startswith(
+                    (
+                        "which one ",
+                        "which is ",
+                        "which would ",
+                        "which has ",
+                        "which performs ",
+                        "what about ",
+                        "how about ",
+                    )
             ):
                 return f"{cleaned} between {a} and {b}."
 
-        if lower == "give example":
-            compared = session.get("last_compared_entities", [])
-            if len(compared) >= 2:
-                a, b = compared[0], compared[1]
+            # "Why?" should inherit the previous comparison rather than
+            # resolving against the dictionary-shaped last_subject.
+            if lower == "why":
+                previous_question = str(
+                    session.get("last_question") or ""
+                ).lower()
+
+                if "faster" in previous_question:
+                    return f"Why is {b} generally faster than {a}?"
+
+                if "slower" in previous_question:
+                    return f"Why is {a} generally slower than {b}?"
+
+                if "easier" in previous_question:
+                    return f"Why is one of {a} and {b} easier?"
+
+                if "better" in previous_question:
+                    return f"Why is one of {a} and {b} better?"
+
+                return f"Why is the difference between {a} and {b}?"
+
+            if lower == "give example":
                 return f"Give an example comparing {a} and {b}."
-            if subject:
-                return f"Give an example of {subject}."
+
+        # ---------------------------------------------------------
+        # 3. Other lightweight references.
+        # ---------------------------------------------------------
+        subject = session.get("last_subject") or session.get("current_topic")
+
+        if isinstance(subject, dict):
+            subject_entities = subject.get("entities") or []
+            if subject_entities:
+                subject = " and ".join(map(str, subject_entities))
+            else:
+                subject = subject.get("type") or None
 
         if lower == "python example":
             return "Give a Python example."
@@ -817,13 +938,9 @@ class ConversationManager:
         if lower == "java example":
             return "Give a Java example."
 
-        if lower == "which is easier":
-            compared = session.get("last_compared_entities", [])
-            if len(compared) >= 2:
-                a, b = compared[0], compared[1]
-                return f"Which is easier between {a} and {b}?"
-            if subject:
-                return f"Which is easier involving {subject}?"
+        if lower == "which is easier" and active_comparison:
+            a, b = compared[0], compared[1]
+            return f"Which is easier between {a} and {b}?"
 
         if not subject:
             return cleaned
@@ -850,8 +967,9 @@ class ConversationManager:
 
         words = cleaned.split()
         words = [
-            subject if w.lower() in ("it", "this", "that") else w
+            str(subject) if w.lower() in ("it", "this", "that") else w
             for w in words
         ]
 
         return " ".join(words)
+
