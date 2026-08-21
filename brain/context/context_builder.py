@@ -30,11 +30,14 @@ class ContextBuilder:
 
     async def build(
         self,
-        query: str,
-        session_id: str,
-        user_id: str, base_context: Optional[Dict[str, Any]] = None,
+        query: str = "",
+        session_id: str = "",
+        user_id: str = "",
+        base_context: Optional[Dict[str, Any]] = None,
         memory=None,
         state=None,
+        intent=None,
+        conversation_history=None,
     ) -> Dict[str, Any]:
 
         # -----------------------------------------------------
@@ -58,10 +61,46 @@ class ContextBuilder:
             last_question = self.working_memory.last_question()
             last_answer = self.working_memory.last_answer()
 
-        clean_query = str(query or "").strip()
+        # -----------------------------------------------------
+        # Canonical cognitive inputs
+        # -----------------------------------------------------
 
-        memory_items = memory if isinstance(memory, list) else []
-        state_data = state if isinstance(state, dict) else {}
+        if intent is not None:
+            intent_query = getattr(
+                intent,
+                "original_query",
+                "",
+            )
+
+            if not query:
+                query = intent_query
+
+        clean_query = str(
+            query or ""
+        ).strip()
+
+        memory_items = (
+            memory
+            if isinstance(memory, list)
+            else []
+        )
+
+        state_data = (
+            state
+            if isinstance(state, dict)
+            else {}
+        )
+
+        if conversation_history is not None:
+            if isinstance(
+                conversation_history,
+                list,
+            ):
+                state_data = dict(state_data)
+
+                state_data[
+                    "conversation_history"
+                ] = conversation_history
 
         conversation_context = {}
 
@@ -290,6 +329,48 @@ class ContextBuilder:
             "query": clean_query,
             "session_id": session_id,
             "user_id": user_id,
+            "intent": {
+                "type": getattr(
+                    intent,
+                    "intent_type",
+                    None,
+                ),
+                "confidence": getattr(
+                    intent,
+                    "confidence",
+                    None,
+                ),
+                "entities": getattr(
+                    intent,
+                    "entities",
+                    [],
+                ),
+                "requires_memory": getattr(
+                    intent,
+                    "requires_memory",
+                    False,
+                ),
+                "requires_documents": getattr(
+                    intent,
+                    "requires_documents",
+                    False,
+                ),
+                "requires_web": getattr(
+                    intent,
+                    "requires_web",
+                    False,
+                ),
+                "requires_reasoning": getattr(
+                    intent,
+                    "requires_reasoning",
+                    False,
+                ),
+                "metadata": getattr(
+                    intent,
+                    "metadata",
+                    {},
+                ),
+            },
             "user_identity": {
                 "user_id": user_id,
                 "name": conversation_context.get("user_name"),
@@ -409,6 +490,34 @@ class ContextBuilder:
             "knowledge": {
                 "has_relevant_memory": has_relevant_memory,
                 "memory_count": len(memory_items),
+                "requires_memory": bool(
+                    getattr(
+                        intent,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+                "requires_web": bool(
+                    getattr(
+                        intent,
+                        "requires_web",
+                        False,
+                    )
+                ),
+                "requires_documents": bool(
+                    getattr(
+                        intent,
+                        "requires_documents",
+                        False,
+                    )
+                ),
+                "requires_reasoning": bool(
+                    getattr(
+                        intent,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
             },
 
             "capabilities": {
