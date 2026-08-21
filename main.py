@@ -1,1409 +1,833 @@
-import os
-import uuid
-import asyncio
 import logging
-import html
+import random
 import re
-from typing import Any
-from pathlib import Path
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
-from core.logging_config import setup_logging
-from core.bootstrap import bootstrap_application
-from core.dependency_injection import RequestContext
+from typing import Dict, Any, Optional
 from personality.response import SystemResponse
-from api.upload import router as upload_router
-
-setup_logging("INFO")
+from personality.conversation_style import ConversationStyle
+from personality.addressing import AddressingEngine
 logger = logging.getLogger("aria")
+class ResponseSource:
+    """Constants for standardized routing of response sources."""
+    CHAT = "chat"
+    MEMORY = "memory"
+    MEMORY_CONVERSATION = "memory_conversation"
+    PROFILE = "profile"
+    WEATHER = "weather"
+    SEARCH = "search"
+    TIME = "time"
+    DATE = "date"
+    CALCULATOR = "calculator"
+    PLANNER = "planner_executor"
+    GREETING = "greeting_fast_path"
+    PLANNER_CONVERSATIONAL = "planner_conversational"
+GLOBAL_ARIA_STYLE = """
+You are ARIA's final communication layer.
+Rewrite the supplied answer into the voice of a highly capable,
+calm, polished personal AI assistant.
+CORE PERSONALITY:
+- Be courteous, composed, intelligent, concise, and attentive.
+- Sound like you are speaking directly to one person.
+- Maintain a subtle sophisticated assistant personality.
+- Address the user naturally when appropriate.
+- Never sound robotic, cold, academic, or like a generic chatbot.
+- Never imitate or quote a specific fictional character.
+SHORT ANSWERS:
+- Even very short answers should retain ARIA's personality.
+- Prefer concise forms.
+- Do not unnecessarily expand a simple answer.
+CONVERSATION:
+- Don't sound like an encyclopedia.
+- Answer naturally.
+- Lead with the answer.
+- Use short paragraphs.
+- Don't repeat the question.
+- Don't overuse bullet lists.
+- Only offer a follow-up if it genuinely helps.
+- If the user asks a simple question, don't write a mini article.
+DOCUMENTS:
+- Never dump raw document formatting unless the user explicitly asks for it.
+- Preserve useful Markdown structure when it improves readability.
+- Use **bold** for important terms, answers, keywords, and key points.
+- Use headings for major sections when they improve readability.
+- Use bullets for ordinary lists.
+IMPORTANT POINTS / QUOTES:
+- When the response contains an important conclusion, definition,
+  warning, recommendation, exam point, or key takeaway, highlight it
+  with a short Markdown blockquote beginning with `>`.
+- Prefer 1–3 meaningful blockquotes in a detailed educational response.
+- Do NOT quote every sentence.
+- The blockquote must contain only the important point itself.
+- Keep the quote concise and directly supported by the answer.
+COMPARISON QUESTIONS:
+- If the user asks for differences, comparison, compare, pros/cons,
+  feature comparison, or "X vs Y", ALWAYS use a Markdown table.
+- The table MUST use this exact standard structure:
 
-class BackgroundTaskManager:
-    def __init__(self):
-        self.tasks = set()
+| Feature | X | Y |
+| :--- | :--- | :--- |
+| Feature 1 | ... | ... |
 
-    def schedule(self, coro):
-        task = asyncio.create_task(coro)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-        return task
-
-    async def shutdown(self):
-        if self.tasks:
-            logger.info("[BackgroundTaskManager] Awaiting completion of %d background tasks...", len(self.tasks))
-            await asyncio.gather(*self.tasks, return_exceptions=True)
-
-background_manager = BackgroundTaskManager()
-
-# ---------------------------------------------------------
-# PENDING DOCUMENT CONFIRMATIONS
-# ---------------------------------------------------------
-
-pending_document_actions = {}
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    registry = await bootstrap_application()
-    app.state.registry = registry
-    app.state.bg_manager = background_manager
-    logger.info("[Lifespan] ARIA Platform successfully started.")
-    yield
-    logger.info("[Lifespan] Shutting down resources...")
-    await background_manager.shutdown()
-
-    if registry.has("scheduler"):
-        try:
-            registry.get("scheduler").shutdown()
-        except Exception:
-            pass
-    if registry.has("http_client"):
-        await registry.get("http_client").aclose()
-    if registry.has("mongo_client"):
-        registry.get("mongo_client").close()
-    logger.info("[Lifespan] All resources successfully released.")
-
-app = FastAPI(title="ARIA AI Operating Platform", version="12.0.0", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://ariaintel.vercel.app",
-        "https://ariaassisant.vercel.app",
-        "https://aria-frontend.vercel.app",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(upload_router)
-
-@app.middleware("http")
-async def add_request_metadata(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    response: Response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("[GlobalExceptionHandler] Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"success": False, "error": "An internal system error occurred, Sir.", "detail": str(exc)})
-
-def build_request_context(session_id: str, request_id: str, registry) -> RequestContext:
-    return RequestContext(
-        session_id=session_id,
-        request_id=request_id,
-        session_manager=registry.get("session_manager"),
-        memory_engine=registry.get("memory_engine"),
-        skill_manager=registry.get("skill_manager"),
-        action_manager=registry.get("action_manager"),
-        planner=registry.get("planner"),
-        cognitive_core=registry.get("cognitive_core"),
-        executor=registry.get("executor"),
-        personality_engine=registry.get("personality_engine")
-    )
-
-async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> Any:
-    registry = app_state.registry
-    ctx = build_request_context(session_id, request_id, registry)
-
-    if ctx.memory_engine is not None:
-        app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
-
-    session = ctx.session_manager.get_or_create_session(session_id)
-    conversation_manager = registry.get("conversation_manager")
-
-    resolved_text = user_text
-
-    if conversation_manager:
-        resolved_text = conversation_manager.resolve_reference(
-            session_id=session_id,
-            query=user_text,
-        )
-
-    base_context = {
-        "app_state": app_state,
-        "session": session,
-        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
-        "document_intelligence": (
-            registry.get("document_intelligence")
-            if registry.has("document_intelligence")
-            else None
-        ),
-    }
-
-    # ---------------------------------------------------------
-    # 5. COGNITIVE CORE
-    # ---------------------------------------------------------
-
-    sys_res = await ctx.cognitive_core.process(
-        query=resolved_text,
-        session_id=session_id,
-        user_id=session_id,
-        base_context=base_context,
-    )
-
-    # ---------------------------------------------------------
-    # 6. UPDATE CONVERSATIONAL STATE
-    #
-    # This must happen after the answer exists so the next
-    # turn can use the completed turn as context.
-    # ---------------------------------------------------------
-
-    if conversation_manager:
-
-        assistant_text = str(sys_res)
-
-        conversation_manager.update_turn(
-            session_id=session_id,
-            user_message=user_text,
-            assistant_message=assistant_text,
-            intent=None,
-        )
-
-    # ---------------------------------------------------------
-    # 7. STRUCTURED DOCUMENT ACTIONS
-    # ---------------------------------------------------------
-
-    if (
-        sys_res
-        and isinstance(sys_res.data, dict)
-        and sys_res.data.get("document_action")
+- Do NOT use spaces/aligned plain-text columns.
+- Do NOT replace the table with bullets unless the user explicitly
+  asks for a non-table format.
+- Keep table cells concise so they remain readable on mobile/Telegram.
+- Do not put extremely long paragraphs inside table cells.
+TELEGRAM READABILITY:
+- The final response may be converted to Telegram HTML.
+- Keep Markdown structures clean and valid.
+- Use **bold** for important terms.
+- Use `>` for important quoted/key statements.
+- Keep comparison tables compact and structurally valid.
+- Never create decorative formatting that can break Telegram rendering.
+UNCERTAINTY:
+- Never state predictions, speculation, or uncertain future events as facts.
+- Clearly distinguish known facts from estimates and predictions.
+- If something cannot currently be known, say so naturally and briefly.
+- Never manufacture certainty merely to provide a decisive answer.
+RESPONSE LENGTH:
+- Match the user's requested depth.
+- Simple question -> simple answer.
+- Summary -> actual summary.
+- Detailed explanation -> detailed answer.
+- Do not turn every response into a report.
+IMPORTANT:
+The supplied answer contains the underlying information.
+You may substantially rewrite its wording and structure.
+Preserve facts, numbers, warnings, URLs, code, and important details.
+Do not invent new factual claims.
+Return ONLY the final user-facing response.
+"""
+class PersonalityEngine:
+    def __init__(self, llm_router=None):
+        self.llm_router = llm_router
+        self.addressing = AddressingEngine()
+        self.conversation_style = {
+            "tone": "assistant",
+            "verbosity": "balanced",
+            "humor": False,
+        }
+    def update_style(
+        self,
+        tone=None,
+        verbosity=None,
+        humor=None,
     ):
-        return sys_res
-
-    # ---------------------------------------------------------
-    # 8. PERSONALITY LAYER
-    # ---------------------------------------------------------
-
-    return await ctx.personality_engine.apply_personality(
-        session_id,
-        resolved_text,
-        sys_res,
-    )
-
-# =============================================================
-# TELEGRAM RESPONSE FORMATTER
-# =============================================================
-
-def format_telegram_response(text: str) -> str:
-    """
-    Convert ARIA Markdown-style output into Telegram HTML.
-
-    Features:
-    - Markdown comparison tables -> Telegram-friendly comparison cards
-    - Markdown blockquotes -> Telegram blockquotes
-    - **bold** -> <b>bold</b>
-    - *italic* -> <i>italic</i>
-    - `inline code` -> <code>inline code</code>
-    - fenced code -> <pre><code>...</code></pre>
-
-    Important:
-    - Never allow Markdown tables to reach Telegram unchanged.
-    - Never allow HTML supplied by the model/user to break Telegram parsing.
-    - Preserve fenced code exactly.
-    """
-
-    if not text:
-        return ""
-
-    text = str(text).strip()
-
-    # =========================================================
-    # 1. PROTECT FENCED CODE BLOCKS
-    # =========================================================
-
-    code_blocks = []
-
-    def protect_code(match):
-        language = match.group(1) or ""
-        code = match.group(2).strip()
-
-        placeholder = f"__ARIA_CODE_BLOCK_{len(code_blocks)}__"
-
-        code_blocks.append(
-            f"<pre><code>{html.escape(code)}</code></pre>"
-        )
-
-        return placeholder
-
-    text = re.sub(
-        r"```([^\n]*)\n?(.*?)```",
-        protect_code,
-        text,
-        flags=re.DOTALL,
-    )
-
-    # =========================================================
-    # 2. CONVERT MARKDOWN TABLES
-    #
-    # Telegram does not reliably render Markdown tables.
-    # =========================================================
-
-    lines = text.splitlines()
-    output = []
-    table_rows = []
-
-    def is_table_separator(cells):
-        if not cells:
-            return False
-
-        return all(
-            re.fullmatch(r":?-{3,}:?", cell.strip())
-            for cell in cells
-        )
-
-    def parse_table_row(line):
-        stripped = line.strip()
-
-        if "|" not in stripped:
-            return None
-
-        if not (
-            stripped.count("|") >= 2
-            and (
-                stripped.startswith("|")
-                or stripped.endswith("|")
-            )
-        ):
-            return None
-
-        cells = [
-            cell.strip()
-            for cell in stripped.strip("|").split("|")
-        ]
-
-        if len(cells) < 2:
-            return None
-
-        return cells
-
-    def flush_table():
-        nonlocal table_rows
-
-        if not table_rows:
-            return
-
-        cleaned_rows = []
-
-        for row in table_rows:
-            cells = parse_table_row(row)
-
-            if not cells:
-                continue
-
-            if is_table_separator(cells):
-                continue
-
-            cleaned_rows.append(cells)
-
-        table_rows = []
-
-        if not cleaned_rows:
-            return
-
-        # -----------------------------------------------------
-        # Single-row table
-        # -----------------------------------------------------
-
-        if len(cleaned_rows) == 1:
-            output.append(
-                "\n".join(
-                    f"<b>{html.escape(cell)}</b>"
-                    for cell in cleaned_rows[0]
-                    if cell.strip()
+        if tone is not None:
+            self.conversation_style["tone"] = tone
+        if verbosity is not None:
+            self.conversation_style["verbosity"] = verbosity
+        if humor is not None:
+            self.conversation_style["humor"] = humor
+    def current_style(self):
+        return self.conversation_style
+    async def apply_personality(
+        self,
+        session_id: str,
+        user_text: str,
+        response: SystemResponse,
+    ) -> str:
+        """Transforms structured SystemResponse payloads into natural, contextual language."""
+        try:
+            if not response.success:
+                return self._format_error(response.error)
+            data = response.data or {}
+            source = response.source
+            intent = data.get("intent")
+            # Route to specific private formatters
+            if source == ResponseSource.TIME and "time" in data:
+                reply = (
+                    f"The current time is {data['time']}, "
+                    f"{self._address('normal')}."
                 )
-            )
-            return
-
-        headers = cleaned_rows[0]
-        data_rows = cleaned_rows[1:]
-
-        # -----------------------------------------------------
-        # 3+ COLUMN COMPARISON
-        # -----------------------------------------------------
-
-        if len(headers) >= 3:
-
-            comparison = []
-
-            comparison.append(
-                "⚖️ <b>"
-                + " vs ".join(
-                    html.escape(header.strip())
-                    for header in headers[1:]
-                    if header.strip()
+            elif source == ResponseSource.DATE and "date" in data:
+                reply = (
+                    f"Today is {data['date']}, "
+                    f"{self._address('normal')}."
                 )
-                + "</b>"
-            )
-
-            comparison.append("")
-
-            for row in data_rows:
-
-                if not row:
-                    continue
-
-                feature = row[0].strip()
-
-                if not feature:
-                    continue
-
-                comparison.append(
-                    f"<b>{html.escape(feature)}</b>"
+            elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
+                reply = str(data["message"])
+            elif source == ResponseSource.CHAT and "response" in data:
+                reply = str(data["response"])
+            elif source == "agent":
+                if "response" in data:
+                    reply = str(data["response"])
+                elif "message" in data:
+                    reply = str(data["message"])
+                else:
+                    reply = self._format_fallback(data)
+            elif source == ResponseSource.CALCULATOR and "result" in data:
+                reply = (
+                    f"The answer is {data['result']}, "
+                    f"{self._address('technical')}."
                 )
-
-                for index in range(1, len(headers)):
-
-                    header = headers[index].strip()
-
-                    if not header:
-                        continue
-
-                    value = (
-                        row[index].strip()
-                        if index < len(row)
-                        else ""
-                    )
-
-                    if not value:
-                        value = "—"
-
-                    comparison.append(
-                        f"{html.escape(header)}: "
-                        f"{html.escape(value)}"
-                    )
-
-                comparison.append("")
-
-            output.append(
-                "\n".join(comparison).strip()
-            )
-
-        # -----------------------------------------------------
-        # 2-COLUMN TABLE
-        # -----------------------------------------------------
-
-        else:
-
-            comparison = []
-
-            for row in data_rows:
-
-                if len(row) < 2:
-                    continue
-
-                label = row[0].strip()
-                value = row[1].strip()
-
-                if not label:
-                    continue
-
-                if not value:
-                    value = "—"
-
-                comparison.append(
-                    f"<b>{html.escape(label)}</b>: "
-                    f"{html.escape(value)}"
-                )
-
-            if comparison:
-                output.append(
-                    "\n".join(comparison).strip()
-                )
-
-    # Detect table blocks.
-    for line in lines:
-
-        stripped = line.strip()
-
-        parsed = parse_table_row(stripped)
-
-        if parsed is not None:
-            table_rows.append(line)
-            continue
-
-        if table_rows:
-            flush_table()
-
-        output.append(line)
-
-    if table_rows:
-        flush_table()
-
-    text = "\n".join(output)
-
-    # =========================================================
-    # 3. ESCAPE HTML
-    # =========================================================
-
-    generated_html = []
-
-    def protect_generated_html(match):
-        placeholder = (
-            f"__ARIA_GENERATED_HTML_{len(generated_html)}__"
-        )
-
-        generated_html.append(match.group(0))
-
-        return placeholder
-
-    text = re.sub(
-        r"<(?:b|i|code|blockquote)(?:\s[^>]*)?>.*?</(?:b|i|code|blockquote)>",
-        protect_generated_html,
-        text,
-        flags=re.DOTALL,
-    )
-
-    text = html.escape(text)
-
-    # =========================================================
-    # 4. RESTORE MARKDOWN BLOCKQUOTES
-    # =========================================================
-
-    text = re.sub(
-        r"(?m)^&gt;\s?(.*)$",
-        r"<blockquote>\1</blockquote>",
-        text,
-    )
-
-    # =========================================================
-    # 5. BOLD
-    # =========================================================
-
-    text = re.sub(
-        r"\*\*(.+?)\*\*",
-        r"<b>\1</b>",
-        text,
-        flags=re.DOTALL,
-    )
-
-    # =========================================================
-    # 6. ITALIC
-    # =========================================================
-
-    text = re.sub(
-        r"(?<!\*)\*([^*\n]+?)\*(?!\*)",
-        r"<i>\1</i>",
-        text,
-    )
-
-    # =========================================================
-    # 7. INLINE CODE
-    # =========================================================
-
-    text = re.sub(
-        r"`([^`\n]+)`",
-        r"<code>\1</code>",
-        text,
-    )
-
-    # =========================================================
-    # 8. RESTORE GENERATED HTML
-    # =========================================================
-
-    for index, fragment in enumerate(generated_html):
-
-        placeholder = (
-            f"__ARIA_GENERATED_HTML_{index}__"
-        )
-
-        text = text.replace(
-            placeholder,
-            fragment,
-        )
-
-    # =========================================================
-    # 9. RESTORE FENCED CODE BLOCKS
-    # =========================================================
-
-    for index, code_block in enumerate(code_blocks):
-
-        placeholder = (
-            f"__ARIA_CODE_BLOCK_{index}__"
-        )
-
-        text = text.replace(
-            placeholder,
-            code_block,
-        )
-
-    # =========================================================
-    # 10. CLEAN EXCESSIVE BLANK LINES
-    # =========================================================
-
-    text = re.sub(
-        r"\n{3,}",
-        "\n\n",
-        text,
-    ).strip()
-
-    return text
-
-@app.post("/telegram-webhook")
-async def telegram_webhook(req: Request):
-    request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
-    config = req.app.state.registry.get("config")
-    token = config.telegram_token
-
-    if not token:
-        return {"status": "telegram token unconfigured"}
-
-    data = await req.json()
-    msg = data.get("message", {})
-
-    chat_id = msg.get("chat", {}).get("id")
-    user_id = msg.get("from", {}).get("id")
-    text = msg.get("text", "").strip()
-
-    if chat_id is None or user_id is None:
-        return {"status": "ok"}
-
-    # ---------------------------------------------------------
-    # PRIVATE OWNER-ONLY ACCESS
-    # ---------------------------------------------------------
-
-    allowed_user_id = os.getenv("ALLOWED_TELEGRAM_USER_ID", "").strip()
-
-    if not allowed_user_id:
-        logger.error(
-            "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
-        )
-        return {"status": "unauthorized"}
-
-    if str(user_id) != allowed_user_id:
-        logger.warning(
-            "[Security] Unauthorized Telegram access attempt."
-        )
-        return {"status": "unauthorized"}
-
-    logger.info("[Security] Authorized Telegram user.")
-
-    # ---------------------------------------------------------
-    # HANDLE PENDING DOCUMENT CONFIRMATION
-    # ---------------------------------------------------------
-
-    confirmation_key = str(user_id)
-
-    if confirmation_key in pending_document_actions:
-
-        pending = pending_document_actions[confirmation_key]
-        answer = text.lower().strip()
-
-        # -----------------------------------------------------
-        # USER IS SELECTING A DOCUMENT
-        # -----------------------------------------------------
-
-        if pending.get("action") == "select_document":
-
-            # Allow the user to cancel/leave document selection.
-            cancel_phrases = {
-                "cancel",
-                "cancel it",
-                "leave it",
-                "leave",
-                "never mind",
-                "nevermind",
-                "forget it",
-                "stop",
-                "no",
-                "no thanks",
-                "no thank you",
+            elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
+                reply = self._format_greeting(user_text)
+            elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
+                reply = self._format_memory(data)
+            elif source == ResponseSource.PLANNER:
+                reply = self._format_planner(data)
+            elif source == "action_manager":
+                reply = self._format_action(data)
+            else:
+                reply = self._format_fallback(data)
+            # Apply conversation styling only to normal conversational replies.
+            # Memory/profile responses are already structured and must remain intact.
+            if source not in {
+                ResponseSource.MEMORY,
+                ResponseSource.PROFILE,
+                ResponseSource.MEMORY_CONVERSATION,
+            }:
+                reply = ConversationStyle.apply(reply)
+                reply = ConversationStyle.follow_up(reply, user_text)
+            # ---------------------------------------------------------
+            # FACTUAL / ROUTED RESPONSES MUST NOT BE REINTERPRETED
+            # ---------------------------------------------------------
+            protected_sources = {
+                ResponseSource.MEMORY,
+                "memory",
+                ResponseSource.PROFILE,
+                ResponseSource.MEMORY_CONVERSATION,
+                "conversation_memory",
+                ResponseSource.TIME,
+                ResponseSource.DATE,
+                ResponseSource.WEATHER,
+                ResponseSource.SEARCH,
+                ResponseSource.CALCULATOR,
+                ResponseSource.PLANNER,
+                ResponseSource.PLANNER_CONVERSATIONAL,
+                ResponseSource.GREETING,
+                "fast_router",
+                "execution_router",
+                "coding_engine",
+                "agent",
+                "action_manager",
             }
-
-            if answer in cancel_phrases:
-
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
+            if source in protected_sources:
+                reply = self._apply_addressing(
+                    reply,
+                    context=self._addressing_context(source),
                 )
-
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "Alright, Sir. Document selection cancelled."
-                    }
-                )
-
-                return {
-                    "status": "document_selection_cancelled"
-                }
-
-            documents = pending.get("documents", [])
-
-            ignored_words = {
-                "pdf",
-                "document",
-                "file",
-                "the",
-                "my",
-                "one",
-                "give",
-                "send",
-                "me",
-                "please",
-            }
-
-            query_words = {
-                word
-                for word in (
-                    answer
-                    .replace(".pdf", "")
-                    .replace("_", " ")
-                    .replace("-", " ")
-                    .split()
-                )
-                if word not in ignored_words
-            }
-
-            best_document = None
-            best_score = 0
-
-            for document in documents:
-
-                filename = str(
-                    document.get("filename", "")
-                )
-
-                filename_words = {
-                    word
-                    for word in (
-                        filename
-                        .lower()
-                        .replace(".pdf", "")
-                        .replace("_", " ")
-                        .replace("-", " ")
-                        .split()
-                    )
-                    if word not in ignored_words
-                }
-
-                score = len(
-                    query_words.intersection(filename_words)
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_document = document
-
-            if best_document and best_score > 0:
-
-                telegram_file_id = best_document.get(
-                    "telegram_file_id"
-                )
-
-                filename = best_document.get(
-                    "filename",
-                    "document.pdf"
-                )
-
-                if telegram_file_id:
-
-                    http_client = req.app.state.registry.get(
-                        "http_client"
-                    )
-
-                    telegram_response = await http_client.post(
-                        f"https://api.telegram.org/bot{token}/sendDocument",
-                        json={
-                            "chat_id": chat_id,
-                            "document": telegram_file_id,
-                            "caption": filename,
-                        }
-                    )
-
-                    if telegram_response.is_success:
-
-                        pending_document_actions.pop(
-                            confirmation_key,
-                            None
-                        )
-
-                        return {
-                            "status": "document_sent"
-                        }
-
-            # No document matched the user's selection.
-            filenames = [
-                document.get(
-                    "filename",
-                    "Unnamed document"
-                )
-                for document in documents
-            ]
-
-            http_client = req.app.state.registry.get(
-                "http_client"
+                return self._post_process(reply)
+            # ---------------------------------------------------------
+            # UNIVERSAL ARIA PERSONALITY PASS
+            # ---------------------------------------------------------
+            reply = await self._apply_aria_voice(
+                user_text=user_text,
+                reply=reply,
             )
-
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": (
-                        "I couldn't identify which document you meant, Sir. "
-                        "Please choose one of these:\n\n"
-                        + "\n".join(
-                            f"• {name}"
-                            for name in filenames
-                        )
-                    )
-                }
-            )
-
-            return {
-                "status": "document_selection_required"
-            }
-
-        # User cancelled the operation.
-        if answer in (
-            "no",
-            "n",
-            "cancel",
-            "stop",
-            "don't",
-            "dont",
-        ):
-            pending_document_actions.pop(
-                confirmation_key,
-                None
-            )
-
-            http_client = req.app.state.registry.get(
-                "http_client"
-            )
-
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": "Cancelled, Sir."
-                }
-            )
-
-            return {
-                "status": "document_action_cancelled"
-            }
-
-        # User confirmed the operation.
-        if answer in (
-            "yes",
-            "y",
-            "confirm",
-            "yes delete",
-            "delete it",
-            "do it",
-        ):
-            document_repository = req.app.state.registry.get(
-                "document_repository"
-            )
-
-            action = pending.get("action")
-
-            if action == "delete_document":
-
-                document_id = pending.get(
-                    "document_id"
-                )
-
-                filename = pending.get(
-                    "filename",
-                    "document"
-                )
-
-                deleted = await document_repository.delete_document(
-                    document_id=document_id,
-                    user_id=str(user_id)
-                )
-
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
-
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
-                message = (
-                    f"Deleted {filename}, Sir."
-                    if deleted
-                    else "I couldn't delete that document, Sir."
-                )
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": message
-                    }
-                )
-
-                return {
-                    "status": (
-                        "document_deleted"
-                        if deleted
-                        else "document_delete_failed"
-                    )
-                }
-
-            if action == "delete_all_documents":
-
-                deleted_count = (
-                    await document_repository.delete_all_user_documents(
-                        user_id=str(user_id)
-                    )
-                )
-
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
-
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            f"Deleted {deleted_count} stored "
-                            f"document(s), Sir."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "all_documents_deleted"
-                }
-
-    # Handle document upload
-    if "document" in msg:
-        document = msg["document"]
-        file_id = document["file_id"]
-
-        http_client = req.app.state.registry.get("http_client")
-
-        # Get Telegram file information
-        file_info = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
-            params={"file_id": file_id}
-        )
-
-        file_path = file_info.json()["result"]["file_path"]
-
-        download_url = (
-            f"https://api.telegram.org/file/bot"
-            f"{token}/{file_path}"
-        )
-
-        os.makedirs("uploads", exist_ok=True)
-
-        # Preserve the original Telegram filename/extension.
-        original_filename = document.get("file_name")
-
-        if original_filename:
-            safe_filename = os.path.basename(original_filename)
-        else:
-            safe_filename = os.path.basename(file_path)
-
-        local_path = os.path.join(
-            "uploads",
-            safe_filename
-        )
-
-        response = await http_client.get(download_url)
-
-        with open(local_path, "wb") as f:
-            f.write(response.content)
-
-        document_ai = req.app.state.registry.get("document_intelligence")
-
-        session_id = str(chat_id)
-
-        original_filename = (
-            document.get("file_name")
-            or Path(local_path).name
-        )
-
-        result = await document_ai.process_document(
-            file_path=local_path,
-            session_id=session_id,
-            document_name=original_filename
-        )
-
-        # -----------------------------------------------------
-        # Persist document metadata in MongoDB
-        # -----------------------------------------------------
-
-        if req.app.state.registry.has("document_repository"):
-
-            document_repository = req.app.state.registry.get(
-                "document_repository"
-            )
-
-            try:
-                saved_document = await document_repository.save_document(
-                    user_id=str(user_id),
-                    filename=safe_filename,
-                    telegram_file_id=document.get("file_id"),
-                    telegram_file_unique_id=document.get(
-                        "file_unique_id"
-                    ),
-                    mime_type=document.get("mime_type"),
-                    size=document.get("file_size"),
-                    summary=result.get("summary"),
-                    text_preview=result.get("text_preview"),
-                    vector_ids=result.get("vector_ids", []),
-                    metadata={
-                        "source": "telegram",
-                        "chat_id": str(chat_id),
-                        "session_id": session_id,
-                    },
-                )
-
-                logger.info(
-                    "[Telegram] Document catalogue entry saved: %s",
-                    saved_document.get("document_id")
-                )
-
-            except Exception:
-                logger.exception(
-                    "[Telegram] Failed to persist document metadata."
-                )
-
-        state_manager = req.app.state.registry.get("state_manager")
-
-        if state_manager:
-            doc_name = document.get("file_name") or Path(local_path).name
-
-            state_manager.update_state(
-                session_id,
-                active_document=True,
-                document_uploaded=True,
-                current_document=doc_name,
-                current_document_summary=result["summary"],
-                last_document_question=None,
-                last_document_answer=None
-            )
-
-        logger.info(
-            "[Telegram] Document processed and stored for session %s. "
-            "Waiting for user instruction.",
-            session_id,
-        )
-
-        return {
-            "status": "processed",
-            "document_ready": True,
-        }
-
-    result = await process_task(
-        text,
-        str(chat_id),
-        request_id,
-        req.app.state
-    )
-
-    http_client = req.app.state.registry.get("http_client")
-
-    # ---------------------------------------------------------
-    # STRUCTURED DOCUMENT ACTION
-    # ---------------------------------------------------------
-
-    if isinstance(result, SystemResponse):
-
-        response_data = (
-            result.data
-            if isinstance(result.data, dict)
-            else {}
-        )
-
-        document_action = response_data.get(
-            "document_action"
-        )
-
-        # -----------------------------------------------------
-        # SEND STORED DOCUMENT
-        # -----------------------------------------------------
-
-        if document_action == "send_document":
-
-            documents = response_data.get(
-                "documents",
-                []
-            )
-
-            query = str(
-                response_data.get("query", text)
-            ).lower()
-
-            if not documents:
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I couldn't find that document, Sir."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_not_found"
-                }
-
-            # -------------------------------------------------
-            # Choose the best matching document.
-            #
-            # Prefer filenames whose meaningful words occur
-            # in the user's request.
-            # -------------------------------------------------
-
-            best_document = None
-            best_score = -1
-
-            ignored_words = {
-                "pdf",
-                "document",
-                "file",
-                "give",
-                "send",
-                "get",
-                "return",
-                "download",
-                "share",
-                "show",
-                "me",
-                "my",
-                "the",
-                "a",
-                "an",
-                "please",
-                "now",
-            }
-
-            for document in documents:
-
-                filename = str(
-                    document.get("filename", "")
-                )
-
-                normalized_filename = (
-                    filename
-                    .lower()
-                    .replace(".pdf", "")
-                    .replace("_", " ")
-                    .replace("-", " ")
-                )
-
-                filename_words = {
-                    word
-                    for word in normalized_filename.split()
-                    if word not in ignored_words
-                }
-
-                score = sum(
-                    1
-                    for word in filename_words
-                    if word in query
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_document = document
-
-            # If there are several documents and nothing matched,
-            # do not silently send an arbitrary file.
-            if (
-                len(documents) > 1
-                and best_score <= 0
-            ):
-
-                filenames = [
-                    document.get(
-                        "filename",
-                        "Unnamed document"
-                    )
-                    for document in documents
-                ]
-
-                # Remember that ARIA is waiting for the user
-                # to choose one of these documents.
-                pending_document_actions[str(user_id)] = {
-                    "action": "select_document",
-                    "documents": documents,
-                }
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I found multiple documents, Sir. "
-                            "Which one would you like?\n\n"
-                            + "\n".join(
-                                f"• {name}"
-                                for name in filenames
-                            )
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_selection_required"
-                }
-
-            if not best_document:
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I couldn't identify the requested "
-                            "document, Sir."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_not_found"
-                }
-
-            telegram_file_id = best_document.get(
-                "telegram_file_id"
-            )
-
-            filename = best_document.get(
-                "filename",
-                "document.pdf"
-            )
-
-            if not telegram_file_id:
-
-                logger.warning(
-                    "[Telegram] Stored document '%s' has no "
-                    "telegram_file_id.",
-                    filename
-                )
-
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I found the document record, Sir, "
-                            "but its original Telegram file reference "
-                            "is unavailable."
-                        )
-                    }
-                )
-
-                return {
-                    "status": "document_file_unavailable"
-                }
-
-            # -------------------------------------------------
-            # Telegram can resend an existing uploaded file
-            # directly using its stored file_id.
-            # -------------------------------------------------
-
-            telegram_response = await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendDocument",
-                json={
-                    "chat_id": chat_id,
-                    "document": telegram_file_id,
-                    "caption": filename
-                }
-            )
-
-            if telegram_response.is_success:
-
-                logger.info(
-                    "[Telegram] Sent stored document '%s'.",
-                    filename
-                )
-
-                return {
-                    "status": "document_sent"
-                }
-
-            logger.error(
-                "[Telegram] Failed to send stored document '%s': %s",
-                filename,
-                telegram_response.text
-            )
-
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": (
-                        "I found the document, Sir, but Telegram "
-                        "couldn't send it."
-                    )
-                }
-            )
-
-            return {
-                "status": "document_send_failed"
-            }
-
-    # ---------------------------------------------------------
-    # NORMAL TEXT RESPONSE
-    # ---------------------------------------------------------
-
-    reply_text = str(result)
-
-    telegram_text = format_telegram_response(
-        reply_text
-    )
-
-    logger.info(
-        "[Telegram] Final reply text: %r",
-        telegram_text
-    )
-
-    telegram_response = await http_client.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": telegram_text,
-            "parse_mode": "HTML",
-        }
-    )
-
-    # ---------------------------------------------------------
-    # SAVE COMPLETED CONVERSATION TURN
-    # ---------------------------------------------------------
-
-    if telegram_response.is_success:
-
-        state_manager = req.app.state.registry.get(
-            "state_manager"
-        )
-
-        if state_manager:
-
-            state_manager.update_state(
-                str(chat_id),
-                last_query=text,
-                last_assistant_response=reply_text,
-            )
-
-            state_manager.add_conversation_turn(
-                session_id=str(chat_id),
-                user_message=text,
-                assistant_message=reply_text
-            )
-
             logger.info(
-                "[Conversation] Stored completed turn "
-                "for session %s.",
-                chat_id
+                "[Personality] Reply before post_process: %r",
+                reply,
             )
-
-    return {
-        "status": "ok"
-    }
-
-@app.get("/health")
-async def health(req: Request):
-    registry = req.app.state.registry
-
-    if not registry.has("health_checker"):
-
-        return {
-            "status": "healthy",
-            "version": "12.0.0",
-            "message": "Health checker not registered."
+            reply = self._apply_addressing(
+                reply,
+                context="normal",
+            )
+            return self._post_process(reply)
+        except Exception as e:
+            logger.exception(
+                "[PersonalityEngine ERROR] Failed to format response: %s",
+                e,
+            )
+            try:
+                title = self._address("warning")
+            except Exception:
+                title = "Sir"
+            return (
+                f"Operation completed, though a formatting error occurred, "
+                f"{title}."
+            )
+    def _address(
+        self,
+        context: str = "normal",
+        preferred: Optional[str] = None,
+    ) -> str:
+        """
+        Return ARIA's current form of address.
+        All user-facing titles must pass through AddressingEngine.
+        The user's personal name is never used.
+        """
+        try:
+            return self.addressing.get_address(
+                context=context,
+                preferred=preferred,
+            )
+        except Exception:
+            logger.exception(
+                "[Personality] Addressing engine failed."
+            )
+            return "Sir"
+    def _format_error(self, error_msg: str) -> str:
+        error_msg = str(error_msg or "").strip()
+        lowered = error_msg.lower()
+        try:
+            title = self._address("warning")
+        except Exception:
+            title = "Sir"
+        if "no profile" in lowered or "no relevant" in lowered:
+            return f"I couldn't find anything matching that request, {title}."
+        if (
+            "429" in lowered
+            or "too many requests" in lowered
+            or "rate limit" in lowered
+            or "quota" in lowered
+            or "all configured llm providers failed" in lowered
+        ):
+            return (
+                f"My AI services are temporarily rate-limited, {title}. "
+                "Try again shortly."
+            )
+        if not error_msg:
+            return (
+                f"I couldn't complete that request just now, {title}. "
+                "Try again shortly."
+            )
+        logger.error(
+            "[Personality] Internal operation error: %s",
+            error_msg,
+        )
+        return f"I couldn't complete that operation, {title}."
+    def _format_greeting(self, user_text: str) -> str:
+        query = user_text.lower()
+        title = self._address("greeting")
+        if "how are you" in query:
+            return (
+                f"All systems operational and fully optimized, "
+                f"{title}. How may I assist you today?"
+            )
+        if "morning" in query:
+            return (
+                f"Good morning, {title}. "
+                "All operational parameters are nominal."
+            )
+        if "evening" in query:
+            return (
+                f"Good evening, {title}. "
+                "Ready for your instructions."
+            )
+        responses = [
+            f"Greetings, {title}. ARIA operational and ready.",
+            f"Good to see you again, {title}.",
+            f"At your service, {title}.",
+            f"Systems online. How may I assist, {self._address('technical')}?",
+            f"Ready whenever you are, {title}.",
+        ]
+        return random.choice(responses)
+    def _format_memory(self, data: Any) -> str:
+        """
+        Converts retrieved memory records into a natural ARIA response.
+        MemoryEngine is responsible for retrieval.
+        PersonalityEngine is responsible for presentation.
+        """
+        data_dict = data if isinstance(data, dict) else {}
+        # If MemoryConversationManager already produced a natural response,
+        # preserve it.
+        message = data_dict.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        memories = data_dict.get("memories", [])
+        if not memories:
+            return (
+                f"I don't have any relevant memories about you yet, "
+                f"{self._address('normal')}."
+            )
+        # ---------------------------------------------------------
+        # Extract and normalize memories
+        # ---------------------------------------------------------
+        normalized = {}
+        for memory in memories:
+            if not isinstance(memory, dict):
+                continue
+            key = str(
+                memory.get("key")
+                or memory.get("field")
+                or memory.get("category")
+                or ""
+            ).strip()
+            value = (
+                memory.get("value")
+                or memory.get("content")
+                or memory.get("text")
+                or memory.get("summary")
+            )
+            if not key or value is None:
+                continue
+            value = str(value).strip()
+            if not value:
+                continue
+            # Prevent duplicate semantic fields.
+            normalized[key] = value
+        if not normalized:
+            return (
+                f"I don't have any relevant memories about you yet, "
+                f"{self._address('normal')}."
+            )
+        # ---------------------------------------------------------
+        # Important memories first
+        # ---------------------------------------------------------
+        priority = [
+            "name",
+            "current_degree",
+            "current_education_level",
+            "future_education_plan",
+            "planned_postgraduate_degree",
+            "planned_postgraduate_location",
+            "study_destination",
+            "intended_degree",
+            "backup_plan_country",
+            "alternative_country",
+            "favorite_color",
+            "favorite_language",
+            "favorite_superhero",
+            "favorite_movie",
+            "favorite_food",
+            "favorite_car",
+            "favorite_animal",
+            "favorite_planet",
+            "favorite_dinosaur",
+            "project_name",
+            "project_type",
+            "project",
+            "exam_preparation",
+        ]
+        ordered_keys = []
+        for key in priority:
+            if key in normalized and key not in ordered_keys:
+                ordered_keys.append(key)
+        # Add any remaining useful memories.
+        for key in normalized:
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+        # ---------------------------------------------------------
+        # Human-friendly labels
+        # ---------------------------------------------------------
+        labels = {
+            "name": "Name",
+            "current_degree": "Current degree",
+            "current_education_level": "Current education",
+            "future_education_plan": "Future education plan",
+            "planned_postgraduate_degree": "Planned postgraduate degree",
+            "planned_postgraduate_location": "Planned postgraduate location",
+            "study_destination": "Study destination",
+            "intended_degree": "Intended degree",
+            "backup_plan_country": "Backup country",
+            "alternative_country": "Alternative country",
+            "favorite_color": "Favorite color",
+            "favorite_colour": "Favorite color",
+            "favorite_test_color": "Favorite test color",
+            "favorite_language": "Favorite programming language",
+            "favorite_superhero": "Favorite superhero",
+            "favorite_movie": "Favorite movie",
+            "favorite_food": "Favorite food",
+            "favorite_car": "Favorite car",
+            "favorite_animal": "Favorite animal",
+            "favorite_planet": "Favorite planet",
+            "favorite_dinosaur": "Favorite dinosaur",
+            "project_name": "Project",
+            "project_type": "Project type",
+            "project": "Other project",
+            "exam_preparation": "Exam preparation",
+            "education_preference": "Education preference",
+            "education_priority": "Education priority",
+            "preferred_education_region": "Preferred education region",
+            "preferred_watch_material": "Preferred watch material",
+            "watch_budget": "Watch budget",
+            "favorite_shopping_platform": "Favorite shopping platform",
+            "intended_purchase": "Intended purchase",
+            "preferred_name": "Preferred form of address",
         }
-
-    checker = registry.get("health_checker")
-
-    base_health = await checker.check_readiness()
-
-    extended_status = {
-        **base_health,
-        "subsystems": {
-            "memory_engine": registry.has("memory_engine"),
-            "skill_manager": registry.has("skill_manager"),
-            "action_manager": registry.has("action_manager"),
-            "plugin_manager": registry.has("plugin_manager"),
-            "scheduler": registry.has("scheduler"),
-            "http_client": registry.has("http_client"),
-        },
-        "plugins_loaded": (
-            list(registry.get("plugin_manager").plugins.keys())
-            if registry.has("plugin_manager")
-            else []
-        ),
-        "version": "12.0.0",
-    }
-
-    return extended_status
-
-@app.get("/")
-async def root():
-    return {"system": "ARIA AI Operating Platform", "status": "operational", "version": "12.0.0"}
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str = "web"
-
-class ChatResponse(BaseModel):
-    success: bool
-    reply: str
-
-@app.post("/chat", response_model=ChatResponse)
-async def web_chat(
-    request: ChatRequest,
-    req: Request,
-):
-    """
-    Web frontend endpoint.
-
-    Uses the exact same cognitive pipeline
-    as Telegram.
-    """
-
-    request_id = str(uuid.uuid4())
-
-    try:
-
-        result = await process_task(
-            user_text=request.message,
-            session_id=request.session_id,
-            request_id=request_id,
-            app_state=req.app.state,
+        # ---------------------------------------------------------
+        # Ignore low-quality/internal memories
+        # ---------------------------------------------------------
+        ignored_keys = {
+            "user_likes",
+            "phase_3_test_animal",
+            "favorite_test_color",
+        }
+        lines = []
+        for key in ordered_keys:
+            if key in ignored_keys:
+                continue
+            value = normalized[key]
+            label = labels.get(
+                key,
+                key.replace("_", " ").capitalize()
+            )
+            lines.append(f"• {label}: {value}")
+        if not lines:
+            return (
+                f"I don't have any relevant memories about you yet, "
+                f"{self._address('normal')}."
+            )
+        return (
+            f"Here's what I remember about you, "
+            f"{self._address('normal')}:\n\n"
+            + "\n".join(lines)
         )
-
-        return ChatResponse(
-            success=True,
-            reply=str(result),
+    def _format_planner(self, data: Any) -> str:
+        if not isinstance(data, dict):
+            return (
+                f"Task executed successfully, "
+                f"{self._address('normal')}."
+            )
+        # ---------------------------------------------------------
+        # 1. USER-FACING FINAL RESPONSE
+        # ---------------------------------------------------------
+        response = data.get("response")
+        if isinstance(response, str) and response.strip():
+            return response.strip()
+        message = data.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        # ---------------------------------------------------------
+        # 2. LEGACY CHAT OUTPUT
+        # ---------------------------------------------------------
+        chat = data.get("chat")
+        if isinstance(chat, dict):
+            response = chat.get("response")
+            if isinstance(response, str) and response.strip():
+                return response.strip()
+            message = chat.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        # ---------------------------------------------------------
+        # 3. SEARCH THROUGH TASK OUTPUTS
+        # ---------------------------------------------------------
+        task_outputs = data.get(
+            "task_outputs",
+            {}
         )
-
-    except Exception as e:
-
-        logger.exception(
-            "[WEB CHAT]"
+        if isinstance(task_outputs, dict):
+            # Reverse insertion order so the final task wins.
+            for output in reversed(
+                list(task_outputs.values())
+            ):
+                if not isinstance(output, dict):
+                    continue
+                for field in (
+                    "response",
+                    "content",
+                    "message",
+                    "answer",
+                    "summary",
+                ):
+                    value = output.get(field)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+        # ---------------------------------------------------------
+        # 4. GENERIC NESTED OUTPUT FALLBACK
+        # ---------------------------------------------------------
+        for output in data.values():
+            if not isinstance(output, dict):
+                continue
+            for field in (
+                "response",
+                "content",
+                "message",
+                "answer",
+                "summary",
+            ):
+                value = output.get(field)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        # ---------------------------------------------------------
+        # 5. NOTHING USER-FACING WAS RETURNED
+        # ---------------------------------------------------------
+        return (
+            f"Task executed successfully, "
+            f"{self._address('normal')}."
         )
-
-        return ChatResponse(
-            success=False,
-            reply=f"System Error: {e}"
+    def _format_action(self, data: Any) -> str:
+        if not isinstance(data, dict):
+            return f"Action completed successfully, {self._address('normal')}."
+        action_name = data.get("action_name")
+        result = data.get("result", {})
+        if action_name == "notification_action":
+            if isinstance(result, dict):
+                message = result.get("message")
+                if message:
+                    return f"Notification dispatched: {message}, {self._address('normal')}."
+            return f"Notification dispatched successfully, {self._address('normal')}."
+        # File actions
+        if action_name == "file_action":
+            if isinstance(result, dict):
+                # READ
+                if "content" in result:
+                    content = str(result["content"])
+                    if content:
+                        return content
+                    return f"The file is empty, {self._address('warning')}."
+                # WRITE
+                if result.get("status") == "written successfully":
+                    return f"File written successfully, {self._address('normal')}."
+            return f"File operation completed successfully, {self._address('normal')}."
+        # Generic formatting for future actions
+        if isinstance(result, dict):
+            if "message" in result:
+                return str(result["message"])
+            if "response" in result:
+                return str(result["response"])
+        return f"Action completed successfully, {self._address('normal')}."
+    def _format_fallback(self, data: Any) -> str:
+        if isinstance(data, dict):
+            # Highest priority
+            if "response" in data:
+                return str(data["response"])
+            if "message" in data:
+                return str(data["message"])
+            if "result" in data:
+                return str(data["result"])
+            if "output" in data:
+                return f"Python Output\n\n{data['output']}"
+            # Last resort
+            return "\n".join(str(v) for v in data.values() if v)
+        if isinstance(data, str):
+            return data
+        return "Done."
+    async def _apply_aria_voice(
+        self,
+        user_text: str,
+        reply: str,
+    ) -> str:
+        """
+        Universal ARIA personality pass.
+        Rewrites presentation only.
+        Facts, code, numbers, URLs, commands, filenames,
+        warnings and technical details must remain unchanged.
+        """
+        reply = str(reply or "").strip()
+        if not reply:
+            return reply
+        if self.llm_router is None:
+            return reply
+        messages = [
+            {
+                "role": "system",
+                "content": GLOBAL_ARIA_STYLE,
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"USER MESSAGE:\n{user_text}\n\n"
+                    f"DRAFT RESPONSE:\n{reply}\n\n"
+                    "Rewrite the draft appropriately for the user's request.\n\n"
+                    "FORMATTING REQUIREMENTS:\n"
+                    "- If this is a comparison/difference question, preserve or create "
+                    "a valid Markdown comparison table.\n"
+                    "- If the answer contains important conclusions, definitions, "
+                    "warnings, recommendations, or key takeaways, use 1–3 concise "
+                    "Markdown blockquotes beginning with `>`.\n"
+                    "- Preserve **bold**, Markdown tables, `>` blockquotes, and fenced "
+                    "code blocks.\n"
+                    "- Do not convert a comparison table into plain-text columns.\n"
+                    "- Do not add formatting that is not useful.\n"
+                    "- Keep the response natural and readable on Telegram."
+                ),
+            },
+        ]
+        try:
+            styled = await self.llm_router.chat(
+                messages,
+                temperature=0.45,
+                max_tokens=1800,
+            )
+            styled = str(styled or "").strip()
+            if styled:
+                logger.info(
+                    "[Personality] Universal ARIA voice applied."
+                )
+                return styled
+        except Exception:
+            # Personality must never break an otherwise valid response.
+            logger.exception(
+                "[Personality] Universal ARIA voice pass failed. "
+                "Using original response."
+            )
+        return reply
+    def _addressing_context(self, source: str) -> str:
+        """
+        Determine the appropriate addressing style from the response source.
+        """
+        if source in {
+            ResponseSource.TIME,
+            ResponseSource.DATE,
+            ResponseSource.CALCULATOR,
+        }:
+            return "technical"
+        if source in {
+            ResponseSource.SEARCH,
+            ResponseSource.WEATHER,
+        }:
+            return "normal"
+        if source in {
+            ResponseSource.MEMORY,
+            ResponseSource.PROFILE,
+            ResponseSource.MEMORY_CONVERSATION,
+        }:
+            return "conversation"
+        if source in {
+            ResponseSource.GREETING,
+            ResponseSource.PLANNER_CONVERSATIONAL,
+        }:
+            return "greeting"
+        if source in {
+            ResponseSource.PLANNER,
+            "action_manager",
+            "agent",
+            "execution_router",
+        }:
+            return "technical"
+        return "normal"
+    def _apply_addressing(
+        self,
+        reply: str,
+        context: str = "normal",
+    ) -> str:
+        """
+        Apply ARIA's centralized form of address.
+        The addressing engine decides the title.
+        Personal names are never used.
+        """
+        reply = str(reply or "").strip()
+        if not reply:
+            return reply
+        title = self.addressing.get_address(context=context)
+        # Remove an existing ARIA title only when it is being used
+        # as a direct form of address.
+        reply = re.sub(
+            r",\s*(Sir|Master|Commander|Chief|Boss)(?=[.!?]|$)",
+            "",
+            reply,
+            flags=re.IGNORECASE,
         )
+        # For short conversational responses, place the title naturally.
+        if "\n" not in reply:
+            if reply.endswith((".", "!", "?")):
+                reply = reply[:-1].rstrip()
+            return f"{reply}, {title}."
+        # For structured/multi-line responses, preserve the structure
+        # and add the address only at the end.
+        return f"{reply}\n\n{title}."
+    def _post_process(self, reply: str) -> str:
+        """
+        Final presentation cleanup for ARIA responses.
+        Preserves useful Markdown formatting while normalizing it
+        for Telegram presentation.
+        """
+        if reply is None:
+            return f"I couldn't generate a response, {self._address('warning')}."
+        reply = str(reply).strip()
+        if not reply:
+            return f"I couldn't generate a response, {self._address('warning')}."
+        # ---------------------------------------------------------
+        # PRESERVE TELEGRAM MARKDOWN STRUCTURES
+        # ---------------------------------------------------------
+        # ARIA may generate:
+        #   > important point
+        #   | Feature | TCP | UDP |
+        #
+        # These structures must survive the final cleanup stage.
+        # Normalize blockquotes without removing them.
+        reply = re.sub(
+            r"(?m)^\s*>\s?",
+            "> ",
+            reply,
+        )
+        # Preserve Markdown table separator spacing.
+        reply = re.sub(
+            r"(?m)^\s*\|(.+)\|\s*$",
+            lambda m: "|" + m.group(1).strip() + "|",
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Protect fenced code blocks
+        # ---------------------------------------------------------
+        code_blocks = []
+        def protect_code(match):
+            code_blocks.append(match.group(0))
+            return f"ARIA_CODE_BLOCK_PLACEHOLDER_{len(code_blocks) - 1}"
+        reply = re.sub(
+            r"```[\s\S]*?```",
+            protect_code,
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Preserve useful headings
+        #
+        # Telegram can display these naturally after the later
+        # Telegram formatting layer is applied.
+        # ---------------------------------------------------------
+        reply = re.sub(
+            r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$",
+            r"\1",
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Preserve bold / important formatting
+        # ---------------------------------------------------------
+        # Keep **bold** exactly as generated.
+        # Do NOT remove it.
+        # Convert Markdown italic to plain text for now.
+        # This avoids accidental formatting conflicts.
+        reply = re.sub(
+            r"(?<!\*)\*([^*\n]+)\*(?!\*)",
+            r"\1",
+            reply,
+        )
+        reply = re.sub(
+            r"(?<!_)_([^_\n]+)_(?!_)",
+            r"\1",
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Remove unnecessary horizontal separators
+        # ---------------------------------------------------------
+        reply = re.sub(
+            r"(?m)^\s*(?:---+|___+)\s*$",
+            "",
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Normalize ordinary bullets only
+        # ---------------------------------------------------------
+        reply = re.sub(
+            r"(?m)^(?!\s*[>|])\s*[-*+]\s+",
+            "• ",
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Clean excessive blank lines
+        # ---------------------------------------------------------
+        reply = re.sub(
+            r"\n[ \t]+\n",
+            "\n\n",
+            reply,
+        )
+        reply = re.sub(
+            r"\n{3,}",
+            "\n\n",
+            reply,
+        )
+        # ---------------------------------------------------------
+        # Remove trailing spaces
+        # ---------------------------------------------------------
+        reply = "\n".join(
+            line.rstrip()
+            for line in reply.splitlines()
+        )
+        # ---------------------------------------------------------
+        # Restore code blocks
+        # ---------------------------------------------------------
+        for index, block in enumerate(code_blocks):
+            reply = reply.replace(
+                f"ARIA_CODE_BLOCK_PLACEHOLDER_{index}",
+                block,
+            )
+        reply = reply.strip()
+        # ---------------------------------------------------------
+        # Simple one-line punctuation
+        # ---------------------------------------------------------
+        if reply and "\n" not in reply:
+            if reply[-1] not in ".!?":
+                reply += "."
+        return reply
