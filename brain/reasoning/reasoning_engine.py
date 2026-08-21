@@ -1474,6 +1474,13 @@ Return JSON:
             ]
         )
 
+        if not isinstance(response, str) or not response.strip():
+            return {
+                "goal_completed": False,
+                "confidence": 0.0,
+                "missing": ["LLM response unavailable"],
+            }
+
         return self.llm_router.extract_json(response)
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
@@ -1894,7 +1901,13 @@ Return JSON:
                         f"Memories: {summary_memories}"
                     )
                     reply = await self.llm_router.chat([{"role": "user", "content": summary_prompt}])
-                    answer = str(reply).strip() if reply else "Here is the summary of your current project and progress."
+                    if isinstance(reply, str) and reply.strip():
+                        answer = reply.strip()
+                    else:
+                        answer = (
+                            "Here is the summary of your current "
+                            "project and progress."
+                        )
                 except Exception:
                     answer = f"Current Goal: {getattr(goal_obj, 'title', 'None')} (Progress: {getattr(goal_obj, 'progress', 0.0)}%)"
 
