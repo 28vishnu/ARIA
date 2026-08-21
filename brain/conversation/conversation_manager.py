@@ -133,21 +133,14 @@ class ConversationManager:
         entities: List[str],
     ) -> None:
         """
-        Preserve comparison state across conversational turns.
+        Maintain comparison context only while the conversation is
+        actually discussing the compared subjects.
 
-        Supports:
-        - compare X and Y
-        - comparing X and Y
-        - X vs Y
-        - X versus Y
-        - comparison between X and Y
-
-        Once a comparison is established, keep it available for
-        short follow-up questions until a clearly different topic
-        replaces it.
+        A new explicit topic automatically ends the old comparison.
         """
 
         text = str(user_message or "").strip().lower()
+        cleaned_entities = self._clean_entities(entities)
 
         comparison_signal = bool(
             re.search(
@@ -165,19 +158,14 @@ class ConversationManager:
             )
         )
 
-        cleaned_entities = self._clean_entities(entities)
-
         # ---------------------------------------------------------
-        # Establish a new comparison
+        # 1. Explicitly establish a NEW comparison
         # ---------------------------------------------------------
-
         if (
             (comparison_signal or between_signal)
             and len(cleaned_entities) >= 2
         ):
-            session["last_compared_entities"] = (
-                cleaned_entities[:]
-            )
+            session["last_compared_entities"] = cleaned_entities[:]
             session["active_comparison"] = True
 
             session["last_subject"] = {
@@ -187,58 +175,87 @@ class ConversationManager:
 
             return
 
-        # ---------------------------------------------------------
-        # Preserve an existing comparison during follow-ups
-        # ---------------------------------------------------------
-
-        existing = session.get(
-            "last_compared_entities",
-            [],
+        existing = self._clean_entities(
+            session.get("last_compared_entities", [])
         )
 
-        if (
+        # ---------------------------------------------------------
+        # 2. Determine whether this is a legitimate comparison
+        #    follow-up.
+        # ---------------------------------------------------------
+        comparison_followup_patterns = (
+            "which one",
+            "which is",
+            "which would",
+            "which has",
+            "which performs",
+            "what about",
+            "how about",
+            "why",
+            "continue",
+            "tell me more",
+            "give example",
+            "explain",
+        )
+
+        is_followup = (
             session.get("active_comparison")
             and len(existing) >= 2
-        ):
-            followup_patterns = (
-                "which one",
-                "which is better",
-                "which is easier",
-                "what about",
-                "how about",
-                "why",
-                "continue",
-                "more",
-                "tell me more",
-                "which would you choose",
-                "what would you choose",
-                "give example",
-                "explain",
+            and (
+                text in comparison_followup_patterns
+                or text.startswith(
+                    tuple(
+                        pattern + " "
+                        for pattern in comparison_followup_patterns
+                    )
+                )
+                or text.startswith(
+                    tuple(
+                        pattern + ","
+                        for pattern in comparison_followup_patterns
+                    )
+                )
             )
+        )
 
-            is_followup = any(
-                text == pattern
-                or text.startswith(pattern + " ")
-                or text.startswith(pattern + ",")
-                for pattern in followup_patterns
-            )
-
-            if is_followup:
-                return
-
-        # ---------------------------------------------------------
-        # A new explicit comparison can replace the old one.
-        # Otherwise leave the existing comparison state untouched.
-        # ---------------------------------------------------------
-
-        if (
-            comparison_signal or between_signal
-        ) and len(cleaned_entities) < 2:
-            # Do not destroy a valid existing comparison merely because
-            # the current message contains comparison language.
+        if is_followup:
             return
 
+        # ---------------------------------------------------------
+        # 3. NEW TOPIC = terminate old comparison
+        #
+        # Example:
+        #   TCP
+        #   UDP
+        #   Which one is faster?
+        #   What is photosynthesis?
+        #
+        # The photosynthesis question must NOT remain attached
+        # to the TCP/UDP comparison.
+        # ---------------------------------------------------------
+        if cleaned_entities:
+            entity_names = {
+                entity.lower()
+                for entity in cleaned_entities
+            }
+
+            comparison_entities = {
+                entity.lower()
+                for entity in existing
+            }
+
+            if not entity_names.intersection(comparison_entities):
+                session["active_comparison"] = False
+                session["last_compared_entities"] = []
+
+        # ---------------------------------------------------------
+        # 4. Explicit comparison language without enough entities
+        #    should not create fake comparison state.
+        # ---------------------------------------------------------
         if comparison_signal or between_signal:
+            if len(cleaned_entities) < 2:
+                return
+
             session["active_comparison"] = False
             session["last_compared_entities"] = []
 
@@ -821,43 +838,68 @@ class ConversationManager:
 
         if not active_comparison and is_comparison_followup:
             history = session.get("conversation_history", [])
-            recent_entity_turns = []
 
-            for turn in reversed(history[-8:]):
+            # ---------------------------------------------------------
+            # IMPORTANT:
+            # Only inspect the immediately preceding user turns.
+            #
+            # Never search deep history for a comparison because that
+            # can incorrectly turn:
+            #
+            #   TCP
+            #   UDP
+            #   ...
+            #   Photosynthesis
+            #   Why is it important?
+            #
+            # into a TCP/UDP question.
+            # ---------------------------------------------------------
+            recent_user_turns = []
+
+            for turn in reversed(history[-3:]):
                 if not isinstance(turn, dict):
                     continue
 
-                user_message = str(turn.get("user", "")).strip()
+                user_message = str(
+                    turn.get("user", "")
+                ).strip()
+
                 if not user_message:
                     continue
 
+                recent_user_turns.append(user_message)
+
+                if len(recent_user_turns) >= 2:
+                    break
+
+            recent_entities = []
+
+            for user_message in recent_user_turns:
                 entities = self._clean_entities(
                     self.extract_entities(user_message)
                 )
 
-                # Keep only the first useful entity from each turn.
-                # This avoids treating "Compare" or question words as
-                # comparison candidates.
-                if entities:
-                    entity = entities[0]
+                if not entities:
+                    continue
 
-                    if not any(
-                        entity.lower() == existing.lower()
-                        for existing in recent_entity_turns
-                    ):
-                        recent_entity_turns.append(entity)
+                entity = entities[0]
 
-                if len(recent_entity_turns) >= 2:
-                    break
+                if not any(
+                    entity.lower() == existing.lower()
+                    for existing in recent_entities
+                ):
+                    recent_entities.append(entity)
 
-            if len(recent_entity_turns) >= 2:
-                compared = list(reversed(recent_entity_turns[:2]))
+            # Only recover an implicit comparison when BOTH
+            # immediately recent turns contain distinct entities.
+            if len(recent_entities) == 2:
+                compared = list(reversed(recent_entities[:2]))
+
                 active_comparison = True
 
-                # Persist the recovered comparison so the next follow-up
-                # does not need to reconstruct it again.
                 session["last_compared_entities"] = compared[:]
                 session["active_comparison"] = True
+
                 session["last_subject"] = {
                     "type": "comparison",
                     "entities": compared[:],
