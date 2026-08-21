@@ -304,7 +304,7 @@ def format_telegram_response(text: str) -> str:
         #
         # Telegram output:
         #
-        # <b>TCP vs UDP</b>
+        # ⚖️ <b>TCP vs UDP</b>
         #
         # <b>Connection</b>
         # TCP: Connection-oriented
@@ -315,7 +315,7 @@ def format_telegram_response(text: str) -> str:
 
             # Comparison title
             comparison.append(
-                "<b>"
+                "⚖️ <b>"
                 + " vs ".join(
                     html.escape(header)
                     for header in headers[1:]
@@ -396,8 +396,11 @@ def format_telegram_response(text: str) -> str:
 
         if (
             "|" in stripped
-            and stripped.startswith("|")
-            and stripped.endswith("|")
+            and stripped.count("|") >= 2
+            and (
+                stripped.startswith("|")
+                or stripped.endswith("|")
+            )
         ):
             table_rows.append(line)
             continue
