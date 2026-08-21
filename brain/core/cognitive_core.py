@@ -1895,34 +1895,109 @@ class CognitiveCore:
                 except Exception as e:
                     logger.warning("Executor plan execution skipped: %s", e)
 
-            # Step 5: Only if there is still no answer, fallback to Memory -> Knowledge -> World -> LLM
+            # Step 5: Complete the response-selection hierarchy.
+            #
+            # IMPORTANT:
+            # Memory is supporting context, not the default final answer.
+            # Phase-1 agent fusion must be allowed to produce the answer
+            # before retrieval subsystems are considered as fallbacks.
             if not answer:
                 self.brain_state["thinking"] = True
 
+                # -----------------------------------------------------
+                # Phase-1 Agent Fusion
+                # -----------------------------------------------------
+                agent_fusion = context.get("agent_fusion")
+
+                if agent_fusion:
+                    if isinstance(agent_fusion, dict):
+                        fused_answer = (
+                            agent_fusion.get("response")
+                            or agent_fusion.get("answer")
+                            or agent_fusion.get("content")
+                            or agent_fusion.get("message")
+                        )
+                    else:
+                        fused_answer = str(agent_fusion)
+
+                    if fused_answer:
+                        answer = str(fused_answer).strip()
+                        source = "multi_agent"
+                        consensus = context.get("agent_consensus", {})
+                        confidence = float(
+                            consensus.get("confidence", 0.90)
+                            if isinstance(consensus, dict)
+                            else 0.90
+                        )
+
+                        logger.info(
+                            "[CognitiveCore] Using fused Phase-1 "
+                            "agent response as primary answer."
+                        )
+
+                # -----------------------------------------------------
                 # Memory Subsystem
+                # -----------------------------------------------------
+                # Memory may enrich context, but it may become the final
+                # answer only for an explicit memory-recall request.
                 mem_res = None
-                if decision and getattr(decision, "use_memory", False) and self.memory_router and hasattr(self.memory_router, "answer"):
+                if (
+                    decision
+                    and getattr(decision, "use_memory", False)
+                    and self.memory_router
+                    and hasattr(self.memory_router, "answer")
+                ):
                     try:
-                        mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
+                        mem_res = await self.memory_router.answer(
+                            resolved_query,
+                            reasoning_result=reasoning,
+                        )
                     except Exception as e:
-                        logger.warning("Memory router answer search skipped: %s", e)
-                elif reasoning and getattr(reasoning, "retrieved_memory", None):
+                        logger.warning(
+                            "Memory router answer search skipped: %s",
+                            e,
+                        )
+                elif reasoning and getattr(
+                    reasoning, "retrieved_memory", None
+                ):
                     mem_res = reasoning.retrieved_memory
-                elif self.memory_router and hasattr(self.memory_router, "answer"):
+                elif self.memory_router and hasattr(
+                    self.memory_router, "answer"
+                ):
                     try:
-                        mem_res = await self.memory_router.answer(resolved_query, reasoning_result=reasoning)
+                        mem_res = await self.memory_router.answer(
+                            resolved_query,
+                            reasoning_result=reasoning,
+                        )
                     except Exception as e:
-                        logger.warning("Memory router answer search skipped: %s", e)
+                        logger.warning(
+                            "Memory router answer search skipped: %s",
+                            e,
+                        )
 
                 if mem_res:
-                    if isinstance(mem_res, str):
-                        answer = mem_res
-                        source = "memory"
-                        confidence = 0.94
-                    elif isinstance(mem_res, list):
+                    if isinstance(mem_res, list):
                         context["memory"] = mem_res
+                    elif isinstance(mem_res, dict):
+                        context["memory"] = [mem_res]
                     else:
-                        answer = str(mem_res)
+                        context["memory"] = [str(mem_res)]
+
+                    if (
+                        not answer
+                        and self._looks_like_memory_recall_request(
+                            resolved_query
+                        )
+                    ):
+                        if isinstance(mem_res, str):
+                            answer = mem_res
+                        elif isinstance(mem_res, list):
+                            answer = "\n".join(
+                                str(item) for item in mem_res
+                            )
+                        else:
+                            answer = str(mem_res)
+
                         source = "memory"
                         confidence = 0.94
 
