@@ -265,6 +265,12 @@ class ConversationManager:
             "this",
             "that",
             "it",
+            "compare",
+            "comparing",
+            "comparison",
+            "versus",
+            "vs",
+            "and",
         }
 
         result = []
