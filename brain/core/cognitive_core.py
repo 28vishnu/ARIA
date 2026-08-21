@@ -1476,49 +1476,6 @@ class CognitiveCore:
             "error": last_error,
         }
 
-    async def _resolve_query(self, session_id: str, query: str) -> str:
-        history = []
-
-        if self.state_manager:
-            try:
-                history = self.state_manager.get_conversation_history(session_id)
-            except Exception as e:
-                logger.warning("State manager conversation history retrieval skipped: %s", e)
-
-        if not history:
-            return query
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Rewrite follow-up questions into standalone questions. "
-                    "Return ONLY the rewritten question."
-                ),
-            }
-        ]
-
-        for turn in history[-5:]:
-            messages.append({"role": "user", "content": turn["user"]})
-            messages.append({"role": "assistant", "content": turn["assistant"]})
-
-        messages.append({"role": "user", "content": query})
-
-        resolved = None
-        if self.llm_router and hasattr(self.llm_router, "chat"):
-            try:
-                resolved = await self.llm_router.chat(messages)
-            except Exception as e:
-                logger.warning("LLM router chat for resolution skipped: %s", e)
-
-        if isinstance(resolved, str):
-            resolved = resolved.strip()
-
-            if resolved:
-                return resolved
-
-        return query
-
     # =========================================================
     # KNOWLEDGE FIRST PIPELINE
     # =========================================================
@@ -1644,24 +1601,36 @@ class CognitiveCore:
             context.setdefault("query", resolved_query)
             context.setdefault("session_id", session_id)
 
-        # Load deterministic conversation context for this session.
+        # Load deterministic conversation context for this session without overwriting richer incoming context.
         if self.conversation_manager:
             try:
-                conversation_context = self.conversation_manager.get_context(
-                    session_id
+                fresh_conversation = (
+                    self.conversation_manager.get_context(session_id)
+                    or {}
                 )
 
-                context["conversation"] = conversation_context
+                existing_conversation = context.get(
+                    "conversation",
+                    {},
+                )
+
+                if isinstance(existing_conversation, dict):
+                    context["conversation"] = {
+                        **fresh_conversation,
+                        **existing_conversation,
+                    }
+                else:
+                    context["conversation"] = fresh_conversation
 
                 logger.info(
                     "[Conversation] Loaded context for session %s: %s",
                     session_id,
-                    conversation_context,
+                    context["conversation"],
                 )
 
             except Exception as e:
                 logger.warning(
-                    "[Conversation] Context retrieval skipped: %s",
+                    "[Conversation] Context refresh skipped: %s",
                     e,
                 )
 
