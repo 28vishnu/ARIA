@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from brain.agents.agent_workflow import AgentWorkflow
+from brain.intent.intent_analyzer import IntentAnalyzer
 
 logger = logging.getLogger("aria")
 
@@ -104,6 +105,7 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
         self.memory_engine = memory_engine
+        self.intent_analyzer = IntentAnalyzer()
 
     def _build_semantic_context(self):
 
@@ -121,7 +123,7 @@ class ReasoningEngine:
         self,
         query: str,
         context: dict,
-    ):
+    ) -> str:
         """
         Choose the best reasoning strategy.
         """
@@ -1482,6 +1484,22 @@ Return JSON:
         self._temp_context = context
         user_query = str(context.get("query", "")).strip()
 
+        # ---------------------------------------------------------
+        # INTENT ANALYSIS
+        # ---------------------------------------------------------
+
+        intent = self.intent_analyzer.analyze(
+            user_query
+        )
+
+        context["intent"] = intent
+
+        logger.info(
+            "[ReasoningEngine] Intent=%s confidence=%.2f",
+            intent.intent_type,
+            intent.confidence,
+        )
+
         semantic_context = self._build_semantic_context()
 
         if semantic_context:
@@ -1494,6 +1512,26 @@ Return JSON:
             user_query,
             context,
         )
+
+        # ---------------------------------------------------------
+        # INTENT-BASED STRATEGY OVERRIDE
+        # ---------------------------------------------------------
+
+        if intent.intent_type == "memory":
+            strategy = "memory_first"
+
+        elif intent.intent_type == "document":
+            strategy = "document_first"
+
+        elif intent.intent_type == "search":
+            strategy = "research_first"
+
+        elif intent.intent_type == "question":
+            if intent.requires_reasoning:
+                strategy = "deep_reasoning"
+
+        elif intent.intent_type == "greeting":
+            strategy = "conversation"
 
         decision = context.get("decision")
 
@@ -1573,6 +1611,10 @@ Return JSON:
         start_time = time.time()
         raw_query = user_query
         reasoning_steps = []
+        reasoning_steps.append(
+            f"Detected intent: {intent.intent_type} "
+            f"(confidence={intent.confidence:.2f})"
+        )
 
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
@@ -1632,7 +1674,11 @@ Return JSON:
         if not selected_agents:
             selected_agents = self.choose_best_agents(
                 query,
-                getattr(context.get("intent"), "name", None)
+                getattr(
+                    context.get("intent"),
+                    "intent_type",
+                    None,
+                ),
             )
 
         reasoning_steps.append(f"Selected best agents: {selected_agents}")
@@ -1642,22 +1688,52 @@ Return JSON:
             if decision
             else strategy == "planning_first"
         )
-        requires_tools = decision.use_tools if decision else False
+
+        requires_tools = (
+            decision.use_tools
+            if decision
+            else False
+        )
+
         requires_memory = (
             decision.use_memory
             if decision
             else strategy == "memory_first"
         )
+
         requires_documents = (
             decision.use_documents
             if decision
             else strategy == "document_first"
         )
+
         requires_web = (
             getattr(decision, "use_web", False)
             if decision
             else strategy == "research_first"
         )
+
+        # ---------------------------------------------------------
+        # INTENT CAPABILITY FLAGS
+        # ---------------------------------------------------------
+
+        requires_memory = (
+            requires_memory
+            or intent.requires_memory
+        )
+
+        requires_documents = (
+            requires_documents
+            or intent.requires_documents
+        )
+
+        requires_web = (
+            requires_web
+            or intent.requires_web
+        )
+
+        if intent.requires_reasoning:
+            mode = "deep_reasoning"
 
         if strategy == "research_first":
             requires_web = True
@@ -1883,6 +1959,12 @@ Return JSON:
         )
 
         metadata = {
+            "intent": intent.intent_type,
+            "intent_confidence": intent.confidence,
+            "intent_requires_memory": intent.requires_memory,
+            "intent_requires_documents": intent.requires_documents,
+            "intent_requires_web": intent.requires_web,
+            "intent_requires_reasoning": intent.requires_reasoning,
             "reasoning_time": reasoning_time,
             "planner_used": planner_used,
             "memory_used": memory_used,
