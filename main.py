@@ -1048,12 +1048,11 @@ async def telegram_webhook(req: Request):
         }
 
     await status.update("Understanding the request...")
-    await status.update("Reasoning...")
     result = await process_task(
         text,
         str(chat_id),
         request_id,
-        req.app.state
+        req.app.state,
     )
 
     # ---------------------------------------------------------
