@@ -105,6 +105,15 @@ class ConversationManager:
             "On",
             "Of",
             "For",
+
+            # Greetings are not conversation topics.
+            "Hello",
+            "Hi",
+            "Hey",
+            "Good",
+            "Morning",
+            "Afternoon",
+            "Evening",
         }
 
         return [
@@ -1013,12 +1022,64 @@ class ConversationManager:
 
         # ---------------------------------------------------------
         # 3. Other lightweight references.
+        #
+        # For pronoun follow-ups such as:
+        #
+        #   What is photosynthesis?
+        #   Why is it important?
+        #   How does it work?
+        #
+        # prefer the most recent meaningful user question over an
+        # old topic such as a greeting.
         # ---------------------------------------------------------
-        subject = (
-            session.get("current_topic")
-            or session.get("last_subject")
-            or session.get("last_entity")
+
+        subject = None
+
+        # First try the most recent user message stored in the session.
+        previous_user_message = str(
+            session.get("last_user_message") or ""
+        ).strip()
+
+        if previous_user_message:
+            previous_entities = self._clean_entities(
+                self.extract_entities(previous_user_message)
+            )
+
+            if previous_entities:
+                subject = previous_entities[0]
+
+        # Fall back to normal conversational state.
+        if not subject:
+            subject = (
+                session.get("current_topic")
+                or session.get("last_subject")
+                or session.get("last_entity")
+            )
+
+        # Pronoun-based follow-ups should inherit the previous subject.
+        pronoun_followup = bool(
+            re.search(
+                r"\b(it|this|that|these|those)\b",
+                lower,
+                re.IGNORECASE,
+            )
         )
+
+        if pronoun_followup and subject:
+            words = cleaned.split()
+
+            words = [
+                str(subject) if word.lower() in {
+                    "it",
+                    "this",
+                    "that",
+                    "these",
+                    "those",
+                } else word
+                for word in words
+            ]
+
+            return " ".join(words)
 
         if isinstance(subject, dict):
             subject_entities = subject.get("entities") or []
@@ -1049,10 +1110,15 @@ class ConversationManager:
             return f"Compare {subject} to {other}"
 
         if lower == "why":
-            return f"Why is {subject} better?"
+            return f"Why is {subject} important?"
 
         if lower.startswith("why "):
-            return f"Why {subject} {cleaned[4:]}"
+            remainder = cleaned[4:].strip()
+
+            if remainder:
+                return f"Why is {subject} {remainder}"
+
+            return f"Why is {subject} important?"
 
         if lower == "continue":
             return f"Continue explaining {subject}"
@@ -1061,8 +1127,11 @@ class ConversationManager:
             return f"Tell me more about {subject}"
 
         words = cleaned.split()
+
         words = [
-            str(subject) if w.lower() in ("it", "this", "that") else w
+            str(subject)
+            if w.lower() in ("it", "this", "that", "these", "those")
+            else w
             for w in words
         ]
 
