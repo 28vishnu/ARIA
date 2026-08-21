@@ -466,8 +466,10 @@ class ReasoningEngine:
 
         active_subject = (
             conv.get("active_subject")
-            or conv.get("last_subject")
+            or conv.get("active_topic")
+            or conv.get("topic")
             or context.get("active_subject")
+            or context.get("topic")
         )
 
         active_comparison = bool(
@@ -539,7 +541,6 @@ class ReasoningEngine:
             "which is easier",
             "what about",
             "how about",
-            "why",
             "tell me more",
             "continue",
             "which would you choose",
@@ -626,7 +627,6 @@ If the user says:
 - "them"
 - "which one"
 - "which is better"
-- "why"
 - "continue"
 - "more"
 - "what about X"
@@ -760,6 +760,8 @@ Return ONLY the standalone request.
 
             "active_subject": (
                 conv.get("active_subject")
+                or conv.get("active_topic")
+                or conv.get("topic")
                 or conv.get("last_subject")
             ),
 
