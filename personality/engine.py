@@ -189,6 +189,80 @@ class PersonalityEngine:
         ):
             return reply
         return f"{reaction} {reply}"
+    def _add_contextual_emoji(self, reply: str, user_text: str) -> str:
+        """
+        Add an occasional emoji only when the conversation naturally calls
+        for one. Never decorate normal technical or factual responses.
+        """
+        if not reply:
+            return reply
+        query = (user_text or "").lower().strip()
+        # Technical/factual requests should stay clean.
+        serious_patterns = (
+            "what is",
+            "what are",
+            "explain",
+            "define",
+            "difference",
+            "compare",
+            "which is",
+            "how does",
+            "how do",
+            "calculate",
+            "solve",
+            "code",
+            "python",
+            "javascript",
+            "api",
+            "error",
+            "bug",
+            "exam",
+            "study",
+            "search",
+            "find",
+            "latest",
+            "news",
+            "price",
+            "buy",
+            "purchase",
+            "file",
+            "document",
+        )
+        if any(pattern in query for pattern in serious_patterns):
+            return reply
+        # Keep emojis uncommon.
+        if random.random() > 0.10:
+            return reply
+        emoji_map = {
+            "😂": (
+                "haha",
+                "lol",
+                "funny",
+                "joke",
+                "lmao",
+            ),
+            "😄": (
+                "great",
+                "awesome",
+                "nice",
+                "finally",
+                "done",
+                "worked",
+            ),
+            "🙂": (
+                "thanks",
+                "thank you",
+                "cool",
+                "okay",
+                "ok",
+            ),
+        }
+        for emoji, triggers in emoji_map.items():
+            if any(trigger in query for trigger in triggers):
+                if emoji not in reply:
+                    return f"{reply} {emoji}"
+                return reply
+        return reply
     async def apply_personality(
         self,
         session_id: str,
@@ -285,6 +359,7 @@ class PersonalityEngine:
             )
             reply = self._post_process(reply)
             reply = self._add_natural_touch(reply, user_text)
+            reply = self._add_contextual_emoji(reply, user_text)
             return reply
         except Exception as e:
             logger.exception(
@@ -793,7 +868,7 @@ class PersonalityEngine:
         # ---------------------------------------------------------
         reply = re.sub(
             r"(?m)^\s*(?:---+|___+)\s*$",
-            ="",
+            "",
             reply,
         )
         # ---------------------------------------------------------
