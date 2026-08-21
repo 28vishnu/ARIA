@@ -101,6 +101,8 @@ class CognitiveCore:
         task_manager=None,
         agent_coordinator=None,
         lead_agent=None,
+        agent_manager=None,
+        task_planner=None,
         document_pipeline=None,
         study_engine=None,
         repository_memory=None,
@@ -134,6 +136,8 @@ class CognitiveCore:
         self.task_manager = task_manager
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
+        self.agent_manager = agent_manager
+        self.task_planner = task_planner
         self.document_pipeline = document_pipeline
         self.study_engine = study_engine
         self.repository_memory = repository_memory
@@ -980,6 +984,131 @@ class CognitiveCore:
                 print("=====================================\n")
 
         return evidence
+
+    async def _run_phase1_agent_pipeline(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        decision=None,
+    ):
+        """
+        Execute the canonical Phase-1 agent pipeline.
+
+        Flow:
+
+            Decision
+                ↓
+            LeadAgent
+                ↓
+            TaskPlanner
+                ↓
+            AgentCoordinator
+                ↓
+            AgentManager
+                ↓
+            Specialists
+        """
+
+        if not self.agent_coordinator:
+            return None
+
+        try:
+            selected_agents = []
+
+            if decision is not None:
+                selected_agents = list(
+                    getattr(
+                        decision,
+                        "selected_agents",
+                        [],
+                    )
+                    or []
+                )
+
+                selected_skills = list(
+                    getattr(
+                        decision,
+                        "selected_skills",
+                        [],
+                    )
+                    or []
+                )
+
+                if not selected_agents:
+                    selected_agents = (
+                        selected_skills
+                    )
+
+            # -------------------------------------------------
+            # Lead Agent
+            # -------------------------------------------------
+
+            execution_plan = None
+
+            if self.lead_agent:
+                execution_plan = (
+                    await self.lead_agent
+                    .create_execution_plan(
+                        query=query,
+                        context=context,
+                        selected_agents=selected_agents,
+                        decision=decision,
+                    )
+                )
+
+                context[
+                    "lead_execution_plan"
+                ] = execution_plan
+
+                selected_agents = list(
+                    execution_plan.get(
+                        "execution_order",
+                        selected_agents,
+                    )
+                    or []
+                )
+
+            # -------------------------------------------------
+            # Task Planner
+            # -------------------------------------------------
+
+            if self.task_planner:
+                task_plan = (
+                    self.task_planner.create_plan(
+                        query=query,
+                        decision=decision,
+                        context=context,
+                    )
+                )
+
+                context[
+                    "task_plan"
+                ] = task_plan
+
+            # -------------------------------------------------
+            # Agent Coordinator
+            # -------------------------------------------------
+
+            coordination = (
+                await self.agent_coordinator.coordinate(
+                    decision=decision,
+                    query=query,
+                    context=context,
+                )
+            )
+
+            context[
+                "agent_coordination"
+            ] = coordination
+
+            return coordination
+
+        except Exception:
+            logger.exception(
+                "[CognitiveCore] Phase-1 agent pipeline failed."
+            )
+
+            return None
 
     def _normalize_execution_verification(
         self,
@@ -3628,6 +3757,73 @@ Execution Results:
             pre_ctx["decision"] = decision
             context["decision"] = decision
 
+            # =================================================
+            # PHASE-1 CANONICAL DECISION STATE
+            # =================================================
+
+            context["phase1"] = {
+                "active": True,
+                "selected_skills": list(
+                    getattr(
+                        decision,
+                        "selected_skills",
+                        [],
+                    )
+                    or []
+                ),
+                "selected_tools": list(
+                    getattr(
+                        decision,
+                        "selected_tools",
+                        [],
+                    )
+                    or []
+                ),
+                "selected_agents": list(
+                    getattr(
+                        decision,
+                        "selected_agents",
+                        [],
+                    )
+                    or []
+                ),
+                "requires_reasoning": bool(
+                    getattr(
+                        decision,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
+                "requires_memory": bool(
+                    getattr(
+                        decision,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+                "requires_documents": bool(
+                    getattr(
+                        decision,
+                        "requires_documents",
+                        False,
+                    )
+                ),
+                "requires_web": bool(
+                    getattr(
+                        decision,
+                        "requires_web",
+                        False,
+                    )
+                ),
+                "requires_planning": bool(
+                    getattr(
+                        decision,
+                        "requires_planning",
+                        False,
+                    )
+                ),
+            }
+
             # Execute required tools based on final decision
             evidence = await self._execute_required_tools(
                 decision,
@@ -3919,6 +4115,91 @@ Execution Results:
                         "[CognitiveCore] Natural memory "
                         "learning failed."
                     )
+
+            # =================================================
+            # 12.5 PHASE-1 MULTI-AGENT EXECUTION
+            # =================================================
+
+            phase1_selected_agents = list(
+                getattr(
+                    decision,
+                    "selected_agents",
+                    [],
+                )
+                or []
+            )
+
+            phase1_selected_skills = list(
+                getattr(
+                    decision,
+                    "selected_skills",
+                    [],
+                )
+                or []
+            )
+
+            should_run_agent_pipeline = bool(
+                self.agent_coordinator
+                and (
+                    phase1_selected_agents
+                    or phase1_selected_skills
+                    or getattr(
+                        decision,
+                        "requires_planning",
+                        False,
+                    )
+                )
+            )
+
+            if should_run_agent_pipeline:
+
+                agent_result = (
+                    await self._run_phase1_agent_pipeline(
+                        query=query,
+                        context=context,
+                        decision=decision,
+                    )
+                )
+
+                if agent_result:
+
+                    context[
+                        "phase1_agent_result"
+                    ] = agent_result
+
+                    # Preserve the structured result for
+                    # knowledge-first response generation.
+                    context[
+                        "agent_outputs"
+                    ] = agent_result.get(
+                        "outputs",
+                        [],
+                    )
+
+                    context[
+                        "agent_consensus"
+                    ] = agent_result.get(
+                        "consensus"
+                    )
+
+                    try:
+                        fused_agents = (
+                            self.response_fusion.fuse(
+                                agent_result.get(
+                                    "outputs",
+                                    [],
+                                )
+                            )
+                        )
+
+                        context[
+                            "agent_fusion"
+                        ] = fused_agents
+
+                    except Exception:
+                        logger.exception(
+                            "[CognitiveCore] Agent response fusion failed."
+                        )
 
             # =================================================
             # 13. KNOWLEDGE-FIRST PIPELINE EXECUTION
