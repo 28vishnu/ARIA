@@ -893,6 +893,7 @@ class ConversationManager:
                         "what about ",
                         "how about ",
                     )
+                )
             ):
                 return f"{cleaned} between {a} and {b}."
 
