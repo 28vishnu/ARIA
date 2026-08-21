@@ -105,7 +105,7 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
         self.memory_engine = memory_engine
-        self.intent_analyzer = IntentAnalyzer()
+        self.intent_analyzer = IntentAnalyzer(llm_router=llm_router)
 
     def _build_semantic_context(self):
 
@@ -1485,7 +1485,7 @@ Return JSON:
         user_query = str(context.get("query", "")).strip()
 
         # ---------------------------------------------------------
-        # INTENT ANALYSIS
+        # INTENT ANALYSIS (Updated to use await)
         # ---------------------------------------------------------
 
         intent = await self.intent_analyzer.analyze(
