@@ -766,19 +766,36 @@ class ConversationManager:
         lower = cleaned.lower()
 
         if active_comparison:
-            if lower in {
-                "which one",
-                "which is better",
-                "which is easier",
-                "what about performance",
-                "what about jobs",
-                "which would you choose",
-            }:
-                a, b = compared[0], compared[1]
+            a, b = compared[0], compared[1]
 
-                return (
-                    f"{cleaned} between {a} and {b}."
-                )
+            # Direct comparison follow-ups.
+            comparison_patterns = (
+                "which one",
+                "which is",
+                "which would",
+                "which has",
+                "which performs",
+                "what about",
+                "how about",
+            )
+
+            if (
+                lower in {
+                    "which one",
+                    "which is better",
+                    "which is faster",
+                    "which is slower",
+                    "which is easier",
+                    "which is safer",
+                    "which is cheaper",
+                    "which is more reliable",
+                    "which would you choose",
+                    "what about performance",
+                    "what about jobs",
+                }
+                or lower.startswith(comparison_patterns)
+            ):
+                return f"{cleaned} between {a} and {b}."
 
         if lower == "give example":
             compared = session.get("last_compared_entities", [])
