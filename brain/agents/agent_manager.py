@@ -14,28 +14,86 @@ class AgentManager:
     def __init__(self):
         self.agents: List[BaseAgent] = []
 
+        # Fast canonical name → agent lookup.
+        self.agent_registry: Dict[str, BaseAgent] = {}
+
     def register(self, agent: BaseAgent):
+        if agent is None:
+            return
+
+        agent_name = str(
+            getattr(agent, "name", "")
+        ).strip()
+
+        if not agent_name:
+            logger.warning(
+                "[AgentManager] Cannot register unnamed agent."
+            )
+            return
+
+        # Prevent duplicate registration.
+        existing = self.agent_registry.get(
+            agent_name
+        )
+
+        if existing is not None:
+            logger.warning(
+                "[AgentManager] Replacing existing agent: %s",
+                agent_name,
+            )
+
+            try:
+                self.agents.remove(existing)
+            except ValueError:
+                pass
+
         self.agents.append(agent)
+        self.agent_registry[agent_name] = agent
 
         logger.info(
             "[AgentManager] Registered agent: %s",
-            agent.name
+            agent_name,
         )
 
-    def get(self, name: str) -> Optional[BaseAgent]:
+    def get(
+        self,
+        name: str,
+    ) -> Optional[BaseAgent]:
         """
-        Retrieves a registered agent by its name.
+        Retrieve a registered agent by canonical name.
         """
-        for agent in self.agents:
-            if agent.name == name:
-                return agent
-        return None
+
+        if not name:
+            return None
+
+        return self.agent_registry.get(
+            str(name).strip()
+        )
 
     def get_agent(self, name: str) -> Optional[BaseAgent]:
         """
         Retrieves a registered agent by its name (alias for sequential execution support).
         """
         return self.get(name)
+
+    def list_agents(self) -> List[str]:
+        """
+        Return registered agent names.
+        """
+
+        return list(
+            self.agent_registry.keys()
+        )
+
+    def has_agent(
+        self,
+        name: str,
+    ) -> bool:
+        """
+        Check whether a specialist is registered.
+        """
+
+        return self.get(name) is not None
 
     async def select_agent(
         self,
@@ -69,6 +127,56 @@ class AgentManager:
 
         return best_agent, best_score
 
+    async def execute_agent(
+        self,
+        agent_name: str,
+        query: str,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Execute one named specialist agent.
+
+        This is the canonical execution interface used by
+        AgentCoordinator.
+        """
+
+        context = (
+            context
+            if isinstance(context, dict)
+            else {}
+        )
+
+        agent = self.get_agent(
+            agent_name
+        )
+
+        if agent is None:
+            raise ValueError(
+                f"Agent not found: {agent_name}"
+            )
+
+        logger.info(
+            "[AgentManager] Executing agent: %s",
+            agent_name,
+        )
+
+        if hasattr(agent, "execute"):
+            return await agent.execute(
+                query=query,
+                context=context,
+            )
+
+        if hasattr(agent, "run"):
+            return await agent.run(
+                query,
+                context,
+            )
+
+        raise RuntimeError(
+            f"Agent '{agent_name}' has neither "
+            f"execute() nor run()."
+        )
+
     async def execute_agents(self, plan, context=None):
         """
         Execute multiple agents sequentially.
@@ -98,41 +206,42 @@ class AgentManager:
 
             task = step.get("task")
 
-            agent = self.get_agent(agent_name)
-
-            if not agent:
-                results.append({
-                    "agent": agent_name,
-                    "success": False,
-                    "error": "Agent not found"
-                })
-                continue
-
             try:
 
-                if hasattr(agent, "run"):
-                    output = await agent.run(task, context)
+                output = await self.execute_agent(
+                    agent_name,
+                    task,
+                    context,
+                )
 
-                elif hasattr(agent, "execute"):
-                    output = await agent.execute(task, context)
+                success = output is not None
 
-                else:
-                    output = {
-                        "error": "Agent has no run() or execute() method"
-                    }
+                if isinstance(
+                    output,
+                    dict,
+                ):
+                    success = output.get(
+                        "success",
+                        True,
+                    )
 
                 results.append({
                     "agent": agent_name,
-                    "success": True,
-                    "result": output
+                    "success": bool(success),
+                    "result": output,
                 })
 
             except Exception as e:
 
+                logger.exception(
+                    "[AgentManager] Agent execution failed: %s",
+                    agent_name,
+                )
+
                 results.append({
                     "agent": agent_name,
                     "success": False,
-                    "error": str(e)
+                    "error": str(e),
                 })
 
         return results
