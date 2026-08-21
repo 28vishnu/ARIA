@@ -296,22 +296,45 @@ def format_telegram_response(text: str) -> str:
 
         comparison = []
 
-        # If this is a normal 3+ column table:
+        # -----------------------------------------------------
+        # 3+ COLUMN COMPARISON TABLE
         #
+        # Example:
         # Feature | TCP | UDP
         #
-        # convert to:
+        # Telegram output:
         #
-        # <b>Feature</b>
-        # > TCP: ...
-        # > UDP: ...
+        # <b>TCP vs UDP</b>
         #
-        # This is much easier to read on mobile.
+        # <b>Connection</b>
+        # TCP: Connection-oriented
+        # UDP: Connectionless
+        # -----------------------------------------------------
+
         if len(headers) >= 3:
+
+            # Comparison title
+            comparison.append(
+                "<b>"
+                + " vs ".join(
+                    html.escape(header)
+                    for header in headers[1:]
+                    if header.strip()
+                )
+                + "</b>"
+            )
+
+            comparison.append("")
 
             for row in data_rows:
 
-                feature = row[0] if row else ""
+                if not row:
+                    continue
+
+                feature = row[0].strip()
+
+                if not feature:
+                    continue
 
                 comparison.append(
                     f"<b>{html.escape(feature)}</b>"
@@ -322,42 +345,49 @@ def format_telegram_response(text: str) -> str:
                     if index >= len(row):
                         continue
 
-                    header = headers[index]
-                    value = row[index]
+                    header = headers[index].strip()
+                    value = row[index].strip()
+
+                    if not value:
+                        continue
 
                     comparison.append(
-                        f"<blockquote>"
-                        f"<b>{html.escape(header)}:</b> "
+                        f"{html.escape(header)}: "
                         f"{html.escape(value)}"
-                        f"</blockquote>"
                     )
 
                 comparison.append("")
 
-            output.append("\n".join(comparison).strip())
+            output.append(
+                "\n".join(comparison).strip()
+            )
 
         else:
+
             # -------------------------------------------------
-            # Generic 2-column table
+            # GENERIC 2-COLUMN TABLE
             # -------------------------------------------------
 
             for row in data_rows:
 
-                if len(row) >= 2:
+                if len(row) < 2:
+                    continue
 
-                    comparison.append(
-                        f"<b>{html.escape(row[0])}</b>"
-                    )
+                label = row[0].strip()
+                value = row[1].strip()
 
-                    comparison.append(
-                        f"<blockquote>"
-                        f"{html.escape(row[1])}"
-                        f"</blockquote>"
-                    )
+                if not label or not value:
+                    continue
 
-                    comparison.append("")
+                comparison.append(
+                    f"<b>{html.escape(label)}</b>: "
+                    f"{html.escape(value)}"
+                )
 
-            output.append("\n".join(comparison).strip())
+            if comparison:
+                output.append(
+                    "\n".join(comparison).strip()
+                )
 
     # Detect table rows.
     for line in lines:
