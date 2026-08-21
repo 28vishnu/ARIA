@@ -73,27 +73,36 @@ class IntentAnalyzer:
                 self.intent_history.pop(0)  
             return intent  
 
-        # Local rule evaluation before calling LLM  
-        if "compare" in q:  
-            intent = Intent("Research", 0.96, False, False, False, True, False, True)  
-            self.intent_history.append(intent)  
-            if len(self.intent_history) > 100:  
-                self.intent_history.pop(0)  
-            return intent  
+        # ---------------------------------------------------------
+        # EXPLICIT COMPARISON REQUEST
+        # ---------------------------------------------------------
+        if (
+            q.startswith("compare ")
+            or " compare " in f" {q} "
+            or q.startswith("difference between ")
+        ):
+            intent = Intent(
+                name="Research",
+                confidence=0.96,
+                requires_planning=False,
+                requires_tools=False,
+                requires_documents=False,
+                requires_memory=False,
+                requires_web=False,
+                requires_reasoning=True,
+                data={
+                    "comparison": True,
+                    "action_name": None,
+                    "action_params": {},
+                },
+            )
 
-        if q.startswith("who"):  
-            intent = Intent("Research", 0.95, False, False, False, True, True, False)  
-            self.intent_history.append(intent)  
-            if len(self.intent_history) > 100:  
-                self.intent_history.pop(0)  
-            return intent  
+            self.intent_history.append(intent)
 
-        if q.startswith("where"):  
-            intent = Intent("Research", 0.95, False, False, False, True, True, False)  
-            self.intent_history.append(intent)  
-            if len(self.intent_history) > 100:  
-                self.intent_history.pop(0)  
-            return intent  
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+
+            return intent
 
         if q == "continue":  
             intent = Intent("Follow-up", 0.99, False, False, False, True, False, False)  
