@@ -55,11 +55,16 @@ CONVERSATION:
 
 DOCUMENTS:
 - Never dump raw document formatting unless the user explicitly asks for it.
-- Remove Markdown artifacts such as **, ###, ---, and unnecessary tables.
-- Summarize rather than reproduce.
+- Preserve useful Markdown structure when it improves readability.
+- Use **bold** for important terms and key points.
+- Use headings for major sections.
+- Use bullets for lists.
+- Use comparison tables when they genuinely improve clarity.
+- For important conclusions, warnings, or key statements, use a short quote-style block.
+- Do not overuse formatting.
+- Preserve code blocks exactly.
+- Summarize rather than reproduce when the user asks for a summary.
 - Preserve only information relevant to the user's request.
-- If the user asks for a summary, do not reproduce the entire document.
-- Use short sections or bullets only when they genuinely improve readability.
 - Do not announce "Document processed successfully" unless that information
   is actually useful to the user.
 
@@ -835,10 +840,10 @@ class PersonalityEngine:
 
     def _post_process(self, reply: str) -> str:
         """
-        Final presentation cleanup for all ARIA responses.
+        Final presentation cleanup for ARIA responses.
 
-        Keeps useful structure and code intact while removing
-        necessary Markdown noise commonly produced by LLMs.
+        Preserves useful Markdown formatting while normalizing it
+        for Telegram presentation.
         """
 
         if reply is None:
@@ -849,9 +854,9 @@ class PersonalityEngine:
         if not reply:
             return f"I couldn't generate a response, {self._address('warning')}."
 
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
         # Protect fenced code blocks
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
 
         code_blocks = []
 
@@ -862,102 +867,205 @@ class PersonalityEngine:
         reply = re.sub(
             r"```[\s\S]*?```",
             protect_code,
-            reply
+            reply,
         )
 
-        # -----------------------------------------------------
-        # Clean Markdown headings
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Preserve useful headings
+        #
+        # Telegram can display these naturally after the later
+        # Telegram formatting layer is applied.
+        # ---------------------------------------------------------
 
         reply = re.sub(
-            r"(?m)^\s{0,3}#{1,6}\s+",
-            "",
-            reply
-        )
-
-        # -----------------------------------------------------
-        # Remove Markdown bold/italic markers
-        # -----------------------------------------------------
-
-        reply = re.sub(
-            r"\*\*(.*?)\*\*",
+            r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$",
             r"\1",
-            reply
+            reply,
         )
 
-        reply = re.sub(
-            r"__(.*?)__",
-            r"\1",
-            reply
-        )
+        # ---------------------------------------------------------
+        # Preserve bold / important formatting
+        # ---------------------------------------------------------
 
-        # Simple italic Markdown
+        # Keep **bold** exactly as generated.
+        # Do NOT remove it.
+
+        # Convert Markdown italic to plain text for now.
+        # This avoids accidental formatting conflicts.
         reply = re.sub(
             r"(?<!\*)\*([^*\n]+)\*(?!\*)",
             r"\1",
-            reply
+            reply,
         )
-
-        # -----------------------------------------------------
-        # Remove horizontal Markdown separators
-        # -----------------------------------------------------
 
         reply = re.sub(
-            r"(?m)^\s*(?:---+|\*\*\*+|___+)\s*$",
-            "",
-            reply
+            r"(?<!_)_([^_\n]+)_(?!_)",
+            r"\1",
+            reply,
         )
 
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Remove unnecessary horizontal separators
+        # ---------------------------------------------------------
+
+        reply = re.sub(
+            r"(?m)^\s*(?:---+|___+)\s*$",
+            "",
+            reply,
+        )
+
+        # ---------------------------------------------------------
         # Normalize bullets
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
 
         reply = re.sub(
             r"(?m)^\s*[-*+]\s+",
             "• ",
-            reply
+            reply,
         )
 
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Normalize Markdown tables
+        #
+        # Telegram does not render Markdown tables properly.
+        # Convert simple tables into aligned plain-text rows.
+        # ---------------------------------------------------------
+
+        lines = reply.splitlines()
+
+        if any(
+            "|" in line
+            for line in lines
+        ):
+            table_lines = []
+            normal_lines = []
+
+            in_table = False
+
+            for line in lines:
+                stripped = line.strip()
+
+                if "|" in stripped:
+                    cells = [
+                        cell.strip()
+                        for cell in stripped.strip("|").split("|")
+                    ]
+
+                    # Ignore Markdown separator rows.
+                    if all(
+                        re.fullmatch(r":?-{3,}:?", cell)
+                        for cell in cells
+                    ):
+                        continue
+
+                    if len(cells) >= 2:
+                        table_lines.append(cells)
+                        in_table = True
+                        continue
+
+                if in_table and table_lines:
+                    # Flush table before normal text.
+                    widths = [
+                        max(
+                            len(row[i])
+                            for row in table_lines
+                            if i < len(row)
+                        )
+                        for i in range(
+                            max(len(row) for row in table_lines)
+                        )
+                    ]
+
+                    formatted_table = []
+
+                    for row in table_lines:
+                        formatted_table.append(
+                            "  ".join(
+                                (
+                                    row[i]
+                                    if i < len(row)
+                                    else ""
+                                ).ljust(widths[i])
+                                for i in range(len(widths))
+                            ).rstrip()
+                        )
+
+                    normal_lines.extend(formatted_table)
+
+                    table_lines = []
+                    in_table = False
+
+                normal_lines.append(line)
+
+            # Flush trailing table.
+            if table_lines:
+                widths = [
+                    max(
+                        len(row[i])
+                        for row in table_lines
+                        if i < len(row)
+                    )
+                    for i in range(
+                        max(len(row) for row in table_lines)
+                    )
+                ]
+
+                for row in table_lines:
+                    normal_lines.append(
+                        "  ".join(
+                            (
+                                row[i]
+                                if i < len(row)
+                                else ""
+                            ).ljust(widths[i])
+                            for i in range(len(widths))
+                        ).rstrip()
+                    )
+
+            lines = normal_lines
+
+        reply = "\n".join(lines)
+
+        # ---------------------------------------------------------
         # Clean excessive blank lines
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
 
         reply = re.sub(
             r"\n[ \t]+\n",
             "\n\n",
-            reply
+            reply,
         )
 
         reply = re.sub(
             r"\n{3,}",
             "\n\n",
-            reply
+            reply,
         )
 
-        # -----------------------------------------------------
-        # Remove trailing spaces from each line
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Remove trailing spaces
+        # ---------------------------------------------------------
 
         reply = "\n".join(
             line.rstrip()
             for line in reply.splitlines()
         )
 
-        # -----------------------------------------------------
-        # Restore protected code blocks
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Restore code blocks
+        # ---------------------------------------------------------
 
         for index, block in enumerate(code_blocks):
             reply = reply.replace(
                 f"ARIA_CODE_BLOCK_PLACEHOLDER_{index}",
-                block
+                block,
             )
 
         reply = reply.strip()
 
-        # -----------------------------------------------------
-        # Add punctuation only to simple one-line responses
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Simple one-line punctuation
+        # ---------------------------------------------------------
 
         if reply and "\n" not in reply:
             if reply[-1] not in ".!?":
