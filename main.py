@@ -671,7 +671,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": "Alright, Sir. Document selection cancelled."
@@ -757,7 +757,7 @@ async def telegram_webhook(req: Request):
                     )
 
                     telegram_response = await http_client.post(
-                        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
+                        f"https://api.telegram.org/bot{token}/sendDocument",
                         json={
                             "chat_id": chat_id,
                             "document": telegram_file_id,
@@ -790,7 +790,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                f"https://api.telegram.org/bot{token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
@@ -827,7 +827,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                f"https://api.telegram.org/bot{token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": "Cancelled, Sir."
@@ -885,7 +885,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": message
@@ -918,7 +918,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -941,14 +941,14 @@ async def telegram_webhook(req: Request):
 
         # Get Telegram file information
         file_info = await http_client.get(
-            f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/getFile",
+            f"https://api.telegram.org/bot{token}/getFile",
             params={"file_id": file_id}
         )
 
         file_path = file_info.json()["result"]["file_path"]
 
         download_url = (
-            f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot)"
+            f"https://api.telegram.org/file/bot"
             f"{token}/{file_path}"
         )
 
@@ -1096,7 +1096,7 @@ async def telegram_webhook(req: Request):
             if not documents:
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1192,7 +1192,7 @@ async def telegram_webhook(req: Request):
                 }
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1213,7 +1213,7 @@ async def telegram_webhook(req: Request):
             if not best_document:
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1245,7 +1245,7 @@ async def telegram_webhook(req: Request):
                 )
 
                 await http_client.post(
-                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                    f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1266,7 +1266,7 @@ async def telegram_webhook(req: Request):
             # -------------------------------------------------
 
             telegram_response = await http_client.post(
-                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
+                f"https://api.telegram.org/bot{token}/sendDocument",
                 json={
                     "chat_id": chat_id,
                     "document": telegram_file_id,
@@ -1292,7 +1292,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+                f"https://api.telegram.org/bot{token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
@@ -1322,7 +1322,7 @@ async def telegram_webhook(req: Request):
     )
 
     telegram_response = await http_client.post(
-        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
+        f"https://api.telegram.org/bot{token}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": telegram_text,
