@@ -1,3 +1,4 @@
+import re
 from enum import Enum
 from dataclasses import dataclass
 
@@ -82,6 +83,32 @@ CONTEXTUAL_CALCULATOR_PHRASES = (
 )
 
 
+def contains_weather_term(q: str) -> bool:
+    weather_terms = (
+        "weather",
+        "temperature",
+        "forecast",
+        "rain",
+        "raining",
+        "sunny",
+        "cloudy",
+        "humidity",
+        "wind",
+        "snow",
+        "storm",
+        "thunderstorm",
+        "precipitation",
+        "climate",
+        "hot",
+        "cold",
+    )
+
+    return any(
+        re.search(rf"\b{re.escape(term)}\b", q)
+        for term in weather_terms
+    )
+
+
 def decide(query: str) -> RouteDecision:
     q = query.lower().strip()
 
@@ -109,24 +136,7 @@ def decide(query: str) -> RouteDecision:
         return RouteDecision(Route.TIME, 0.99)
 
     # Weather
-    if any(word in q for word in (
-        "weather",
-        "temperature",
-        "forecast",
-        "rain",
-        "raining",
-        "sunny",
-        "cloudy",
-        "humidity",
-        "wind",
-        "snow",
-        "storm",
-        "thunderstorm",
-        "precipitation",
-        "climate",
-        "hot",
-        "cold",
-    )):
+    if contains_weather_term(q):
         return RouteDecision(Route.WEATHER, 0.99)
 
     # Coding
