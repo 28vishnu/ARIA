@@ -478,6 +478,17 @@ def format_telegram_response(text: str) -> str:
     text = html.escape(text)
 
     # =========================================================
+    # CLEAN REMAINING MARKDOWN BOLD MARKERS
+    # =========================================================
+
+    text = re.sub(
+        r"\*\*(.+?)\*\*",
+        r"<b>\1</b>",
+        text,
+        flags=re.DOTALL,
+    )
+
+    # =========================================================
     # 4. RESTORE MARKDOWN BLOCKQUOTES
     # =========================================================
 
