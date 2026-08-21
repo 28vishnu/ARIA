@@ -972,4 +972,3 @@ class ConversationManager:
         ]
 
         return " ".join(words)
-
