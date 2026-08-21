@@ -679,6 +679,401 @@ async def telegram_webhook(req: Request):
 
                 await status.delete()
                 await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": "Alright, Sir. Document selection cancelled."
+                    }
+                )
+
+                return {
+                    "status": "document_selection_cancelled"
+                }
+
+            documents = pending.get("documents", [])
+
+            ignored_words = {
+                "pdf",
+                "document",
+                "file",
+                "the",
+                "my",
+                "one",
+                "give",
+                "send",
+                "me",
+                "please",
+            }
+
+            query_words = {
+                word
+                for word in (
+                    answer
+                    .replace(".pdf", "")
+                    .replace("_", " ")
+                    .replace("-", " ")
+                    .split()
+                )
+                if word not in ignored_words
+            }
+
+            best_document = None
+            best_score = 0
+
+            for document in documents:
+
+                filename = str(
+                    document.get("filename", "")
+                )
+
+                filename_words = {
+                    word
+                    for word in (
+                        filename
+                        .lower()
+                        .replace(".pdf",o native Markdown table support.
+    #
+    # If a Markdown table somehow reaches this function,
+    # convert it into a readable mobile comparison instead
+    # of showing broken pipes.
+    # ---------------------------------------------------------
+
+    lines = text.split("\n")
+    output = []
+
+    table_rows = []
+    in_table = False
+
+    def flush_table():
+
+        nonlocal table_rows
+
+        if not table_rows:
+            return
+
+        rows = []
+
+        for row in table_rows:
+
+            cells = [
+                cell.strip()
+                for cell in row.strip().strip("|").split("|")
+            ]
+
+            # Ignore Markdown separator rows.
+            if cells and all(
+                re.fullmatch(r":?-{3,}:?", cell or "")
+                for cell in cells
+            ):
+                continue
+
+            rows.append(cells)
+
+        table_rows = []
+
+        if not rows:
+            return
+
+        headers = rows[0]
+
+        # -----------------------------------------------------
+        # 2-COLUMN TABLE
+        # -----------------------------------------------------
+
+        if len(headers) == 2:
+
+            comparison = []
+
+            for row in rows[1:]:
+
+                if len(row) < 2:
+                    continue
+
+                feature = row[0].strip()
+                value = row[1].strip()
+
+                if not feature:
+                    continue
+
+                comparison.append(
+                    f"<b>▸ {feature}</b>\n"
+                    f"  {value}"
+                )
+
+            if comparison:
+                output.append(
+                    "\n\n".join(comparison)
+                )
+
+            return
+
+        # -----------------------------------------------------
+        # 3+ COLUMN COMPARISON
+        #
+        # Mobile-friendly Telegram layout.
+        # -----------------------------------------------------
+
+        if len(headers) >= 3:
+
+            comparison = []
+
+            names = [
+                h.strip()
+                for h in headers[1:]
+                if h.strip()
+            ]
+
+            if names:
+                comparison.append(
+                    "⚖️ <b>"
+                    + " vs ".join(names)
+                    + "</b>"
+                )
+
+            for row in rows[1:]:
+
+                if not row:
+                    continue
+
+                feature = row[0].strip()
+
+                if not feature:
+                    continue
+
+                comparison.append(
+                    f"<b>▸ {feature}</b>"
+                )
+
+                for index in range(1, len(headers)):
+
+                    header = headers[index].strip()
+
+                    if not header:
+                        continue
+
+                    value = (
+                        row[index].strip()
+                        if index < len(row)
+                        else "—"
+                    )
+
+                    if not value:
+                        value = "—"
+
+                    comparison.append(
+                        f"  <b>{header}:</b> {value}"
+                    )
+
+                comparison.append("")
+
+            if comparison:
+                output.append(
+                    "\n".join(comparison).strip()
+                )
+
+    # ---------------------------------------------------------
+    # 11. DETECT / CONVERT TABLES
+    # ---------------------------------------------------------
+
+    for line in lines:
+
+        stripped = line.strip()
+
+        if (
+            stripped.startswith("|")
+            and stripped.endswith("|")
+            and "|" in stripped[1:-1]
+        ):
+            table_rows.append(line)
+            in_table = True
+            continue
+
+        if in_table:
+            flush_table()
+            in_table = False
+
+        output.append(line)
+
+    if in_table:
+        flush_table()
+
+    text = "\n".join(output)
+
+    # ---------------------------------------------------------
+    # 12. RESTORE PROTECTED CODE
+    # ---------------------------------------------------------
+
+    for index, original in enumerate(protected):
+
+        placeholder = f"__ARIA_PROTECTED_{index}__"
+
+        if original.startswith("```"):
+
+            match = re.match(
+                r"```(?:([\w+#.-]+))?\n?(.*?)```$",
+                original,
+                flags=re.DOTALL,
+            )
+
+            if match:
+
+                language = match.group(1) or ""
+                code = match.group(2)
+
+                code_html = html.escape(
+                    code,
+                    quote=False,
+                )
+
+                replacement = (
+                    f"<pre><code>{code_html}</code></pre>"
+                )
+
+            else:
+                replacement = (
+                    f"<pre><code>"
+                    f"{html.escape(original)}"
+                    f"</code></pre>"
+                )
+
+        else:
+
+            code = original[1:-1]
+
+            replacement = (
+                f"<code>"
+                f"{html.escape(code, quote=False)}"
+                f"</code>"
+            )
+
+        text = text.replace(
+            placeholder,
+            replacement,
+        )
+
+    # ---------------------------------------------------------
+    # 13. FINAL CLEANUP
+    # ---------------------------------------------------------
+
+    # Remove accidental remaining Markdown emphasis markers.
+    text = re.sub(
+        r"\*\*(.*?)\*\*",
+        r"<b>\1</b>",
+        text,
+        flags=re.DOTALL,
+    )
+
+    text = re.sub(
+        r"(?<!\*)\*([^*\n]+?)\*(?!\*)",
+        r"<i>\1</i>",
+        text,
+    )
+
+    # Collapse excessive blank lines.
+    text = re.sub(
+        r"\n{3,}",
+        "\n\n",
+        text,
+    )
+
+    return text.strip()
+
+def format_telegram_response(text: str) -> str:
+    """
+    Wrapper alias pointing to markdown_to_telegram_html.
+    """
+    return markdown_to_telegram_html(text)
+
+@app.post("/telegram-webhook")
+async def telegram_webhook(req: Request):
+    request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
+    config = req.app.state.registry.get("config")
+    token = config.telegram_token
+
+    if not token:
+        return {"status": "telegram token unconfigured"}
+
+    data = await req.json()
+    msg = data.get("message", {})
+
+    chat_id = msg.get("chat", {}).get("id")
+    user_id = msg.get("from", {}).get("id")
+    text = msg.get("text", "").strip()
+
+    if chat_id is None or user_id is None:
+        return {"status": "ok"}
+
+    # ---------------------------------------------------------
+    # PRIVATE OWNER-ONLY ACCESS
+    # ---------------------------------------------------------
+
+    allowed_user_id = os.getenv("ALLOWED_TELEGRAM_USER_ID", "").strip()
+
+    if not allowed_user_id:
+        logger.error(
+            "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
+        )
+        return {"status": "unauthorized"}
+
+    if str(user_id) != allowed_user_id:
+        logger.warning(
+            "[Security] Unauthorized Telegram access attempt."
+        )
+        return {"status": "unauthorized"}
+
+    logger.info("[Security] Authorized Telegram user.")
+
+    http_client = req.app.state.registry.get("http_client")
+
+    status = TelegramStatus(
+        http_client=http_client,
+        token=token,
+        chat_id=chat_id,
+    )
+
+    await status.start("Reading your request...")
+
+    # ---------------------------------------------------------
+    # HANDLE PENDING DOCUMENT CONFIRMATION
+    # ---------------------------------------------------------
+
+    confirmation_key = str(user_id)
+
+    if confirmation_key in pending_document_actions:
+
+        pending = pending_document_actions[confirmation_key]
+        answer = text.lower().strip()
+
+        # -----------------------------------------------------
+        # USER IS SELECTING A DOCUMENT
+        # -----------------------------------------------------
+
+        if pending.get("action") == "select_document":
+
+            # Allow the user to cancel/leave document selection.
+            cancel_phrases = {
+                "cancel",
+                "cancel it",
+                "leave it",
+                "leave",
+                "never mind",
+                "nevermind",
+                "forget it",
+                "stop",
+                "no",
+                "no thanks",
+                "no thank you",
+            }
+
+            if answer in cancel_phrases:
+
+                pending_document_actions.pop(
+                    confirmation_key,
+                    None
+                )
+
+                await status.delete()
+                await http_client.post(
                     f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
