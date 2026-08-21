@@ -659,8 +659,8 @@ Return ONLY the standalone request.
                     task="context_resolution",
                 )
 
-                if resolved:
-                    resolved = str(resolved).strip()
+                if isinstance(resolved, str):
+                    resolved = resolved.strip()
 
                     if resolved:
                         logger.info(
