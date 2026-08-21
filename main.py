@@ -196,12 +196,17 @@ def format_telegram_response(text: str) -> str:
     Convert ARIA Markdown-style output into Telegram HTML.
 
     Features:
-    - Markdown tables -> Telegram-safe comparison cards
-    - > important points -> Telegram blockquotes
+    - Markdown comparison tables -> Telegram-friendly comparison cards
+    - Markdown blockquotes -> Telegram blockquotes
     - **bold** -> <b>bold</b>
     - *italic* -> <i>italic</i>
     - `inline code` -> <code>inline code</code>
     - fenced code -> <pre><code>...</code></pre>
+
+    Important:
+    - Never allow Markdown tables to reach Telegram unchanged.
+    - Never allow HTML supplied by the model/user to break Telegram parsing.
+    - Preserve fenced code exactly.
     """
 
     if not text:
@@ -216,6 +221,7 @@ def format_telegram_response(text: str) -> str:
     code_blocks = []
 
     def protect_code(match):
+        language = match.group(1) or ""
         code = match.group(2).strip()
 
         placeholder = f"__ARIA_CODE_BLOCK_{len(code_blocks)}__"
@@ -227,7 +233,7 @@ def format_telegram_response(text: str) -> str:
         return placeholder
 
     text = re.sub(
-        r"```(\w+)?\s*\n?(.*?)```",
+        r"```([^\n]*)\n?(.*?)```",
         protect_code,
         text,
         flags=re.DOTALL,
@@ -236,13 +242,46 @@ def format_telegram_response(text: str) -> str:
     # =========================================================
     # 2. CONVERT MARKDOWN TABLES
     #
-    # Telegram does not display Markdown tables properly.
-    # Convert them into readable comparison sections.
+    # Telegram does not reliably render Markdown tables.
     # =========================================================
 
     lines = text.splitlines()
     output = []
     table_rows = []
+
+    def is_table_separator(cells):
+        if not cells:
+            return False
+
+        return all(
+            re.fullmatch(r":?-{3,}:?", cell.strip())
+            for cell in cells
+        )
+
+    def parse_table_row(line):
+        stripped = line.strip()
+
+        if "|" not in stripped:
+            return None
+
+        if not (
+            stripped.count("|") >= 2
+            and (
+                stripped.startswith("|")
+                or stripped.endswith("|")
+            )
+        ):
+            return None
+
+        cells = [
+            cell.strip()
+            for cell in stripped.strip("|").split("|")
+        ]
+
+        if len(cells) < 2:
+            return None
+
+        return cells
 
     def flush_table():
         nonlocal table_rows
@@ -253,21 +292,15 @@ def format_telegram_response(text: str) -> str:
         cleaned_rows = []
 
         for row in table_rows:
-            cells = [
-                cell.strip()
-                for cell in row.strip().strip("|").split("|")
-            ]
+            cells = parse_table_row(row)
 
-            # Ignore Markdown separator:
-            # |------|------|
-            if cells and all(
-                re.fullmatch(r":?-+:?", cell)
-                for cell in cells
-            ):
+            if not cells:
                 continue
 
-            if cells:
-                cleaned_rows.append(cells)
+            if is_table_separator(cells):
+                continue
+
+            cleaned_rows.append(cells)
 
         table_rows = []
 
@@ -275,7 +308,7 @@ def format_telegram_response(text: str) -> str:
             return
 
         # -----------------------------------------------------
-        # First row = table headers
+        # Single-row table
         # -----------------------------------------------------
 
         if len(cleaned_rows) == 1:
@@ -283,6 +316,7 @@ def format_telegram_response(text: str) -> str:
                 "\n".join(
                     f"<b>{html.escape(cell)}</b>"
                     for cell in cleaned_rows[0]
+                    if cell.strip()
                 )
             )
             return
@@ -291,33 +325,17 @@ def format_telegram_response(text: str) -> str:
         data_rows = cleaned_rows[1:]
 
         # -----------------------------------------------------
-        # Telegram-friendly comparison format
-        # -----------------------------------------------------
-
-        comparison = []
-
-        # -----------------------------------------------------
-        # 3+ COLUMN COMPARISON TABLE
-        #
-        # Example:
-        # Feature | TCP | UDP
-        #
-        # Telegram output:
-        #
-        # ⚖️ <b>TCP vs UDP</b>
-        #
-        # <b>Connection</b>
-        # TCP: Connection-oriented
-        # UDP: Connectionless
+        # 3+ COLUMN COMPARISON
         # -----------------------------------------------------
 
         if len(headers) >= 3:
 
-            # Comparison title
+            comparison = []
+
             comparison.append(
                 "⚖️ <b>"
                 + " vs ".join(
-                    html.escape(header)
+                    html.escape(header.strip())
                     for header in headers[1:]
                     if header.strip()
                 )
@@ -342,14 +360,19 @@ def format_telegram_response(text: str) -> str:
 
                 for index in range(1, len(headers)):
 
-                    if index >= len(row):
+                    header = headers[index].strip()
+
+                    if not header:
                         continue
 
-                    header = headers[index].strip()
-                    value = row[index].strip()
+                    value = (
+                        row[index].strip()
+                        if index < len(row)
+                        else ""
+                    )
 
                     if not value:
-                        continue
+                        value = "—"
 
                     comparison.append(
                         f"{html.escape(header)}: "
@@ -362,11 +385,13 @@ def format_telegram_response(text: str) -> str:
                 "\n".join(comparison).strip()
             )
 
+        # -----------------------------------------------------
+        # 2-COLUMN TABLE
+        # -----------------------------------------------------
+
         else:
 
-            # -------------------------------------------------
-            # GENERIC 2-COLUMN TABLE
-            # -------------------------------------------------
+            comparison = []
 
             for row in data_rows:
 
@@ -376,8 +401,11 @@ def format_telegram_response(text: str) -> str:
                 label = row[0].strip()
                 value = row[1].strip()
 
-                if not label or not value:
+                if not label:
                     continue
+
+                if not value:
+                    value = "—"
 
                 comparison.append(
                     f"<b>{html.escape(label)}</b>: "
@@ -389,19 +417,14 @@ def format_telegram_response(text: str) -> str:
                     "\n".join(comparison).strip()
                 )
 
-    # Detect table rows.
+    # Detect table blocks.
     for line in lines:
 
         stripped = line.strip()
 
-        if (
-            "|" in stripped
-            and stripped.count("|") >= 2
-            and (
-                stripped.startswith("|")
-                or stripped.endswith("|")
-            )
-        ):
+        parsed = parse_table_row(stripped)
+
+        if parsed is not None:
             table_rows.append(line)
             continue
 
@@ -419,18 +442,28 @@ def format_telegram_response(text: str) -> str:
     # 3. ESCAPE HTML
     # =========================================================
 
+    generated_html = []
+
+    def protect_generated_html(match):
+        placeholder = (
+            f"__ARIA_GENERATED_HTML_{len(generated_html)}__"
+        )
+
+        generated_html.append(match.group(0))
+
+        return placeholder
+
+    text = re.sub(
+        r"<(?:b|i|code|blockquote)(?:\s[^>]*)?>.*?</(?:b|i|code|blockquote)>",
+        protect_generated_html,
+        text,
+        flags=re.DOTALL,
+    )
+
     text = html.escape(text)
 
     # =========================================================
-    # 4. RESTORE BLOCKQUOTES
-    #
-    # Markdown:
-    #
-    # > Important point
-    #
-    # Telegram:
-    #
-    # <blockquote>Important point</blockquote>
+    # 4. RESTORE MARKDOWN BLOCKQUOTES
     # =========================================================
 
     text = re.sub(
@@ -447,6 +480,7 @@ def format_telegram_response(text: str) -> str:
         r"\*\*(.+?)\*\*",
         r"<b>\1</b>",
         text,
+        flags=re.DOTALL,
     )
 
     # =========================================================
@@ -470,7 +504,22 @@ def format_telegram_response(text: str) -> str:
     )
 
     # =========================================================
-    # 8. RESTORE FENCED CODE BLOCKS
+    # 8. RESTORE GENERATED HTML
+    # =========================================================
+
+    for index, fragment in enumerate(generated_html):
+
+        placeholder = (
+            f"__ARIA_GENERATED_HTML_{index}__"
+        )
+
+        text = text.replace(
+            placeholder,
+            fragment,
+        )
+
+    # =========================================================
+    # 9. RESTORE FENCED CODE BLOCKS
     # =========================================================
 
     for index, code_block in enumerate(code_blocks):
@@ -485,7 +534,7 @@ def format_telegram_response(text: str) -> str:
         )
 
     # =========================================================
-    # 9. CLEAN EXCESSIVE BLANK LINES
+    # 10. CLEAN EXCESSIVE BLANK LINES
     # =========================================================
 
     text = re.sub(
