@@ -43,6 +43,7 @@ class ConversationManager:
                 "last_company": None,
                 "last_place": None,
                 "last_language": None,
+                "recent_topics": [],
                 "user_name": None,
 
                 # Generic conversational state
@@ -66,6 +67,7 @@ class ConversationManager:
             session.setdefault("conversation_history", [])
             session.setdefault("last_compared_entities", [])
             session.setdefault("active_comparison", False)
+            session.setdefault("recent_topics", [])
             session.setdefault("state_version", 1)
 
         return self._sessions[session_id]
@@ -125,6 +127,34 @@ class ConversationManager:
         if ents:
             return ents[0]
         return None
+
+    def _remember_topic(
+        self,
+        session: Dict[str, Any],
+        topic: Optional[str],
+    ) -> None:
+        """Keep the two most recent meaningful conversation topics."""
+
+        if not topic:
+            return
+
+        topic = str(topic).strip()
+
+        if not topic:
+            return
+
+        recent = session.setdefault("recent_topics", [])
+
+        # Don't duplicate the current topic.
+        recent = [
+            item for item in recent
+            if str(item).lower() != topic.lower()
+        ]
+
+        recent.append(topic)
+
+        # Keep only the two most recent topics.
+        session["recent_topics"] = recent[-2:]
 
     def _update_comparison_state(
         self,
@@ -421,6 +451,9 @@ class ConversationManager:
             if new_topic != session.get("current_topic"):
                 session["previous_topic"] = session.get("current_topic")
                 session["current_topic"] = new_topic
+
+            self._remember_topic(session, new_topic)
+
             if not isinstance(session.get("last_subject"), dict):
                 session["last_subject"] = new_topic
 
@@ -539,6 +572,9 @@ class ConversationManager:
             if new_topic != session.get("current_topic"):
                 session["previous_topic"] = session.get("current_topic")
                 session["current_topic"] = new_topic
+
+            self._remember_topic(session, new_topic)
+
             if not isinstance(session.get("last_subject"), dict):
                 session["last_subject"] = new_topic
 
@@ -837,64 +873,10 @@ class ConversationManager:
         )
 
         if not active_comparison and is_comparison_followup:
-            history = session.get("conversation_history", [])
+            recent_topics = session.get("recent_topics", [])
 
-            # ---------------------------------------------------------
-            # IMPORTANT:
-            # Only inspect the immediately preceding user turns.
-            #
-            # Never search deep history for a comparison because that
-            # can incorrectly turn:
-            #
-            #   TCP
-            #   UDP
-            #   ...
-            #   Photosynthesis
-            #   Why is it important?
-            #
-            # into a TCP/UDP question.
-            # ---------------------------------------------------------
-            recent_user_turns = []
-
-            for turn in reversed(history[-3:]):
-                if not isinstance(turn, dict):
-                    continue
-
-                user_message = str(
-                    turn.get("user", "")
-                ).strip()
-
-                if not user_message:
-                    continue
-
-                recent_user_turns.append(user_message)
-
-                if len(recent_user_turns) >= 2:
-                    break
-
-            recent_entities = []
-
-            for user_message in recent_user_turns:
-                entities = self._clean_entities(
-                    self.extract_entities(user_message)
-                )
-
-                if not entities:
-                    continue
-
-                entity = entities[0]
-
-                if not any(
-                    entity.lower() == existing.lower()
-                    for existing in recent_entities
-                ):
-                    recent_entities.append(entity)
-
-            # Only recover an implicit comparison when BOTH
-            # immediately recent turns contain distinct entities.
-            if len(recent_entities) == 2:
-                compared = list(reversed(recent_entities[:2]))
-
+            if len(recent_topics) >= 2:
+                compared = recent_topics[-2:]
                 active_comparison = True
 
                 session["last_compared_entities"] = compared[:]
@@ -904,6 +886,74 @@ class ConversationManager:
                     "type": "comparison",
                     "entities": compared[:],
                 }
+            else:
+                history = session.get("conversation_history", [])
+
+                # ---------------------------------------------------------
+                # IMPORTANT:
+                # Only inspect the immediately preceding user turns.
+                #
+                # Never search deep history for a comparison because that
+                # can incorrectly turn:
+                #
+                #   TCP
+                #   UDP
+                #   ...
+                #   Photosynthesis
+                #   Why is it important?
+                #
+                # into a TCP/UDP question.
+                # ---------------------------------------------------------
+                recent_user_turns = []
+
+                for turn in reversed(history[-3:]):
+                    if not isinstance(turn, dict):
+                        continue
+
+                    user_message = str(
+                        turn.get("user", "")
+                    ).strip()
+
+                    if not user_message:
+                        continue
+
+                    recent_user_turns.append(user_message)
+
+                    if len(recent_user_turns) >= 2:
+                        break
+
+                recent_entities = []
+
+                for user_message in recent_user_turns:
+                    entities = self._clean_entities(
+                        self.extract_entities(user_message)
+                    )
+
+                    if not entities:
+                        continue
+
+                    entity = entities[0]
+
+                    if not any(
+                        entity.lower() == existing.lower()
+                        for existing in recent_entities
+                    ):
+                        recent_entities.append(entity)
+
+                # Only recover an implicit comparison when BOTH
+                # immediately recent turns contain distinct entities.
+                if len(recent_entities) == 2:
+                    compared = list(reversed(recent_entities[:2]))
+
+                    active_comparison = True
+
+                    session["last_compared_entities"] = compared[:]
+                    session["active_comparison"] = True
+
+                    session["last_subject"] = {
+                        "type": "comparison",
+                        "entities": compared[:],
+                    }
 
         # ---------------------------------------------------------
         # 2. Resolve direct comparison follow-ups.
