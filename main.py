@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from core.logging_config import setup_logging
 from core.bootstrap import bootstrap_application
 from core.dependency_injection import RequestContext
+from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
 
@@ -607,6 +608,16 @@ async def telegram_webhook(req: Request):
     if chat_id is None or user_id is None:
         return {"status": "ok"}
 
+    http_client = req.app.state.registry.get("http_client")
+
+    status = TelegramStatus(
+        http_client=http_client,
+        token=token,
+        chat_id=chat_id,
+    )
+
+    await status.start("Reading your request...")
+
     # ---------------------------------------------------------
     # PRIVATE OWNER-ONLY ACCESS
     # ---------------------------------------------------------
@@ -617,12 +628,14 @@ async def telegram_webhook(req: Request):
         logger.error(
             "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
         )
+        await status.delete()
         return {"status": "unauthorized"}
 
     if str(user_id) != allowed_user_id:
         logger.warning(
             "[Security] Unauthorized Telegram access attempt."
         )
+        await status.delete()
         return {"status": "unauthorized"}
 
     logger.info("[Security] Authorized Telegram user.")
@@ -666,12 +679,9 @@ async def telegram_webhook(req: Request):
                     None
                 )
 
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": "Alright, Sir. Document selection cancelled."
@@ -752,12 +762,9 @@ async def telegram_webhook(req: Request):
 
                 if telegram_file_id:
 
-                    http_client = req.app.state.registry.get(
-                        "http_client"
-                    )
-
+                    await status.delete()
                     telegram_response = await http_client.post(
-                        f"https://api.telegram.org/bot{token}/sendDocument",
+                        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
                         json={
                             "chat_id": chat_id,
                             "document": telegram_file_id,
@@ -785,12 +792,9 @@ async def telegram_webhook(req: Request):
                 for document in documents
             ]
 
-            http_client = req.app.state.registry.get(
-                "http_client"
-            )
-
+            await status.delete()
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
@@ -822,12 +826,9 @@ async def telegram_webhook(req: Request):
                 None
             )
 
-            http_client = req.app.state.registry.get(
-                "http_client"
-            )
-
+            await status.delete()
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": "Cancelled, Sir."
@@ -874,18 +875,15 @@ async def telegram_webhook(req: Request):
                     None
                 )
 
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
                 message = (
                     f"Deleted {filename}, Sir."
                     if deleted
                     else "I couldn't delete that document, Sir."
                 )
 
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": message
@@ -913,12 +911,9 @@ async def telegram_webhook(req: Request):
                     None
                 )
 
-                http_client = req.app.state.registry.get(
-                    "http_client"
-                )
-
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -934,21 +929,20 @@ async def telegram_webhook(req: Request):
 
     # Handle document upload
     if "document" in msg:
+        await status.update("Understanding the request...")
         document = msg["document"]
         file_id = document["file_id"]
 
-        http_client = req.app.state.registry.get("http_client")
-
         # Get Telegram file information
         file_info = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
+            f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/getFile",
             params={"file_id": file_id}
         )
 
         file_path = file_info.json()["result"]["file_path"]
 
         download_url = (
-            f"https://api.telegram.org/file/bot"
+            f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot)"
             f"{token}/{file_path}"
         )
 
@@ -981,6 +975,7 @@ async def telegram_webhook(req: Request):
             or Path(local_path).name
         )
 
+        await status.update("Reasoning...")
         result = await document_ai.process_document(
             file_path=local_path,
             session_id=session_id,
@@ -1048,19 +1043,20 @@ async def telegram_webhook(req: Request):
             session_id,
         )
 
+        await status.delete()
         return {
             "status": "processed",
             "document_ready": True,
         }
 
+    await status.update("Understanding the request...")
+    await status.update("Reasoning...")
     result = await process_task(
         text,
         str(chat_id),
         request_id,
         req.app.state
     )
-
-    http_client = req.app.state.registry.get("http_client")
 
     # ---------------------------------------------------------
     # STRUCTURED DOCUMENT ACTION
@@ -1095,8 +1091,9 @@ async def telegram_webhook(req: Request):
 
             if not documents:
 
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1191,8 +1188,9 @@ async def telegram_webhook(req: Request):
                     "documents": documents,
                 }
 
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1212,8 +1210,9 @@ async def telegram_webhook(req: Request):
 
             if not best_document:
 
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1244,8 +1243,9 @@ async def telegram_webhook(req: Request):
                     filename
                 )
 
+                await status.delete()
                 await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
@@ -1265,8 +1265,9 @@ async def telegram_webhook(req: Request):
             # directly using its stored file_id.
             # -------------------------------------------------
 
+            await status.delete()
             telegram_response = await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendDocument",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendDocument",
                 json={
                     "chat_id": chat_id,
                     "document": telegram_file_id,
@@ -1292,7 +1293,7 @@ async def telegram_webhook(req: Request):
             )
 
             await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
+                f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": (
@@ -1310,6 +1311,7 @@ async def telegram_webhook(req: Request):
     # NORMAL TEXT RESPONSE
     # ---------------------------------------------------------
 
+    await status.update("Preparing the response...")
     reply_text = str(result)
 
     telegram_text = format_telegram_response(
@@ -1321,8 +1323,9 @@ async def telegram_webhook(req: Request):
         telegram_text
     )
 
+    await status.delete()
     telegram_response = await http_client.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
+        f"[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": telegram_text,
