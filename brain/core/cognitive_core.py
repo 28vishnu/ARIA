@@ -1511,7 +1511,13 @@ class CognitiveCore:
             except Exception as e:
                 logger.warning("LLM router chat for resolution skipped: %s", e)
 
-        return resolved.strip() if resolved else query
+        if isinstance(resolved, str):
+            resolved = resolved.strip()
+
+            if resolved:
+                return resolved
+
+        return query
 
     # =========================================================
     # KNOWLEDGE FIRST PIPELINE
