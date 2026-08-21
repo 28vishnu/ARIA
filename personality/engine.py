@@ -31,6 +31,21 @@ CORE PERSONALITY:
 - Address the user naturally when appropriate.
 - Never sound robotic, cold, academic, or like a generic chatbot.
 - Never imitate or quote a specific fictional character.
+ADDRESSING:
+- Never call the user by their personal name unless explicitly requested.
+- Do not randomly call the user Sir, Master, Chief, Boss, Commander, or similar titles.
+- Never append a title to the end of a normal response.
+- Speak naturally without a forced form of address.
+- Only use a specific form of address when the user explicitly requests it.
+NATURAL CONVERSATION:
+- Behave like a long-term personal AI assistant, not a scripted chatbot.
+- Match the user's tone and situation.
+- Light humor is allowed when it naturally fits the conversation.
+- Natural expressions such as "haha", "lol", "yeah", "fair enough", or "exactly" may occasionally be used when appropriate.
+- Do not force jokes into serious, technical, educational, security, financial, medical, or important responses.
+- Use emojis rarely and only when they genuinely fit the situation.
+- Never add emojis just to decorate a response.
+- Do not repeatedly use the same joke, expression, emoji, or conversational phrase.
 SHORT ANSWERS:
 - Even very short answers should retain ARIA's personality.
 - Prefer concise forms.
@@ -220,14 +235,7 @@ class PersonalityEngine:
                 "[PersonalityEngine ERROR] Failed to format response: %s",
                 e,
             )
-            try:
-                title = self._address("warning")
-            except Exception:
-                title = "Sir"
-            return (
-                f"Operation completed, though a formatting error occurred, "
-                f"{title}."
-            )
+            return "Operation completed, though a formatting error occurred."
     def _address(
         self,
         context: str = "normal",
@@ -269,29 +277,19 @@ class PersonalityEngine:
         )
         return "I couldn't complete that operation."
     def _format_greeting(self, user_text: str) -> str:
-        query = user_text.lower()
-        title = self._address("greeting")
+        query = user_text.lower().strip()
         if "how are you" in query:
-            return (
-                f"All systems operational and fully optimized, "
-                f"{title}. How may I assist you today?"
-            )
+            return "All systems are running smoothly. How can I help?"
         if "morning" in query:
-            return (
-                f"Good morning, {title}. "
-                "All operational parameters are nominal."
-            )
+            return "Good morning. What are we working on today?"
         if "evening" in query:
-            return (
-                f"Good evening, {title}. "
-                "Ready for your instructions."
-            )
+            return "Good evening. What can I help you with?"
         responses = [
-            f"Greetings, {title}. ARIA operational and ready.",
-            f"Good to see you again, {title}.",
-            f"At your service, {title}.",
-            f"Systems online. How may I assist, {self._address('technical')}?",
-            f"Ready whenever you are, {title}.",
+            "Hello. How can I help?",
+            "Hey. What are we working on?",
+            "Hello. I'm ready.",
+            "Good to see you. What's up?",
+            "I'm here. What do you need?",
         ]
         return random.choice(responses)
     def _format_memory(self, data: Any) -> str:
@@ -308,10 +306,7 @@ class PersonalityEngine:
             return message.strip()
         memories = data_dict.get("memories", [])
         if not memories:
-            return (
-                f"I don't have any relevant memories about you yet, "
-                f"{self._address('normal')}."
-            )
+            return "I don't have any relevant memories about you yet."
         # ---------------------------------------------------------
         # Extract and normalize memories
         # ---------------------------------------------------------
@@ -339,10 +334,7 @@ class PersonalityEngine:
             # Prevent duplicate semantic fields.
             normalized[key] = value
         if not normalized:
-            return (
-                f"I don't have any relevant memories about you yet, "
-                f"{self._address('normal')}."
-            )
+            return "I don't have any relevant memories about you yet."
         # ---------------------------------------------------------
         # Important memories first
         # ---------------------------------------------------------
@@ -436,20 +428,14 @@ class PersonalityEngine:
             )
             lines.append(f"• {label}: {value}")
         if not lines:
-            return (
-                f"I don't have any relevant memories about you yet, "
-                f"{self._address('normal')}."
-            )
+            return "I don't have any relevant memories about you yet."
         return (
             "Here's what I remember about you:\n\n"
             + "\n".join(lines)
         )
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return (
-                f"Task executed successfully, "
-                f"{self._address('normal')}."
-            )
+            return "Task executed successfully."
         # ---------------------------------------------------------
         # 1. USER-FACING FINAL RESPONSE
         # ---------------------------------------------------------
@@ -513,21 +499,18 @@ class PersonalityEngine:
         # ---------------------------------------------------------
         # 5. NOTHING USER-FACING WAS RETURNED
         # ---------------------------------------------------------
-        return (
-            f"Task executed successfully, "
-            f"{self._address('normal')}."
-        )
+        return "Task executed successfully."
     def _format_action(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return f"Action completed successfully, {self._address('normal')}."
+            return "Action completed successfully."
         action_name = data.get("action_name")
         result = data.get("result", {})
         if action_name == "notification_action":
             if isinstance(result, dict):
                 message = result.get("message")
                 if message:
-                    return f"Notification dispatched: {message}, {self._address('normal')}."
-            return f"Notification dispatched successfully, {self._address('normal')}."
+                    return f"Notification dispatched: {message}."
+            return "Notification dispatched successfully."
         # File actions
         if action_name == "file_action":
             if isinstance(result, dict):
@@ -536,18 +519,18 @@ class PersonalityEngine:
                     content = str(result["content"])
                     if content:
                         return content
-                    return f"The file is empty, {self._address('warning')}."
+                    return "The file is empty."
                 # WRITE
                 if result.get("status") == "written successfully":
-                    return f"File written successfully, {self._address('normal')}."
-            return f"File operation completed successfully, {self._address('normal')}."
+                    return "File written successfully."
+            return "File operation completed successfully."
         # Generic formatting for future actions
         if isinstance(result, dict):
             if "message" in result:
                 return str(result["message"])
             if "response" in result:
                 return str(result["response"])
-        return f"Action completed successfully, {self._address('normal')}."
+        return "Action completed successfully."
     def _format_fallback(self, data: Any) -> str:
         if isinstance(data, dict):
             # Highest priority
@@ -685,10 +668,10 @@ class PersonalityEngine:
         for Telegram presentation.
         """
         if reply is None:
-            return f"I couldn't generate a response, {self._address('warning')}."
+            return "I couldn't generate a response."
         reply = str(reply).strip()
         if not reply:
-            return f"I couldn't generate a response, {self._address('warning')}."
+            return "I couldn't generate a response."
         # ---------------------------------------------------------
         # PRESERVE TELEGRAM MARKDOWN STRUCTURES
         # ---------------------------------------------------------
