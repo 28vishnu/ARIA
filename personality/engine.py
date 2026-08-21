@@ -102,9 +102,9 @@ class PersonalityEngine:
         self.llm_router = llm_router
         self.addressing = AddressingEngine()
         self.conversation_style = {
-            "tone": "assistant",
+            "tone": "natural_assistant",
             "verbosity": "balanced",
-            "humor": False,
+            "humor": True,
         }
     def update_style(
         self,
@@ -135,15 +135,9 @@ class PersonalityEngine:
             intent = data.get("intent")
             # Route to specific private formatters
             if source == ResponseSource.TIME and "time" in data:
-                reply = (
-                    f"The current time is {data['time']}, "
-                    f"{self._address('normal')}."
-                )
+                reply = f"The current time is {data['time']}."
             elif source == ResponseSource.DATE and "date" in data:
-                reply = (
-                    f"Today is {data['date']}, "
-                    f"{self._address('normal')}."
-                )
+                reply = f"Today is {data['date']}."
             elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
                 reply = str(data["message"])
             elif source == ResponseSource.CHAT and "response" in data:
@@ -156,10 +150,7 @@ class PersonalityEngine:
                 else:
                     reply = self._format_fallback(data)
             elif source == ResponseSource.CALCULATOR and "result" in data:
-                reply = (
-                    f"The answer is {data['result']}, "
-                    f"{self._address('technical')}."
-                )
+                reply = f"The answer is {data['result']}."
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
                 reply = self._format_greeting(user_text)
             elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
@@ -260,12 +251,8 @@ class PersonalityEngine:
     def _format_error(self, error_msg: str) -> str:
         error_msg = str(error_msg or "").strip()
         lowered = error_msg.lower()
-        try:
-            title = self._address("warning")
-        except Exception:
-            title = "Sir"
         if "no profile" in lowered or "no relevant" in lowered:
-            return f"I couldn't find anything matching that request, {title}."
+            return "I couldn't find anything matching that request."
         if (
             "429" in lowered
             or "too many requests" in lowered
@@ -273,20 +260,14 @@ class PersonalityEngine:
             or "quota" in lowered
             or "all configured llm providers failed" in lowered
         ):
-            return (
-                f"My AI services are temporarily rate-limited, {title}. "
-                "Try again shortly."
-            )
+            return "My AI services are temporarily rate-limited. Try again shortly."
         if not error_msg:
-            return (
-                f"I couldn't complete that request just now, {title}. "
-                "Try again shortly."
-            )
+            return "I couldn't complete that request just now. Try again shortly."
         logger.error(
             "[Personality] Internal operation error: %s",
             error_msg,
         )
-        return f"I couldn't complete that operation, {title}."
+        return "I couldn't complete that operation."
     def _format_greeting(self, user_text: str) -> str:
         query = user_text.lower()
         title = self._address("greeting")
@@ -460,8 +441,7 @@ class PersonalityEngine:
                 f"{self._address('normal')}."
             )
         return (
-            f"Here's what I remember about you, "
-            f"{self._address('normal')}:\n\n"
+            "Here's what I remember about you:\n\n"
             + "\n".join(lines)
         )
     def _format_planner(self, data: Any) -> str:
@@ -684,30 +664,20 @@ class PersonalityEngine:
         context: str = "normal",
     ) -> str:
         """
-        Apply ARIA's centralized form of address.
-        The addressing engine decides the title.
-        Personal names are never used.
+        Apply addressing only when it is genuinely appropriate.
+        ARIA must NOT randomly append titles such as:
+        Sir, Master, Chief, Boss, Commander.
+        Personal names are never used automatically.
         """
         reply = str(reply or "").strip()
         if not reply:
             return reply
-        title = self.addressing.get_address(context=context)
-        # Remove an existing ARIA title only when it is being used
-        # as a direct form of address.
-        reply = re.sub(
-            r",\s*(Sir|Master|Commander|Chief|Boss)(?=[.!?]|$)",
-            "",
-            reply,
-            flags=re.IGNORECASE,
-        )
-        # For short conversational responses, place the title naturally.
-        if "\n" not in reply:
-            if reply.endswith((".", "!", "?")):
-                reply = reply[:-1].rstrip()
-            return f"{reply}, {title}."
-        # For structured/multi-line responses, preserve the structure
-        # and add the address only at the end.
-        return f"{reply}\n\n{title}."
+        # Normal responses should contain NO forced title.
+        #
+        # Addressing is intentionally disabled here.
+        # Specific future situations can explicitly request
+        # an address when it is actually useful.
+        return reply
     def _post_process(self, reply: str) -> str:
         """
         Final presentation cleanup for ARIA responses.
