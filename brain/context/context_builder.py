@@ -54,10 +54,19 @@ class ContextBuilder:
         last_answer = None
 
         if self.working_memory:
-            working_topic = self.working_memory.get_topic()
-            working_goal = self.working_memory.get_goal()
-            working_entities = self.working_memory.get_entities()
-            working_document = self.working_memory.get_document()
+            working_topic = (
+                self.working_memory.get_topic()
+            )
+            working_goal = (
+                self.working_memory.get_goal()
+            )
+            working_entities = (
+                self.working_memory.get_entities()
+                or []
+            )
+            working_document = (
+                self.working_memory.get_document()
+            )
             last_question = self.working_memory.last_question()
             last_answer = self.working_memory.last_answer()
 
@@ -79,6 +88,14 @@ class ContextBuilder:
             query or ""
         ).strip()
 
+        resolved_query = str(
+            ctx.get(
+                "resolved_query",
+                clean_query,
+            )
+            or clean_query
+        ).strip()
+
         memory_items = (
             memory
             if isinstance(memory, list)
@@ -91,16 +108,32 @@ class ContextBuilder:
             else {}
         )
 
-        if conversation_history is not None:
-            if isinstance(
-                conversation_history,
-                list,
-            ):
-                state_data = dict(state_data)
+        stored_conversation_history = state_data.get(
+            "conversation_history",
+            []
+        )
 
-                state_data[
-                    "conversation_history"
-                ] = conversation_history
+        if not isinstance(
+            stored_conversation_history,
+            list,
+        ):
+            stored_conversation_history = []
+
+        # Explicit pipeline history has priority over stored state.
+        if isinstance(
+            conversation_history,
+            list,
+        ):
+            effective_conversation_history = conversation_history
+        else:
+            effective_conversation_history = (
+                stored_conversation_history
+            )
+
+        # Keep cognitive context bounded.
+        recent_conversation = (
+            effective_conversation_history[-8:]
+        )
 
         conversation_context = {}
 
@@ -119,17 +152,6 @@ class ContextBuilder:
         last_assistant_response = state_data.get(
             "last_assistant_response"
         )
-
-        conversation_history = state_data.get(
-            "conversation_history",
-            []
-        )
-
-        if not isinstance(conversation_history, list):
-            conversation_history = []
-
-        # Keep cognitive context bounded even if state contains more.
-        recent_conversation = conversation_history[-8:]
 
         active_document = (
             state_data.get("active_document")
@@ -327,6 +349,7 @@ class ContextBuilder:
         ctx.update({
             "context_version": 2,
             "query": clean_query,
+            "resolved_query": resolved_query,
             "session_id": session_id,
             "user_id": user_id,
             "intent": {
@@ -369,6 +392,36 @@ class ContextBuilder:
                     intent,
                     "metadata",
                     {},
+                ),
+            },
+            "intent_requirements": {
+                "memory": bool(
+                    getattr(
+                        intent,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+                "documents": bool(
+                    getattr(
+                        intent,
+                        "requires_documents",
+                        False,
+                    )
+                ),
+                "web": bool(
+                    getattr(
+                        intent,
+                        "requires_web",
+                        False,
+                    )
+                ),
+                "reasoning": bool(
+                    getattr(
+                        intent,
+                        "requires_reasoning",
+                        False,
+                    )
                 ),
             },
             "user_identity": {
@@ -522,11 +575,53 @@ class ContextBuilder:
 
             "capabilities": {
                 "conversation": True,
-                "memory": bool(self.memory_router or memory_items),
-                "knowledge_graph": bool(self.knowledge_graph),
-                "world_model": bool(self.world_model),
-                "working_memory": bool(self.working_memory),
-                "documents": document_active,
+
+                "memory": bool(
+                    self.memory_router
+                    or memory_items
+                    or getattr(
+                        intent,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+
+                "knowledge_graph": bool(
+                    self.knowledge_graph
+                ),
+
+                "world_model": bool(
+                    self.world_model
+                ),
+
+                "working_memory": bool(
+                    self.working_memory
+                ),
+
+                "documents": bool(
+                    document_active
+                    or getattr(
+                        intent,
+                        "requires_documents",
+                        False,
+                    )
+                ),
+
+                "web": bool(
+                    getattr(
+                        intent,
+                        "requires_web",
+                        False,
+                    )
+                ),
+
+                "reasoning": bool(
+                    getattr(
+                        intent,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
             },
 
             # Document state
@@ -540,6 +635,28 @@ class ContextBuilder:
             # This is a hint for later reasoning, not a hard rule.
             "response": {
                 "depth": response_depth,
+
+                "intent_type": getattr(
+                    intent,
+                    "intent_type",
+                    "conversation",
+                ),
+
+                "intent_confidence": float(
+                    getattr(
+                        intent,
+                        "confidence",
+                        0.0,
+                    ) or 0.0
+                ),
+
+                "requires_reasoning": bool(
+                    getattr(
+                        intent,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
             },
         })
 
