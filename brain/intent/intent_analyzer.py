@@ -116,6 +116,103 @@ class IntentAnalyzer:
                 self.intent_history.pop(0)  
             return intent  
 
+        # ---------------------------------------------------------
+        # GENERAL KNOWLEDGE / EXPLANATION FAST PATH
+        # ---------------------------------------------------------
+        #
+        # Ordinary questions such as:
+        #   "What is photosynthesis?"
+        #   "Explain gravity"
+        #   "Why is the sky blue?"
+        #   "How does TCP work?"
+        #
+        # must NEVER accidentally become weather/tool/action requests.
+        #
+        # Explicit web/tool requests are intentionally excluded.
+        # ---------------------------------------------------------
+
+        explicit_web = (
+            "search the web" in q
+            or "search online" in q
+            or "search internet" in q
+            or "look it up online" in q
+            or "find online" in q
+            or "browse the web" in q
+            or "latest news" in q
+            or "current news" in q
+        )
+
+        explicit_tool = (
+            q.startswith("calculate ")
+            or q.startswith("convert ")
+            or q.startswith("set a reminder")
+            or q.startswith("remind me")
+            or q.startswith("what time is it")
+            or q.startswith("what's the weather")
+            or q.startswith("what is the weather")
+        )
+
+        knowledge_patterns = (
+            "what is ",
+            "what are ",
+            "who is ",
+            "who was ",
+            "where is ",
+            "where was ",
+            "when was ",
+            "when did ",
+            "why is ",
+            "why are ",
+            "why was ",
+            "why were ",
+            "why do ",
+            "why does ",
+            "why did ",
+            "how does ",
+            "how do ",
+            "how did ",
+            "how is ",
+            "how are ",
+            "explain ",
+            "tell me about ",
+            "define ",
+            "meaning of ",
+            "difference between ",
+            "what's ",
+            "whats ",
+        )
+
+        if (
+            not explicit_web
+            and not explicit_tool
+            and (
+                q.startswith(knowledge_patterns)
+                or q.endswith("?")
+            )
+        ):
+            intent = Intent(
+                name="Research",
+                confidence=0.94,
+                requires_planning=False,
+                requires_tools=False,
+                requires_documents=False,
+                requires_memory=False,
+                requires_web=False,
+                requires_reasoning=True,
+                data={
+                    "action_name": None,
+                    "action_params": {},
+                    "knowledge_query": True,
+                },
+            )
+
+            self.intent_history.append(intent)
+
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+
+            return intent
+
         # Delegate to semantic analysis if LLM router is available  
         if self.llm_router and hasattr(self.llm_router, "chat"):  
             semantic_intent = await self._semantic_intent(query)  
