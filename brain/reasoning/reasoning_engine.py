@@ -1488,7 +1488,7 @@ Return JSON:
         # INTENT ANALYSIS
         # ---------------------------------------------------------
 
-        intent = self.intent_analyzer.analyze(
+        intent = await self.intent_analyzer.analyze(
             user_query
         )
 
