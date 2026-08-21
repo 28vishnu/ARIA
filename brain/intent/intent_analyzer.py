@@ -104,7 +104,21 @@ class IntentAnalyzer:
 
             return intent
 
-        if q == "continue":  
+        if q in {
+            "continue",
+            "go on",
+            "tell me more",
+            "explain more",
+            "next",
+            "and then",
+            "then",
+            "what about it",
+            "what about that",
+            "why",
+            "how",
+            "why is that",
+            "how so",
+        }:  
             intent = Intent("Follow-up", 0.99, False, False, False, True, False, False)  
             self.intent_history.append(intent)  
             if len(self.intent_history) > 100:  
@@ -186,7 +200,6 @@ class IntentAnalyzer:
             "tell me about ",
             "define ",
             "meaning of ",
-            "difference between ",
             "what's ",
             "whats ",
         )
@@ -239,7 +252,21 @@ class IntentAnalyzer:
                 self.intent_history.pop(0)  
             return intent  
 
-        if q in {"continue", "go on", "tell me more", "explain more", "next", "and", "then"}:  
+        if q in {
+            "continue",
+            "go on",
+            "tell me more",
+            "explain more",
+            "next",
+            "and then",
+            "then",
+            "what about it",
+            "what about that",
+            "why",
+            "how",
+            "why is that",
+            "how so",
+        }:  
             intent = Intent("Follow-up", 0.90, False, False, False, True, False, False)  
             self.intent_history.append(intent)  
             if len(self.intent_history) > 100:  
