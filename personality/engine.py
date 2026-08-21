@@ -135,6 +135,60 @@ class PersonalityEngine:
             self.conversation_style["humor"] = humor
     def current_style(self):
         return self.conversation_style
+    def _add_natural_touch(self, reply: str, user_text: str) -> str:
+        """
+        Add occasional natural conversational reactions.
+        Never force humor into factual, technical, serious, or task responses.
+        """
+        if not reply or not self.conversation_style.get("humor", True):
+            return reply
+        query = (user_text or "").lower().strip()
+        # Never add casual reactions to these types of requests.
+        serious_patterns = (
+            "what is",
+            "explain",
+            "define",
+            "difference",
+            "compare",
+            "how does",
+            "how do",
+            "calculate",
+            "solve",
+            "code",
+            "python",
+            "javascript",
+            "error",
+            "bug",
+            "exam",
+            "study",
+            "search",
+            "find",
+            "latest",
+            "news",
+            "price",
+            "buy",
+            "purchase",
+            "document",
+            "file",
+        )
+        if any(pattern in query for pattern in serious_patterns):
+            return reply
+        # Keep humor occasional rather than deterministic.
+        if random.random() > 0.12:
+            return reply
+        humorous_reactions = (
+            "Haha.",
+            "Lol, fair enough.",
+            "Haha, I get you.",
+            "That was a good one.",
+        )
+        reaction = random.choice(humorous_reactions)
+        # Don't add a reaction if the response already has one.
+        if reply.lower().startswith(
+            ("haha", "lol", "lmao")
+        ):
+            return reply
+        return f"{reaction} {reply}"
     async def apply_personality(
         self,
         session_id: str,
@@ -229,7 +283,9 @@ class PersonalityEngine:
                 reply,
                 context="normal",
             )
-            return self._post_process(reply)
+            reply = self._post_process(reply)
+            reply = self._add_natural_touch(reply, user_text)
+            return reply
         except Exception as e:
             logger.exception(
                 "[PersonalityEngine ERROR] Failed to format response: %s",
@@ -737,7 +793,7 @@ class PersonalityEngine:
         # ---------------------------------------------------------
         reply = re.sub(
             r"(?m)^\s*(?:---+|___+)\s*$",
-            "",
+            ="",
             reply,
         )
         # ---------------------------------------------------------
