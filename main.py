@@ -608,16 +608,6 @@ async def telegram_webhook(req: Request):
     if chat_id is None or user_id is None:
         return {"status": "ok"}
 
-    http_client = req.app.state.registry.get("http_client")
-
-    status = TelegramStatus(
-        http_client=http_client,
-        token=token,
-        chat_id=chat_id,
-    )
-
-    await status.start("Reading your request...")
-
     # ---------------------------------------------------------
     # PRIVATE OWNER-ONLY ACCESS
     # ---------------------------------------------------------
@@ -628,17 +618,25 @@ async def telegram_webhook(req: Request):
         logger.error(
             "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
         )
-        await status.delete()
         return {"status": "unauthorized"}
 
     if str(user_id) != allowed_user_id:
         logger.warning(
             "[Security] Unauthorized Telegram access attempt."
         )
-        await status.delete()
         return {"status": "unauthorized"}
 
     logger.info("[Security] Authorized Telegram user.")
+
+    http_client = req.app.state.registry.get("http_client")
+
+    status = TelegramStatus(
+        http_client=http_client,
+        token=token,
+        chat_id=chat_id,
+    )
+
+    await status.start("Reading your request...")
 
     # ---------------------------------------------------------
     # HANDLE PENDING DOCUMENT CONFIRMATION
