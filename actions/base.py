@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
 
 @dataclass
 class ActionResult:
@@ -9,6 +10,8 @@ class ActionResult:
     data: Any = None
     error: Optional[str] = None
     rolled_back: bool = False
+    execution_time_ms: float = 0.0
+
 
 class BaseAction(ABC):
     name: str = "base_action"
@@ -29,4 +32,3 @@ class BaseAction(ABC):
     async def rollback(self, params: Dict[str, Any]) -> bool:
         """Optional rollback support if action fails halfway."""
         return False
-      
