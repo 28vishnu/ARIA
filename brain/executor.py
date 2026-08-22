@@ -818,7 +818,107 @@ class Executor:
                 ]
 
                 if not ready_tasks:
-                    logger.error("[Executor] Unresolvable dependency tree.")
+
+                    # =========================================================
+                    # CONFIRMATION PAUSE IS NOT A DEPENDENCY FAILURE
+                    # =========================================================
+                    #
+                    # A task can legitimately have no ready tasks because
+                    # execution is paused while waiting for user confirmation.
+                    #
+                    # Example:
+                    #
+                    #     file_action
+                    #          ↓
+                    #     awaiting_confirmation
+                    #
+                    # In that situation we MUST return a paused workflow.
+                    # We must NOT classify it as an unresolved dependency tree.
+                    # =========================================================
+
+                    awaiting_confirmation_tasks = [
+                        task
+                        for task in plan.tasks
+                        if (
+                            task.id not in executed
+                            and getattr(
+                                task,
+                                "status",
+                                None,
+                            ) == "awaiting_confirmation"
+                        )
+                    ]
+
+                    if awaiting_confirmation_tasks:
+
+                        pending_task = (
+                            awaiting_confirmation_tasks[0]
+                        )
+
+                        pending_task_id = (
+                            pending_task.id
+                        )
+
+                        pending_action_name = getattr(
+                            pending_task,
+                            "action_name",
+                            None,
+                        )
+
+                        pending_action_params = dict(
+                            getattr(
+                                pending_task,
+                                "params",
+                                {},
+                            )
+                            or {}
+                        )
+
+                        logger.info(
+                            "[Executor] Workflow paused for confirmation. "
+                            "task_id=%s action=%s params=%s",
+                            pending_task_id,
+                            pending_action_name,
+                            pending_action_params,
+                        )
+
+                        plan.status = (
+                            "awaiting_confirmation"
+                        )
+
+                        plan.completed_tasks = list(
+                            completed
+                        )
+
+                        plan.failed_tasks = list(
+                            failed
+                        )
+
+                        plan.skipped_tasks = list(
+                            skipped
+                        )
+
+                        return self._build_result(
+                            task_outputs=task_outputs,
+                            workflow_results=workflow_results,
+                            completed=completed,
+                            failed=failed,
+                            skipped=skipped,
+                            paused=True,
+                            requires_confirmation=True,
+                            pending_task_id=pending_task_id,
+                            pending_action_name=pending_action_name,
+                            pending_action_params=pending_action_params,
+                        )
+
+                    # =========================================================
+                    # REAL DEPENDENCY FAILURE
+                    # =========================================================
+
+                    logger.error(
+                        "[Executor] Unresolvable dependency tree."
+                    )
+
                     remaining = [
                         task for task in plan.tasks if task.id not in executed
                     ]
