@@ -112,10 +112,7 @@ class ExecutionPlan:
         return [
             task
             for task in self.tasks
-            if task.status in (
-                "pending",
-                "awaiting_confirmation",
-            )
+            if task.status == "pending"
         ]
 
     def get_completed_task_ids(self) -> List[str]:
@@ -255,13 +252,18 @@ class ExecutionPlan:
         task_id: str
     ):
         """
-        Record task failure.
+        Record task failure and remove it
+        from successful/skipped task tracking.
         """
 
         if task_id not in self.failed_tasks:
-            self.failed_tasks.append(
-                task_id
-            )
+            self.failed_tasks.append(task_id)
+
+        if task_id in self.completed_tasks:
+            self.completed_tasks.remove(task_id)
+
+        if task_id in self.skipped_tasks:
+            self.skipped_tasks.remove(task_id)
 
     def record_skipped_task(
         self,
@@ -282,24 +284,52 @@ class ExecutionPlan:
 
     def validate_dependencies(self) -> bool:
         """
-        Validate that all dependency IDs refer to real tasks.
-
-        Also rejects a task depending directly on itself.
+        Validate that all dependency IDs refer to real tasks,
+        reject self-dependencies, and reject dependency cycles.
         """
 
-        task_ids = {
-            task.id
+        task_map = {
+            task.id: task
             for task in self.tasks
         }
 
+        # Every task ID must be unique.
+        if len(task_map) != len(self.tasks):
+            return False
+
+        # Validate dependency references and self-dependencies.
         for task in self.tasks:
-
             for dependency in task.depends_on:
-
-                if dependency not in task_ids:
+                if dependency not in task_map:
                     return False
 
                 if dependency == task.id:
                     return False
+
+        # Detect dependency cycles using DFS.
+        visiting = set()
+        visited = set()
+
+        def has_cycle(task_id: str) -> bool:
+            if task_id in visiting:
+                return True
+
+            if task_id in visited:
+                return False
+
+            visiting.add(task_id)
+
+            for dependency in task_map[task_id].depends_on:
+                if has_cycle(dependency):
+                    return True
+
+            visiting.remove(task_id)
+            visited.add(task_id)
+
+            return False
+
+        for task_id in task_map:
+            if has_cycle(task_id):
+                return False
 
         return True
