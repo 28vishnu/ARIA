@@ -2322,46 +2322,52 @@ Return JSON:
         reasoning_steps.append(f"Chosen reasoning mode: {mode}")
 
         # ---------------------------------------------------------
-        # PHASE 2: Intent-driven agent selection
+        # PHASE 2: Intent-driven agent selection + execution
         # ---------------------------------------------------------
 
-        intent_type = getattr(
-            intent,
-            "intent_type",
-            None,
-        )
+        intent_type = getattr(intent, "intent_type", None)
 
+        # Select agents strictly from the detected intent.
         selected_agents = self.choose_best_agents(
             query=query,
             intent_name=intent_type,
         )
 
+        # Add explicitly requested capabilities from the cognitive decision.
         if decision:
+            capability_agents = []
+
             if getattr(decision, "use_memory", False):
-                selected_agents.append("memory")
+                capability_agents.append("memory")
 
             if getattr(decision, "use_documents", False):
-                selected_agents.append("document")
+                capability_agents.append("document")
 
             if getattr(decision, "use_planner", False):
-                selected_agents.append("planning")
+                capability_agents.append("planning")
 
             if getattr(decision, "use_web", False):
-                selected_agents.append("research")
+                capability_agents.append("research")
 
             if getattr(decision, "use_tools", False):
-                selected_agents.append("coding")
+                capability_agents.append("coding")
 
-        selected_agents = list(dict.fromkeys(selected_agents))
+            for agent_name in capability_agents:
+                if agent_name not in selected_agents:
+                    selected_agents.append(agent_name)
 
+        # Always have a valid fallback.
         if not selected_agents:
             selected_agents = ["chat"]
 
+        # Remove duplicates while preserving execution order.
+        selected_agents = list(dict.fromkeys(selected_agents))
+
         reasoning_steps.append(
-            f"Selected agents from intent={intent_type}: "
-            f"{selected_agents}"
+            f"Selected agents from intent={intent_type}: {selected_agents}"
         )
 
+        # Build deterministic execution plan.
         execution_plan = self.build_execution_plan(
             agents=selected_agents,
             intent_name=intent_type,
@@ -2374,26 +2380,30 @@ Return JSON:
             f"Built execution plan with {len(execution_plan)} step(s)"
         )
 
+        # ---------------------------------------------------------
+        # Capability flags
+        # ---------------------------------------------------------
+
         requires_planning = (
-            decision.use_planner
+            getattr(decision, "use_planner", False)
             if decision
             else strategy == "planning_first"
         )
 
         requires_tools = (
-            decision.use_tools
+            getattr(decision, "use_tools", False)
             if decision
             else False
         )
 
         requires_memory = (
-            decision.use_memory
+            getattr(decision, "use_memory", False)
             if decision
             else strategy == "memory_first"
         )
 
         requires_documents = (
-            decision.use_documents
+            getattr(decision, "use_documents", False)
             if decision
             else strategy == "document_first"
         )
@@ -2404,22 +2414,23 @@ Return JSON:
             else strategy == "research_first"
         )
 
+        # Intent requirements always take priority.
         requires_memory = (
             requires_memory
-            or intent.requires_memory
+            or getattr(intent, "requires_memory", False)
         )
 
         requires_documents = (
             requires_documents
-            or intent.requires_documents
+            or getattr(intent, "requires_documents", False)
         )
 
         requires_web = (
             requires_web
-            or intent.requires_web
+            or getattr(intent, "requires_web", False)
         )
 
-        if intent.requires_reasoning:
+        if getattr(intent, "requires_reasoning", False):
             mode = "deep_reasoning"
 
         if strategy == "research_first":
@@ -2430,6 +2441,134 @@ Return JSON:
             f"memory={requires_memory}, "
             f"planning={requires_planning}, "
             f"tools={requires_tools}"
+        )
+
+        # ---------------------------------------------------------
+        # Agent execution
+        # ---------------------------------------------------------
+
+        agent_results = []
+
+        if self.agent_coordinator and selected_agents:
+
+            execution_plan_payload = {
+                "agents": selected_agents,
+                "query": query,
+                "context": context,
+                "plan": execution_plan,
+            }
+
+            # Give the Lead Agent the opportunity to optimize ordering.
+            if (
+                self.lead_agent
+                and hasattr(self.lead_agent, "create_execution_plan")
+            ):
+                try:
+                    lead_plan = await self.lead_agent.create_execution_plan(
+                        query,
+                        context,
+                        selected_agents,
+                    )
+
+                    if isinstance(lead_plan, dict):
+                        execution_plan_payload.update(lead_plan)
+
+                except Exception:
+                    logger.exception(
+                        "[ReasoningEngine] Lead Agent planning failed; "
+                        "using deterministic Phase 2 plan."
+                    )
+
+            logger.info(
+                "[ReasoningEngine] Phase 2 execution plan: %s",
+                execution_plan_payload,
+            )
+
+            if hasattr(self.agent_coordinator, "execute"):
+                try:
+                    coordination = await self.agent_coordinator.execute(
+                        execution_plan_payload.get(
+                            "agents",
+                            selected_agents,
+                        ),
+                        execution_plan_payload.get(
+                            "query",
+                            query,
+                        ),
+                        execution_plan_payload.get(
+                            "context",
+                            context,
+                        ),
+                    )
+
+                    if isinstance(coordination, dict):
+
+                        agent_results = coordination.get(
+                            "outputs",
+                            [],
+                        )
+
+                        context.update(
+                            coordination.get(
+                                "shared_context",
+                                {},
+                            )
+                        )
+
+                        context["execution_result"] = coordination
+
+                except Exception:
+                    logger.exception(
+                        "[ReasoningEngine] Phase 2 agent coordination failed."
+                    )
+                    agent_results = []
+
+        context["best_agent"] = (
+            agent_results[0].get("agent")
+            if agent_results
+            and isinstance(agent_results[0], dict)
+            else None
+        )
+
+        logger.info(
+            "[ReasoningEngine] %d agents completed",
+            len(agent_results),
+        )
+
+        # Normalize specialist-agent outputs.
+        workflow = AgentWorkflow()
+        agent_outputs = {}
+
+        for result in agent_results:
+
+            if not isinstance(result, dict):
+                continue
+
+            agent_name = result.get("agent", "unknown")
+            agent_result = result.get("result")
+
+            if agent_result is None:
+                agent_result = ""
+
+            confidence_value = result.get("confidence", 0.0)
+
+            try:
+                confidence_value = float(confidence_value)
+            except (TypeError, ValueError):
+                confidence_value = 0.0
+
+            agent_outputs[agent_name] = agent_result
+
+            logger.info(
+                "\nAgent: %s\nConfidence: %.2f\n%s\n",
+                agent_name,
+                confidence_value,
+                agent_result,
+            )
+
+        reasoning_steps.append(
+            f"Executed {len(agent_results)} specialist agent(s) "
+            f"via Phase 2 coordinator"
         )
 
         retrieval = await self.retrieve_context(
@@ -2479,106 +2618,6 @@ Return JSON:
         reasoning_steps.append(f"Selected best reasoning path: {best_path}")
 
         conflicts = await self.detect_conflicts(ranked_evidence)
-
-        agent_results = []
-
-        if self.agent_coordinator and selected_agents:
-
-            execution_plan_payload = {
-                "agents": selected_agents,
-                "query": query,
-                "context": context,
-                "plan": context.get("execution_plan", []),
-            }
-
-            if (
-                self.lead_agent
-                and hasattr(self.lead_agent, "create_execution_plan")
-            ):
-                try:
-                    lead_plan = await self.lead_agent.create_execution_plan(
-                        query,
-                        context,
-                        selected_agents,
-                    )
-
-                    if isinstance(lead_plan, dict):
-                        execution_plan_payload.update(lead_plan)
-
-                except Exception:
-                    logger.exception(
-                        "[ReasoningEngine] Lead Agent planning failed; "
-                        "using deterministic Phase 2 plan."
-                    )
-
-            logger.info(
-                "[ReasoningEngine] Execution plan: %s",
-                execution_plan_payload,
-            )
-
-            if hasattr(self.agent_coordinator, "execute"):
-                try:
-                    coordination = await self.agent_coordinator.execute(
-                        execution_plan_payload.get(
-                            "agents",
-                            selected_agents,
-                        ),
-                        execution_plan_payload.get(
-                            "query",
-                            query,
-                        ),
-                        execution_plan_payload.get(
-                            "context",
-                            context,
-                        ),
-                    )
-
-                    if isinstance(coordination, dict):
-                        agent_results = coordination.get(
-                            "outputs",
-                            [],
-                        )
-
-                        context.update(
-                            coordination.get(
-                                "shared_context",
-                                {},
-                            )
-                        )
-
-                        context["execution_result"] = coordination
-
-                except Exception:
-                    logger.exception(
-                        "[ReasoningEngine] Agent coordination failed."
-                    )
-                    agent_results = []
-
-        context["best_agent"] = (
-            agent_results[0].get("agent")
-            if agent_results and isinstance(agent_results[0], dict)
-            else None
-        )
-
-        logger.info(
-            "[ReasoningEngine] %d agents completed",
-            len(agent_results),
-        )
-
-        workflow = AgentWorkflow()
-
-        agent_outputs = {}
-        for result in agent_results:
-            if isinstance(result, dict):
-                agent_outputs[result.get("agent", "unknown")] = result.get("result")
-                logger.info(
-                    "\nAgent: %s\nConfidence: %.2f\n%s\n",
-                    result.get("agent"),
-                    result.get("confidence", 0.0),
-                    result.get("result")
-                )
-
-        reasoning_steps.append(f"Executed {len(agent_results)} specialist agent(s) sequentially via coordinator")
 
         plan = []
         if requires_planning:
