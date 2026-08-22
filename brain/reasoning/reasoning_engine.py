@@ -107,6 +107,10 @@ class ReasoningEngine:
         self.memory_engine = memory_engine
         self.intent_analyzer = IntentAnalyzer(llm_router=llm_router)
 
+        # Multi-topic conversation state
+        self.conversation_threads = {}
+        self.active_thread_id = None
+
     def _build_semantic_context(self):
 
         if not hasattr(self, "working_memory") or not self.working_memory:
@@ -376,6 +380,58 @@ class ReasoningEngine:
 
         return list(dict.fromkeys(entities))
 
+    def _get_or_create_thread(
+        self,
+        topic: Optional[str],
+        subject: Optional[str],
+        entities: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Maintain independent conversational threads.
+
+        A conversation may contain any number of topics/tasks.
+        Only one thread is active for the current turn, while older
+        threads remain recoverable.
+        """
+
+        topic = str(topic or "").strip()
+        subject = str(subject or topic or "").strip()
+        entities = list(entities or [])
+
+        # Stable identity for the conversational task.
+        thread_key = (
+            topic.lower()
+            or subject.lower()
+            or "general"
+        )
+
+        if thread_key not in self.conversation_threads:
+            self.conversation_threads[thread_key] = {
+                "thread_id": thread_key,
+                "topic": topic or subject or "general",
+                "subject": subject or topic or "general",
+                "entities": list(dict.fromkeys(entities)),
+                "compared_entities": [],
+                "active_comparison": False,
+                "history": [],
+                "last_user": None,
+                "last_assistant": None,
+                "last_result": None,
+            }
+
+        thread = self.conversation_threads[thread_key]
+
+        if entities:
+            thread["entities"] = list(
+                dict.fromkeys(
+                    thread.get("entities", []) + entities
+                )
+            )
+
+        self.active_thread_id = thread_key
+
+        return thread
+
     async def track_conversation(
         self,
         context: Dict[str, Any],
@@ -427,41 +483,30 @@ class ReasoningEngine:
         if not isinstance(compared_entities, list):
             compared_entities = []
 
-        # Recover comparison entities from the recent conversation
-        # when the conversation manager did not explicitly persist them.
-        recent_comparison_entities = []
-
-        for item in history[-10:]:
-            if not isinstance(item, dict):
-                continue
-
-            previous_user = str(
-                item.get("user", "")
-            ).strip()
-
-            if previous_user:
-                recent_comparison_entities = (
-                    self._extract_comparison_entities(
-                        previous_user,
-                        recent_comparison_entities,
-                    )
-                )
-
         current_query = str(
             context.get("query", "")
         ).strip()
 
-        compared_entities = self._extract_comparison_entities(
-            current_query,
-            compared_entities,
+        current_comparison_entities = (
+            self._extract_comparison_entities(
+                current_query
+            )
         )
 
-        if recent_comparison_entities:
+        # Explicit comparison in the CURRENT request always wins.
+        if len(current_comparison_entities) >= 2:
+            compared_entities = current_comparison_entities
+            active_comparison = True
+        else:
+            # Otherwise preserve comparison only from the ACTIVE thread.
             compared_entities = list(
                 dict.fromkeys(
-                    recent_comparison_entities
-                    + compared_entities
+                    compared_entities
                 )
+            )
+            active_comparison = bool(
+                conv.get("active_comparison")
+                and len(compared_entities) >= 2
             )
 
         active_subject = (
@@ -470,11 +515,6 @@ class ReasoningEngine:
             or conv.get("topic")
             or context.get("active_subject")
             or context.get("topic")
-        )
-
-        active_comparison = bool(
-            conv.get("active_comparison")
-            or len(compared_entities) >= 2
         )
 
         # A comparison remains active while the user is asking
@@ -487,9 +527,29 @@ class ReasoningEngine:
         last_assistant = conv.get("last_assistant")
         last_result = conv.get("last_result")
 
+        thread = self._get_or_create_thread(
+            topic=active_topic,
+            subject=active_subject,
+            entities=active_entities,
+        )
+
+        # Update the active thread with current comparison state.
+        if active_comparison:
+            thread["compared_entities"] = list(
+                dict.fromkeys(compared_entities)
+            )
+            thread["active_comparison"] = True
+
+        thread["topic"] = active_topic or thread.get("topic")
+        thread["subject"] = active_subject or thread.get("subject")
+
         return {
             "history": history,
             "recent_history": history[-10:],
+
+            "thread_id": thread.get("thread_id"),
+            "thread": thread,
+            "threads": self.conversation_threads,
 
             "active_topic": active_topic,
             "previous_topic": previous_topic,
@@ -549,30 +609,51 @@ class ReasoningEngine:
 
         lower_query = clean_query.lower()
 
+        active_thread = conversation_state.get("thread", {})
+
+        active_comparison = bool(
+            active_thread.get("active_comparison")
+        )
+
+        compared_entities = active_thread.get(
+            "compared_entities",
+            []
+        )
+
         if (
-            conversation_state.get("active_comparison")
-            and conversation_state.get("compared_entities")
+            active_comparison
+            and len(compared_entities) >= 2
             and any(
                 phrase in lower_query
                 for phrase in followup_patterns
             )
         ):
-            entities = conversation_state["compared_entities"]
+            comparison = " and ".join(compared_entities)
 
-            if len(entities) >= 2:
-                comparison = " and ".join(entities)
+            logger.info(
+                "[Reasoning] Preserving active thread comparison: %s",
+                comparison,
+            )
 
-                logger.info(
-                    "[Reasoning] Preserving active comparison: %s",
-                    comparison,
-                )
-
-                return (
-                    f"{clean_query} "
-                    f"Compare the relevant options: {comparison}."
-                )
+            return (
+                f"{clean_query} "
+                f"Compare the relevant options: {comparison}."
+            )
 
         reference_context = {
+            "active_thread_id": conversation_state.get(
+                "thread_id"
+            ),
+            "active_thread": conversation_state.get(
+                "thread",
+                {}
+            ),
+            "available_threads": list(
+                conversation_state.get(
+                    "threads",
+                    {}
+                ).keys()
+            ),
             "active_topic": conversation_state.get("active_topic"),
             "previous_topic": conversation_state.get("previous_topic"),
             "active_subject": conversation_state.get("active_subject"),
@@ -611,14 +692,30 @@ Do NOT invent information.
 
 Priority order:
 
-1. Latest coherent conversation
-2. Explicit entities in the latest request
-3. Active comparison state
-4. Recent conversation history
-5. Long-term memory only when explicitly relevant
+1. Explicit entities in the latest request
+2. Active conversation thread
+3. Latest coherent messages belonging to the active thread
+4. Explicitly requested previous thread/topic
+5. Other conversation threads only when the user clearly refers to them
+6. Long-term memory only when explicitly relevant
 
-Never allow unrelated long-term memory to replace the active
-conversation.
+IMPORTANT:
+
+The conversation may contain MANY independent topics or tasks.
+
+Only the ACTIVE THREAD should be treated as the current context.
+
+Never merge entities from unrelated threads.
+
+Never revive an old comparison merely because it appeared somewhere
+in recent conversation history.
+
+If the user explicitly changes topic, switch to the new thread.
+
+If the user says "go back to TCP", "continue the DNA topic", etc.,
+retrieve that specific thread.
+
+If the user says "which one?", resolve it using the active thread.
 
 If the user says:
 - "it"
@@ -720,18 +817,11 @@ Return ONLY the standalone request.
         Working memory is not long-term memory.
         """
 
-        conv = context.get("conversation", {})
-
-        if not isinstance(conv, dict):
-            conv = {}
-
-        history = conv.get(
-            "conversation_history",
-            conv.get("history", []),
+        conversation_state = await self.track_conversation(context)
+        active_thread = conversation_state.get(
+            "thread",
+            {}
         )
-
-        if not isinstance(history, list):
-            history = []
 
         return {
             "current_query": context.get("query", ""),
@@ -741,7 +831,9 @@ Return ONLY the standalone request.
                 [],
             ),
 
-            "recent_conversation": history[-8:],
+            "recent_conversation": (
+                active_thread.get("history", [])
+            ),
 
             "active_document": (
                 context.get("document")
@@ -749,34 +841,45 @@ Return ONLY the standalone request.
                 or {}
             ),
 
-            "active_topic": (
-                conv.get("active_topic")
-                or conv.get("topic")
+            "active_thread_id": (
+                conversation_state.get("thread_id")
             ),
 
-            "previous_topic": conv.get(
-                "previous_topic"
+            "active_topic": (
+                active_thread.get("topic")
+            ),
+
+            "previous_topic": (
+                conversation_state.get("previous_topic")
             ),
 
             "active_subject": (
-                conv.get("active_subject")
-                or conv.get("active_topic")
-                or conv.get("topic")
-                or conv.get("last_subject")
+                active_thread.get("subject")
             ),
 
-            "active_entities": conv.get(
-                "active_entities",
-                conv.get("entities", []),
+            "active_entities": (
+                active_thread.get("entities", [])
             ),
 
-            "compared_entities": conv.get(
-                "last_compared_entities",
-                conv.get("compared_entities", []),
+            "compared_entities": (
+                active_thread.get(
+                    "compared_entities",
+                    []
+                )
             ),
 
             "active_comparison": bool(
-                conv.get("active_comparison")
+                active_thread.get(
+                    "active_comparison",
+                    False
+                )
+            ),
+
+            "available_threads": list(
+                conversation_state.get(
+                    "threads",
+                    {}
+                ).keys()
             ),
 
             "current_goal": context.get(
