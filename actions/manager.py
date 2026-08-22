@@ -59,6 +59,14 @@ class ActionManager:
                     "description",
                     "",
                 ),
+                "timeout_seconds": getattr(
+                    action,
+                    "timeout_seconds",
+                    None,
+                ),
+                "supports_rollback": callable(
+                    getattr(action, "rollback", None)
+                ),
             }
 
         return capabilities
@@ -90,7 +98,6 @@ class ActionManager:
             - permissions
             - validation
             - timeout
-            - retry
             - rollback
 
         The LLM must never call actions directly.
@@ -172,6 +179,15 @@ class ActionManager:
 
         action = self.actions[action_name]
 
+        # Phase 3 defensive parameter isolation.
+        params = dict(params or {})
+
+        logger.debug(
+            "[ActionManager] Parameters prepared for action '%s': keys=%s",
+            action_name,
+            list(params.keys()),
+        )
+
         # 1. Evaluate permissions
         #
         # Some actions have operation-specific permissions.
@@ -212,9 +228,12 @@ class ActionManager:
             return ActionResult(success=False, action_name=action_name, error="Parameter validation failed.")
 
         # 3. Execute with timeout, retries, and rollback support
-        max_retries = 2
+        # Phase 3: Task-level retries are controlled by Executor.
+        # ActionManager executes an action once to prevent duplicate side effects.
+        max_retries = 0
         attempt = 0
         last_error = None
+        execution_started = False
         start_time = time.perf_counter()
 
         while attempt <= max_retries:
@@ -222,6 +241,8 @@ class ActionManager:
                 # Wrap execution in asyncio timeout
                 async def _run():
                     return await action.execute(params)
+
+                execution_started = True
 
                 result = await asyncio.wait_for(_run(), timeout=action.timeout_seconds)
 
@@ -247,20 +268,27 @@ class ActionManager:
                     break
             except asyncio.TimeoutError:
                 last_error = f"Action timed out after {action.timeout_seconds}s"
-                logger.warning("[ActionManager] Action '%s' timed out (Attempt %d/%d)", action.name, attempt + 1, max_retries + 1)
+                logger.warning("[ActionManager] Action '%s' timed out.", action.name)
             except Exception as e:
                 last_error = str(e)
                 logger.exception("[ActionManager ERROR] Exception executing action '%s'", action.name)
 
             attempt += 1
-            if attempt <= max_retries:
-                await asyncio.sleep(1.0 * attempt) # Backoff
 
-        # If all retries failed, attempt rollback
+        # If execution started, attempt rollback
         rolled_back = False
-        try:
-            rolled_back = await action.rollback(params)
-        except Exception:
-            pass
+        if execution_started:
+            try:
+                rolled_back = await action.rollback(params)
+            except Exception:
+                logger.exception(
+                    "[ActionManager] Rollback failed for '%s'",
+                    action_name,
+                )
 
-        return ActionResult(success=False, action_name=action_name, error=last_error, rolled_back=rolled_back)
+        return ActionResult(
+            success=False,
+            action_name=action_name,
+            error=last_error or "Action execution failed.",
+            rolled_back=rolled_back,
+        )
