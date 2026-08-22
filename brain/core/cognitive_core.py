@@ -2880,25 +2880,35 @@ Execution Results:
         )
 
         pending_task_id = (
+            exec_result.get("pending_task_id")
+        )
+        pending_action_name = (
+            exec_result.get("pending_action_name")
+        )
+        pending_action_params = (
             exec_result.get(
-                "pending_task_id"
+                "pending_action_params",
+                {},
             )
+            or {}
         )
 
-        pending_action_name = (
-            exec_result.get(
-                "pending_action_name"
-            )
+        logger.info(
+            "[CognitiveCore] Workflow result received: "
+            "paused=%s confirmation=%s "
+            "task_id=%s action=%s params=%s",
+            paused,
+            requires_confirmation,
+            pending_task_id,
+            pending_action_name,
+            pending_action_params,
         )
 
         # =====================================================
         # WORKFLOW PAUSED FOR CONFIRMATION
         # =====================================================
 
-        if (
-            paused
-            and requires_confirmation
-        ):
+        if paused and requires_confirmation:
 
             if not self.state_manager:
 
@@ -2916,11 +2926,90 @@ Execution Results:
                     ),
                 )
 
+            # Safety fallback:
+            # If Executor somehow did not provide the pending task ID,
+            # recover it from the plan.
+
+            if not pending_task_id:
+
+                awaiting_task = next(
+                    (
+                        task
+                        for task in plan.tasks
+                        if getattr(
+                            task,
+                            "status",
+                            None,
+                        )
+                        == "awaiting_confirmation"
+                    ),
+                    None,
+                )
+
+                if awaiting_task is not None:
+
+                    pending_task_id = awaiting_task.id
+
+                    pending_action_name = (
+                        pending_action_name
+                        or getattr(
+                            awaiting_task,
+                            "action_name",
+                            None,
+                        )
+                    )
+
+                    if not pending_action_params:
+
+                        pending_action_params = dict(
+                            getattr(
+                                awaiting_task,
+                                "params",
+                                {},
+                            )
+                            or {}
+                        )
+
+            # Final validation.
+            # Never store an incomplete confirmation workflow.
+
+            if not pending_task_id:
+
+                logger.error(
+                    "[CognitiveCore] Workflow requested confirmation "
+                    "but no pending task ID could be determined."
+                )
+
+                if self.state_manager:
+
+                    self.state_manager.mark_workflow_failed(
+                        session_id,
+                        error=(
+                            "Workflow confirmation state was created "
+                            "without a task ID."
+                        ),
+                    )
+
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="workflow_confirmation",
+                    error=(
+                        "Unable to determine which workflow task "
+                        "requires confirmation."
+                    ),
+                )
+
             logger.info(
-                "[CognitiveCore] Persisting suspended workflow "
-                "at task %s (%s).",
+                "[CognitiveCore] Persisting suspended workflow: "
+                "task_id=%s action=%s params=%s",
                 pending_task_id,
                 pending_action_name,
+                pending_action_params,
             )
 
             self.state_manager.set_pending_workflow(
