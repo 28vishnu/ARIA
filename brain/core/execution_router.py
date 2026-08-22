@@ -155,6 +155,29 @@ def contains_weather_term(q: str) -> bool:
     )
 
 
+def contains_file_reference(q: str) -> bool:
+    """
+    Detect likely file references.
+
+    Examples:
+        test.txt
+        notes.md
+        data.json
+        report.pdf
+    """
+
+    return bool(
+        re.search(
+            r"\b[\w\-]+\.(?:"
+            r"txt|md|json|csv|py|js|ts|html|css|"
+            r"pdf|docx|xlsx|pptx"
+            r")\b",
+            q,
+            re.IGNORECASE,
+        )
+    )
+
+
 def decide(query: str) -> RouteDecision:
     q = query.lower().strip()
 
@@ -279,12 +302,15 @@ def decide(query: str) -> RouteDecision:
             for verb in ACTION_VERBS
         )
         and
-        any(
-            re.search(
-                rf"\b{re.escape(target)}\b",
-                q,
+        (
+            any(
+                re.search(
+                    rf"\b{re.escape(target)}\b",
+                    q,
+                )
+                for target in ACTION_TARGETS
             )
-            for target in ACTION_TARGETS
+            or contains_file_reference(q)
         )
     ):
         return RouteDecision(
