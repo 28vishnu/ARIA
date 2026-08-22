@@ -14,7 +14,7 @@ class Intent:
     requires_planning: bool = False
     requires_tools: bool = False
     requires_documents: bool = False
-    requires_memory: bool = True
+    requires_memory: bool = False
     requires_web: bool = False
     requires_reasoning: bool = False
 
@@ -64,7 +64,7 @@ class IntentAnalyzer:
                 requires_planning=False,  
                 requires_tools=False,  
                 requires_documents=False,  
-                requires_memory=True,  
+                requires_memory=False,  
                 requires_web=False,
                 requires_reasoning=False,
             )  
@@ -104,26 +104,75 @@ class IntentAnalyzer:
 
             return intent
 
-        if q in {
-            "continue",
-            "go on",
-            "tell me more",
-            "explain more",
-            "next",
-            "and then",
-            "then",
+        # ---------------------------------------------------------
+        # FOLLOW-UP / CONTEXT-DEPENDENT REQUEST
+        # ---------------------------------------------------------
+
+        follow_up_patterns = (
+            "why is it important",
+            "why is this important",
+            "why is that important",
+            "why does it matter",
+            "why is it useful",
+            "how does it work",
+            "how does this work",
+            "how does that work",
+            "how is it done",
+            "how does it happen",
             "what about it",
             "what about that",
+            "tell me more",
+            "explain more",
+            "go on",
+            "continue",
+            "and then",
+            "what happens next",
             "why",
             "how",
-            "why is that",
-            "how so",
-        }:  
-            intent = Intent("Follow-up", 0.99, False, False, False, True, False, False)  
-            self.intent_history.append(intent)  
-            if len(self.intent_history) > 100:  
-                self.intent_history.pop(0)  
-            return intent  
+        )
+
+        is_follow_up = (
+            q in {
+                "continue",
+                "go on",
+                "tell me more",
+                "explain more",
+                "next",
+                "and then",
+                "then",
+                "what about it",
+                "what about that",
+                "why",
+                "how",
+                "why is that",
+                "how so",
+            }
+            or q.startswith(follow_up_patterns)
+        )
+
+        if is_follow_up:
+            intent = Intent(
+                name="Follow-up",
+                confidence=0.98,
+                requires_planning=False,
+                requires_tools=False,
+                requires_documents=False,
+                requires_memory=True,
+                requires_web=False,
+                requires_reasoning=True,
+                data={
+                    "context_dependent": True,
+                    "action_name": None,
+                    "action_params": {},
+                },
+            )
+
+            self.intent_history.append(intent)
+
+            if len(self.intent_history) > 100:
+                self.intent_history.pop(0)
+
+            return intent
 
         if "remember" in q:  
             intent = Intent("Memory", 0.99, False, False, False, True, False, False)  
@@ -133,7 +182,7 @@ class IntentAnalyzer:
             return intent  
 
         if "plan" in q:  
-            intent = Intent("Planning", 0.95, True, False, False, True, False, True)  
+            intent = Intent("Planning", 0.95, True, False, False, False, False, True)  
             self.intent_history.append(intent)  
             if len(self.intent_history) > 100:  
                 self.intent_history.pop(0)  
@@ -213,18 +262,18 @@ class IntentAnalyzer:
             )
         ):
             intent = Intent(
-                name="Research",
+                name="Chat",
                 confidence=0.94,
                 requires_planning=False,
                 requires_tools=False,
                 requires_documents=False,
                 requires_memory=False,
                 requires_web=False,
-                requires_reasoning=True,
+                requires_reasoning=False,
                 data={
+                    "knowledge_query": True,
                     "action_name": None,
                     "action_params": {},
-                    "knowledge_query": True,
                 },
             )
 
@@ -246,28 +295,7 @@ class IntentAnalyzer:
 
         # Fallback local heuristics  
         if q in {"hi", "hello", "hey", "good morning", "good afternoon", "good evening"}:  
-            intent = Intent("Chat", 0.99, False, False, False, True, False, False)  
-            self.intent_history.append(intent)  
-            if len(self.intent_history) > 100:  
-                self.intent_history.pop(0)  
-            return intent  
-
-        if q in {
-            "continue",
-            "go on",
-            "tell me more",
-            "explain more",
-            "next",
-            "and then",
-            "then",
-            "what about it",
-            "what about that",
-            "why",
-            "how",
-            "why is that",
-            "how so",
-        }:  
-            intent = Intent("Follow-up", 0.90, False, False, False, True, False, False)  
+            intent = Intent("Chat", 0.99, False, False, False, False, False, False)  
             self.intent_history.append(intent)  
             if len(self.intent_history) > 100:  
                 self.intent_history.pop(0)  
@@ -279,7 +307,7 @@ class IntentAnalyzer:
             requires_planning=False,  
             requires_tools=False,  
             requires_documents=False,  
-            requires_memory=True,  
+            requires_memory=False,  
             requires_web=False,
             requires_reasoning=False,
         )  
@@ -315,7 +343,24 @@ Determine the following boolean execution requirements based on the request cont
 - requires_memory (bool)
 - requires_web (bool)
 - requires_reasoning (bool)
+- context_dependent (bool)
+- knowledge_query (bool)
 - confidence (float between 0.0 and 1.0)
+
+IMPORTANT CLASSIFICATION RULES:
+
+- Ordinary factual questions such as "What is DNA?",
+  "What is photosynthesis?", "Explain TCP", or
+  "How does replication work?" are Chat/knowledge requests.
+- Do NOT classify ordinary knowledge questions as Web Search
+  unless the user explicitly asks for current/latest/online information.
+- If the question depends on the previous conversation,
+  set context_dependent=true and requires_memory=true.
+- Short follow-ups such as "Why is it important?",
+  "How does it work?", "What about that?", and
+  "Tell me more" are context-dependent.
+- Do not invent an action_name.
+- Return valid JSON only.
 
 Return ONLY valid JSON in this exact structure:
 {
@@ -324,9 +369,11 @@ Return ONLY valid JSON in this exact structure:
   "requires_planning": false,
   "requires_tools": false,
   "requires_documents": false,
-  "requires_memory": true,
+  "requires_memory": false,
   "requires_web": false,
   "requires_reasoning": false,
+  "context_dependent": false,
+  "knowledge_query": false,
   "action_name": null,
   "action_params": {}
 }
@@ -348,14 +395,41 @@ Return ONLY valid JSON in this exact structure:
                 cleaned = re.sub(r"\s*```$", "", cleaned).strip()  
 
             data = json.loads(cleaned)  
-            name = str(data.get("intent", "Chat")).strip()  
+
+            allowed_intents = {
+                "Chat",
+                "Follow-up",
+                "Memory",
+                "Planning",
+                "Research",
+                "Coding",
+                "Tool",
+                "Document",
+                "Web Search",
+                "Multi-step task",
+                "Clarification needed",
+            }
+
+            name = str(
+                data.get("intent", "Chat")
+            ).strip()
+
+            if name not in allowed_intents:
+                name = "Chat"
+
             confidence = float(data.get("confidence", 0.80))  
             requires_planning = bool(data.get("requires_planning", False))  
             requires_tools = bool(data.get("requires_tools", False))  
             requires_documents = bool(data.get("requires_documents", False))  
-            requires_memory = bool(data.get("requires_memory", True))  
+            requires_memory = bool(data.get("requires_memory", False))  
             requires_web = bool(data.get("requires_web", False))  
             requires_reasoning = bool(data.get("requires_reasoning", False))  
+            context_dependent = bool(
+                data.get("context_dependent", False)
+            )
+            knowledge_query = bool(
+                data.get("knowledge_query", False)
+            )
 
             return Intent(  
                 name=name,  
@@ -369,6 +443,8 @@ Return ONLY valid JSON in this exact structure:
                 data={  
                     "action_name": data.get("action_name"),  
                     "action_params": data.get("action_params", {}),  
+                    "context_dependent": context_dependent,
+                    "knowledge_query": knowledge_query,
                 },  
             )  
         except Exception:  
