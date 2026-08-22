@@ -2146,23 +2146,58 @@ Return JSON:
 
         reasoning_steps.append(f"Chosen reasoning mode: {mode}")
 
-        selected_agents = (
-            list(decision.selected_agents)
-            if decision and getattr(decision, "selected_agents", None)
-            else []
+        # ---------------------------------------------------------
+        # PHASE 2: Intent-driven agent selection
+        # ---------------------------------------------------------
+
+        intent_type = getattr(
+            intent,
+            "intent_type",
+            None,
         )
 
-        if not selected_agents:
-            selected_agents = self.choose_best_agents(
-                query,
-                getattr(
-                    context.get("intent"),
-                    "intent_type",
-                    None,
-                ),
-            )
+        selected_agents = self.choose_best_agents(
+            query=query,
+            intent_name=intent_type,
+        )
 
-        reasoning_steps.append(f"Selected best agents: {selected_agents}")
+        if decision:
+            if getattr(decision, "use_memory", False):
+                selected_agents.append("memory")
+
+            if getattr(decision, "use_documents", False):
+                selected_agents.append("document")
+
+            if getattr(decision, "use_planner", False):
+                selected_agents.append("planning")
+
+            if getattr(decision, "use_web", False):
+                selected_agents.append("research")
+
+            if getattr(decision, "use_tools", False):
+                selected_agents.append("coding")
+
+        selected_agents = list(dict.fromkeys(selected_agents))
+
+        if not selected_agents:
+            selected_agents = ["chat"]
+
+        reasoning_steps.append(
+            f"Selected agents from intent={intent_type}: "
+            f"{selected_agents}"
+        )
+
+        execution_plan = self.build_execution_plan(
+            agents=selected_agents,
+            intent_name=intent_type,
+            goal=goal,
+        )
+
+        context["execution_plan"] = execution_plan
+
+        reasoning_steps.append(
+            f"Built execution plan with {len(execution_plan)} step(s)"
+        )
 
         requires_planning = (
             decision.use_planner
@@ -2273,33 +2308,76 @@ Return JSON:
         agent_results = []
 
         if self.agent_coordinator and selected_agents:
-            execution_plan = {
+
+            execution_plan_payload = {
                 "agents": selected_agents,
                 "query": query,
                 "context": context,
+                "plan": context.get("execution_plan", []),
             }
 
-            if self.lead_agent and hasattr(self.lead_agent, "create_execution_plan"):
-                execution_plan = await self.lead_agent.create_execution_plan(
-                    query,
-                    context,
-                    selected_agents,
-                )
+            if (
+                self.lead_agent
+                and hasattr(self.lead_agent, "create_execution_plan")
+            ):
+                try:
+                    lead_plan = await self.lead_agent.create_execution_plan(
+                        query,
+                        context,
+                        selected_agents,
+                    )
+
+                    if isinstance(lead_plan, dict):
+                        execution_plan_payload.update(lead_plan)
+
+                except Exception:
+                    logger.exception(
+                        "[ReasoningEngine] Lead Agent planning failed; "
+                        "using deterministic Phase 2 plan."
+                    )
 
             logger.info(
-                "[ReasoningEngine] Lead Agent assigned %d agents.",
-                len(execution_plan.get("agents", [])),
+                "[ReasoningEngine] Execution plan: %s",
+                execution_plan_payload,
             )
 
             if hasattr(self.agent_coordinator, "execute"):
-                coordination = await self.agent_coordinator.execute(
-                    execution_plan.get("agents", []),
-                    execution_plan.get("query", query),
-                    execution_plan.get("context", context),
-                )
+                try:
+                    coordination = await self.agent_coordinator.execute(
+                        execution_plan_payload.get(
+                            "agents",
+                            selected_agents,
+                        ),
+                        execution_plan_payload.get(
+                            "query",
+                            query,
+                        ),
+                        execution_plan_payload.get(
+                            "context",
+                            context,
+                        ),
+                    )
 
-                agent_results = coordination.get("outputs", [])
-                context.update(coordination.get("shared_context", {}))
+                    if isinstance(coordination, dict):
+                        agent_results = coordination.get(
+                            "outputs",
+                            [],
+                        )
+
+                        context.update(
+                            coordination.get(
+                                "shared_context",
+                                {},
+                            )
+                        )
+
+                        context["execution_result"] = coordination
+
+                except Exception:
+                    logger.exception(
+                        "[ReasoningEngine] Agent coordination failed."
+                    )
+                    agent_results = []
 
         context["best_agent"] = (
             agent_results[0].get("agent")
