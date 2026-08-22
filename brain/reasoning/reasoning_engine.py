@@ -266,41 +266,97 @@ class ReasoningEngine:
             2,
         )
 
-    def choose_best_agents(self, query: str, intent_name: Optional[str] = None) -> List[str]:
+    def choose_best_agents(
+        self,
+        query: str,
+        intent_name: Optional[str] = None,
+    ) -> List[str]:
         """
-        Decide which specialist agents should handle the request.
+        Select the specialist capabilities required for the request.
+
+        Intent is the primary signal.
+        Keyword matching is used only as a secondary fallback so that
+        multi-purpose requests can still select more than one capability.
         """
-        query = query.lower()
+
+        query = str(query or "").strip().lower()
+        intent_name = str(intent_name or "").strip().lower()
+
         agents = []
+
+        intent_agent_map = {
+            "memory": "memory",
+            "memory_store": "memory",
+            "memory_update": "memory",
+            "memory_delete": "memory",
+
+            "document": "document",
+            "document_search": "document",
+            "document_query": "document",
+            "delete_document": "document",
+            "delete_all_documents": "document",
+
+            "search": "research",
+            "research": "research",
+
+            "planner": "planning",
+            "planning": "planning",
+
+            "coding": "coding",
+            "code": "coding",
+
+            "writing": "writing",
+
+            "greeting": "chat",
+            "question": "chat",
+            "chat": "chat",
+            "conversation": "chat",
+        }
+
+        primary_agent = intent_agent_map.get(intent_name)
+
+        if primary_agent:
+            agents.append(primary_agent)
 
         if any(word in query for word in [
             "code",
             "python",
             "java",
+            "javascript",
+            "typescript",
             "bug",
+            "debug",
             "program",
-            "implement"
+            "implement",
+            "function",
+            "class",
+            "api",
         ]):
             agents.append("coding")
 
         if any(word in query for word in [
             "research",
             "find",
-            "compare",
             "search",
+            "compare",
             "latest",
             "news",
             "current",
             "recent",
-            "today"
+            "today",
+            "look up",
         ]):
             agents.append("research")
 
         if any(word in query for word in [
             "plan",
+            "planning",
             "roadmap",
+            "steps",
             "schedule",
-            "strategy"
+            "strategy",
+            "build",
+            "create",
         ]):
             agents.append("planning")
 
@@ -310,24 +366,77 @@ class ReasoningEngine:
             "email",
             "story",
             "article",
-            "summary"
+            "rewrite",
+            "summary",
         ]):
             agents.append("writing")
 
+        if any(word in query for word in [
+            "remember",
+            "recall",
+            "save this",
+            "store this",
+            "forget this",
+            "delete memory",
+        ]):
+            agents.append("memory")
+
+        if any(word in query for word in [
+            "document",
+            "pdf",
+            "file",
+            "uploaded file",
+            "this file",
+        ]):
+            agents.append("document")
+
         if not agents:
-            if intent_name == "memory":
-                agents.append("memory")
-            elif intent_name == "document":
-                agents.append("document")
-            else:
-                agents.append("chat")
+            agents.append("chat")
 
         unique_agents = list(dict.fromkeys(agents))
+
         logger.info(
-            "[ReasoningEngine] Selected agents: %s",
-            unique_agents
+            "[ReasoningEngine] Intent=%s -> Selected agents=%s",
+            intent_name,
+            unique_agents,
         )
+
         return unique_agents
+
+    def build_execution_plan(
+        self,
+        agents: List[str],
+        intent_name: Optional[str] = None,
+        goal: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert selected capabilities into a deterministic execution plan.
+        """
+
+        plan = []
+
+        priority = {
+            "memory": 10,
+            "document": 20,
+            "research": 30,
+            "coding": 40,
+            "planning": 50,
+            "writing": 60,
+            "chat": 70,
+        }
+
+        for agent in agents:
+            plan.append({
+                "agent": agent,
+                "priority": priority.get(agent, 100),
+                "intent": intent_name,
+                "goal": goal,
+                "status": "pending",
+            })
+
+        plan.sort(key=lambda item: item["priority"])
+
+        return plan
 
     def _normalize_topic(self, value: Any) -> str:
         """Normalize a topic/subject for safe thread matching."""
@@ -497,11 +606,6 @@ class ReasoningEngine:
     )
 
     def _derive_active_topic_from_history(self, history: List[Any], current_query: str = "") -> str:
-        """Recover the latest real user topic when external state has no active_topic.
-
-        This is intentionally deterministic: it never treats a contextual follow-up
-        ("why is it important?", "how does it work?", etc.) as a new topic.
-        """
         if not isinstance(history, list):
             return ""
 
@@ -522,19 +626,16 @@ class ReasoningEngine:
             if self._is_contextual_followup(user_text):
                 continue
 
-            # A normal non-follow-up user turn is a valid topic candidate.
             if len(user_text.split()) >= 2:
                 return user_text
 
         return ""
 
     def _sanitize_response_text(self, value: Any) -> str:
-        """Remove internal transport/formatting artifacts before exposing text."""
         text = str(value or "").strip()
         if not text:
             return ""
 
-        # Internal placeholders must never reach the user.
         text = re.sub(
             r"\b(?:ARIA)?CODEBLOCKPLACEHOLDER\d*\b",
             "",
@@ -548,7 +649,6 @@ class ReasoningEngine:
             flags=re.IGNORECASE,
         )
 
-        # Remove internal context annotations if any downstream component leaked them.
         text = re.sub(
             r"\s*Context:\s*[^.!?\n]+[.!?]?",
             "",
@@ -556,13 +656,11 @@ class ReasoningEngine:
             flags=re.IGNORECASE,
         )
 
-        # Collapse whitespace left behind by removed placeholders.
         text = re.sub(r"[ \t]+", " ", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
     def _extract_explicit_topic(self, query: str) -> Optional[str]:
-        """Extract a newly introduced subject from an explicit question."""
         text = self._normalize_topic(query)
 
         for pattern in self._EXPLICIT_TOPIC_PATTERNS:
@@ -579,7 +677,6 @@ class ReasoningEngine:
         return None
 
     def _extract_thread_return_target(self, query: str) -> Optional[str]:
-        """Detect an explicit request to return to an older thread."""
         text = self._normalize_topic(query)
 
         for pattern in self._THREAD_RETURN_PATTERNS:
@@ -592,7 +689,6 @@ class ReasoningEngine:
         return None
 
     def _is_contextual_followup(self, query: str) -> bool:
-        """Detect short/context-dependent requests without choosing a topic."""
         text = self._normalize_topic(query).lower()
 
         if not text:
@@ -621,7 +717,6 @@ class ReasoningEngine:
         self,
         target: str,
     ) -> Optional[Dict[str, Any]]:
-        """Find the closest existing conversation thread by topic/subject."""
         target_norm = self._normalize_topic(target).lower()
 
         if not target_norm:
@@ -665,13 +760,6 @@ class ReasoningEngine:
         entities: Optional[List[str]] = None,
         force_new: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Return the thread representing the CURRENT conversational task.
-
-        Older threads remain available, but they are never automatically
-        reactivated unless explicitly requested.
-        """
-
         topic = self._normalize_topic(topic)
         subject = self._normalize_topic(subject or topic)
 
@@ -729,17 +817,6 @@ class ReasoningEngine:
         self,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Resolve the CURRENT conversational thread.
-
-        Rules:
-        1. Explicit new subject starts/selects that topic.
-        2. Explicit comparison activates a comparison on that topic.
-        3. Short contextual follow-ups stay on the active thread.
-        4. Explicit requests to return to an old topic reactivate that thread.
-        5. Old threads are never revived implicitly.
-        """
-
         conv = context.get("conversation", {})
 
         if not isinstance(conv, dict):
@@ -757,10 +834,6 @@ class ReasoningEngine:
             context.get("query", "")
         )
 
-        # The reasoning engine may be reconstructed for every request, so its
-        # in-process thread dictionary cannot be the only source of truth.
-        # Recover the active topic from the externally supplied conversation
-        # history when active_topic/topic is missing.
         history_active_topic = self._derive_active_topic_from_history(
             history, current_query
         )
@@ -968,14 +1041,6 @@ class ReasoningEngine:
         query: str,
         context: Dict[str, Any],
     ) -> str:
-        """
-        Resolve contextual references against the ACTIVE thread.
-
-        Explicit subjects always win.
-        Contextual follow-ups use the active thread.
-        Older threads require explicit user instruction.
-        """
-
         clean_query = self._normalize_topic(query)
 
         if not clean_query:
@@ -1060,7 +1125,6 @@ class ReasoningEngine:
         return clean_query
 
     async def track_goal(self, context: Dict[str, Any]) -> str:
-        """Determine the primary user objective using intent, conversation state, and query characteristics."""
         query = str(context.get("query", "")).strip().lower()
         intent = context.get("intent")
         intent_name = intent.name if intent and hasattr(intent, "name") else str(intent) if intent else None
@@ -1083,7 +1147,6 @@ class ReasoningEngine:
         return "answer"
 
     async def detect_topic_shift(self, context: Dict[str, Any]) -> bool:
-        """Detect whether the user has shifted conversational topic."""
         conv = context.get("conversation", {})
         curr = conv.get("topic")
         prev = conv.get("previous_topic")
@@ -1095,12 +1158,6 @@ class ReasoningEngine:
         self,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Construct short-lived reasoning state for the current turn.
-
-        Working memory is not long-term memory.
-        """
-
         conversation_state = await self.track_conversation(context)
         active_thread = conversation_state.get(
             "thread",
@@ -1177,7 +1234,6 @@ class ReasoningEngine:
         }
 
     async def generate_hypotheses(self, query: str, evidence: List[Dict[str, Any]]) -> List[str]:
-        """Generate multiple plausible analytical hypotheses explaining the user query or evidence."""
         if not query:
             return []
         return [
@@ -1186,14 +1242,12 @@ class ReasoningEngine:
         ]
 
     async def simulate_future(self, plan: List[Any], action: str) -> List[Dict[str, Any]]:
-        """Simulate future consequences and success probabilities for planned paths."""
         return [
             {"path": action, "projected_success": 0.91, "risk": "low"},
             {"path": "fallback_llm", "projected_success": 0.75, "risk": "medium"}
         ]
 
     async def self_critique(self, hypotheses: List[str], evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Critique generated hypotheses against available evidence to spot weaknesses or gaps."""
         return {
             "valid": True,
             "flaws": [],
@@ -1201,12 +1255,10 @@ class ReasoningEngine:
         }
 
     async def confidence_score(self, evidence: List[Dict[str, Any]], critique: Dict[str, Any]) -> float:
-        """Calculate robust confidence score combining evidence metrics and critique results."""
         base = 0.75 if not evidence else sum(item.get("confidence", 0.5) for item in evidence) / len(evidence)
         return min(1.0, base + (0.15 if critique.get("valid") else 0.0))
 
     async def action_prediction(self, goal: str, context: Dict[str, Any]) -> List[str]:
-        """Predict likely follow-up actions or subsequent user needs."""
         predictions = []
         if goal == "answer":
             predictions.append("Offer related explanation")
@@ -1219,14 +1271,12 @@ class ReasoningEngine:
         return predictions
 
     async def choose_best_reasoning(self, hypotheses: List[str], simulations: List[Dict[str, Any]]) -> str:
-        """Choose the optimal reasoning path among multi-path alternatives."""
         if simulations:
             best = max(simulations, key=lambda s: s.get("projected_success", 0.0))
             return best.get("path", "primary")
         return hypotheses[0] if hypotheses else "default"
 
     async def decide_response_strategy(self, goal: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Decide the high-level response strategy based on goal and response depth hints."""
         depth = context.get("response", {}).get("depth", "normal")
         return {
             "depth": depth,
@@ -1245,8 +1295,6 @@ class ReasoningEngine:
         query: str,
         context: Dict[str, Any],
     ) -> bool:
-        """Determine whether clarification is genuinely required."""
-
         clean = self._normalize_topic(query)
 
         if not clean:
@@ -1308,13 +1356,6 @@ class ReasoningEngine:
         requires_memory: bool = True,
         conversation_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Retrieve context from ARIA's independent knowledge systems.
-
-        Each subsystem is isolated so a slow or failing source does not
-        block the entire reasoning pipeline.
-        """
-
         memory_query = query
 
         if conversation_state:
@@ -1351,11 +1392,6 @@ class ReasoningEngine:
             timeout=8.0,
             name="retrieval",
         ):
-            """
-            Execute one retrieval source with timeout and failure
-            isolation.
-            """
-
             if operation is None:
                 return default
 
@@ -1672,14 +1708,6 @@ class ReasoningEngine:
         self,
         evidence: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """
-        Detect disagreements between independent evidence sources.
-
-        ARIA must never assume that multiple sources automatically agree.
-        Conflicts are surfaced to the higher-level response system so that
-        ARIA can verify, qualify, or prefer stronger evidence.
-        """
-
         if not evidence:
             return {
                 "conflict": False,
@@ -1818,15 +1846,55 @@ class ReasoningEngine:
 
     async def execute_agents(self, agents, query, context):
         outputs = {}
+        completed = []
+        failed = []
+
         async def run(agent):
+            agent_name = agent.__class__.__name__
+
             try:
-                if hasattr(agent, "execute"):
-                    result = await agent.execute(query, context)
-                    outputs[agent.__class__.__name__] = result
-            except Exception:
-                logger.exception("[ReasoningEngine] Agent execution failed.")
-        await asyncio.gather(*(run(agent) for agent in agents))
-        return outputs
+                if not hasattr(agent, "execute"):
+                    failed.append({
+                        "agent": agent_name,
+                        "error": "Agent has no execute() method",
+                    })
+                    return
+
+                result = await agent.execute(query, context)
+
+                outputs[agent_name] = result
+
+                completed.append({
+                    "agent": agent_name,
+                    "result": result,
+                })
+
+            except Exception as exc:
+                logger.exception(
+                    "[ReasoningEngine] Agent execution failed: %s",
+                    agent_name,
+                )
+
+                failed.append({
+                    "agent": agent_name,
+                    "error": str(exc),
+                })
+
+        await asyncio.gather(
+            *(run(agent) for agent in agents)
+        )
+
+        return {
+            "outputs": outputs,
+            "completed": completed,
+            "failed": failed,
+            "total": len(agents),
+            "success_rate": (
+                len(completed) / len(agents)
+                if agents
+                else 0.0
+            ),
+        }
 
     async def evaluate_result(
         self,
@@ -1872,10 +1940,6 @@ Return JSON:
         return self.llm_router.extract_json(response)
 
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
-        """
-        Core decision pipeline determining precisely what sub-pipelines are required
-        and returning a comprehensive ReasoningResult object.
-        """
         self._temp_context = context
         user_query = str(context.get("query", "")).strip()
 
@@ -2036,9 +2100,6 @@ Return JSON:
         context["resolved_query"] = self._clean_context_text(resolved_query_raw)
         query = context["resolved_query"]
 
-        # Make the active conversational state explicit for downstream agents/LLM
-        # responders. They must receive both the user's clean query and the
-        # structured thread history; never inject "Context: ..." into the query.
         context["conversation_state"] = conv_tracking
         context["active_topic"] = conv_tracking.get("active_topic")
         context["active_subject"] = conv_tracking.get("active_subject")
