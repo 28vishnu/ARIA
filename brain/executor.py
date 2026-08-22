@@ -620,6 +620,28 @@ class Executor:
         resume_state: Optional[Dict[str, Any]] = None,
         confirmed_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # ---------------------------------------------------------
+        # VALIDATE PLAN BEFORE EXECUTION
+        # ---------------------------------------------------------
+
+        if hasattr(plan, "validate_dependencies"):
+            if not plan.validate_dependencies():
+                logger.error(
+                    "[Executor] Invalid execution plan rejected."
+                )
+
+                plan.mark_failed(
+                    "Invalid execution plan dependencies."
+                )
+
+                return self._build_result(
+                    task_outputs={},
+                    workflow_results={},
+                    completed=[],
+                    failed=[],
+                    skipped=[],
+                )
+
         if isinstance(plan, ExecutionPlan):
             plan = self.optimizer.optimize(plan)
 
@@ -791,10 +813,7 @@ class Executor:
                     for task in plan.tasks
                     if (
                         task.id not in executed
-                        and all(
-                            dependency in executed
-                            for dependency in task.depends_on
-                        )
+                        and task.is_ready(completed)
                     )
                 ]
 
@@ -1091,9 +1110,25 @@ class Executor:
                     return "done"
 
                 results_batch = await asyncio.gather(*(execute_single_task(t) for t in parallel_batch))
+                
+                progress = await self.update_progress(
+                    plan,
+                    completed,
+                    [task.id for task in parallel_batch],
+                    start_time_all,
+                )
+
+                logger.info(
+                    "[Executor] Progress: %.2f%% | Remaining: %d",
+                    progress["percent_completed"],
+                    progress["remaining"],
+                )
+
                 if "paused" in results_batch:
                     plan.completed_tasks = list(completed)
                     plan.failed_tasks = list(failed)
+                    plan.skipped_tasks = list(skipped)
+                    plan.status = "awaiting_confirmation"
                     return self._build_result(
                         task_outputs=task_outputs,
                         workflow_results=workflow_results,
@@ -1110,7 +1145,16 @@ class Executor:
 
         plan.completed_tasks = list(completed)
         plan.failed_tasks = list(failed)
+        plan.skipped_tasks = list(skipped)
+
         success = (len(failed) == 0 and len(skipped) == 0)
+
+        if success:
+            plan.mark_completed()
+        else:
+            plan.mark_failed(
+                "One or more tasks failed or were skipped."
+            )
 
         elapsed_all_ms = (time.time() - start_time_all) * 1000
         self.statistics["average_time"] = (self.statistics["average_time"] + elapsed_all_ms) / 2
@@ -1283,7 +1327,12 @@ class Executor:
             elif file_mode == "write":
                 permission_level = "confirm"
 
-        if permission_level == "confirm" and not task.confirmed:
+        needs_confirmation = (
+            task.requires_confirmation
+            or permission_level == "confirm"
+        )
+
+        if needs_confirmation and not task.confirmed:
             logger.info(
                 "[Executor] Task %s requires confirmation before action '%s'.",
                 task.id,
