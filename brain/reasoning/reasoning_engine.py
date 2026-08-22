@@ -334,7 +334,7 @@ class ReasoningEngine:
         text = re.sub(r"\s+", " ", str(value or "")).strip()
         return text.strip(" .,!?:;")
 
-    _Context_Artifact_Words = {
+    _CONTEXT_ARTIFACT_WORDS = {
         "context",
         "previous context",
         "current context",
@@ -352,7 +352,7 @@ class ReasoningEngine:
 
         normalized = text.lower()
 
-        if normalized in self._Context_Artifact_Words:
+        if normalized in self._CONTEXT_ARTIFACT_WORDS:
             return True
 
         if normalized.endswith(" context"):
@@ -931,7 +931,7 @@ class ReasoningEngine:
             active_thread.get("active_comparison")
         )
 
-        compared_entities = list(
+        compared_entities = self._clean_entities(
             active_thread.get(
                 "compared_entities",
                 [],
@@ -955,10 +955,6 @@ class ReasoningEngine:
             )
 
             if target_thread:
-                target_topic = self._normalize_topic(
-                    target_thread.get("topic")
-                )
-
                 return clean_query
 
             return clean_query
@@ -968,15 +964,10 @@ class ReasoningEngine:
             and len(compared_entities) >= 2
             and self._is_contextual_followup(clean_query)
         ):
-            comparison = " and ".join(
-                compared_entities
-            )
-
             logger.info(
                 "[Reasoning] Active comparison preserved: %s",
-                comparison,
+                compared_entities,
             )
-
             return clean_query
 
         if (
@@ -987,7 +978,6 @@ class ReasoningEngine:
                 "[Reasoning] Active topic preserved: %s",
                 active_topic,
             )
-
             return clean_query
 
         if active_topic:
@@ -1176,14 +1166,63 @@ class ReasoningEngine:
             ),
         }
 
-    async def needs_clarification(self, query: str, context: Dict[str, Any]) -> bool:
-        """Determine if the user query is excessively vague or ambiguous."""
-        clean = query.strip()
-        if len(clean.split()) <= 1 and clean.lower() not in ["hi", "hello", "help", "status"]:
-            conv = context.get("conversation", {})
-            if conv.get("topic") or conv.get("history"):
-                return False
+    async def needs_clarification(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> bool:
+        """Determine whether clarification is genuinely required."""
+
+        clean = self._normalize_topic(query)
+
+        if not clean:
             return True
+
+        if self._is_contextual_followup(clean):
+            conversation_state = context.get("conversation_state") or {}
+
+            active_thread = conversation_state.get("thread") or {}
+            active_topic = (
+                active_thread.get("topic")
+                or conversation_state.get("active_topic")
+                or context.get("topic")
+            )
+
+            if active_topic:
+                return False
+
+            conv = context.get("conversation", {})
+
+            if isinstance(conv, dict):
+                if (
+                    conv.get("active_topic")
+                    or conv.get("topic")
+                    or conv.get("history")
+                    or conv.get("conversation_history")
+                ):
+                    return False
+
+            return True
+
+        if len(clean.split()) <= 1 and clean.lower() not in {
+            "hi",
+            "hello",
+            "help",
+            "status",
+        }:
+            conv = context.get("conversation", {})
+
+            if isinstance(conv, dict):
+                if (
+                    conv.get("topic")
+                    or conv.get("active_topic")
+                    or conv.get("history")
+                    or conv.get("conversation_history")
+                ):
+                    return False
+
+            return True
+
         return False
 
     async def build_reasoning_trace(self, steps: List[str]) -> str:
@@ -1893,6 +1932,17 @@ Return JSON:
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
 
+        logger.info(
+            "[Conversation DEBUG] query=%r active_thread=%r topic=%r subject=%r history=%d",
+            raw_query,
+            conv_tracking.get("thread_id"),
+            conv_tracking.get("active_topic"),
+            conv_tracking.get("active_subject"),
+            len(
+                conv_tracking.get("thread", {}).get("history", [])
+            ),
+        )
+
         context["conversation_state"] = conv_tracking
 
         resolved_query_raw = await self.resolve_references(
@@ -1901,6 +1951,11 @@ Return JSON:
                 **context,
                 "conversation_state": conv_tracking,
             },
+        )
+
+        logger.info(
+            "[Conversation DEBUG] resolved_query=%r",
+            resolved_query_raw,
         )
 
         context["raw_query"] = raw_query
@@ -2209,6 +2264,30 @@ Return JSON:
             response_to_store += (
                 f"\n\nA good next step would be to "
                 f"{getattr(next_task, 'title', 'proceed').lower()}."
+            )
+
+        active_thread = conv_tracking.get("thread")
+
+        if active_thread:
+            active_thread["last_user"] = raw_query
+            active_thread["last_resolved_query"] = query
+            active_thread["last_assistant"] = response_to_store
+            active_thread["last_result"] = response_to_store
+
+            active_thread.setdefault("history", [])
+
+            active_thread["history"].append({
+                "role": "user",
+                "content": raw_query,
+            })
+
+            active_thread["history"].append({
+                "role": "assistant",
+                "content": response_to_store,
+            })
+
+            active_thread["history"] = (
+                active_thread["history"][-20:]
             )
 
         critique_result = self._self_critique(
