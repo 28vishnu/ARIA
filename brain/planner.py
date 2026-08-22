@@ -572,7 +572,10 @@ Schema:
             "action_name": null,
             "input": {{}},
             "params": {{}},
-            "depends_on": []
+            "depends_on": [],
+            "requires_confirmation": false,
+            "max_retries": 2,
+            "priority": 1
         }}
     ]
 }}
@@ -606,6 +609,12 @@ Before producing JSON, verify:
 - Did you avoid inventing capabilities?
 - Did you avoid unnecessary notifications?
 - Did you preserve permission boundaries?
+- Are confirmation requirements correctly specified?
+- Are retry counts within safe limits?
+- Are task priorities valid integers?
+- Are all task IDs unique?
+- Does every dependency reference an earlier task?
+- Does the final ExecutionPlan pass validate_dependencies()?
 
 Then return the JSON only.
 """
@@ -674,7 +683,7 @@ Then return the JSON only.
                         "id",
                         len(tasks) + 1,
                     )
-                )
+                ).strip()
 
                 if task_id in known_ids:
                     logger.warning(
@@ -758,28 +767,43 @@ Then return the JSON only.
                 # VALIDATE DEPENDENCIES
                 # ---------------------------------------------
 
-                depends_on = raw_task.get(
-                    "depends_on",
-                    [],
-                )
+                depends_on = raw_task.get("depends_on", [])
 
-                if not isinstance(
-                    depends_on,
-                    list,
-                ):
-                    depends_on = []
+                if not isinstance(depends_on, list):
+                    logger.warning(
+                        "[Planner] Invalid depends_on for task %s",
+                        task_id,
+                    )
+                    continue
 
                 depends_on = [
-                    str(dep)
+                    str(dep).strip()
                     for dep in depends_on
+                    if str(dep).strip()
                 ]
 
-                # Dependencies must point backwards.
-                valid_dependencies = [
+                # Dependencies must reference existing earlier tasks.
+                invalid_dependencies = [
                     dep
                     for dep in depends_on
-                    if dep in known_ids
+                    if dep not in known_ids
                 ]
+
+                if invalid_dependencies:
+                    logger.warning(
+                        "[Planner] Invalid dependencies for task %s: %s",
+                        task_id,
+                        invalid_dependencies,
+                    )
+                    continue
+
+                # Prevent self-dependency explicitly.
+                if task_id in depends_on:
+                    logger.warning(
+                        "[Planner] Self-dependency rejected for task %s",
+                        task_id,
+                    )
+                    continue
 
                 task = Task(
                     id=task_id,
@@ -820,7 +844,28 @@ Then return the JSON only.
                         )
                         else {}
                     ),
-                    depends_on=valid_dependencies,
+                    depends_on=depends_on,
+                    requires_confirmation=bool(
+                        raw_task.get(
+                            "requires_confirmation",
+                            False,
+                        )
+                    ),
+                    max_retries=max(
+                        0,
+                        int(
+                            raw_task.get(
+                                "max_retries",
+                                2,
+                            )
+                        )
+                    ),
+                    priority=int(
+                        raw_task.get(
+                            "priority",
+                            1,
+                        )
+                    ),
                 )
 
                 tasks.append(task)
@@ -863,11 +908,40 @@ Then return the JSON only.
                 confidence=confidence,
                 metadata={
                     "phase": 3,
+                    "valid": True,
                     "supports_actions": True,
                     "supports_dependencies": True,
                     "supports_result_references": True,
                 },
             )
+
+            # ---------------------------------------------
+            # FINAL PLAN VALIDATION
+            # ---------------------------------------------
+
+            if not plan.validate_dependencies():
+                logger.error(
+                    "[Planner] Invalid execution plan rejected."
+                )
+
+                plan = ExecutionPlan(
+                    goal=goal,
+                    tasks=[],
+                    confidence=0.0,
+                    metadata={
+                        "phase": 3,
+                        "valid": False,
+                        "reason": "invalid_dependencies",
+                    },
+                )
+
+                self.plan_history.append(plan)
+
+                if len(self.plan_history) > 100:
+                    self.plan_history.pop(0)
+
+                return plan
+
             # Convert a single plan into executable steps
             if not hasattr(plan, "steps") or not plan.steps:
                 plan.steps = [
