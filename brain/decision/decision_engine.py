@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -81,12 +82,107 @@ class DecisionEngine:
 
         return False
 
+    def _looks_like_file_read_request(
+        self,
+        query: str,
+    ) -> bool:
+        """
+        Detect requests that explicitly ask ARIA to inspect/read
+        a file.
+
+        These requests must use file_action(read) rather than
+        normal conversational reasoning.
+        """
+
+        q = query.lower().strip()
+
+        read_phrases = (
+            "what's in",
+            "whats in",
+            "what is in",
+            "what's inside",
+            "whats inside",
+            "what is inside",
+            "show me",
+            "show what's in",
+            "show whats in",
+            "read",
+            "read the file",
+            "open the file",
+            "check the file",
+            "check what's in",
+            "check whats in",
+            "contents of",
+            "content of",
+        )
+
+        has_file_extension = bool(
+            re.search(
+                r"\b[\w\-]+\.(?:"
+                r"txt|md|json|csv|py|js|ts|html|css|"
+                r"pdf|docx|xlsx|pptx"
+                r")\b",
+                q,
+                re.IGNORECASE,
+            )
+        )
+
+        return (
+            has_file_extension
+            and any(
+                phrase in q
+                for phrase in read_phrases
+            )
+        )
+
     async def decide(self, query: str, intent, context) -> Decision:
         decision = Decision(
             action="chat",
             reasoning_mode="knowledge_first",
             confidence=1.0,
         )
+
+        # ---------------------------------------------------------
+        # DETERMINISTIC FILE READ OVERRIDE
+        # ---------------------------------------------------------
+        # Explicit requests such as:
+        #
+        #   "What's in phase3_test.txt?"
+        #   "Read test.txt"
+        #   "Show me notes.txt"
+        #
+        # must never fall through to chat/memory/LLM reasoning.
+        # They require an actual file read.
+        #
+        # This override intentionally happens before route handling
+        # because the upstream intent classifier may incorrectly
+        # classify these requests as conversation/document/chat.
+        # ---------------------------------------------------------
+
+        if self._looks_like_file_read_request(query):
+
+            decision.action = "file_read"
+            decision.use_tools = True
+            decision.reasoning_mode = "file_read"
+            decision.selected_agents = ["file_action"]
+            decision.required_tools = ["file_action"]
+            decision.confidence = 0.99
+            decision.explanation = (
+                "Explicit file-content request detected."
+            )
+
+            logger.info(
+                "[DecisionEngine] Deterministic file-read "
+                "override activated for query=%r",
+                query,
+            )
+
+            self.decision_history.append(decision)
+
+            if len(self.decision_history) > 100:
+                self.decision_history.pop(0)
+
+            return decision
 
         route = getattr(intent, "route", None)
 
