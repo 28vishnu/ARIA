@@ -329,6 +329,73 @@ class ReasoningEngine:
         )
         return unique_agents
 
+    def _normalize_topic(self, value: Any) -> str:
+        """Normalize a topic/subject for safe thread matching."""
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text.strip(" .,!?:;")
+
+    _Context_Artifact_Words = {
+        "context",
+        "previous context",
+        "current context",
+        "active context",
+    }
+
+    def _is_context_artifact(self, value: Any) -> bool:
+        """Return True when a value is internal context metadata, not a real entity/topic."""
+        if value is None:
+            return True
+
+        text = re.sub(r"\s+", " ", str(value)).strip().strip(".,:;!?")
+        if not text:
+            return True
+
+        normalized = text.lower()
+
+        if normalized in self._Context_Artifact_Words:
+            return True
+
+        if normalized.endswith(" context"):
+            return True
+
+        return False
+
+    def _clean_context_text(self, value: Any) -> str:
+        """Remove internal Context: annotations from generated/resolved text."""
+        text = str(value or "").strip()
+
+        if not text:
+            return ""
+
+        text = re.sub(
+            r"\s*Context:\s*[^.!?\n]+[.!?]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        text = re.sub(r"\s+", " ", text).strip()
+
+        return text
+
+    def _clean_entities(self, values: Optional[List[Any]]) -> List[str]:
+        """Normalize entities while rejecting internal context artifacts."""
+        cleaned = []
+
+        for value in values or []:
+            entity = self._normalize_topic(value)
+
+            if not entity:
+                continue
+
+            if self._is_context_artifact(entity):
+                continue
+
+            if entity not in cleaned:
+                cleaned.append(entity)
+
+        return cleaned
+
     def _extract_comparison_entities(
         self,
         query: str,
@@ -345,7 +412,7 @@ class ReasoningEngine:
         text = str(query or "").strip()
 
         if not text:
-            return list(dict.fromkeys(entities))
+            return self._clean_entities(entities)
 
         comparison_patterns = [
             r"\bbetween\s+(.+?)\s+and\s+(.+?)(?:[?.!,]|$)",
@@ -378,7 +445,7 @@ class ReasoningEngine:
 
             break
 
-        return list(dict.fromkeys(entities))
+        return self._clean_entities(entities)
 
     # ================================================================
     # CONVERSATION THREAD HELPERS
@@ -429,17 +496,16 @@ class ReasoningEngine:
         "which would you choose",
     )
 
-    def _normalize_topic(self, value: Any) -> str:
-        """Normalize a topic/subject for safe thread matching."""
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
-        return text.strip(" .,!?:;")
-
     def _extract_explicit_topic(self, query: str) -> Optional[str]:
         """Extract a newly introduced subject from an explicit question."""
         text = self._normalize_topic(query)
 
         for pattern in self._EXPLICIT_TOPIC_PATTERNS:
-            match = re.match(pattern, text, flags=re.IGNORECASE)
+            match = re.match(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
             if match:
                 topic = self._normalize_topic(match.group(1))
                 if topic:
@@ -544,11 +610,7 @@ class ReasoningEngine:
         topic = self._normalize_topic(topic)
         subject = self._normalize_topic(subject or topic)
 
-        entities = [
-            self._normalize_topic(x)
-            for x in (entities or [])
-            if self._normalize_topic(x)
-        ]
+        entities = self._clean_entities(entities)
 
         base_key = (
             topic.lower()
@@ -650,11 +712,7 @@ class ReasoningEngine:
         if not isinstance(external_entities, list):
             external_entities = []
 
-        external_entities = [
-            self._normalize_topic(x)
-            for x in external_entities
-            if self._normalize_topic(x)
-        ]
+        external_entities = self._clean_entities(external_entities)
 
         explicit_topic = self._extract_explicit_topic(
             current_query
@@ -787,20 +845,25 @@ class ReasoningEngine:
 
             "active_topic": thread.get("topic"),
             "previous_topic": (
-                conv.get("previous_topic")
-                or context.get("previous_topic")
+                None
+                if self._is_context_artifact(
+                    conv.get("previous_topic")
+                    or context.get("previous_topic")
+                )
+                else self._normalize_topic(
+                    conv.get("previous_topic")
+                    or context.get("previous_topic")
+                )
             ),
 
             "active_subject": thread.get("subject"),
 
-            "active_entities": thread.get(
-                "entities",
-                [],
+            "active_entities": self._clean_entities(
+                thread.get("entities", [])
             ),
 
-            "compared_entities": thread.get(
-                "compared_entities",
-                [],
+            "compared_entities": self._clean_entities(
+                thread.get("compared_entities", [])
             ),
 
             "active_comparison": bool(
@@ -896,10 +959,7 @@ class ReasoningEngine:
                     target_thread.get("topic")
                 )
 
-                return (
-                    f"{clean_query} "
-                    f"Context: {target_topic}."
-                )
+                return clean_query
 
             return clean_query
 
@@ -917,10 +977,7 @@ class ReasoningEngine:
                 comparison,
             )
 
-            return (
-                f"{clean_query} "
-                f"Compare the relevant options: {comparison}."
-            )
+            return clean_query
 
         if (
             active_topic
@@ -931,10 +988,7 @@ class ReasoningEngine:
                 active_topic,
             )
 
-            return (
-                f"{clean_query} "
-                f"Context: {active_subject or active_topic}."
-            )
+            return clean_query
 
         if active_topic:
             return clean_query
@@ -1841,7 +1895,7 @@ Return JSON:
 
         context["conversation_state"] = conv_tracking
 
-        query = await self.resolve_references(
+        resolved_query_raw = await self.resolve_references(
             raw_query,
             {
                 **context,
@@ -1850,7 +1904,8 @@ Return JSON:
         )
 
         context["raw_query"] = raw_query
-        context["resolved_query"] = query
+        context["resolved_query"] = self._clean_context_text(resolved_query_raw)
+        query = context["resolved_query"]
 
         reasoning_steps.append(
             "Resolved conversational references"
