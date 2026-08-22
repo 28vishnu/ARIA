@@ -111,6 +111,28 @@ class ReasoningEngine:
         self.conversation_threads = {}
         self.active_thread_id = None
 
+    def _empty_reasoning_result(
+        self,
+        *,
+        goal: str = "answer",
+        action: str = "chat",
+        confidence: float = 0.5,
+        answer: Optional[str] = None,
+    ) -> ReasoningResult:
+        return ReasoningResult(
+            goal=goal,
+            action=action,
+            confidence=confidence,
+            evidence=[],
+            selected_agents=[],
+            plan=[],
+            retrieved_memory=[],
+            retrieved_knowledge=[],
+            graph_results=[],
+            world_state={},
+            answer=answer,
+        )
+
     def _build_semantic_context(self):
 
         if not hasattr(self, "working_memory") or not self.working_memory:
@@ -726,6 +748,8 @@ class ReasoningEngine:
                 "them",
                 "he",
                 "she",
+                "these",
+                "those",
             }:
                 return None
 
@@ -2174,7 +2198,16 @@ Return JSON:
                 },
                 action_name=action_name,
                 action_params=action_params,
-                workflow=workflow
+                workflow=workflow,
+                goal="action",
+                action="action",
+                evidence=[],
+                selected_agents=[],
+                plan=[],
+                retrieved_memory=[],
+                retrieved_knowledge=[],
+                graph_results=[],
+                world_state={},
             )
 
         logger.info(
@@ -2731,6 +2764,14 @@ Return JSON:
             action = "memory_conversation"
         elif goal == "plan":
             action = "planner"
+
+        # Respect authoritative decision action if provided
+        if decision and getattr(decision, "action", None):
+            action = decision.action
+            if decision.action == "planner":
+                requires_planning = True
+                if "planning" not in selected_agents:
+                    selected_agents.append("planning")
 
         reasoning_time = round(time.time() - start_time, 3)
 
