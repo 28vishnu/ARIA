@@ -15,10 +15,10 @@ class LLMRouter:
     Unified LLM interface for ARIA.
 
     Provider priority:
-    1. Groq
-    2. Gemini
-    3. OpenRouter
-    4. Mistral
+    1. Mistral
+    2. Groq
+    3. Gemini
+    4. OpenRouter
     """
 
     def __init__(self, config):
@@ -185,48 +185,44 @@ class LLMRouter:
         }
 
         # Provider order is task-aware.
-        #
-        # Small structured reasoning tasks prioritize fast providers.
-        # General conversation keeps the normal quality/failover order.
-        # This is a preference, not a hard dependency: health and
-        # cooldown logic below can still route around any provider.
+        # Mistral is prioritized first across tasks to avoid 404 issues on others.
 
         task_orders = {
             "command_reasoning": [
-                "Groq",
                 "Mistral",
+                "Groq",
                 "Gemini",
                 "OpenRouter",
             ],
             "planning": [
-                "Groq",
                 "Mistral",
+                "Groq",
                 "Gemini",
                 "OpenRouter",
             ],
             "memory_relevance": [
-                "Groq",
                 "Mistral",
+                "Groq",
                 "Gemini",
                 "OpenRouter",
             ],
             "memory_extraction": [
-                "Groq",
                 "Mistral",
+                "Groq",
                 "Gemini",
                 "OpenRouter",
             ],
             "memory_reasoning": [
-                "Groq",
                 "Mistral",
-                "OpenRouter",
+                "Groq",
                 "Gemini",
+                "OpenRouter",
             ],
             "general": [
+                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
-                "Mistral",
             ],
         }
 
@@ -1349,11 +1345,11 @@ Return ONLY valid JSON in this exact format:
         if len(memories) == 1:
             memory = memories[0]
             if hasattr(memory, "key") and hasattr(memory, "value"):
-                return f"Your {memory.key.replace('_', ' ')} is {memory.value}, Sir."
+                return f"Your {memory.key.replace('_', ' ')} is {memory.value}."
             elif isinstance(memory, dict) and "key" in memory and "value" in memory:
                 key_str = str(memory["key"]).replace("_", " ")
                 val_str = str(memory["value"])
-                return f"Your {key_str} is {val_str}, Sir."
+                return f"Your {key_str} is {val_str}."
 
         memory_payload = []
 
@@ -1423,7 +1419,7 @@ Memories:
 ]
 
 Valid answer:
-You were thinking of going to Italy for your master's after B.Tech, Sir.
+You were thinking of going to Italy for your master's after B.Tech.
 
 IMPORTANT RULES:
 
@@ -1437,7 +1433,8 @@ IMPORTANT RULES:
   to answer the question confidently, return exactly:
   MEMORY_NOT_ENOUGH
 - Answer naturally and concisely.
-- Address the user as "Sir".
+- Address the user naturally.
+- Do not use titles such as "Sir" unless explicitly requested.
 - Return only the final answer.
 """
 
