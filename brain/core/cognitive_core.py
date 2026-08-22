@@ -564,7 +564,7 @@ class CognitiveCore:
 
             Will it rain in Mumbai tomorrow?
                 -> location=Mumbai, forecast_days=2,
-                   forecast_target=tomorrow
+                    forecast_target=tomorrow
         """
 
         text = str(query or "").strip()
@@ -627,15 +627,6 @@ class CognitiveCore:
 
         location = ""
 
-        # Common construction:
-        #
-        #   weather in London
-        #   weather in Vizag
-        #   temperature in New York
-        #   rain in Mumbai
-        #
-        # Capture everything after "in/at" until another part of
-        # the user's request begins.
         location_match = re.search(
             r"\b(?:in|at)\s+"
             r"(.+?)"
@@ -711,7 +702,6 @@ class CognitiveCore:
         location = re.sub(r"\s+", " ", location)
         location = location.strip(" ,.;:!?")
 
-        # Remove accidental leading weather words if they survived.
         location = re.sub(
             r"^(?:the\s+)?(?:weather|temperature|forecast)\s+",
             "",
@@ -993,20 +983,6 @@ class CognitiveCore:
     ):
         """
         Execute the canonical Phase-1 agent pipeline.
-
-        Flow:
-
-            Decision
-                ↓
-            LeadAgent
-                ↓
-            TaskPlanner
-                ↓
-            AgentCoordinator
-                ↓
-            AgentManager
-                ↓
-            Specialists
         """
 
         if not self.agent_coordinator:
@@ -1039,10 +1015,6 @@ class CognitiveCore:
                         selected_skills
                     )
 
-            # -------------------------------------------------
-            # Lead Agent
-            # -------------------------------------------------
-
             execution_plan = None
 
             if self.lead_agent:
@@ -1068,10 +1040,6 @@ class CognitiveCore:
                     or []
                 )
 
-            # -------------------------------------------------
-            # Task Planner
-            # -------------------------------------------------
-
             if self.task_planner:
                 task_plan = (
                     self.task_planner.create_plan(
@@ -1084,10 +1052,6 @@ class CognitiveCore:
                 context[
                     "task_plan"
                 ] = task_plan
-
-            # -------------------------------------------------
-            # Agent Coordinator
-            # -------------------------------------------------
 
             coordination = (
                 await self.agent_coordinator.coordinate(
@@ -1117,11 +1081,6 @@ class CognitiveCore:
     ) -> Dict[str, Any]:
         """
         Normalize executor verification into one reliable structure.
-
-        Verification states:
-        - verified_success
-        - verified_failure
-        - uncertain
         """
 
         if not isinstance(evaluation, dict):
@@ -1157,7 +1116,6 @@ class CognitiveCore:
                 ),
             }
 
-        # Missing verification is NOT success.
         return {
             "status": "uncertain",
             "goal_completed": False,
@@ -1178,14 +1136,6 @@ class CognitiveCore:
     ):
         """
         Execute a plan through a centralized recovery loop.
-
-        Recovery policy:
-        1. Execute the current plan.
-        2. Verify the result when possible.
-        3. Return immediately when the goal is completed.
-        4. If execution fails or verification says incomplete,
-           attempt intelligent replanning.
-        5. Never blindly execute the exact same plan indefinitely.
         """
 
         current_plan = plan
@@ -1224,29 +1174,6 @@ class CognitiveCore:
                 )
                 last_result = self._normalize_execution_result(raw_result)
 
-                # =========================================================
-                # PHASE 3 — WORKFLOW PAUSE / CONFIRMATION
-                # =========================================================
-                #
-                # A paused workflow is NOT a failed execution.
-                # The Executor may stop because an action requires user
-                # confirmation. In that case:
-                #
-                #   Planner
-                #       ↓
-                #   Executor
-                #       ↓
-                #   paused=True
-                #       ↓
-                #   CognitiveCore persists workflow
-                #       ↓
-                #   User confirms
-                #       ↓
-                #   Executor resumes
-                #
-                # Do not verify or replan a workflow that is intentionally
-                # waiting for the user.
-                # =========================================================
                 if isinstance(last_result, dict):
 
                     paused = bool(
@@ -1330,10 +1257,6 @@ class CognitiveCore:
                 )
 
             else:
-                # -------------------------------------------------
-                # VERIFY EXECUTION
-                # -------------------------------------------------
-
                 evaluation = None
 
                 if (
@@ -1384,10 +1307,6 @@ class CognitiveCore:
                     ),
                 )
 
-                # -------------------------------------------------
-                # ACCEPT VERIFIED SUCCESS
-                # -------------------------------------------------
-
                 if verification["goal_completed"]:
                     logger.info(
                         "[Recovery] Goal verified successfully "
@@ -1404,10 +1323,6 @@ class CognitiveCore:
                         "recovered": attempt > 1,
                         "success": True,
                     }
-
-                # -------------------------------------------------
-                # FALLBACK SUCCESS DETECTION
-                # -------------------------------------------------
 
                 if isinstance(last_result, dict):
 
@@ -1454,10 +1369,6 @@ class CognitiveCore:
                             "success": True,
                         }
 
-                # -------------------------------------------------
-                # RECORD FAILURE / INCOMPLETE EXECUTION
-                # -------------------------------------------------
-
                 last_error = (
                     "Execution completed but the requested goal "
                     "was not verified."
@@ -1470,16 +1381,8 @@ class CognitiveCore:
                         or last_error
                     )
 
-            # -----------------------------------------------------
-            # NO MORE RECOVERY ATTEMPTS
-            # -----------------------------------------------------
-
             if attempt >= max_attempts:
                 break
-
-            # -----------------------------------------------------
-            # INTELLIGENT REPLANNING
-            # -----------------------------------------------------
 
             recovery_context = dict(context)
 
@@ -1497,7 +1400,6 @@ class CognitiveCore:
             )
 
             try:
-
                 new_plan = None
 
                 if self.planner and hasattr(
@@ -1530,10 +1432,6 @@ class CognitiveCore:
                     exc,
                 )
 
-                # If replanning itself fails, preserve the original
-                # plan for one controlled retry rather than crashing
-                # the entire cognitive pipeline.
-
         logger.error(
             "[Recovery] Execution failed after %d attempt(s). "
             "Last error: %s",
@@ -1551,10 +1449,6 @@ class CognitiveCore:
             "success": False,
             "error": last_error,
         }
-
-    # =========================================================
-    # KNOWLEDGE FIRST PIPELINE
-    # =========================================================
 
     async def knowledge_first_pipeline(
         self,
@@ -1578,34 +1472,6 @@ class CognitiveCore:
 
         self.brain_state["retrieving"] = True
 
-        # =========================================================
-        # PHASE 1 — CANONICAL COGNITIVE PIPELINE
-        # =========================================================
-        #
-        # This method is the authoritative cognitive path.
-        #
-        # The pipeline must always follow:
-        #
-        # INPUT
-        #   ↓
-        # REFERENCE RESOLUTION
-        #   ↓
-        # CONTEXT
-        #   ↓
-        # REASONING
-        #   ↓
-        # DECISION
-        #   ↓
-        # EXECUTION / KNOWLEDGE / CHAT
-        #   ↓
-        # VERIFICATION
-        #   ↓
-        # RESPONSE
-        #
-        # Individual routers, agents and tools may assist this
-        # pipeline, but none of them may become a second brain.
-        # =========================================================
-
         answer = None
         source = "cognitive_core"
         confidence = 0.0
@@ -1617,38 +1483,18 @@ class CognitiveCore:
         context.setdefault("execution_id", self._create_execution_id())
         context.setdefault("query", query)
 
-        # ---------------------------------------------------------
-        # Step 0: Load deterministic conversation context FIRST.
-        #
-        # Reference resolution depends on the previous conversational
-        # state, including generic structured results.
-        # ---------------------------------------------------------
         if self.conversation_manager:
             try:
                 conversation_context = self.conversation_manager.get_context(
                     session_id
                 )
-
                 context["conversation"] = conversation_context
-
-                logger.info(
-                    "[Conversation] Loaded context for reference resolution "
-                    "for session %s: %s",
-                    session_id,
-                    conversation_context,
-                )
-
             except Exception as e:
                 logger.warning(
-                    "[Conversation] Context retrieval before reference "
-                    "resolution skipped: %s",
+                    "[Conversation] Context retrieval skipped: %s",
                     e,
                 )
 
-        # ---------------------------------------------------------
-        # Step 1: Resolve conversational references using the
-        # complete session context.
-        # ---------------------------------------------------------
         if self.reasoning_engine:
             resolved_query = await self.reasoning_engine.resolve_references(
                 query,
@@ -1660,7 +1506,6 @@ class CognitiveCore:
         context["original_query"] = query
         context["resolved_query"] = resolved_query
 
-        # Step 2: Build context via context_builder if available.
         if self.context_builder:
             try:
                 context = await self.context_builder.build(
@@ -1677,19 +1522,16 @@ class CognitiveCore:
             context.setdefault("query", resolved_query)
             context.setdefault("session_id", session_id)
 
-        # Load deterministic conversation context for this session without overwriting richer incoming context.
         if self.conversation_manager:
             try:
                 fresh_conversation = (
                     self.conversation_manager.get_context(session_id)
                     or {}
                 )
-
                 existing_conversation = context.get(
                     "conversation",
                     {},
                 )
-
                 if isinstance(existing_conversation, dict):
                     context["conversation"] = {
                         **fresh_conversation,
@@ -1697,20 +1539,12 @@ class CognitiveCore:
                     }
                 else:
                     context["conversation"] = fresh_conversation
-
-                logger.info(
-                    "[Conversation] Loaded context for session %s: %s",
-                    session_id,
-                    context["conversation"],
-                )
-
             except Exception as e:
                 logger.warning(
                     "[Conversation] Context refresh skipped: %s",
                     e,
                 )
 
-        # Build working memory context with updated priority ordering
         working_memory_context = {}
         if self.working_memory:
             working_memory_context = {
@@ -1724,14 +1558,6 @@ class CognitiveCore:
         memory_context = context.get("memory", [])
         world_state = context.get("world", {})
 
-        # ---------------------------------------------------------
-        # Preserve the complete cognitive context.
-        #
-        # Do NOT reconstruct the dictionary from a small whitelist.
-        # ContextBuilder, ReasoningEngine, DecisionEngine, execution
-        # recovery and downstream systems may add important fields.
-        # ---------------------------------------------------------
-
         context = dict(context)
 
         context.update({
@@ -1743,12 +1569,6 @@ class CognitiveCore:
             "memory": memory_context,
             "world": world_state,
         })
-
-        # =========================================================
-        # DETERMINISTIC PERSONAL CONTEXT RECALL
-        # =========================================================
-
-        conversation_context = context.get("conversation", {})
 
         if self._looks_like_name_recall_request(query):
             user_name = conversation_context.get("user_name")
@@ -1764,7 +1584,6 @@ class CognitiveCore:
                     },
                 )
 
-        # Step 2: Reuse precomputed reasoning result from process() instead of running reasoning twice
         reasoning = precomputed_reasoning
         if not reasoning and self.reasoning_engine:
             try:
@@ -1775,9 +1594,6 @@ class CognitiveCore:
         if reasoning:
             context["reasoning"] = reasoning
 
-        # =========================================================
-        # EDIT 3A & 3B — DECISION ACTION HANDLING & FALLBACK
-        # =========================================================
         if decision and getattr(decision, "action", None) in {
             "chat",
             "memory",
@@ -1800,21 +1616,12 @@ class CognitiveCore:
             previous_result = persisted_execution.get("result")
 
             if previous_result:
-                logger.info(
-                    "[CognitiveCore] Reusing completed "
-                    "execution %s",
-                    previous_execution_id,
-                )
                 execution_result = previous_result
                 if isinstance(reasoning, dict):
                     reasoning["execution_result"] = execution_result
                 elif reasoning is not None:
                     setattr(reasoning, "execution_result", execution_result)
         elif decision and getattr(decision, "action", None) == "planner":
-
-            # =========================================================
-            # PHASE 3 — PLANNER → EXECUTOR → WORKFLOW RESULT
-            # =========================================================
 
             plan = None
 
@@ -1880,22 +1687,6 @@ class CognitiveCore:
                     error="The executor returned an invalid workflow result.",
                 )
 
-            # =========================================================
-            # IMPORTANT
-            #
-            # Always send the result through the unified workflow
-            # processor.
-            #
-            # This method handles:
-            #
-            # completed workflow
-            # failed workflow
-            # paused workflow
-            # confirmation persistence
-            # task outputs
-            # workflow results
-            # =========================================================
-
             return self._process_workflow_result(
                 session_id=session_id,
                 plan=recovery.get(
@@ -1906,13 +1697,11 @@ class CognitiveCore:
             )
 
         try:
-            # Step 3: If reasoning already contains an answer
             if reasoning and getattr(reasoning, "answer", None):
                 answer = reasoning.answer
                 source = "reasoning"
                 confidence = getattr(reasoning, "confidence", 0.90)
 
-            # Step 4: If reasoning generated a plan, execute it via the executor
             if not answer and reasoning and getattr(reasoning, "plan", None) and self.executor:
                 try:
                     recovery = await self._execute_plan_with_recovery(
@@ -1923,10 +1712,7 @@ class CognitiveCore:
                     )
 
                     result = recovery.get("result")
-                    
-                    # =========================================================
-                    # PHASE 3 — HANDLE PAUSED WORKFLOW
-                    # =========================================================
+
                     if (
                         recovery.get("paused")
                         or (
@@ -2012,18 +1798,9 @@ class CognitiveCore:
                 except Exception as e:
                     logger.warning("Executor plan execution skipped: %s", e)
 
-            # Step 5: Complete the response-selection hierarchy.
-            #
-            # IMPORTANT:
-            # Memory is supporting context, not the default final answer.
-            # Phase-1 agent fusion must be allowed to produce the answer
-            # before retrieval subsystems are considered as fallbacks.
             if not answer:
                 self.brain_state["thinking"] = True
 
-                # -----------------------------------------------------
-                # Phase-1 Agent Fusion
-                # -----------------------------------------------------
                 agent_fusion = context.get("agent_fusion")
 
                 if agent_fusion:
@@ -2047,16 +1824,6 @@ class CognitiveCore:
                             else 0.90
                         )
 
-                        logger.info(
-                            "[CognitiveCore] Using fused Phase-1 "
-                            "agent response as primary answer."
-                        )
-
-                # -----------------------------------------------------
-                # Memory Subsystem
-                # -----------------------------------------------------
-                # Memory may enrich context, but it may become the final
-                # answer only for an explicit memory-recall request.
                 mem_res = None
                 if (
                     decision
@@ -2070,10 +1837,7 @@ class CognitiveCore:
                             reasoning_result=reasoning,
                         )
                     except Exception as e:
-                        logger.warning(
-                            "Memory router answer search skipped: %s",
-                            e,
-                        )
+                        logger.warning("Memory router answer search skipped: %s", e)
                 elif reasoning and getattr(
                     reasoning, "retrieved_memory", None
                 ):
@@ -2087,10 +1851,7 @@ class CognitiveCore:
                             reasoning_result=reasoning,
                         )
                     except Exception as e:
-                        logger.warning(
-                            "Memory router answer search skipped: %s",
-                            e,
-                        )
+                        logger.warning("Memory router answer search skipped: %s", e)
 
                 if mem_res:
                     if isinstance(mem_res, list):
@@ -2118,7 +1879,6 @@ class CognitiveCore:
                         source = "memory"
                         confidence = 0.94
 
-                # Knowledge Subsystem
                 if not answer:
                     doc_res = None
                     try:
@@ -2149,7 +1909,6 @@ class CognitiveCore:
                         except Exception as e:
                             logger.warning("Knowledge database search skipped: %s", e)
 
-                # World Model Subsystem
                 if not answer:
                     world_res = None
                     if decision and getattr(decision, "use_world_model", False) and self.world_model and hasattr(self.world_model, "search"):
@@ -2169,7 +1928,6 @@ class CognitiveCore:
                         source = "world_model"
                         confidence = 0.91
 
-                # LLM Fallback (only if required)
                 if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
                     try:
                         system_context = (
@@ -2314,7 +2072,6 @@ Execution Results:
             self.brain_state["thinking"] = False
             self.brain_state["reasoning"] = False
 
-        # Step 6: Reflection and Learning hooks before returning
         if self.self_reflection:
             try:
                 await self.self_reflection.reflect(
@@ -2366,7 +2123,6 @@ Execution Results:
             except Exception as e:
                 logger.warning("Event bus publish skipped: %s", e)
 
-        # Synchronization steps after response generation
         formatted_response = await self._format_response(answer, source, context, confidence)
         response_text = formatted_response.data.get("response", answer)
 
@@ -2435,10 +2191,6 @@ Execution Results:
             },
         )
 
-    # =========================================================
-    # HELPERS
-    # =========================================================
-
     def _normalize_confirmation_text(
         self,
         query: str,
@@ -2464,11 +2216,6 @@ Execution Results:
         )
 
     def _looks_like_memory_recall_request(self, query: str) -> bool:
-        """
-        Detect questions that ask ARIA to retrieve existing memories
-        rather than store/update a new memory.
-        """
-
         q = str(query or "").strip().lower()
 
         recall_phrases = (
@@ -2634,16 +2381,25 @@ Execution Results:
         if not self.state_manager:
             return None
 
-        if not state.get(
-            "pending_workflow_confirmation"
-        ):
-            return None
-
         pending_plan = (
             self.state_manager.get_pending_workflow(
                 session_id
             )
         )
+
+        has_pending_workflow = bool(pending_plan)
+        is_paused = bool(state.get("workflow_paused"))
+        awaiting_confirmation = bool(
+            state.get("pending_workflow_confirmation")
+        )
+
+        if not awaiting_confirmation:
+            if not (has_pending_workflow and is_paused):
+                return None
+            logger.warning(
+                "[CognitiveCore] Recovering pending workflow "
+                "confirmation from paused workflow state."
+            )
 
         pending_task_id = (
             self.state_manager.get_pending_workflow_task_id(
@@ -2651,14 +2407,7 @@ Execution Results:
             )
         )
 
-        # -----------------------------------------------------
-        # Invalid / stale workflow state
-        # -----------------------------------------------------
-
-        if (
-            pending_plan is None
-            or not pending_task_id
-        ):
+        if pending_plan is None or not pending_task_id:
             logger.warning(
                 "[CognitiveCore] Invalid pending workflow state."
             )
@@ -2675,10 +2424,6 @@ Execution Results:
                     "The pending workflow is no longer available."
                 ),
             )
-
-        # -----------------------------------------------------
-        # USER REJECTED
-        # -----------------------------------------------------
 
         if self._is_reject(query):
 
@@ -2701,12 +2446,6 @@ Execution Results:
                 },
             )
 
-        # -----------------------------------------------------
-        # Not confirmation/rejection.
-        #
-        # Keep workflow suspended.
-        # -----------------------------------------------------
-
         if not self._is_confirm(query):
 
             return SystemResponse(
@@ -2721,10 +2460,6 @@ Execution Results:
                     ),
                 },
             )
-
-        # -----------------------------------------------------
-        # USER CONFIRMED
-        # -----------------------------------------------------
 
         logger.info(
             "[CognitiveCore] Resuming workflow at task %s.",
@@ -2741,7 +2476,6 @@ Execution Results:
             session_id
         )
 
-        # Build enough context for the Executor.
         ctx = dict(
             base_context or {}
         )
@@ -2904,10 +2638,6 @@ Execution Results:
             pending_action_params,
         )
 
-        # =====================================================
-        # WORKFLOW PAUSED FOR CONFIRMATION
-        # =====================================================
-
         if paused and requires_confirmation:
 
             if not self.state_manager:
@@ -2926,9 +2656,25 @@ Execution Results:
                     ),
                 )
 
-            # Safety fallback:
-            # If Executor somehow did not provide the pending task ID,
-            # recover it from the plan.
+            if not pending_task_id and hasattr(plan, "tasks"):
+                for task in plan.tasks:
+                    if getattr(task, "requires_confirmation", False):
+                        pending_task_id = task.id
+                        pending_action_name = pending_action_name or getattr(
+                            task,
+                            "action_name",
+                            None,
+                        )
+                        if not pending_action_params:
+                            pending_action_params = dict(
+                                getattr(
+                                    task,
+                                    "params",
+                                    {},
+                                )
+                                or {}
+                            )
+                        break
 
             if not pending_task_id:
 
@@ -2970,9 +2716,6 @@ Execution Results:
                             or {}
                         )
 
-            # Final validation.
-            # Never store an incomplete confirmation workflow.
-
             if not pending_task_id:
 
                 logger.error(
@@ -3012,15 +2755,29 @@ Execution Results:
                 pending_action_params,
             )
 
-            self.state_manager.set_pending_workflow(
-                session_id=session_id,
-                plan=plan,
-                task_id=pending_task_id,
-                task_outputs=task_outputs,
-                completed_tasks=completed,
-                failed_tasks=failed,
-                skipped_tasks=skipped,
-            )
+            if hasattr(self.state_manager, "set_pending_workflow"):
+                try:
+                    self.state_manager.set_pending_workflow(
+                        session_id=session_id,
+                        plan=plan,
+                        task_id=pending_task_id,
+                        task_outputs=task_outputs,
+                        completed_tasks=completed,
+                        failed_tasks=failed,
+                        skipped_tasks=skipped,
+                    )
+                except TypeError:
+                    state = self.state_manager.get_state(session_id) or {}
+                    state["workflow_active"] = True
+                    state["workflow_paused"] = True
+                    state["pending_workflow_confirmation"] = True
+                    state["pending_workflow"] = plan
+                    state["pending_workflow_task_id"] = pending_task_id
+                    state["workflow_task_outputs"] = task_outputs or {}
+                    state["workflow_completed_tasks"] = completed or []
+                    state["workflow_failed_tasks"] = failed or []
+                    state["workflow_skipped_tasks"] = skipped or []
+                    self.state_manager.update_state(session_id, **state)
 
             return SystemResponse(
                 success=True,
@@ -3042,10 +2799,6 @@ Execution Results:
                     ),
                 },
             )
-
-        # =====================================================
-        # WORKFLOW FAILED
-        # =====================================================
 
         success = bool(
             exec_result.get(
@@ -3108,10 +2861,6 @@ Execution Results:
                 error=error,
             )
 
-        # =====================================================
-        # WORKFLOW COMPLETED
-        # =====================================================
-
         if self.state_manager:
 
             self.state_manager.mark_workflow_completed(
@@ -3127,10 +2876,6 @@ Execution Results:
         logger.info(
             "[CognitiveCore] Workflow completed successfully."
         )
-
-        # =====================================================
-        # EXTRACT USER-FACING OUTPUT FROM FINAL TASK
-        # =====================================================
 
         final_message = None
 
@@ -3196,22 +2941,6 @@ Execution Results:
         execution_id = self._create_execution_id()
 
         try:
-            # =========================================================
-            # PHASE 3 — PENDING WORKFLOW CONFIRMATION FIRST
-            # =========================================================
-            #
-            # A reply such as:
-            #
-            # "yes"
-            # "okay"
-            # "proceed"
-            #
-            # must be checked before normal routing.
-            #
-            # Otherwise ARIA may treat confirmation as a completely
-            # new user request.
-            # =========================================================
-
             if self.state_manager:
 
                 try:
@@ -3240,10 +2969,6 @@ Execution Results:
                         "handling failed: %s",
                         exc,
                     )
-
-            # =========================================================
-            # DETERMINISTIC USER NAME RECALL
-            # =========================================================
 
             if re.fullmatch(
                 r"\s*(?:what(?:'s| is)|whats)\s+my\s+name\s*\??\s*",
@@ -3280,27 +3005,6 @@ Execution Results:
                             e,
                         )
 
-            # =================================================
-            # PHASE 1 — FAST ROUTER AS CLASSIFIER ONLY
-            # =================================================
-            #
-            # FastRouter is allowed to classify the request for
-            # performance, but it is NOT allowed to generate the
-            # final response or bypass the Cognitive Core.
-            #
-            # Canonical ownership remains:
-            #
-            # CognitiveCore
-            #     ↓
-            # routing classification
-            #     ↓
-            # authoritative decision
-            #     ↓
-            # execution / reasoning / knowledge / memory / LLM
-            #
-            # This prevents FastRouter from becoming a second brain.
-            # =================================================
-
             fast_decision = None
 
             try:
@@ -3318,25 +3022,6 @@ Execution Results:
                     "[FastRouter] Classification skipped: %s",
                     e,
                 )
-
-            # IMPORTANT:
-            # Do not return from the FastRouter.
-            # The request must continue through the canonical
-            # Cognitive Core pipeline.
-
-
-            # ============================================
-            # MEMORY RECALL FAST PATH
-            # ============================================
-            #
-            # Questions asking what ARIA already remembers
-            # must NEVER be routed to memory storage.
-            #
-            # Example:
-            #   "What do you remember about me?"
-            #
-            # This is retrieval, not memory creation.
-            # ============================================
 
             if self._looks_like_memory_recall_request(query):
 
@@ -3379,11 +3064,6 @@ Execution Results:
                         source="memory",
                         error="I couldn't retrieve your memories right now.",
                     )
-
-
-            # ============================================
-            # EXECUTION ROUTER
-            # ============================================
 
             route = decide(query)
 
@@ -3462,7 +3142,6 @@ Execution Results:
 
                     calculation_result = data.get("result")
 
-                    # Store the successful calculation for future follow-ups.
                     if self.conversation_manager:
                         try:
                             self.conversation_manager.set_last_result(
@@ -3582,10 +3261,6 @@ Execution Results:
                             error="Weather action manager is not available.",
                         )
 
-                    # -------------------------------------------------
-                    # Extract structured weather parameters
-                    # -------------------------------------------------
-
                     weather_params = self._extract_weather_params(query)
 
                     logger.info(
@@ -3662,10 +3337,6 @@ Execution Results:
                     },
                 )
 
-            # =================================================
-            # 1. LOAD STATE
-            # =================================================
-
             state: Dict[str, Any] = {}
 
             if self.state_manager:
@@ -3688,62 +3359,40 @@ Execution Results:
                     persisted_execution.get("attempt", 0),
                 )
 
-            # =================================================
-            # 1.5 INITIALIZE UNIFIED EXECUTION CONTEXT
-            # =================================================
             context = dict(base_context or {})
             context["persisted_execution"] = (
                 persisted_execution
             )
             context["execution_id"] = execution_id
             context.update({
-                # Core identity / request
                 "query": query,
                 "session_id": session_id,
                 "user_id": user_id,
-
-                # Cognitive state
                 "state": state,
-
-                # Brain components
                 "memory": self.memory_engine,
                 "planner": self.planner,
                 "executor": self.executor,
                 "reasoning": self.reasoning_engine,
                 "decision": self.decision_engine,
-
-                # Capability managers
                 "agent_manager": getattr(self, "agent_manager", None),
                 "tool_manager": getattr(self, "tool_manager", None),
                 "action_manager": self.action_manager,
                 "skill_manager": self.skill_manager,
-
-                # Conversation
                 "conversation_manager": self.conversation_manager,
                 "working_memory": self.working_memory,
-
-                # Knowledge
                 "knowledge_manager": self.knowledge_manager,
                 "knowledge_graph": self.knowledge_graph,
                 "knowledge_database": self.knowledge_database,
                 "world_model": self.world_model,
-
-                # Learning / reflection
                 "learning_engine": self.learning_engine,
                 "autonomous_learning": self.autonomous_learning,
                 "self_reflection": self.self_reflection,
-
-                # Routing metadata
                 "fast_route": (
                     getattr(fast_decision, "reason", None)
                     if fast_decision
                     else None
                 ),
             })
-
-            # =================================================
-            # 2. RESOLVE CONTEXT THROUGH THE REASONING LAYER
-            # =================================================
 
             if self.reasoning_engine:
                 try:
@@ -3794,9 +3443,6 @@ Execution Results:
                         e,
                     )
 
-            # =================================================
-            # 2.5 COGNITIVE CONTROLLER ANALYSIS & CONTROLLED RETRIEVAL
-            # =================================================
             context.update({
                 "session_id": session_id,
                 "user_id": user_id,
@@ -3805,17 +3451,12 @@ Execution Results:
                 "context": context,
             })
             
-            # Initial cognitive analysis
             controller_decision = self.cognitive_controller.analyze(
                 query=query,
                 context=context,
             )
 
             context["cognitive_decision"] = controller_decision
-
-            # =============================================================
-            # 2.6 NORMALIZE COGNITIVE DECISION
-            # =============================================================
 
             def _decision_value(decision, key, default=None):
                 if decision is None:
@@ -3825,7 +3466,6 @@ Execution Results:
                     return decision.get(key, default)
 
                 return getattr(decision, key, default)
-
 
             decision_contract = {
                 "intent": _decision_value(
@@ -3899,10 +3539,6 @@ Execution Results:
                     self.working_memory.metadata["cognitive_decision"] = controller_decision
                 else:
                     setattr(self.working_memory, "cognitive_decision", controller_decision)
-
-            # =================================================
-            # 4. HANDLE PENDING DIRECT ACTION
-            # =================================================
 
             if (
                 self.state_manager
@@ -4012,15 +3648,8 @@ Execution Results:
                     },
                 )
 
-            # =================================================
-            # 4.5 OBSERVE & UPDATE TASKS
-            # =================================================
             self._observe_tasks(query)
             self._update_task_progress(query)
-
-            # =================================================
-            # 5. INTENT ANALYSIS
-            # =================================================
 
             intent = None
 
@@ -4036,9 +3665,6 @@ Execution Results:
                         "[CognitiveCore] Intent analysis failed."
                     )
 
-            # =================================================
-            # 6. DECISION ENGINE INTEGRATION (Central Control)
-            # =================================================
             pre_ctx = dict(context)
             pre_ctx["query"] = query
             pre_ctx["session_id"] = session_id
@@ -4066,10 +3692,6 @@ Execution Results:
 
             pre_ctx["decision"] = decision
             context["decision"] = decision
-
-            # =================================================
-            # PHASE-1 CANONICAL DECISION STATE
-            # =================================================
 
             context["phase1"] = {
                 "active": True,
@@ -4134,7 +3756,6 @@ Execution Results:
                 ),
             }
 
-            # Execute required tools based on final decision
             evidence = await self._execute_required_tools(
                 decision,
                 query,
@@ -4165,10 +3786,6 @@ Execution Results:
                 except Exception:
                     logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
 
-            # =================================================
-            # PHASE 9: GOAL MANAGER & PROJECT MANAGER HOOKS
-            # =================================================
-
             completed_goal = None
 
             if self.goal_manager:
@@ -4189,10 +3806,6 @@ Execution Results:
                     await self.project_manager.observe(query, pre_ctx)
                 except Exception:
                     logger.exception("[CognitiveCore] ProjectManager observation failed.")
-
-            # =================================================
-            # 7. RETRIEVE RELEVANT MEMORY CONDITIONALLY VIA ROUTER / ENGINE
-            # =================================================
 
             memories = evidence.get("memory", [])
 
@@ -4228,10 +3841,6 @@ Execution Results:
                             "[CognitiveCore] Memory retrieval failed."
                         )
 
-            # =================================================
-            # 8. BUILD COMPLETE CONTEXT
-            # =================================================
-
             if self.context_builder:
 
                 ctx = await self.context_builder.build(
@@ -4262,10 +3871,6 @@ Execution Results:
 
             if decision:
                 context["decision"] = decision
-
-            # =================================================
-            # 9. ATTACH REGISTERED CAPABILITIES
-            # =================================================
 
             app_state = None
 
@@ -4319,10 +3924,6 @@ Execution Results:
                 "executor": self.executor is not None,
             }
 
-            # =================================================
-            # 10. SAVE CURRENT QUERY
-            # =================================================
-
             if self.state_manager:
                 try:
                     self.state_manager.update_state(
@@ -4331,10 +3932,6 @@ Execution Results:
                     )
                 except Exception as e:
                     logger.warning("State manager update skipped: %s", e)
-
-            # =================================================
-            # 11. EXPLICIT MEMORY MANAGEMENT
-            # =================================================
 
             if (
                 intent
@@ -4370,10 +3967,6 @@ Execution Results:
                         "message": reply,
                     },
                 )
-
-            # =================================================
-            # 12. NATURAL MEMORY LEARNING VIA ROUTER
-            # =================================================
 
             if self.memory_router:
 
@@ -4426,10 +4019,6 @@ Execution Results:
                         "learning failed."
                     )
 
-            # =================================================
-            # 12.5 PHASE-1 MULTI-AGENT EXECUTION
-            # =================================================
-
             phase1_selected_agents = list(
                 getattr(
                     decision,
@@ -4477,8 +4066,6 @@ Execution Results:
                         "phase1_agent_result"
                     ] = agent_result
 
-                    # Preserve the structured result for
-                    # knowledge-first response generation.
                     context[
                         "agent_outputs"
                     ] = agent_result.get(
@@ -4511,10 +4098,6 @@ Execution Results:
                             "[CognitiveCore] Agent response fusion failed."
                         )
 
-            # =================================================
-            # 13. KNOWLEDGE-FIRST PIPELINE EXECUTION
-            # =================================================
-
             self.brain_state["thinking"] = True
             self.brain_state["reasoning"] = True
             return await self.knowledge_first_pipeline(
@@ -4524,10 +4107,6 @@ Execution Results:
                 precomputed_reasoning=reasoning,
                 completed_goal=completed_goal,
             )
-
-        # =====================================================
-        # GLOBAL ERROR HANDLER
-        # =====================================================
 
         except Exception as exc:
 
