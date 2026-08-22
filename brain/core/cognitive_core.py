@@ -1224,6 +1224,82 @@ class CognitiveCore:
                 )
                 last_result = self._normalize_execution_result(raw_result)
 
+                # =========================================================
+                # PHASE 3 — WORKFLOW PAUSE / CONFIRMATION
+                # =========================================================
+                #
+                # A paused workflow is NOT a failed execution.
+                # The Executor may stop because an action requires user
+                # confirmation. In that case:
+                #
+                #   Planner
+                #       ↓
+                #   Executor
+                #       ↓
+                #   paused=True
+                #       ↓
+                #   CognitiveCore persists workflow
+                #       ↓
+                #   User confirms
+                #       ↓
+                #   Executor resumes
+                #
+                # Do not verify or replan a workflow that is intentionally
+                # waiting for the user.
+                # =========================================================
+                if isinstance(last_result, dict):
+
+                    paused = bool(
+                        last_result.get(
+                            "paused",
+                            False,
+                        )
+                    )
+
+                    requires_confirmation = bool(
+                        last_result.get(
+                            "requires_confirmation",
+                            False,
+                        )
+                    )
+
+                    if paused and requires_confirmation:
+
+                        logger.info(
+                            "[Recovery] Workflow paused awaiting user confirmation "
+                            "on attempt %d.",
+                            attempt,
+                        )
+
+                        self._persist_execution_state(
+                            session_id,
+                            execution_id=execution_id,
+                            status="awaiting_confirmation",
+                            query=query,
+                            plan=current_plan,
+                            result=last_result,
+                            attempt=attempt,
+                        )
+
+                        return {
+                            "result": last_result,
+                            "plan": current_plan,
+                            "evaluation": None,
+                            "verification": {
+                                "status": "awaiting_confirmation",
+                                "goal_completed": False,
+                                "confidence": 1.0,
+                                "reason": (
+                                    "Workflow is waiting for user confirmation."
+                                ),
+                            },
+                            "attempts": attempt,
+                            "recovered": attempt > 1,
+                            "success": True,
+                            "paused": True,
+                            "requires_confirmation": True,
+                        }
+
                 self._persist_execution_state(
                     session_id,
                     execution_id=execution_id,
@@ -1735,6 +1811,11 @@ class CognitiveCore:
                 elif reasoning is not None:
                     setattr(reasoning, "execution_result", execution_result)
         elif decision and getattr(decision, "action", None) == "planner":
+
+            # =========================================================
+            # PHASE 3 — PLANNER → EXECUTOR → WORKFLOW RESULT
+            # =========================================================
+
             plan = None
 
             if self.planner and hasattr(
@@ -1746,46 +1827,83 @@ class CognitiveCore:
                     context,
                 )
 
-            if plan and getattr(
+            if not plan or not getattr(
                 plan,
                 "tasks",
                 None,
             ):
-                if self.executor and hasattr(
-                    self.executor,
-                    "execute_plan",
-                ):
-                    recovery = await self._execute_plan_with_recovery(
-                        plan=plan,
-                        query=resolved_query,
-                        context=context,
-                        max_attempts=3,
-                    )
+                return SystemResponse(
+                    success=False,
+                    confidence=0.0,
+                    source="planner_executor",
+                    error="The planner could not produce an executable plan.",
+                )
 
-                    execution_result = recovery.get("result")
-                    success = (
-                        recovery.get("success", True)
-                        if isinstance(recovery, dict)
-                        else True
-                    )
+            if not self.executor or not hasattr(
+                self.executor,
+                "execute_plan",
+            ):
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="planner_executor",
+                    error="The workflow executor is unavailable.",
+                )
 
-                    return SystemResponse(
-                        success=success,
-                        confidence=getattr(
-                            plan,
-                            "confidence",
-                            0.85,
-                        ),
-                        data=(
-                            execution_result.get(
-                                "task_outputs",
-                                {},
-                            )
-                            if isinstance(execution_result, dict)
-                            else execution_result
-                        ),
-                        source="planner_executor",
-                    )
+            recovery = await self._execute_plan_with_recovery(
+                plan=plan,
+                query=resolved_query,
+                context=context,
+                max_attempts=3,
+            )
+
+            execution_result = recovery.get(
+                "result"
+            )
+
+            if not isinstance(
+                execution_result,
+                dict,
+            ):
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="planner_executor",
+                    error="The executor returned an invalid workflow result.",
+                )
+
+            # =========================================================
+            # IMPORTANT
+            #
+            # Always send the result through the unified workflow
+            # processor.
+            #
+            # This method handles:
+            #
+            # completed workflow
+            # failed workflow
+            # paused workflow
+            # confirmation persistence
+            # task outputs
+            # workflow results
+            # =========================================================
+
+            return self._process_workflow_result(
+                session_id=session_id,
+                plan=recovery.get(
+                    "plan",
+                    plan,
+                ),
+                exec_result=execution_result,
+            )
 
         try:
             # Step 3: If reasoning already contains an answer
@@ -1805,10 +1923,34 @@ class CognitiveCore:
                     )
 
                     result = recovery.get("result")
+                    
+                    # =========================================================
+                    # PHASE 3 — HANDLE PAUSED WORKFLOW
+                    # =========================================================
+                    if (
+                        recovery.get("paused")
+                        or (
+                            isinstance(result, dict)
+                            and result.get("paused")
+                            and result.get("requires_confirmation")
+                        )
+                    ):
+                        return self._process_workflow_result(
+                            session_id=session_id,
+                            plan=recovery.get(
+                                "plan",
+                                reasoning.plan,
+                            ),
+                            exec_result=result,
+                        )
+
                     context["execution_verification"] = (
                         recovery.get("verification", {})
                     )
-                    context["execution_attempt"] = recovery.get("attempts", 1)
+                    context["execution_attempt"] = recovery.get(
+                        "attempts",
+                        1,
+                    )
 
                     if not recovery.get("success"):
                         logger.warning(
@@ -2966,6 +3108,51 @@ Execution Results:
 
         try:
             # =========================================================
+            # PHASE 3 — PENDING WORKFLOW CONFIRMATION FIRST
+            # =========================================================
+            #
+            # A reply such as:
+            #
+            # "yes"
+            # "okay"
+            # "proceed"
+            #
+            # must be checked before normal routing.
+            #
+            # Otherwise ARIA may treat confirmation as a completely
+            # new user request.
+            # =========================================================
+
+            if self.state_manager:
+
+                try:
+
+                    state = self.state_manager.get_state(
+                        session_id
+                    )
+
+                    pending_response = (
+                        await self._handle_pending_workflow(
+                            query=query,
+                            session_id=session_id,
+                            base_context=base_context,
+                            state=state,
+                        )
+                    )
+
+                    if pending_response is not None:
+
+                        return pending_response
+
+                except Exception as exc:
+
+                    logger.exception(
+                        "[CognitiveCore] Pending workflow "
+                        "handling failed: %s",
+                        exc,
+                    )
+
+            # =========================================================
             # DETERMINISTIC USER NAME RECALL
             # =========================================================
 
@@ -3087,7 +3274,7 @@ Execution Results:
                         source="memory",
                         data={
                             "memories": [],
-                            "message": "I don't have any relevant memories about you yet, Sir.",
+                            "message": "I don't have any relevant memories about you yet.",
                         },
                     )
 
@@ -3125,8 +3312,8 @@ Execution Results:
                     confidence=1.0,
                     source="memory",
                     data={
-                        "response": "Certainly, Sir. I'll remember that.",
-                        "message": "Certainly, Sir. I'll remember that.",
+                        "response": "Certainly. I'll remember that.",
+                        "message": "Certainly. I'll remember that.",
                     },
                 )
 
@@ -3136,8 +3323,8 @@ Execution Results:
                     confidence=1.0,
                     source="execution_router",
                     data={
-                        "response": "Hello, Sir. How can I help you today?",
-                        "message": "Hello, Sir. How can I help you today?",
+                        "response": "Hello. How can I help you today?",
+                        "message": "Hello. How can I help you today?",
                     },
                 )
 
@@ -4314,6 +4501,6 @@ Execution Results:
                 source="cognitive_core",
                 data={},
                 error=(
-                    "I couldn't complete that operation safely, Sir."
+                    "I couldn't complete that operation safely."
                 ),
             )
