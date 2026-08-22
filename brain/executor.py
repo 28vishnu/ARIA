@@ -991,34 +991,66 @@ class Executor:
                     self.statistics["average_task_time"] = (self.statistics["average_task_time"] + elapsed_ms) / 2
 
                     if result.get("requires_confirmation"):
+                        # =============================================
+                        # WORKFLOW PAUSE
+                        # =============================================
                         task.mark_awaiting_confirmation()
+
+                        confirmation_data = (
+                            result.get("data", {})
+                            or {}
+                        )
+
+                        pending_task_id = (
+                            confirmation_data.get("task_id")
+                            or task.id
+                        )
+
+                        pending_action_name = (
+                            confirmation_data.get("action_name")
+                            or task.action_name
+                        )
+
+                        pending_action_params = (
+                            confirmation_data.get("params")
+                            or resolved_params
+                            or {}
+                        )
+
                         workflow_results[task.id] = {
                             "type": task.task_type,
-                            "target": task.action_name,
+                            "target": pending_action_name,
                             "status": "awaiting_confirmation",
                             "execution_time_ms": elapsed_ms,
                         }
-                        self.paused_workflows[workflow_id] = {
-                            "plan": plan,
-                            "task_outputs": task_outputs,
-                            "completed": completed,
-                            "failed": failed,
-                            "skipped": skipped,
-                            "workflow_results": workflow_results,
-                            "status": "paused",
-                        }
-                        await self._persist_workflow_state(workflow_id, self.paused_workflows[workflow_id])
 
-                        if self.event_bus:
-                            await self.event_bus.publish(
-                                Event(
-                                    type=event_types.WORKFLOW_PAUSED,
-                                    source="executor",
-                                    data={"workflow_id": workflow_id, "task_id": task.id},
-                                )
-                            )
-                        self.statistics["paused"] += 1
-                        return "paused"
+                        logger.info(
+                            "[Executor] Workflow paused. "
+                            "task_id=%s action=%s params=%s",
+                            pending_task_id,
+                            pending_action_name,
+                            pending_action_params,
+                        )
+
+                        # Do not mark this task as executed.
+                        # The workflow must remain paused until confirmation.
+
+                        plan.completed_tasks = list(completed)
+                        plan.failed_tasks = list(failed)
+                        plan.skipped_tasks = list(skipped)
+
+                        return self._build_result(
+                            task_outputs=task_outputs,
+                            workflow_results=workflow_results,
+                            completed=completed,
+                            failed=failed,
+                            skipped=skipped,
+                            paused=True,
+                            requires_confirmation=True,
+                            pending_task_id=pending_task_id,
+                            pending_action_name=pending_action_name,
+                            pending_action_params=pending_action_params,
+                        )
 
                     if result.get("success"):
                         output = result.get("data", {}) or {}
