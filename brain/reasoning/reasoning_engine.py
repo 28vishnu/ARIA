@@ -380,30 +380,190 @@ class ReasoningEngine:
 
         return list(dict.fromkeys(entities))
 
+    # ================================================================
+    # CONVERSATION THREAD HELPERS
+    # ================================================================
+
+    _EXPLICIT_TOPIC_PATTERNS = (
+        r"^\s*what is\s+(.+?)\s*\??\s*$",
+        r"^\s*what are\s+(.+?)\s*\??\s*$",
+        r"^\s*who is\s+(.+?)\s*\??\s*$",
+        r"^\s*who are\s+(.+?)\s*\??\s*$",
+        r"^\s*define\s+(.+?)\s*\??\s*$",
+        r"^\s*explain\s+(.+?)\s*\??\s*$",
+    )
+
+    _THREAD_RETURN_PATTERNS = (
+        r"\bgo back to\s+(.+?)\s*$",
+        r"\breturn to\s+(.+?)\s*$",
+        r"\bback to\s+(.+?)\s*$",
+        r"\bcontinue\s+(?:the\s+)?(.+?)\s+(?:topic|discussion)\s*$",
+        r"\bcontinue\s+with\s+(.+?)\s*$",
+    )
+
+    _CONTEXTUAL_FOLLOWUPS = (
+        "why is it important",
+        "why is this important",
+        "why are they important",
+        "why is that important",
+        "why does it matter",
+        "why does this matter",
+        "how does it work",
+        "how does it work?",
+        "how does it replicate",
+        "how does this work",
+        "what about it",
+        "tell me more",
+        "explain more",
+        "more about it",
+        "continue",
+        "and then",
+        "what happens next",
+        "how",
+        "why",
+        "what about",
+        "which one",
+        "which is better",
+        "which is faster",
+        "which is easier",
+        "which would you choose",
+    )
+
+    def _normalize_topic(self, value: Any) -> str:
+        """Normalize a topic/subject for safe thread matching."""
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text.strip(" .,!?:;")
+
+    def _extract_explicit_topic(self, query: str) -> Optional[str]:
+        """Extract a newly introduced subject from an explicit question."""
+        text = self._normalize_topic(query)
+
+        for pattern in self._EXPLICIT_TOPIC_PATTERNS:
+            match = re.match(pattern, text, flags=re.IGNORECASE)
+            if match:
+                topic = self._normalize_topic(match.group(1))
+                if topic:
+                    return topic
+
+        return None
+
+    def _extract_thread_return_target(self, query: str) -> Optional[str]:
+        """Detect an explicit request to return to an older thread."""
+        text = self._normalize_topic(query)
+
+        for pattern in self._THREAD_RETURN_PATTERNS:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                target = self._normalize_topic(match.group(1))
+                if target:
+                    return target
+
+        return None
+
+    def _is_contextual_followup(self, query: str) -> bool:
+        """Detect short/context-dependent requests without choosing a topic."""
+        text = self._normalize_topic(query).lower()
+
+        if not text:
+            return False
+
+        if text in self._CONTEXTUAL_FOLLOWUPS:
+            return True
+
+        if re.search(
+            r"\b(it|this|that|they|them|he|she|these|those)\b",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        if len(text.split()) <= 6 and re.match(
+            r"^(why|how|what|which|when|where|who)\b",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        return False
+
+    def _find_thread_by_topic(
+        self,
+        target: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Find the closest existing conversation thread by topic/subject."""
+        target_norm = self._normalize_topic(target).lower()
+
+        if not target_norm:
+            return None
+
+        for thread in self.conversation_threads.values():
+            topic = self._normalize_topic(
+                thread.get("topic")
+            ).lower()
+
+            subject = self._normalize_topic(
+                thread.get("subject")
+            ).lower()
+
+            if target_norm == topic or target_norm == subject:
+                return thread
+
+        for thread in self.conversation_threads.values():
+            topic = self._normalize_topic(
+                thread.get("topic")
+            ).lower()
+
+            subject = self._normalize_topic(
+                thread.get("subject")
+            ).lower()
+
+            if (
+                target_norm in topic
+                or target_norm in subject
+                or topic in target_norm
+                or subject in target_norm
+            ):
+                return thread
+
+        return None
+
     def _get_or_create_thread(
         self,
         topic: Optional[str],
         subject: Optional[str],
         entities: Optional[List[str]] = None,
+        force_new: bool = False,
     ) -> Dict[str, Any]:
         """
-        Maintain independent conversational threads.
+        Return the thread representing the CURRENT conversational task.
 
-        A conversation may contain any number of topics/tasks.
-        Only one thread is active for the current turn, while older
-        threads remain recoverable.
+        Older threads remain available, but they are never automatically
+        reactivated unless explicitly requested.
         """
 
-        topic = str(topic or "").strip()
-        subject = str(subject or topic or "").strip()
-        entities = list(entities or [])
+        topic = self._normalize_topic(topic)
+        subject = self._normalize_topic(subject or topic)
 
-        # Stable identity for the conversational task.
-        thread_key = (
+        entities = [
+            self._normalize_topic(x)
+            for x in (entities or [])
+            if self._normalize_topic(x)
+        ]
+
+        base_key = (
             topic.lower()
             or subject.lower()
             or "general"
         )
+
+        thread_key = base_key
+
+        if force_new:
+            suffix = 2
+
+            while thread_key in self.conversation_threads:
+                thread_key = f"{base_key}#{suffix}"
+                suffix += 1
 
         if thread_key not in self.conversation_threads:
             self.conversation_threads[thread_key] = {
@@ -411,12 +571,18 @@ class ReasoningEngine:
                 "topic": topic or subject or "general",
                 "subject": subject or topic or "general",
                 "entities": list(dict.fromkeys(entities)),
+
                 "compared_entities": [],
                 "active_comparison": False,
+
                 "history": [],
                 "last_user": None,
                 "last_assistant": None,
                 "last_result": None,
+
+                "turn_count": 0,
+                "last_query": None,
+                "last_resolved_query": None,
             }
 
         thread = self.conversation_threads[thread_key]
@@ -437,12 +603,16 @@ class ReasoningEngine:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Build structured conversational working state.
+        Resolve the CURRENT conversational thread.
 
-        Conversation state has priority over long-term memory.
-        This method does not answer the user; it only describes the
-        current dialogue state.
+        Rules:
+        1. Explicit new subject starts/selects that topic.
+        2. Explicit comparison activates a comparison on that topic.
+        3. Short contextual follow-ups stay on the active thread.
+        4. Explicit requests to return to an old topic reactivate that thread.
+        5. Old threads are never revived implicitly.
         """
+
         conv = context.get("conversation", {})
 
         if not isinstance(conv, dict):
@@ -456,36 +626,43 @@ class ReasoningEngine:
         if not isinstance(history, list):
             history = []
 
-        active_topic = (
+        current_query = self._normalize_topic(
+            context.get("query", "")
+        )
+
+        external_active_topic = self._normalize_topic(
             conv.get("active_topic")
             or conv.get("topic")
             or context.get("topic")
         )
 
-        previous_topic = (
-            conv.get("previous_topic")
-            or context.get("previous_topic")
+        external_subject = self._normalize_topic(
+            conv.get("active_subject")
+            or context.get("active_subject")
+            or external_active_topic
         )
 
-        active_entities = conv.get(
+        external_entities = conv.get(
             "active_entities",
             conv.get("entities", []),
         )
 
-        if not isinstance(active_entities, list):
-            active_entities = []
+        if not isinstance(external_entities, list):
+            external_entities = []
 
-        compared_entities = conv.get(
-            "last_compared_entities",
-            conv.get("compared_entities", []),
+        external_entities = [
+            self._normalize_topic(x)
+            for x in external_entities
+            if self._normalize_topic(x)
+        ]
+
+        explicit_topic = self._extract_explicit_topic(
+            current_query
         )
 
-        if not isinstance(compared_entities, list):
-            compared_entities = []
-
-        current_query = str(
-            context.get("query", "")
-        ).strip()
+        return_target = self._extract_thread_return_target(
+            current_query
+        )
 
         current_comparison_entities = (
             self._extract_comparison_entities(
@@ -493,81 +670,112 @@ class ReasoningEngine:
             )
         )
 
-        # Explicit comparison in the CURRENT request always wins.
-        if len(current_comparison_entities) >= 2:
-            compared_entities = current_comparison_entities
-            active_comparison = True
+        thread = None
+
+        if return_target:
+            thread = self._find_thread_by_topic(
+                return_target
+            )
+
+            if thread:
+                logger.info(
+                    "[Reasoning] Explicitly returning to thread: %s",
+                    thread.get("thread_id"),
+                )
+
+        if explicit_topic:
+            if not thread:
+                thread = self._get_or_create_thread(
+                    topic=explicit_topic,
+                    subject=explicit_topic,
+                    entities=external_entities,
+                )
+
+            comparison_is_about_new_topic = (
+                len(current_comparison_entities) >= 2
+                and any(
+                    explicit_topic.lower() in
+                    str(entity).lower()
+                    or str(entity).lower() in
+                    explicit_topic.lower()
+                    for entity in current_comparison_entities
+                )
+            )
+
+            if comparison_is_about_new_topic:
+                thread["compared_entities"] = (
+                    current_comparison_entities
+                )
+                thread["active_comparison"] = True
+            else:
+                thread["compared_entities"] = []
+                thread["active_comparison"] = False
+
+            thread["topic"] = explicit_topic
+            thread["subject"] = explicit_topic
+
+        elif len(current_comparison_entities) >= 2:
+            comparison_topic = " vs ".join(
+                current_comparison_entities
+            )
+
+            thread = self._get_or_create_thread(
+                topic=comparison_topic,
+                subject=comparison_topic,
+                entities=current_comparison_entities,
+            )
+
+            thread["compared_entities"] = (
+                current_comparison_entities
+            )
+            thread["active_comparison"] = True
+
+        elif self._is_contextual_followup(current_query):
+            if self.active_thread_id:
+                thread = self.conversation_threads.get(
+                    self.active_thread_id
+                )
+
+            if not thread and external_active_topic:
+                thread = self._get_or_create_thread(
+                    topic=external_active_topic,
+                    subject=external_subject or external_active_topic,
+                    entities=external_entities,
+                )
+
         else:
-            compared_entities = list(
-                dict.fromkeys(
-                    compared_entities
-                )
+            topic = (
+                external_active_topic
+                or external_subject
+                or "general"
             )
 
-            active_comparison = bool(
-                conv.get("active_comparison")
-                and len(compared_entities) >= 2
+            thread = self._get_or_create_thread(
+                topic=topic,
+                subject=external_subject or topic,
+                entities=external_entities,
             )
 
-            # An explicit new topic/question must not inherit
-            # an unrelated previous comparison.
-            current_query_lower = current_query.lower()
-
-            explicit_new_topic = bool(
-                re.match(
-                    r"^\s*(what is|what are|who is|define|explain)\s+.+",
-                    current_query_lower,
-                    flags=re.IGNORECASE,
-                )
+        if not thread:
+            thread = self._get_or_create_thread(
+                topic=external_active_topic or "general",
+                subject=external_subject or external_active_topic or "general",
+                entities=external_entities,
             )
 
-            if explicit_new_topic:
-                active_comparison = False
-                compared_entities = []
+        if explicit_topic:
+            if not (
+                len(current_comparison_entities) >= 2
+                and thread.get("active_comparison")
+            ):
+                thread["compared_entities"] = []
+                thread["active_comparison"] = False
 
-                match = re.match(
-                    r"^\s*(what is|what are|who is|define|explain)\s+(.+?)\s*\??\s*$",
-                    current_query,
-                    flags=re.IGNORECASE,
-                )
-
-                if match:
-                    active_topic = match.group(2).strip()
-
-        active_subject = (
-            active_topic
-            or conv.get("active_subject")
-            or conv.get("active_topic")
-            or conv.get("topic")
-            or context.get("active_subject")
-            or context.get("topic")
+        thread["turn_count"] = (
+            int(thread.get("turn_count", 0)) + 1
         )
 
-        # A comparison remains active while the user is asking
-        # follow-up questions about the same compared entities.
-        if active_comparison:
-            active_topic = active_topic or "comparison"
-            active_subject = active_subject or compared_entities
-
-        last_user = conv.get("last_user")
-        last_assistant = conv.get("last_assistant")
-        last_result = conv.get("last_result")
-
-        thread = self._get_or_create_thread(
-            topic=active_topic,
-            subject=active_subject,
-            entities=active_entities,
-        )
-
-        # Update the ACTIVE thread with the current comparison state.
-        # A topic switch must explicitly clear stale comparison state.
-        thread["compared_entities"] = list(
-            dict.fromkeys(compared_entities)
-        )
-        thread["active_comparison"] = bool(active_comparison)
-
-        thread["topic"] = active_topic or thread.get("topic")
-        thread["subject"] = active_subject or thread.get("subject")
+        thread["last_query"] = current_query
 
         return {
             "history": history,
@@ -577,18 +785,39 @@ class ReasoningEngine:
             "thread": thread,
             "threads": self.conversation_threads,
 
-            "active_topic": active_topic,
-            "previous_topic": previous_topic,
+            "active_topic": thread.get("topic"),
+            "previous_topic": (
+                conv.get("previous_topic")
+                or context.get("previous_topic")
+            ),
 
-            "active_subject": active_subject,
+            "active_subject": thread.get("subject"),
 
-            "active_entities": active_entities,
-            "compared_entities": compared_entities,
-            "active_comparison": active_comparison,
+            "active_entities": thread.get(
+                "entities",
+                [],
+            ),
 
-            "last_user": last_user,
-            "last_assistant": last_assistant,
-            "last_result": last_result,
+            "compared_entities": thread.get(
+                "compared_entities",
+                [],
+            ),
+
+            "active_comparison": bool(
+                thread.get("active_comparison", False)
+            ),
+
+            "last_user": thread.get(
+                "last_user"
+            ) or conv.get("last_user"),
+
+            "last_assistant": thread.get(
+                "last_assistant"
+            ) or conv.get("last_assistant"),
+
+            "last_result": thread.get(
+                "last_result"
+            ) or conv.get("last_result"),
 
             "dialogue_stage": (
                 "greeting"
@@ -603,110 +832,88 @@ class ReasoningEngine:
         context: Dict[str, Any],
     ) -> str:
         """
-        Convert a contextual user message into a standalone request.
+        Resolve contextual references against the ACTIVE thread.
 
-        This is a reasoning operation only.
-        It must never answer the user.
+        Explicit subjects always win.
+        Contextual follow-ups use the active thread.
+        Older threads require explicit user instruction.
         """
 
-        clean_query = str(query or "").strip()
+        clean_query = self._normalize_topic(query)
 
         if not clean_query:
             return clean_query
 
-        conversation_state = await self.track_conversation(context)
+        conversation_state = context.get("conversation_state")
 
-        # Deterministic comparison resolution for short follow-ups.
-        # This prevents the LLM from losing an already-established
-        # comparison when the latest message contains pronouns or
-        # phrases such as "which one", "what about performance", etc.
+        if not conversation_state:
+            conversation_state = await self.track_conversation(
+                context
+            )
 
-        followup_patterns = (
-            "which one",
-            "which is better",
-            "which is easier",
-            "what about",
-            "how about",
-            "tell me more",
-            "continue",
-            "which would you choose",
-            "what would you choose",
+        active_thread = conversation_state.get(
+            "thread",
+            {},
         )
 
-        lower_query = clean_query.lower()
+        active_topic = self._normalize_topic(
+            active_thread.get("topic")
+        )
 
-        active_thread = conversation_state.get("thread", {})
+        active_subject = self._normalize_topic(
+            active_thread.get("subject")
+        )
 
         active_comparison = bool(
             active_thread.get("active_comparison")
         )
 
-        compared_entities = active_thread.get(
-            "compared_entities",
-            []
+        compared_entities = list(
+            active_thread.get(
+                "compared_entities",
+                [],
+            )
         )
 
-        # ---------------------------------------------------------
-        # EXPLICIT NEW TOPIC OVERRIDES OLD COMPARISON CONTEXT
-        # ---------------------------------------------------------
-        # A new explicit subject must never inherit an unrelated
-        # comparison from an older conversational thread.
-
-        explicit_topic = None
-
-        topic_patterns = [
-            r"^what is\s+(.+?)\??$",
-            r"^who is\s+(.+?)\??$",
-            r"^what are\s+(.+?)\??$",
-            r"^define\s+(.+?)\??$",
-            r"^explain\s+(.+?)\??$",
-        ]
-
-        for pattern in topic_patterns:
-            match = re.match(
-                pattern,
-                clean_query,
-                flags=re.IGNORECASE,
-            )
-            if match:
-                explicit_topic = match.group(1).strip()
-                break
+        explicit_topic = self._extract_explicit_topic(
+            clean_query
+        )
 
         if explicit_topic:
-            explicit_topic_lower = explicit_topic.lower()
+            return clean_query
 
-            comparison_text = " ".join(
-                str(item).lower()
-                for item in compared_entities
+        return_target = self._extract_thread_return_target(
+            clean_query
+        )
+
+        if return_target:
+            target_thread = self._find_thread_by_topic(
+                return_target
             )
 
-            # If the new explicit topic is not one of the
-            # currently compared entities, this is a topic switch.
-            if (
-                active_comparison
-                and explicit_topic_lower not in comparison_text
-            ):
-                logger.info(
-                    "[Reasoning] Explicit topic switch detected: "
-                    "comparison -> %s",
-                    explicit_topic,
+            if target_thread:
+                target_topic = self._normalize_topic(
+                    target_thread.get("topic")
                 )
 
-                active_comparison = False
-                compared_entities = []
+                return (
+                    f"{clean_query} "
+                    f"Context: {target_topic}."
+                )
+
+            return clean_query
 
         if (
             active_comparison
             and len(compared_entities) >= 2
-            and any(
-                phrase in lower_query
-                for phrase in followup_patterns
-            )
+            and self._is_contextual_followup(clean_query)
         ):
-            comparison = " and ".join(compared_entities)
+            comparison = " and ".join(
+                compared_entities
+            )
 
             logger.info(
-                "[Reasoning] Preserving active thread comparison: %s",
+                "[Reasoning] Active comparison preserved: %s",
                 comparison,
             )
 
@@ -715,138 +922,22 @@ class ReasoningEngine:
                 f"Compare the relevant options: {comparison}."
             )
 
-        reference_context = {
-            "active_thread_id": conversation_state.get(
-                "thread_id"
-            ),
-            "active_thread": conversation_state.get(
-                "thread",
-                {}
-            ),
-            "available_threads": list(
-                conversation_state.get(
-                    "threads",
-                    {}
-                ).keys()
-            ),
-            "active_topic": conversation_state.get("active_topic"),
-            "previous_topic": conversation_state.get("previous_topic"),
-            "active_subject": conversation_state.get("active_subject"),
-            "active_entities": conversation_state.get("active_entities", []),
-            "compared_entities": conversation_state.get(
-                "compared_entities",
-                [],
-            ),
-            "active_comparison": conversation_state.get(
-                "active_comparison",
-                False,
-            ),
-            "last_user": conversation_state.get("last_user"),
-            "last_assistant": conversation_state.get("last_assistant"),
-            "last_result": conversation_state.get("last_result"),
-            "recent_history": conversation_state.get(
-                "recent_history",
-                [],
-            ),
-        }
+        if (
+            active_topic
+            and self._is_contextual_followup(clean_query)
+        ):
+            logger.info(
+                "[Reasoning] Active topic preserved: %s",
+                active_topic,
+            )
 
-        if self.llm_router and hasattr(self.llm_router, "chat"):
-            try:
-                messages = [
-                    {
-                        "role": "system",
-                        "content": """
-You are ARIA's conversational reference-resolution layer.
+            return (
+                f"{clean_query} "
+                f"Context: {active_subject or active_topic}."
+            )
 
-Your task is ONLY to rewrite the latest user request into a
-standalone request when contextual information is required.
-
-Do NOT answer the request.
-Do NOT explain your reasoning.
-Do NOT invent information.
-
-Priority order:
-
-1. Explicit entities in the latest request
-2. Active conversation thread
-3. Latest coherent messages belonging to the active thread
-4. Explicitly requested previous thread/topic
-5. Other conversation threads only when the user clearly refers to them
-6. Long-term memory only when explicitly relevant
-
-IMPORTANT:
-
-The conversation may contain MANY independent topics or tasks.
-
-Only the ACTIVE THREAD should be treated as the current context.
-
-Never merge entities from unrelated threads.
-
-Never revive an old comparison merely because it appeared somewhere
-in recent conversation history.
-
-If the user explicitly changes topic, switch to the new thread.
-
-If the user says "go back to TCP", "continue the DNA topic", etc.,
-retrieve that specific thread.
-
-If the user says "which one?", resolve it using the active thread.
-
-If the user says:
-- "it"
-- "that"
-- "this"
-- "them"
-- "which one"
-- "which is better"
-- "continue"
-- "more"
-- "what about X"
-
-resolve it from the current conversational state.
-
-If multiple entities are currently being compared, preserve ALL
-relevant comparison entities.
-
-For example, if the dialogue contains several entities in the
-same comparison, "which one is better?" means continue that
-comparison rather than selecting an unrelated remembered entity.
-
-Return ONLY the standalone request.
-""",
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            "STRUCTURED CONVERSATION STATE:\n"
-                            f"{reference_context}\n\n"
-                            "LATEST USER REQUEST:\n"
-                            f"{clean_query}"
-                        ),
-                    },
-                ]
-
-                resolved = await self.llm_router.chat(
-                    messages,
-                    task="context_resolution",
-                )
-
-                if isinstance(resolved, str):
-                    resolved = resolved.strip()
-
-                    if resolved:
-                        logger.info(
-                            "[Reasoning] Context resolved: %r -> %r",
-                            clean_query,
-                            resolved,
-                        )
-
-                        return resolved
-
-            except Exception:
-                logger.exception(
-                    "[Reasoning] Context resolution failed."
-                )
+        if active_topic:
+            return clean_query
 
         return clean_query
 
@@ -1122,10 +1213,6 @@ Return ONLY the standalone request.
                 )
                 return default
 
-        # ---------------------------------------------------------
-        # MEMORY
-        # ---------------------------------------------------------
-
         memory_operation = None
 
         if (
@@ -1139,10 +1226,6 @@ Return ONLY the standalone request.
             memory_operation = self.memory_router.recall(
                 memory_query
             )
-
-        # ---------------------------------------------------------
-        # KNOWLEDGE DATABASE
-        # ---------------------------------------------------------
 
         knowledge_operation = None
 
@@ -1178,10 +1261,6 @@ Return ONLY the standalone request.
                     )
                 )
 
-        # ---------------------------------------------------------
-        # KNOWLEDGE GRAPH
-        # ---------------------------------------------------------
-
         graph_operation = None
 
         if (
@@ -1197,10 +1276,6 @@ Return ONLY the standalone request.
                 )
             )
 
-        # ---------------------------------------------------------
-        # WORLD MODEL
-        # ---------------------------------------------------------
-
         world_operation = None
 
         if (
@@ -1214,10 +1289,6 @@ Return ONLY the standalone request.
                 self.world_model.search,
                 query,
             )
-
-        # ---------------------------------------------------------
-        # RUN ALL SOURCES IN PARALLEL
-        # ---------------------------------------------------------
 
         raw_memories, raw_knowledge, raw_graph, raw_world = (
             await asyncio.gather(
@@ -1247,10 +1318,6 @@ Return ONLY the standalone request.
                 ),
             )
         )
-
-        # ---------------------------------------------------------
-        # NORMALIZE MEMORY
-        # ---------------------------------------------------------
 
         memories = []
 
@@ -1299,10 +1366,6 @@ Return ONLY the standalone request.
                 "content": content,
             })
 
-        # ---------------------------------------------------------
-        # NORMALIZE KNOWLEDGE
-        # ---------------------------------------------------------
-
         knowledge = []
 
         knowledge_items = (
@@ -1350,10 +1413,6 @@ Return ONLY the standalone request.
                 "content": content,
             })
 
-        # ---------------------------------------------------------
-        # NORMALIZE GRAPH
-        # ---------------------------------------------------------
-
         graph = []
 
         graph_items = (
@@ -1400,10 +1459,6 @@ Return ONLY the standalone request.
                 ),
                 "content": content,
             })
-
-        # ---------------------------------------------------------
-        # NORMALIZE WORLD MODEL
-        # ---------------------------------------------------------
 
         world = {}
 
@@ -1475,10 +1530,6 @@ Return ONLY the standalone request.
 
         conflicts = []
 
-        # ---------------------------------------------------------
-        # Group evidence by normalized subject/topic when available
-        # ---------------------------------------------------------
-
         grouped = {}
 
         for item in evidence:
@@ -1496,8 +1547,6 @@ Return ONLY the standalone request.
             ).strip().lower()
 
             if not subject:
-                # Conservative fallback: use the first meaningful
-                # portion of the evidence as its comparison key.
                 subject = re.sub(
                     r"\s+",
                     " ",
@@ -1508,10 +1557,6 @@ Return ONLY the standalone request.
                 subject,
                 []
             ).append(item)
-
-        # ---------------------------------------------------------
-        # Detect explicit contradictory signals
-        # ---------------------------------------------------------
 
         contradiction_pairs = [
             ("true", "false"),
@@ -1572,10 +1617,6 @@ Return ONLY the standalone request.
                             })
 
                             break
-
-        # ---------------------------------------------------------
-        # Calculate conflict confidence
-        # ---------------------------------------------------------
 
         conflict_detected = bool(conflicts)
 
@@ -1671,10 +1712,6 @@ Return JSON:
         self._temp_context = context
         user_query = str(context.get("query", "")).strip()
 
-        # ---------------------------------------------------------
-        # INTENT ANALYSIS (Updated to use await)
-        # ---------------------------------------------------------
-
         intent = await self.intent_analyzer.analyze(
             user_query
         )
@@ -1699,10 +1736,6 @@ Return JSON:
             user_query,
             context,
         )
-
-        # ---------------------------------------------------------
-        # INTENT-BASED STRATEGY OVERRIDE
-        # ---------------------------------------------------------
 
         if intent.intent_type == "memory":
             strategy = "memory_first"
@@ -1806,14 +1839,18 @@ Return JSON:
         conv_tracking = await self.track_conversation(context)
         reasoning_steps.append("Tracked conversation state")
 
+        context["conversation_state"] = conv_tracking
+
         query = await self.resolve_references(
             raw_query,
-            context,
+            {
+                **context,
+                "conversation_state": conv_tracking,
+            },
         )
 
         context["raw_query"] = raw_query
         context["resolved_query"] = query
-        context["conversation_state"] = conv_tracking
 
         reasoning_steps.append(
             "Resolved conversational references"
@@ -1899,10 +1936,6 @@ Return JSON:
             if decision
             else strategy == "research_first"
         )
-
-        # ---------------------------------------------------------
-        # INTENT CAPABILITY FLAGS
-        # ---------------------------------------------------------
 
         requires_memory = (
             requires_memory
