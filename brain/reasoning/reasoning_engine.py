@@ -785,6 +785,9 @@ class ReasoningEngine:
                 "thread_id": thread_key,
                 "topic": topic or subject or "general",
                 "subject": subject or topic or "general",
+
+                "previous_topic": None,
+
                 "entities": list(dict.fromkeys(entities)),
 
                 "compared_entities": [],
@@ -889,6 +892,13 @@ class ReasoningEngine:
                 )
 
         if explicit_topic:
+            old_active_topic = self._normalize_topic(
+                self.conversation_threads.get(
+                    self.active_thread_id,
+                    {}
+                ).get("topic")
+            ) if self.active_thread_id else ""
+
             if not thread:
                 thread = self._get_or_create_thread(
                     topic=explicit_topic,
@@ -918,6 +928,18 @@ class ReasoningEngine:
 
             thread["topic"] = explicit_topic
             thread["subject"] = explicit_topic
+
+            if (
+                old_active_topic
+                and old_active_topic.lower() != explicit_topic.lower()
+            ):
+                thread["previous_topic"] = old_active_topic
+
+                logger.info(
+                    "[Reasoning] Topic shift: %s -> %s",
+                    old_active_topic,
+                    explicit_topic,
+                )
 
         elif len(current_comparison_entities) >= 2:
             comparison_topic = " vs ".join(
@@ -992,14 +1014,17 @@ class ReasoningEngine:
 
             "active_topic": thread.get("topic"),
             "previous_topic": (
-                None
-                if self._is_context_artifact(
-                    conv.get("previous_topic")
-                    or context.get("previous_topic")
-                )
-                else self._normalize_topic(
-                    conv.get("previous_topic")
-                    or context.get("previous_topic")
+                thread.get("previous_topic")
+                or (
+                    None
+                    if self._is_context_artifact(
+                        conv.get("previous_topic")
+                        or context.get("previous_topic")
+                    )
+                    else self._normalize_topic(
+                        conv.get("previous_topic")
+                        or context.get("previous_topic")
+                    )
                 )
             ),
 
@@ -1041,6 +1066,14 @@ class ReasoningEngine:
         query: str,
         context: Dict[str, Any],
     ) -> str:
+        """
+        Resolve contextual references such as:
+            "Why is it important?" -> "Why is photosynthesis important?"
+            "How does it replicate?" -> "How does DNA replicate?"
+
+        Explicit topics always take priority over previous conversation topics.
+        """
+
         clean_query = self._normalize_topic(query)
 
         if not clean_query:
@@ -1049,79 +1082,157 @@ class ReasoningEngine:
         conversation_state = context.get("conversation_state")
 
         if not conversation_state:
-            conversation_state = await self.track_conversation(
-                context
-            )
+            conversation_state = await self.track_conversation(context)
 
-        active_thread = conversation_state.get(
-            "thread",
-            {},
-        )
+        active_thread = conversation_state.get("thread") or {}
 
         active_topic = self._normalize_topic(
             active_thread.get("topic")
+            or conversation_state.get("active_topic")
+            or context.get("active_topic")
+            or context.get("topic")
         )
 
         active_subject = self._normalize_topic(
             active_thread.get("subject")
+            or conversation_state.get("active_subject")
+            or context.get("active_subject")
+            or active_topic
         )
 
-        active_comparison = bool(
-            active_thread.get("active_comparison")
-        )
-
-        compared_entities = self._clean_entities(
-            active_thread.get(
-                "compared_entities",
-                [],
-            )
-        )
-
-        explicit_topic = self._extract_explicit_topic(
-            clean_query
-        )
+        # ---------------------------------------------------------
+        # 1. Explicit topic = NEVER replace it with old context
+        # ---------------------------------------------------------
+        explicit_topic = self._extract_explicit_topic(clean_query)
 
         if explicit_topic:
+            logger.info(
+                "[Reasoning] Explicit topic detected: %s",
+                explicit_topic,
+            )
             return clean_query
 
-        return_target = self._extract_thread_return_target(
-            clean_query
-        )
+        # ---------------------------------------------------------
+        # 2. Explicitly returning to another thread
+        # ---------------------------------------------------------
+        return_target = self._extract_thread_return_target(clean_query)
 
         if return_target:
-            target_thread = self._find_thread_by_topic(
-                return_target
-            )
+            target_thread = self._find_thread_by_topic(return_target)
 
             if target_thread:
-                return clean_query
+                logger.info(
+                    "[Reasoning] Returning to topic: %s",
+                    target_thread.get("topic"),
+                )
 
             return clean_query
 
-        if (
-            active_comparison
-            and len(compared_entities) >= 2
-            and self._is_contextual_followup(clean_query)
-        ):
+        # ---------------------------------------------------------
+        # 3. No topic available -> leave query unchanged
+        # ---------------------------------------------------------
+        if not active_topic:
             logger.info(
-                "[Reasoning] Active comparison preserved: %s",
-                compared_entities,
+                "[Reasoning] No active topic available for reference resolution."
             )
             return clean_query
 
-        if (
-            active_topic
-            and self._is_contextual_followup(clean_query)
-        ):
-            logger.info(
-                "[Reasoning] Active topic preserved: %s",
+        # ---------------------------------------------------------
+        # 4. Contextual follow-up resolution
+        # ---------------------------------------------------------
+        if self._is_contextual_followup(clean_query):
+
+            resolved = clean_query
+
+            # Pronoun references
+            resolved = re.sub(
+                r"\bit\b",
                 active_topic,
+                resolved,
+                flags=re.IGNORECASE,
             )
-            return clean_query
 
-        if active_topic:
-            return clean_query
+            resolved = re.sub(
+                r"\bthis\b",
+                active_topic,
+                resolved,
+                flags=re.IGNORECASE,
+            )
 
+            resolved = re.sub(
+                r"\bthat\b",
+                active_topic,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+            # Common implicit follow-ups that contain no explicit subject.
+            normalized = clean_query.lower().strip(" ?.!")
+
+            if normalized == "why is it important":
+                resolved = f"Why is {active_topic} important?"
+
+            elif normalized == "why is this important":
+                resolved = f"Why is {active_topic} important?"
+
+            elif normalized == "why is that important":
+                resolved = f"Why is {active_topic} important?"
+
+            elif normalized == "why does it matter":
+                resolved = f"Why does {active_topic} matter?"
+
+            elif normalized == "why does this matter":
+                resolved = f"Why does {active_topic} matter?"
+
+            elif normalized == "how does it work":
+                resolved = f"How does {active_topic} work?"
+
+            elif normalized == "how does this work":
+                resolved = f"How does {active_topic} work?"
+
+            elif normalized == "how does it replicate":
+                resolved = f"How does {active_topic} replicate?"
+
+            elif normalized == "how does this replicate":
+                resolved = f"How does {active_topic} replicate?"
+
+            elif normalized == "tell me more":
+                resolved = f"Tell me more about {active_topic}."
+
+            elif normalized == "explain more":
+                resolved = f"Explain more about {active_topic}."
+
+            elif normalized == "more about it":
+                resolved = f"Tell me more about {active_topic}."
+
+            elif normalized == "what about it":
+                resolved = f"What about {active_topic}?"
+
+            elif normalized == "what about this":
+                resolved = f"What about {active_topic}?"
+
+            elif normalized == "continue":
+                resolved = f"Continue explaining {active_topic}."
+
+            elif normalized == "and then":
+                resolved = f"What happens next with {active_topic}?"
+
+            elif normalized == "what happens next":
+                resolved = f"What happens next with {active_topic}?"
+
+            resolved = self._clean_context_text(resolved)
+
+            logger.info(
+                "[Reasoning] Reference resolved: %r -> %r",
+                clean_query,
+                resolved,
+            )
+
+            return resolved
+
+        # ---------------------------------------------------------
+        # 5. Non-contextual query
+        # ---------------------------------------------------------
         return clean_query
 
     async def track_goal(self, context: Dict[str, Any]) -> str:
