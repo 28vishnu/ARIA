@@ -525,8 +525,18 @@ class ReasoningEngine:
                 active_comparison = False
                 compared_entities = []
 
+                match = re.match(
+                    r"^\s*(what is|what are|who is|define|explain)\s+(.+?)\s*\??\s*$",
+                    current_query,
+                    flags=re.IGNORECASE,
+                )
+
+                if match:
+                    active_topic = match.group(2).strip()
+
         active_subject = (
-            conv.get("active_subject")
+            active_topic
+            or conv.get("active_subject")
             or conv.get("active_topic")
             or conv.get("topic")
             or context.get("active_subject")
@@ -549,12 +559,12 @@ class ReasoningEngine:
             entities=active_entities,
         )
 
-        # Update the active thread with current comparison state.
-        if active_comparison:
-            thread["compared_entities"] = list(
-                dict.fromkeys(compared_entities)
-            )
-            thread["active_comparison"] = True
+        # Update the ACTIVE thread with the current comparison state.
+        # A topic switch must explicitly clear stale comparison state.
+        thread["compared_entities"] = list(
+            dict.fromkeys(compared_entities)
+        )
+        thread["active_comparison"] = bool(active_comparison)
 
         thread["topic"] = active_topic or thread.get("topic")
         thread["subject"] = active_subject or thread.get("subject")
