@@ -83,6 +83,52 @@ CONTEXTUAL_CALCULATOR_PHRASES = (
 )
 
 
+# =========================================================
+# ACTION / EXECUTION REQUESTS
+# =========================================================
+#
+# These phrases describe requests where ARIA should perform
+# an action instead of merely generating a conversational
+# response.
+#
+# Such requests should enter the Planner → Executor pipeline.
+# =========================================================
+
+ACTION_VERBS = (
+    "create",
+    "write",
+    "read",
+    "delete",
+    "remove",
+    "rename",
+    "move",
+    "copy",
+    "save",
+    "open",
+    "close",
+    "send",
+    "notify",
+    "notification",
+    "set",
+    "change",
+    "update",
+    "download",
+    "upload",
+    "run",
+    "execute",
+)
+
+ACTION_TARGETS = (
+    "file",
+    "folder",
+    "directory",
+    "notification",
+    "alert",
+    "message",
+    "reminder",
+)
+
+
 def contains_weather_term(q: str) -> bool:
     weather_terms = (
         "weather",
@@ -201,21 +247,50 @@ def decide(query: str) -> RouteDecision:
         return RouteDecision(Route.CALCULATOR, 0.99)
 
     # Contextual calculator follow-up
-    #
-    # Examples:
-    #   "Add 50"
-    #   "Subtract 20"
-    #   "Multiply by 4"
-    #   "Divide that by 10"
-    #
-    # These requests may not contain mathematical symbols because
-    # the operand comes from the previous conversational result.
-
     if any(
         phrase in q
         for phrase in CONTEXTUAL_CALCULATOR_PHRASES
     ):
         return RouteDecision(Route.CALCULATOR, 0.98)
+
+    # =========================================================
+    # ACTION EXECUTION
+    # =========================================================
+    #
+    # Detect requests that require ARIA to actually perform an
+    # action. These must go through:
+    #
+    # Planner
+    #     ↓
+    # ExecutionPlan
+    #     ↓
+    # Executor
+    #     ↓
+    # ActionManager
+    #
+    # Instead of falling through to normal CHAT / LLM response.
+    # =========================================================
+    if (
+        any(
+            re.search(
+                rf"\b{re.escape(verb)}\b",
+                q,
+            )
+            for verb in ACTION_VERBS
+        )
+        and
+        any(
+            re.search(
+                rf"\b{re.escape(target)}\b",
+                q,
+            )
+            for target in ACTION_TARGETS
+        )
+    ):
+        return RouteDecision(
+            Route.PLANNER,
+            0.98,
+        )
 
     # Planning
     if any(word in q for word in (
