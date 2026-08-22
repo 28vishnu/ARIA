@@ -496,6 +496,71 @@ class ReasoningEngine:
         "which would you choose",
     )
 
+    def _derive_active_topic_from_history(self, history: List[Any], current_query: str = "") -> str:
+        """Recover the latest real user topic when external state has no active_topic.
+
+        This is intentionally deterministic: it never treats a contextual follow-up
+        ("why is it important?", "how does it work?", etc.) as a new topic.
+        """
+        if not isinstance(history, list):
+            return ""
+
+        for item in reversed(history):
+            if not isinstance(item, dict):
+                continue
+
+            user_text = self._normalize_topic(
+                item.get("user") or item.get("query") or item.get("content") or ""
+            )
+            if not user_text:
+                continue
+
+            explicit = self._extract_explicit_topic(user_text)
+            if explicit:
+                return explicit
+
+            if self._is_contextual_followup(user_text):
+                continue
+
+            # A normal non-follow-up user turn is a valid topic candidate.
+            if len(user_text.split()) >= 2:
+                return user_text
+
+        return ""
+
+    def _sanitize_response_text(self, value: Any) -> str:
+        """Remove internal transport/formatting artifacts before exposing text."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+
+        # Internal placeholders must never reach the user.
+        text = re.sub(
+            r"\b(?:ARIA)?CODEBLOCKPLACEHOLDER\d*\b",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\b(?:CODE_BLOCK|CODEBLOCK|RESPONSE_PLACEHOLDER)_PLACEHOLDER\d*\b",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Remove internal context annotations if any downstream component leaked them.
+        text = re.sub(
+            r"\s*Context:\s*[^.!?\n]+[.!?]?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Collapse whitespace left behind by removed placeholders.
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
     def _extract_explicit_topic(self, query: str) -> Optional[str]:
         """Extract a newly introduced subject from an explicit question."""
         text = self._normalize_topic(query)
@@ -692,10 +757,19 @@ class ReasoningEngine:
             context.get("query", "")
         )
 
+        # The reasoning engine may be reconstructed for every request, so its
+        # in-process thread dictionary cannot be the only source of truth.
+        # Recover the active topic from the externally supplied conversation
+        # history when active_topic/topic is missing.
+        history_active_topic = self._derive_active_topic_from_history(
+            history, current_query
+        )
+
         external_active_topic = self._normalize_topic(
             conv.get("active_topic")
             or conv.get("topic")
             or context.get("topic")
+            or history_active_topic
         )
 
         external_subject = self._normalize_topic(
@@ -1962,6 +2036,18 @@ Return JSON:
         context["resolved_query"] = self._clean_context_text(resolved_query_raw)
         query = context["resolved_query"]
 
+        # Make the active conversational state explicit for downstream agents/LLM
+        # responders. They must receive both the user's clean query and the
+        # structured thread history; never inject "Context: ..." into the query.
+        context["conversation_state"] = conv_tracking
+        context["active_topic"] = conv_tracking.get("active_topic")
+        context["active_subject"] = conv_tracking.get("active_subject")
+        context["conversation_history"] = conv_tracking.get("recent_history", [])
+        context["active_thread_history"] = (
+            conv_tracking.get("thread", {}).get("history", [])
+        )
+        context["contextual_followup"] = self._is_contextual_followup(query)
+
         reasoning_steps.append(
             "Resolved conversational references"
         )
@@ -2254,6 +2340,7 @@ Return JSON:
         world_conf = 0.90 if world_state else 0.5
 
         response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
+        response_to_store = self._sanitize_response_text(response_to_store)
 
         if (
             next_task
@@ -2265,6 +2352,8 @@ Return JSON:
                 f"\n\nA good next step would be to "
                 f"{getattr(next_task, 'title', 'proceed').lower()}."
             )
+
+        response_to_store = self._sanitize_response_text(response_to_store)
 
         active_thread = conv_tracking.get("thread")
 
@@ -2345,6 +2434,13 @@ Return JSON:
             "strategy": strategy,
             "self_critique": critique_result,
             "final_confidence": final_confidence,
+            "conversation": {
+                "active_thread_id": conv_tracking.get("thread_id"),
+                "active_topic": conv_tracking.get("active_topic"),
+                "active_subject": conv_tracking.get("active_subject"),
+                "contextual_followup": self._is_contextual_followup(query),
+                "history": conv_tracking.get("recent_history", []),
+            },
         }
 
         if feedback["needs_replanning"]:
