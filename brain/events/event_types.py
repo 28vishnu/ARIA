@@ -16,6 +16,7 @@ WORKFLOW_COMPLETED = "workflow_completed"
 WORKFLOW_PAUSED = "workflow_paused"
 WORKFLOW_RESUMED = "workflow_resumed"
 WORKFLOW_CANCELLED = "workflow_cancelled"
+WORKFLOW_FAILED = "workflow_failed"
 
 # ==========================================================
 # Task Events
