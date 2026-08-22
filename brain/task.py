@@ -132,8 +132,12 @@ class Task:
         completed_task_ids: List[str]
     ) -> bool:
         """
-        Returns True when every dependency has completed.
+        Returns True when every dependency has completed
+        and this task is still pending.
         """
+
+        if self.status != "pending":
+            return False
 
         return all(
             dependency in completed_task_ids
@@ -165,9 +169,11 @@ class Task:
     def mark_awaiting_confirmation(self):
         self.status = "awaiting_confirmation"
         self.requires_confirmation = True
+        self.confirmed = False
 
     def confirm(self):
         self.confirmed = True
+        self.requires_confirmation = False
 
         if self.status == "awaiting_confirmation":
             self.status = "pending"
