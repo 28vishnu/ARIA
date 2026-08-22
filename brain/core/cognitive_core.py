@@ -3812,22 +3812,6 @@ Execution Results:
                     setattr(self.working_memory, "cognitive_decision", controller_decision)
 
             # =================================================
-            # 3. RESUME / CANCEL PENDING WORKFLOW
-            # =================================================
-
-            workflow_response = (
-                await self._handle_pending_workflow(
-                    query=query,
-                    session_id=session_id,
-                    base_context=base_context,
-                    state=state,
-                )
-            )
-
-            if workflow_response is not None:
-                return workflow_response
-
-            # =================================================
             # 4. HANDLE PENDING DIRECT ACTION
             # =================================================
 
