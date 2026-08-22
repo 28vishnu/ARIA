@@ -676,6 +676,63 @@ class ReasoningEngine:
 
         return None
 
+    def _extract_explicit_subject_from_question(
+        self,
+        query: str,
+    ) -> Optional[str]:
+        """
+        Detect an explicitly named subject in common question forms.
+
+        Examples:
+            Why is DNA important? -> DNA
+            Why does DNA matter? -> DNA
+            How does DNA replicate? -> DNA
+            How does photosynthesis work? -> photosynthesis
+
+        Pronoun-only questions remain contextual:
+            Why is it important? -> None
+            How does it work? -> None
+        """
+        text = self._normalize_topic(query)
+
+        patterns = (
+            r"^\s*why\s+is\s+(.+?)\s+important\s*\??\s*$",
+            r"^\s*why\s+does\s+(.+?)\s+matter\s*\??\s*$",
+            r"^\s*how\s+does\s+(.+?)\s+(?:replicate|work)\s*\??\s*$",
+            r"^\s*how\s+does\s+(.+?)\s+function\s*\??\s*$",
+            r"^\s*what\s+is\s+the\s+importance\s+of\s+(.+?)\s*\??\s*$",
+        )
+
+        for pattern in patterns:
+            match = re.match(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            if not match:
+                continue
+
+            subject = self._normalize_topic(match.group(1))
+
+            if not subject:
+                continue
+
+            if subject.lower() in {
+                "it",
+                "this",
+                "that",
+                "they",
+                "them",
+                "he",
+                "she",
+            }:
+                return None
+
+            return subject
+
+        return None
+
     def _extract_thread_return_target(self, query: str) -> Optional[str]:
         text = self._normalize_topic(query)
 
@@ -867,6 +924,13 @@ class ReasoningEngine:
         explicit_topic = self._extract_explicit_topic(
             current_query
         )
+
+        explicit_subject = self._extract_explicit_subject_from_question(
+            current_query
+        )
+
+        if explicit_subject and not explicit_topic:
+            explicit_topic = explicit_subject
 
         return_target = self._extract_thread_return_target(
             current_query
