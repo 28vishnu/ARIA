@@ -498,16 +498,32 @@ class ReasoningEngine:
             compared_entities = current_comparison_entities
             active_comparison = True
         else:
-            # Otherwise preserve comparison only from the ACTIVE thread.
             compared_entities = list(
                 dict.fromkeys(
                     compared_entities
                 )
             )
+
             active_comparison = bool(
                 conv.get("active_comparison")
                 and len(compared_entities) >= 2
             )
+
+            # An explicit new topic/question must not inherit
+            # an unrelated previous comparison.
+            current_query_lower = current_query.lower()
+
+            explicit_new_topic = bool(
+                re.match(
+                    r"^\s*(what is|what are|who is|define|explain)\s+.+",
+                    current_query_lower,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+            if explicit_new_topic:
+                active_comparison = False
+                compared_entities = []
 
         active_subject = (
             conv.get("active_subject")
@@ -619,6 +635,55 @@ class ReasoningEngine:
             "compared_entities",
             []
         )
+
+        # ---------------------------------------------------------
+        # EXPLICIT NEW TOPIC OVERRIDES OLD COMPARISON CONTEXT
+        # ---------------------------------------------------------
+        # A new explicit subject must never inherit an unrelated
+        # comparison from an older conversational thread.
+
+        explicit_topic = None
+
+        topic_patterns = [
+            r"^what is\s+(.+?)\??$",
+            r"^who is\s+(.+?)\??$",
+            r"^what are\s+(.+?)\??$",
+            r"^define\s+(.+?)\??$",
+            r"^explain\s+(.+?)\??$",
+        ]
+
+        for pattern in topic_patterns:
+            match = re.match(
+                pattern,
+                clean_query,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                explicit_topic = match.group(1).strip()
+                break
+
+        if explicit_topic:
+            explicit_topic_lower = explicit_topic.lower()
+
+            comparison_text = " ".join(
+                str(item).lower()
+                for item in compared_entities
+            )
+
+            # If the new explicit topic is not one of the
+            # currently compared entities, this is a topic switch.
+            if (
+                active_comparison
+                and explicit_topic_lower not in comparison_text
+            ):
+                logger.info(
+                    "[Reasoning] Explicit topic switch detected: "
+                    "comparison -> %s",
+                    explicit_topic,
+                )
+
+                active_comparison = False
+                compared_entities = []
 
         if (
             active_comparison
