@@ -1142,6 +1142,15 @@ class CognitiveCore:
         last_result = None
         last_error = None
 
+        # ---------------------------------------------------------
+        # Recovery-state defaults
+        # ---------------------------------------------------------
+        # These must exist before the execution loop because an
+        # exception can occur before evaluation/verification are
+        # produced.
+        evaluation = {}
+        verification = {}
+
         max_attempts = max(1, min(int(max_attempts), 3))
         session_id = context.get("session_id", "")
         execution_id = context.get("execution_id", "")
@@ -2657,15 +2666,44 @@ Execution Results:
                 )
 
             if not pending_task_id and hasattr(plan, "tasks"):
+
                 for task in plan.tasks:
-                    if getattr(task, "requires_confirmation", False):
-                        pending_task_id = task.id
-                        pending_action_name = pending_action_name or getattr(
+
+                    task_requires_confirmation = bool(
+                        getattr(
                             task,
-                            "action_name",
+                            "requires_confirmation",
+                            False,
+                        )
+                    )
+
+                    task_is_awaiting_confirmation = (
+                        getattr(
+                            task,
+                            "status",
                             None,
                         )
+                        == "awaiting_confirmation"
+                    )
+
+                    if (
+                        task_requires_confirmation
+                        or task_is_awaiting_confirmation
+                    ):
+
+                        pending_task_id = task.id
+
+                        pending_action_name = (
+                            pending_action_name
+                            or getattr(
+                                task,
+                                "action_name",
+                                None,
+                            )
+                        )
+
                         if not pending_action_params:
+
                             pending_action_params = dict(
                                 getattr(
                                     task,
@@ -2674,47 +2712,16 @@ Execution Results:
                                 )
                                 or {}
                             )
+
+                        logger.info(
+                            "[CognitiveCore] Identified "
+                            "confirmation task from plan: "
+                            "task_id=%s action=%s",
+                            pending_task_id,
+                            pending_action_name,
+                        )
+
                         break
-
-            if not pending_task_id:
-
-                awaiting_task = next(
-                    (
-                        task
-                        for task in plan.tasks
-                        if getattr(
-                            task,
-                            "status",
-                            None,
-                        )
-                        == "awaiting_confirmation"
-                    ),
-                    None,
-                )
-
-                if awaiting_task is not None:
-
-                    pending_task_id = awaiting_task.id
-
-                    pending_action_name = (
-                        pending_action_name
-                        or getattr(
-                            awaiting_task,
-                            "action_name",
-                            None,
-                        )
-                    )
-
-                    if not pending_action_params:
-
-                        pending_action_params = dict(
-                            getattr(
-                                awaiting_task,
-                                "params",
-                                {},
-                            )
-                            or {}
-                        )
 
             if not pending_task_id:
 
@@ -2757,6 +2764,7 @@ Execution Results:
 
             if hasattr(self.state_manager, "set_pending_workflow"):
                 try:
+
                     self.state_manager.set_pending_workflow(
                         session_id=session_id,
                         plan=plan,
@@ -2766,18 +2774,49 @@ Execution Results:
                         failed_tasks=failed,
                         skipped_tasks=skipped,
                     )
+
+                    logger.info(
+                        "[CognitiveCore] Pending workflow persisted: "
+                        "task_id=%s confirmation=%s paused=%s",
+                        pending_task_id,
+                        True,
+                        True,
+                    )
+
                 except TypeError:
-                    state = self.state_manager.get_state(session_id) or {}
+                    state = self.state_manager.get_state(
+                        session_id
+                    ) or {}
+
                     state["workflow_active"] = True
                     state["workflow_paused"] = True
                     state["pending_workflow_confirmation"] = True
                     state["pending_workflow"] = plan
                     state["pending_workflow_task_id"] = pending_task_id
-                    state["workflow_task_outputs"] = task_outputs or {}
-                    state["workflow_completed_tasks"] = completed or []
-                    state["workflow_failed_tasks"] = failed or []
-                    state["workflow_skipped_tasks"] = skipped or []
-                    self.state_manager.update_state(session_id, **state)
+                    state["workflow_task_outputs"] = (
+                        task_outputs or {}
+                    )
+                    state["workflow_completed_tasks"] = (
+                        completed or []
+                    )
+                    state["workflow_failed_tasks"] = (
+                        failed or []
+                    )
+                    state["workflow_skipped_tasks"] = (
+                        skipped or []
+                    )
+
+                    self.state_manager.update_state(
+                        session_id,
+                        **state,
+                    )
+
+                    logger.info(
+                        "[CognitiveCore] Pending workflow state "
+                        "persisted through fallback: "
+                        "task_id=%s",
+                        pending_task_id,
+                    )
 
             return SystemResponse(
                 success=True,
