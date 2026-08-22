@@ -4,9 +4,8 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger("aria")
 
-
 @dataclass
-    class Decision:
+class Decision:
     action: str
     reasoning_mode: str
     use_memory: bool = False
