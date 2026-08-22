@@ -2124,6 +2124,59 @@ Return JSON:
 
         context["intent"] = intent
 
+        intent_name = (
+            intent.intent_type
+            if hasattr(intent, "intent_type")
+            else str(intent)
+        ).lower()
+        intent_confidence = getattr(intent, "confidence", 1.0)
+
+        # -----------------------------------------------------
+        # EXECUTABLE ACTION
+        # -----------------------------------------------------
+        if (
+            intent_name in ("action", "tool")
+            or bool(
+                getattr(intent, "data", None)
+                and intent.data.get("action_name")
+            )
+        ):
+
+            intent_data = getattr(
+                intent,
+                "data",
+                {}
+            ) or {}
+
+            action_name = intent_data.get(
+                "action_name"
+            )
+
+            action_params = intent_data.get(
+                "action_params",
+                {}
+            ) or {}
+
+            task_plan = context.get("task_plan", [])
+            task_workflows = context.get("task_workflows", {})
+            workflow = context.get("workflow")
+
+            return ReasoningResult(
+                primary_action="action",
+                confidence=intent_confidence,
+                reasoning="Executable system action requested.",
+                metadata={
+                    "goal": "action_execution",
+                    "execution_plan": ["action"],
+                    "response_depth": "concise",
+                    "task_plan": task_plan,
+                    "task_workflows": task_workflows,
+                },
+                action_name=action_name,
+                action_params=action_params,
+                workflow=workflow
+            )
+
         logger.info(
             "[ReasoningEngine] Intent=%s confidence=%.2f",
             intent.intent_type,
