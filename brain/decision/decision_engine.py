@@ -6,7 +6,7 @@ logger = logging.getLogger("aria")
 
 
 @dataclass
-class Decision:
+    class Decision:
     action: str
     reasoning_mode: str
     use_memory: bool = False
@@ -106,14 +106,31 @@ class DecisionEngine:
                 decision.selected_agents.append("memory")
 
             elif "coding" in route:
+                decision.action = "coding"
                 decision.use_executor = True
                 decision.reasoning_mode = "coding"
-                decision.selected_agents.append("coding")
+
+                if "coding" not in decision.selected_agents:
+                    decision.selected_agents.append("coding")
 
             elif "planner" in route:
+                # =========================================================
+                # PLANNER / EXECUTION ROUTE
+                # =========================================================
+                #
+                # Route.PLANNER must explicitly set action="planner".
+                #
+                # CognitiveCore uses decision.action to determine whether
+                # the Planner → Executor workflow should be entered.
+                # =========================================================
+
+                decision.action = "planner"
                 decision.use_planner = True
+                decision.use_executor = True
                 decision.reasoning_mode = "planning"
-                decision.selected_agents.append("planning")
+
+                if "planning" not in decision.selected_agents:
+                    decision.selected_agents.append("planning")
 
             elif "research" in route:
                 decision.use_world_model = True
