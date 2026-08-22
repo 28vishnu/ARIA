@@ -146,6 +146,67 @@ class DecisionEngine:
                 decision.reasoning_mode = "vision"
                 decision.selected_agents.append("vision")
 
+        # =========================================================
+        # DETERMINISTIC ACTION INTENT OVERRIDE
+        # =========================================================
+        # The intent system may already have identified an exact
+        # executable action such as:
+        #     create_file
+        #     read_file
+        #     delete_file
+        #     notification_action
+        # These are executable operations and MUST NOT fall through
+        # to chat/document/LLM reasoning.
+        # The action intent takes priority over probabilistic
+        # reasoning classification.
+        # =========================================================
+        intent_data = getattr(intent, "data", None)
+        if isinstance(intent_data, dict):
+
+            action_name = intent_data.get(
+                "action_name"
+            )
+
+            if isinstance(action_name, str):
+
+                action_name = action_name.strip().lower()
+
+                EXECUTABLE_ACTIONS = {
+                    "create_file",
+                    "read_file",
+                    "write_file",
+                    "delete_file",
+                    "remove_file",
+                    "rename_file",
+                    "move_file",
+                    "copy_file",
+                    "notification_action",
+                    "send_notification",
+                }
+
+                if action_name in EXECUTABLE_ACTIONS:
+
+                    decision.action = "planner"
+                    decision.use_planner = True
+                    decision.use_executor = True
+                    decision.reasoning_mode = "action_execution"
+
+                    if "planning" not in decision.selected_agents:
+                        decision.selected_agents.append(
+                            "planning"
+                        )
+
+                    decision.confidence = max(
+                        decision.confidence,
+                        0.99,
+                    )
+
+                    logger.info(
+                        "[DecisionEngine] Deterministic executable "
+                        "action detected: %s → planner/executor",
+                        action_name,
+                    )
+
         # ---------------------------------------------------------
         # DETERMINISTIC CAPABILITY OVERRIDE
         # ---------------------------------------------------------
