@@ -19,15 +19,21 @@ class AgentCoordinator:
 
         # Maps cognitive skills/tools to registered specialist agents.
         self.skill_agent_map = {
+            # Canonical capabilities
+            "chat": "chat",
             "coding": "coding",
             "research": "research",
             "planning": "planning",
             "writing": "writing",
             "math": "math",
-            "memory_engine": "memory",
-            "document_intelligence": "document",
+            "memory": "memory",
+            "document": "document",
             "reasoning": "reasoning",
             "execution": "execution",
+
+            # Compatibility aliases
+            "memory_engine": "memory",
+            "document_intelligence": "document",
         }
 
         # Stores previous agent executions
@@ -38,16 +44,16 @@ class AgentCoordinator:
         decision,
     ) -> List[str]:
         """
-        Convert the canonical Decision object into concrete
-        specialist agents.
+        Resolve the final specialist execution list.
 
-        New architecture:
-            Decision.selected_skills
-            Decision.selected_tools
-                    ↓
-              specialist agents
-
-        Legacy fields are retained as fallbacks.
+        Phase 2 rules:
+        1. Prefer explicitly selected agents.
+        2. Add selected skills.
+        3. Add selected tools.
+        4. Add required capabilities.
+        5. Normalize aliases.
+        6. Deduplicate.
+        7. Preserve deterministic ordering.
         """
 
         if decision is None:
@@ -55,76 +61,99 @@ class AgentCoordinator:
 
         execution_plan = []
 
+        def add_agent(value):
+            if not value:
+                return
+
+            normalized = self.skill_agent_map.get(
+                str(value).strip().lower(),
+                str(value).strip().lower(),
+            )
+
+            if normalized and normalized not in execution_plan:
+                execution_plan.append(normalized)
+
         # -----------------------------------------------------
-        # Preferred Phase-1 fields
+        # 1. Explicit agents
         # -----------------------------------------------------
 
-        selected_skills = getattr(
+        for agent in getattr(
+            decision,
+            "selected_agents",
+            [],
+        ) or []:
+            add_agent(agent)
+
+        # -----------------------------------------------------
+        # 2. Selected skills
+        # -----------------------------------------------------
+
+        for skill in getattr(
             decision,
             "selected_skills",
             [],
-        )
+        ) or []:
+            add_agent(skill)
 
-        selected_tools = getattr(
+        # -----------------------------------------------------
+        # 3. Selected tools
+        # -----------------------------------------------------
+
+        for tool in getattr(
             decision,
             "selected_tools",
             [],
-        )
-
-        for skill in selected_skills or []:
-            agent_name = self.skill_agent_map.get(
-                skill,
-                skill,
-            )
-
-            if agent_name:
-                execution_plan.append(
-                    agent_name
-                )
-
-        # Tools can explicitly request specialist execution.
-        for tool in selected_tools or []:
-            agent_name = self.skill_agent_map.get(
-                tool,
-                tool,
-            )
-
-            if agent_name:
-                execution_plan.append(
-                    agent_name
-                )
+        ) or []:
+            add_agent(tool)
 
         # -----------------------------------------------------
-        # Legacy compatibility
+        # 4. Required tools
         # -----------------------------------------------------
 
-        if not execution_plan:
+        for tool in getattr(
+            decision,
+            "required_tools",
+            [],
+        ) or []:
+            add_agent(tool)
 
-            required_tools = getattr(
+        # -----------------------------------------------------
+        # 5. Required capabilities
+        # -----------------------------------------------------
+
+        requirements = {
+            "memory": getattr(
                 decision,
-                "required_tools",
-                [],
-            )
-
-            selected_agents = getattr(
+                "requires_memory",
+                False,
+            ),
+            "document": getattr(
                 decision,
-                "selected_agents",
-                [],
-            )
+                "requires_documents",
+                False,
+            ),
+            "research": getattr(
+                decision,
+                "requires_web",
+                False,
+            ),
+            "planning": getattr(
+                decision,
+                "requires_planning",
+                False,
+            ),
+        }
 
-            execution_plan.extend(
-                required_tools or []
-            )
-
-            execution_plan.extend(
-                selected_agents or []
-            )
+        for capability, required in requirements.items():
+            if required:
+                add_agent(capability)
 
         # -----------------------------------------------------
-        # Normalize + deduplicate
+        # 6. Validate
         # -----------------------------------------------------
 
         valid_agents = {
+            "chat",
             "coding",
             "research",
             "planning",
@@ -142,11 +171,31 @@ class AgentCoordinator:
             if agent in valid_agents
         ]
 
-        return list(
-            dict.fromkeys(
-                execution_plan
+        # -----------------------------------------------------
+        # 7. Deterministic order
+        # -----------------------------------------------------
+
+        priority = {
+            "memory": 10,
+            "document": 20,
+            "research": 30,
+            "coding": 40,
+            "planning": 50,
+            "writing": 60,
+            "math": 70,
+            "reasoning": 80,
+            "execution": 90,
+            "chat": 100,
+        }
+
+        execution_plan.sort(
+            key=lambda agent: priority.get(
+                agent,
+                999,
             )
         )
+
+        return execution_plan
 
     def score_result(
         self,
@@ -345,13 +394,7 @@ class AgentCoordinator:
 
         outputs = []
 
-        merged = {
-            "planning": None,
-            "research": None,
-            "coding": None,
-            "writing": None,
-            "math": None,
-        }
+        merged = {}
 
         logger.info(
             "[Coordinator] %d agents scheduled.",
@@ -489,18 +532,59 @@ class AgentCoordinator:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Legacy compatibility wrapper mapping to coordinate().
+        Compatibility wrapper for direct agent execution.
+
+        Accepts the deterministic Phase 2 agent list produced
+        by ReasoningEngine.
         """
+
         class DummyDecision:
             def __init__(self, ags):
-                self.selected_agents = ags
-                self.required_tools = ags
+                self.selected_agents = list(ags or [])
+                self.selected_skills = []
+                self.selected_tools = []
+                self.required_tools = []
+                self.requires_memory = (
+                    "memory" in self.selected_agents
+                )
+                self.requires_documents = (
+                    "document" in self.selected_agents
+                )
+                self.requires_web = (
+                    "research" in self.selected_agents
+                )
+                self.requires_planning = (
+                    "planning" in self.selected_agents
+                )
 
         decision = DummyDecision(agents)
-        coord_res = await self.coordinate(decision, query, context)
+
+        coord_res = await self.coordinate(
+            decision,
+            query,
+            context,
+        )
+
         return {
-            "outputs": coord_res["outputs"],
-            "shared_context": coord_res["shared_context"],
+            "success": coord_res.get(
+                "success",
+                True,
+            ),
+            "outputs": coord_res.get(
+                "outputs",
+                [],
+            ),
+            "results": coord_res.get(
+                "results",
+                {},
+            ),
+            "shared_context": coord_res.get(
+                "shared_context",
+                {},
+            ),
+            "consensus": coord_res.get(
+                "consensus",
+            ),
         }
 
     async def prepare(
