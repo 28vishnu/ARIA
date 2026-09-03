@@ -2912,6 +2912,46 @@ Execution Results:
                 last_success=True,
             )
 
+        # ---------------------------------------------------------
+        # PHASE 4 — ADVANCE ACTIVE AUTONOMOUS GOAL
+        # ---------------------------------------------------------
+        if self.goal_manager:
+            try:
+                active_goal = self.goal_manager.current_goal()
+
+                if active_goal:
+                    next_subgoal = self.goal_manager.next_subgoal(
+                        active_goal
+                    )
+
+                    if next_subgoal:
+                        completed_subgoal = (
+                            self.goal_manager.complete_subgoal(
+                                active_goal,
+                                next_subgoal.title,
+                            )
+                        )
+
+                        if completed_subgoal:
+                            logger.info(
+                                "[CognitiveCore] Goal subgoal completed: "
+                                "%s | goal=%s | progress=%.1f%%",
+                                completed_subgoal.title,
+                                active_goal.title,
+                                active_goal.progress,
+                            )
+
+                    if active_goal.status == "completed":
+                        logger.info(
+                            "[CognitiveCore] Autonomous goal completed: %s",
+                            active_goal.title,
+                        )
+
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] GoalManager workflow advancement failed."
+                )
+
         logger.info(
             "[CognitiveCore] Workflow completed successfully."
         )
