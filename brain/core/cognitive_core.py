@@ -1769,7 +1769,7 @@ class CognitiveCore:
                     error="The executor returned an invalid workflow result.",
                 )
 
-            return self._process_workflow_result(
+            return await self._process_workflow_result(
                 session_id=session_id,
                 plan=recovery.get(
                     "plan",
@@ -1803,7 +1803,7 @@ class CognitiveCore:
                             and result.get("requires_confirmation")
                         )
                     ):
-                        return self._process_workflow_result(
+                        return await self._process_workflow_result(
                             session_id=session_id,
                             plan=recovery.get(
                                 "plan",
@@ -2598,7 +2598,7 @@ Execution Results:
                 error=str(exc),
             )
 
-        return self._process_workflow_result(
+        return await self._process_workflow_result(
             session_id=session_id,
             plan=pending_plan,
             exec_result=exec_result,
@@ -2608,7 +2608,7 @@ Execution Results:
     # WORKFLOW RESULT PROCESSING
     # =========================================================
 
-    def _process_workflow_result(
+    async def _process_workflow_result(
         self,
         *,
         session_id: str,
@@ -2891,6 +2891,72 @@ Execution Results:
                         pending_task_id,
                     )
 
+            # ---------------------------------------------------------
+            # PHASE 4 — DURABLE SUSPENDED WORKFLOW
+            # ---------------------------------------------------------
+            if self.world_model:
+                try:
+                    workflow_state = (
+                        self.world_model.get_workflow_state()
+                    )
+
+                    if not isinstance(workflow_state, dict):
+                        workflow_state = {}
+
+                    workflow_state.update({
+                        "active": True,
+                        "paused": True,
+                        "awaiting_confirmation": True,
+                        "pending_task_id": pending_task_id,
+                        "pending_action_name": pending_action_name,
+                        "pending_action_params": (
+                            pending_action_params or {}
+                        ),
+                        "task_outputs": task_outputs or {},
+                        "completed_tasks": completed or [],
+                        "failed_tasks": failed or [],
+                        "skipped_tasks": skipped or [],
+                        "goal": (
+                            getattr(
+                                plan,
+                                "goal",
+                                None,
+                            )
+                            or getattr(
+                                plan,
+                                "objective",
+                                None,
+                            )
+                        ),
+                    })
+
+                    # Keep the plan in memory for the current process.
+                    # Durable recovery will use the stored execution
+                    # information after a restart.
+                    workflow_state["execution"] = {
+                        "status": "awaiting_confirmation",
+                        "query": workflow_state.get(
+                            "execution",
+                            {}
+                        ).get("query", ""),
+                        "updated_at": time.time(),
+                    }
+
+                    await self.world_model.save()
+
+                    logger.info(
+                        "[CognitiveCore] Durable suspended workflow "
+                        "saved: task_id=%s",
+                        pending_task_id,
+                    )
+
+                except Exception as exc:
+                    logger.warning(
+                        "[CognitiveCore] Durable suspended workflow "
+                        "persistence skipped: %s",
+                        exc,
+                    )
+
             return SystemResponse(
                 success=True,
                 confidence=getattr(
@@ -2984,6 +3050,44 @@ Execution Results:
                 last_action="planner_executor",
                 last_success=True,
             )
+
+        # ---------------------------------------------------------
+        # PHASE 4 — CLEAR DURABLE WORKFLOW
+        # ---------------------------------------------------------
+        if self.world_model:
+            try:
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    workflow_state.update({
+                        "active": False,
+                        "paused": False,
+                        "awaiting_confirmation": False,
+                        "pending_task_id": None,
+                        "pending_action_name": None,
+                        "pending_action_params": {},
+                        "task_outputs": task_outputs,
+                        "completed_tasks": completed,
+                        "failed_tasks": failed,
+                        "skipped_tasks": skipped,
+                        "completed_at": time.time(),
+                    })
+
+                    await self.world_model.save()
+
+                    logger.info(
+                        "[CognitiveCore] Durable workflow marked "
+                        "completed."
+                    )
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Durable workflow completion "
+                    "persistence skipped: %s",
+                    exc,
+                )
 
         # ---------------------------------------------------------
         # PHASE 4 — ADVANCE ACTIVE AUTONOMOUS GOAL
