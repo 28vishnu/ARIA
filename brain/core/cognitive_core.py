@@ -2469,6 +2469,134 @@ Execution Results:
             )
         )
 
+        # ---------------------------------------------------------
+        # PHASE 4 — DURABLE WORKFLOW RECOVERY
+        # ---------------------------------------------------------
+        # StateManager is runtime-only. If ARIA restarted, recover
+        # the original query from WorldModel and regenerate the plan.
+        if pending_plan is None and self.world_model:
+            try:
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    durable_active = bool(
+                        workflow_state.get("active")
+                    )
+                    durable_paused = bool(
+                        workflow_state.get("paused")
+                    )
+                    durable_confirmation = bool(
+                        workflow_state.get(
+                            "awaiting_confirmation"
+                        )
+                    )
+
+                    if (
+                        durable_active
+                        and durable_paused
+                        and durable_confirmation
+                    ):
+                        execution = workflow_state.get(
+                            "execution",
+                            {},
+                        )
+
+                        if not isinstance(execution, dict):
+                            execution = {}
+
+                        recovery_query = str(
+                            execution.get("query")
+                            or workflow_state.get("goal")
+                            or ""
+                        ).strip()
+
+                        durable_task_id = workflow_state.get(
+                            "pending_task_id"
+                        )
+
+                        if recovery_query:
+                            logger.info(
+                                "[CognitiveCore] Recovering durable "
+                                "workflow after restart: query=%r task=%s",
+                                recovery_query,
+                                durable_task_id,
+                            )
+
+                            recovery_context = dict(
+                                base_context or {}
+                            )
+
+                            recovery_context.update({
+                                "session_id": session_id,
+                                "user_id": recovery_context.get(
+                                    "user_id",
+                                    session_id,
+                                ),
+                                "state": state,
+                                "workflow_recovery": True,
+                                "durable_workflow": workflow_state,
+                            })
+
+                            if self.planner and hasattr(
+                                self.planner,
+                                "create_plan",
+                            ):
+                                regenerated_plan = (
+                                    await self.planner.create_plan(
+                                        recovery_query,
+                                        recovery_context,
+                                    )
+                                )
+
+                                if regenerated_plan:
+                                    pending_plan = regenerated_plan
+
+                                    self.state_manager.set_pending_workflow(
+                                        session_id=session_id,
+                                        plan=regenerated_plan,
+                                        task_id=durable_task_id,
+                                        task_outputs=(
+                                            workflow_state.get(
+                                                "task_outputs",
+                                                {},
+                                            )
+                                            or {}
+                                        ),
+                                        completed_tasks=(
+                                            workflow_state.get(
+                                                "completed_tasks",
+                                                [],
+                                            )
+                                            or []
+                                        ),
+                                        failed_tasks=(
+                                            workflow_state.get(
+                                                "failed_tasks",
+                                                [],
+                                            )
+                                            or []
+                                        ),
+                                        skipped_tasks=(
+                                            workflow_state.get(
+                                                "skipped_tasks",
+                                                [],
+                                            )
+                                            or []
+                                        ),
+                                    )
+
+                                    logger.info(
+                                        "[CognitiveCore] Durable workflow "
+                                        "plan regenerated successfully."
+                                    )
+
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] Durable workflow recovery failed."
+                )
+
         has_pending_workflow = bool(pending_plan)
         is_paused = bool(state.get("workflow_paused"))
         awaiting_confirmation = bool(
@@ -2916,31 +3044,33 @@ Execution Results:
                         "completed_tasks": completed or [],
                         "failed_tasks": failed or [],
                         "skipped_tasks": skipped or [],
-                        "goal": (
+                        "goal": str(
                             getattr(
                                 plan,
                                 "goal",
-                                None,
+                                "",
                             )
                             or getattr(
                                 plan,
                                 "objective",
-                                None,
+                                "",
                             )
                         ),
                     })
 
-                    # Keep the plan in memory for the current process.
-                    # Durable recovery will use the stored execution
-                    # information after a restart.
-                    workflow_state["execution"] = {
+                    execution = workflow_state.get(
+                        "execution"
+                    )
+
+                    if not isinstance(execution, dict):
+                        execution = {}
+
+                    execution.update({
                         "status": "awaiting_confirmation",
-                        "query": workflow_state.get(
-                            "execution",
-                            {}
-                        ).get("query", ""),
                         "updated_at": time.time(),
-                    }
+                    })
+
+                    workflow_state["execution"] = execution
 
                     await self.world_model.save()
 
