@@ -224,6 +224,7 @@ class CognitiveCore:
         allowed_statuses = {
             "running",
             "executed",
+            "awaiting_confirmation",
             "verified_success",
             "verified_failure",
             "completed",
@@ -267,7 +268,7 @@ class CognitiveCore:
             ),
         }
 
-    def _persist_execution_state(
+    async def _persist_execution_state(
         self,
         session_id: str,
         execution_id: str = "",
@@ -283,74 +284,146 @@ class CognitiveCore:
         """
         Persist resumable execution state.
 
-        This is deliberately best-effort:
-        state persistence must never crash the main cognitive pipeline.
+        Runtime StateManager keeps the fast in-process copy.
+        WorldModel provides durable persistence across restarts.
         """
 
-        if not self.state_manager or not session_id:
-            return
+        state_payload = {
+            "execution_id": execution_id,
+            "status": status,
+            "query": query,
+            "plan": plan,
+            "result": result,
+            "verification": verification or {},
+            "attempt": attempt,
+            "error": error,
+            "updated_at": time.time(),
+        }
 
-        try:
-            state_payload = {
-                "execution": {
-                    "execution_id": execution_id,
-                    "status": status,
-                    "query": query,
-                    "plan": plan,
-                    "result": result,
-                    "verification": verification or {},
-                    "attempt": attempt,
-                    "error": error,
-                    "updated_at": time.time(),
-                }
-            }
+        # ---------------------------------------------------------
+        # 1. FAST RUNTIME STATE
+        # ---------------------------------------------------------
+        if self.state_manager and session_id:
+            try:
+                self.state_manager.update_state(
+                    session_id,
+                    execution={
+                        **state_payload,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Runtime execution state "
+                    "persistence skipped: %s",
+                    exc,
+                )
 
-            self.state_manager.update_state(
-                session_id,
-                **state_payload,
-            )
+        # ---------------------------------------------------------
+        # 2. DURABLE WORLD MODEL STATE
+        # ---------------------------------------------------------
+        if self.world_model:
+            try:
+                await self.world_model.update_workflow_state(
+                    goal=query,
+                    progress=(
+                        100
+                        if status in {
+                            "completed",
+                            "verified_success",
+                        }
+                        else 0
+                    ),
+                )
 
-            logger.debug(
-                "[CognitiveCore] Execution state persisted: "
-                "session=%s execution_id=%s status=%s attempt=%s",
-                session_id,
-                execution_id,
-                status,
-                attempt,
-            )
+                # Store the complete resumable execution payload
+                # in the WorldModel workflow state.
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
 
-        except Exception as e:
-            logger.warning(
-                "[CognitiveCore] Execution state persistence skipped: %s",
-                e,
-            )
+                if isinstance(workflow_state, dict):
+                    workflow_state[
+                        "execution"
+                    ] = state_payload
 
-    def _get_persisted_execution_state(
+                    await self.world_model.save()
+
+                logger.debug(
+                    "[CognitiveCore] Durable workflow state "
+                    "persisted: execution_id=%s status=%s",
+                    execution_id,
+                    status,
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Durable workflow persistence "
+                    "skipped: %s",
+                    exc,
+                )
+
+    async def _get_persisted_execution_state(
         self,
         session_id: str,
     ) -> Dict[str, Any]:
         """
-        Retrieve the last persisted execution state.
+        Retrieve resumable execution state.
 
-        Invalid or missing state is treated as empty state.
+        Runtime state is checked first because it is fastest.
+        WorldModel is used as the durable fallback.
         """
 
-        if not self.state_manager or not session_id:
-            return {}
+        # ---------------------------------------------------------
+        # 1. FAST RUNTIME STATE
+        # ---------------------------------------------------------
+        if self.state_manager and session_id:
+            try:
+                state = (
+                    self.state_manager.get_state(
+                        session_id
+                    )
+                    or {}
+                )
 
-        try:
-            state = self.state_manager.get_state(session_id) or {}
+                execution = state.get(
+                    "execution",
+                    {},
+                )
 
-            execution = state.get("execution", {})
+                if isinstance(execution, dict) and execution:
+                    return execution
 
-            if isinstance(execution, dict):
-                return execution
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Runtime execution "
+                    "state recovery skipped: %s",
+                    exc,
+                )
 
-        except Exception as e:
-            logger.warning(
-                "[CognitiveCore] Could not restore execution state: %s",
-                e,
-            )
+        # ---------------------------------------------------------
+        # 2. DURABLE WORLD MODEL FALLBACK
+        # ---------------------------------------------------------
+        if self.world_model:
+            try:
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    execution = workflow_state.get(
+                        "execution",
+                        {},
+                    )
+
+                    if isinstance(execution, dict):
+                        return execution
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Durable workflow recovery "
+                    "skipped: %s",
+                    exc,
+                )
 
         return {}
 
@@ -1168,7 +1241,7 @@ class CognitiveCore:
                 if not current_plan:
                     raise ValueError("No executable plan was produced.")
 
-                self._persist_execution_state(
+                await self._persist_execution_state(
                     session_id,
                     execution_id=execution_id,
                     status="running",
@@ -1207,7 +1280,7 @@ class CognitiveCore:
                             attempt,
                         )
 
-                        self._persist_execution_state(
+                        await self._persist_execution_state(
                             session_id,
                             execution_id=execution_id,
                             status="awaiting_confirmation",
@@ -1236,7 +1309,7 @@ class CognitiveCore:
                             "requires_confirmation": True,
                         }
 
-                self._persist_execution_state(
+                await self._persist_execution_state(
                     session_id,
                     execution_id=execution_id,
                     status="executed",
@@ -1296,7 +1369,7 @@ class CognitiveCore:
                     )
                 )
 
-                self._persist_execution_state(
+                await self._persist_execution_state(
                     session_id,
                     execution_id=execution_id,
                     status=verification.get(
@@ -1753,7 +1826,7 @@ class CognitiveCore:
                             "execution was not verified: %s",
                             recovery.get("error"),
                         )
-                        self._persist_execution_state(
+                        await self._persist_execution_state(
                             session_id,
                             execution_id=execution_id,
                             status="failed",
@@ -1782,7 +1855,7 @@ class CognitiveCore:
                             operation=resolved_query,
                         )
 
-                        self._persist_execution_state(
+                        await self._persist_execution_state(
                             session_id,
                             execution_id=execution_id,
                             status="completed",
@@ -3425,9 +3498,7 @@ Execution Results:
                 )
 
             persisted_execution = self._validate_persisted_execution(
-                state.get("execution", {})
-                if isinstance(state, dict)
-                else {}
+                await self._get_persisted_execution_state(session_id)
             )
 
             if persisted_execution:
@@ -4221,7 +4292,7 @@ Execution Results:
             )
 
             try:
-                self._persist_execution_state(
+                await self._persist_execution_state(
                     session_id,
                     execution_id=locals().get(
                         "execution_id",
