@@ -3826,6 +3826,7 @@ Execution Results:
                     logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
 
             completed_goal = None
+            goal_context = None
 
             if self.goal_manager:
                 try:
@@ -3837,8 +3838,33 @@ Execution Results:
 
                     if active_before and active_after is None:
                         completed_goal = active_before
+
+                    active_goal = self.goal_manager.current_goal()
+
+                    if active_goal:
+                        goal_context = self.goal_manager.get_goal_context(
+                            active_goal.id
+                        )
+
+                        context["goal"] = goal_context
+                        pre_ctx["goal"] = goal_context
+
+                        logger.info(
+                            "[CognitiveCore] Active goal: %s | progress=%.1f%% | next=%s",
+                            active_goal.title,
+                            active_goal.progress,
+                            goal_context.get("next_subgoal")
+                            if goal_context
+                            else None,
+                        )
+
                 except Exception:
-                    logger.exception("[CognitiveCore] GoalManager observation failed.")
+                    logger.exception(
+                        "[CognitiveCore] GoalManager observation failed."
+                    )
+
+            if goal_context:
+                context["autonomous_goal"] = goal_context
 
             if self.project_manager:
                 try:
