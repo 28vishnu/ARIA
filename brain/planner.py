@@ -28,7 +28,7 @@ GREETINGS = {
 
 class Planner:
     """
-    ARIA Phase-3 planner.
+    ARIA Phase-4 autonomous planner.
 
     Produces plans containing either:
 
@@ -924,11 +924,47 @@ Then return the JSON only.
                 tasks=tasks,
                 confidence=confidence,
                 metadata={
-                    "phase": 3,
+                    "phase": 4,
                     "valid": True,
                     "supports_actions": True,
                     "supports_dependencies": True,
                     "supports_result_references": True,
+
+                    # ---------------------------------------------------------
+                    # PHASE 4 — AUTONOMOUS GOAL OWNERSHIP
+                    # ---------------------------------------------------------
+                    # Identifies which autonomous goal owns this workflow.
+                    # CognitiveCore uses this to prevent unrelated workflows
+                    # from advancing the active goal.
+                    "autonomous_goal_id": str(
+                        (
+                            context.get("autonomous_goal")
+                            or context.get("goal")
+                            or {}
+                        ).get("goal_id", "")
+                        if isinstance(
+                            context.get("autonomous_goal")
+                            or context.get("goal")
+                            or {},
+                            dict,
+                        )
+                        else ""
+                    ),
+
+                    "autonomous_goal_title": str(
+                        (
+                            context.get("autonomous_goal")
+                            or context.get("goal")
+                            or {}
+                        ).get("title", "")
+                        if isinstance(
+                            context.get("autonomous_goal")
+                            or context.get("goal")
+                            or {},
+                            dict,
+                        )
+                        else ""
+                    ),
                 },
             )
 
@@ -946,7 +982,7 @@ Then return the JSON only.
                     tasks=[],
                     confidence=0.0,
                     metadata={
-                        "phase": 3,
+                        "phase": 4,
                         "valid": False,
                         "reason": "invalid_dependencies",
                     },
