@@ -42,7 +42,7 @@ class IntentDecision:
 
 class Executor:
     """
-    ARIA Phase-3 hybrid workflow executor.
+    ARIA Phase-4 autonomous workflow executor.
 
     Executes:
     - skills through SkillManager
