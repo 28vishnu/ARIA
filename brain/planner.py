@@ -282,6 +282,23 @@ Conversation context:{context.get("conversation", {})}
 Capability availability:{context.get("capabilities", {})}
 
 =============================================================
+ACTIVE AUTONOMOUS GOAL
+=============================================================
+
+{context.get("autonomous_goal") or context.get("goal") or "No active autonomous goal."}
+
+When an autonomous goal is present:
+
+1. Treat the active goal as the larger objective.
+2. Prioritize its current next_subgoal when planning.
+3. Do not mark the entire goal complete unless the current workflow
+   actually accomplishes the relevant goal/subgoal.
+4. Preserve dependencies between tasks.
+5. If the current request advances the active goal, create the smallest
+   executable workflow that advances it.
+6. If there is no active autonomous goal, plan normally from the user's goal.
+
+=============================================================
 USER GOAL
 ============================================================={goal}
 
