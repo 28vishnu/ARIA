@@ -284,10 +284,15 @@ class CognitiveCore:
         """
         Persist resumable execution state.
 
-        Runtime StateManager keeps the fast in-process copy.
-        WorldModel provides durable persistence across restarts.
+        StateManager keeps the complete runtime execution state.
+        WorldModel stores only BSON-safe durable metadata so execution
+        state survives application restarts without serializing planner
+        or executor objects directly.
         """
 
+        # ---------------------------------------------------------
+        # 1. COMPLETE RUNTIME STATE
+        # ---------------------------------------------------------
         state_payload = {
             "execution_id": execution_id,
             "status": status,
@@ -300,9 +305,6 @@ class CognitiveCore:
             "updated_at": time.time(),
         }
 
-        # ---------------------------------------------------------
-        # 1. FAST RUNTIME STATE
-        # ---------------------------------------------------------
         if self.state_manager and session_id:
             try:
                 self.state_manager.update_state(
@@ -335,16 +337,70 @@ class CognitiveCore:
                     ),
                 )
 
-                # Store the complete resumable execution payload
-                # in the WorldModel workflow state.
                 workflow_state = (
                     self.world_model.get_workflow_state()
                 )
 
                 if isinstance(workflow_state, dict):
+                    # IMPORTANT:
+                    # Do NOT persist raw Plan / Executor objects.
+                    # Store only simple BSON-safe recovery metadata.
+                    durable_execution = {
+                        "execution_id": str(
+                            execution_id or ""
+                        ),
+                        "status": str(status or ""),
+                        "query": str(query or ""),
+                        "attempt": int(attempt or 0),
+                        "error": (
+                            str(error)
+                            if error is not None
+                            else None
+                        ),
+                        "updated_at": time.time(),
+                    }
+
+                    if isinstance(verification, dict):
+                        durable_execution[
+                            "verification"
+                        ] = {
+                            "status": str(
+                                verification.get(
+                                    "status",
+                                    "",
+                                )
+                            ),
+                            "goal_completed": bool(
+                                verification.get(
+                                    "goal_completed",
+                                    False,
+                                )
+                            ),
+                            "confidence": float(
+                                verification.get(
+                                    "confidence",
+                                    0.0,
+                                )
+                                or 0.0
+                            ),
+                            "reason": str(
+                                verification.get(
+                                    "reason",
+                                    "",
+                                )
+                                or ""
+                            ),
+                        }
+                    else:
+                        durable_execution[
+                            "verification"
+                        ] = {}
+
+                    # Store the execution metadata needed for
+                    # restart/recovery, but never the raw plan/result.
                     workflow_state[
                         "execution"
-                    ] = state_payload
+                    ] = durable_execution
 
                     await self.world_model.save()
 
