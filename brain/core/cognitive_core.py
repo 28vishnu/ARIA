@@ -3351,31 +3351,69 @@ Execution Results:
                 active_goal = self.goal_manager.current_goal()
 
                 if active_goal:
-                    next_subgoal = self.goal_manager.next_subgoal(
-                        active_goal
+                    # Only advance the autonomous goal when this workflow
+                    # explicitly belongs to that goal.
+                    plan_goal = str(
+                        getattr(plan, "goal", "")
+                        or getattr(plan, "objective", "")
+                        or ""
+                    ).strip()
+
+                    goal_context = getattr(
+                        plan,
+                        "metadata",
+                        {},
+                    ) or {}
+
+                    autonomous_goal_id = str(
+                        goal_context.get(
+                            "autonomous_goal_id",
+                            ""
+                        )
+                        or ""
                     )
 
-                    if next_subgoal:
-                        completed_subgoal = (
-                            self.goal_manager.complete_subgoal(
-                                active_goal,
-                                next_subgoal.title,
-                            )
+                    workflow_belongs_to_goal = (
+                        autonomous_goal_id == active_goal.id
+                        if autonomous_goal_id
+                        else (
+                            plan_goal.lower()
+                            == active_goal.title.lower()
+                        )
+                    )
+
+                    if workflow_belongs_to_goal:
+                        next_subgoal = self.goal_manager.next_subgoal(
+                            active_goal
                         )
 
-                        if completed_subgoal:
-                            logger.info(
-                                "[CognitiveCore] Goal subgoal completed: "
-                                "%s | goal=%s | progress=%.1f%%",
-                                completed_subgoal.title,
-                                active_goal.title,
-                                active_goal.progress,
+                        if next_subgoal:
+                            completed_subgoal = (
+                                self.goal_manager.complete_subgoal(
+                                    active_goal,
+                                    next_subgoal.title,
+                                )
                             )
 
-                    if active_goal.status == "completed":
-                        logger.info(
-                            "[CognitiveCore] Autonomous goal completed: %s",
-                            active_goal.title,
+                            if completed_subgoal:
+                                logger.info(
+                                    "[CognitiveCore] Goal subgoal completed: "
+                                    "%s | goal=%s | progress=%.1f%%",
+                                    completed_subgoal.title,
+                                    active_goal.title,
+                                    active_goal.progress,
+                                )
+
+                        if active_goal.status == "completed":
+                            logger.info(
+                                "[CognitiveCore] Autonomous goal completed: %s",
+                                active_goal.title,
+                            )
+
+                    else:
+                        logger.debug(
+                            "[CognitiveCore] Workflow does not belong to "
+                            "active autonomous goal; goal not advanced."
                         )
 
             except Exception:
