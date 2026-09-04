@@ -1280,7 +1280,59 @@ class Executor:
                     plan.completed_tasks = list(completed)
                     plan.failed_tasks = list(failed)
                     plan.skipped_tasks = list(skipped)
+
+                    # ---------------------------------------------------------
+                    # Preserve the exact task/action awaiting confirmation.
+                    # ---------------------------------------------------------
+                    pending_task = next(
+                        (
+                            task
+                            for task in plan.tasks
+                            if (
+                                task.id not in executed
+                                and getattr(task, "status", None)
+                                == "awaiting_confirmation"
+                            )
+                        ),
+                        None,
+                    )
+
+                    pending_task_id = (
+                        pending_task.id
+                        if pending_task
+                        else None
+                    )
+
+                    pending_action_name = (
+                        getattr(
+                            pending_task,
+                            "action_name",
+                            None,
+                        )
+                        if pending_task
+                        else None
+                    )
+
+                    pending_action_params = (
+                        dict(
+                            getattr(
+                                pending_task,
+                                "params",
+                                {},
+                            )
+                            or {}
+                        )
+                        if pending_task
+                        else {}
+                    )
+
                     plan.status = "awaiting_confirmation"
+
+                    if pending_task_id:
+                        plan.mark_awaiting_confirmation(
+                            pending_task_id
+                        )
+
                     return self._build_result(
                         task_outputs=task_outputs,
                         workflow_results=workflow_results,
@@ -1289,6 +1341,9 @@ class Executor:
                         skipped=skipped,
                         paused=True,
                         requires_confirmation=True,
+                        pending_task_id=pending_task_id,
+                        pending_action_name=pending_action_name,
+                        pending_action_params=pending_action_params,
                     )
 
         finally:
