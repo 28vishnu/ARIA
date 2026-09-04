@@ -486,13 +486,24 @@ class GoalManager:
     # SUBGOALS
     # =========================================================
 
-    def next_subgoal(self):
-        active = self.current_goal()
+    def next_subgoal(self, goal=None):
+        """
+        Return the next pending subgoal for the supplied goal.
 
-        if not active:
+        If no goal is supplied, use the current active goal.
+        This keeps subgoal selection scoped correctly when multiple
+        autonomous goals exist.
+        """
+
+        target = goal or self.current_goal()
+
+        if not target:
             return None
 
-        for subgoal in active.subgoals:
+        if target.status != "active":
+            return None
+
+        for subgoal in target.subgoals:
             if subgoal.status == "pending":
                 return subgoal
 
@@ -585,7 +596,7 @@ class GoalManager:
         if not goal:
             return None
 
-        next_goal = self.next_subgoal()
+        next_goal = self.next_subgoal(goal)
 
         return {
             "goal_id": goal.id,
