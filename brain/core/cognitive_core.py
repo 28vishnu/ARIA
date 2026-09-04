@@ -2609,39 +2609,107 @@ Execution Results:
                                 if regenerated_plan:
                                     pending_plan = regenerated_plan
 
-                                    self.state_manager.set_pending_workflow(
-                                        session_id=session_id,
-                                        plan=regenerated_plan,
-                                        task_id=durable_task_id,
-                                        task_outputs=(
-                                            workflow_state.get(
-                                                "task_outputs",
-                                                {},
-                                            )
-                                            or {}
-                                        ),
-                                        completed_tasks=(
-                                            workflow_state.get(
-                                                "completed_tasks",
-                                                [],
-                                            )
-                                            or []
-                                        ),
-                                        failed_tasks=(
-                                            workflow_state.get(
-                                                "failed_tasks",
-                                                [],
-                                            )
-                                            or []
-                                        ),
-                                        skipped_tasks=(
-                                            workflow_state.get(
-                                                "skipped_tasks",
-                                                [],
-                                            )
-                                            or []
-                                        ),
+                                    # ---------------------------------------------------------
+                                    # PHASE 4 — RESOLVE PENDING TASK AFTER RESTART
+                                    # ---------------------------------------------------------
+                                    # Planner task IDs may change when a plan is regenerated.
+                                    # Prefer the durable task ID when it still exists; otherwise
+                                    # identify the equivalent confirmation task from the new plan.
+                                    resolved_task_id = durable_task_id
+
+                                    plan_tasks = list(
+                                        getattr(regenerated_plan, "tasks", [])
+                                        or []
                                     )
+
+                                    plan_task_ids = {
+                                        str(getattr(task, "id", ""))
+                                        for task in plan_tasks
+                                        if getattr(task, "id", None)
+                                    }
+
+                                    if (
+                                        not resolved_task_id
+                                        or str(resolved_task_id) not in plan_task_ids
+                                    ):
+                                        resolved_task_id = None
+
+                                        for task in plan_tasks:
+                                            task_requires_confirmation = bool(
+                                                getattr(
+                                                    task,
+                                                    "requires_confirmation",
+                                                    False,
+                                                )
+                                            )
+
+                                            task_is_awaiting_confirmation = (
+                                                getattr(
+                                                    task,
+                                                    "status",
+                                                    None,
+                                                )
+                                                == "awaiting_confirmation"
+                                            )
+
+                                            if (
+                                                task_requires_confirmation
+                                                or task_is_awaiting_confirmation
+                                            ):
+                                                resolved_task_id = getattr(
+                                                    task,
+                                                    "id",
+                                                    None,
+                                                )
+                                                break
+
+                                    if not resolved_task_id:
+                                        logger.error(
+                                            "[CognitiveCore] Could not resolve the "
+                                            "pending confirmation task after restart."
+                                        )
+                                    else:
+                                        pending_task_id = resolved_task_id
+
+                                        self.state_manager.set_pending_workflow(
+                                            session_id=session_id,
+                                            plan=regenerated_plan,
+                                            task_id=resolved_task_id,
+                                            task_outputs=(
+                                                workflow_state.get(
+                                                    "task_outputs",
+                                                    {},
+                                                )
+                                                or {}
+                                            ),
+                                            completed_tasks=(
+                                                workflow_state.get(
+                                                    "completed_tasks",
+                                                    [],
+                                                )
+                                                or []
+                                            ),
+                                            failed_tasks=(
+                                                workflow_state.get(
+                                                    "failed_tasks",
+                                                    [],
+                                                )
+                                                or []
+                                            ),
+                                            skipped_tasks=(
+                                                workflow_state.get(
+                                                    "skipped_tasks",
+                                                    [],
+                                                )
+                                                or []
+                                            ),
+                                        )
+
+                                        logger.info(
+                                            "[CognitiveCore] Durable workflow confirmation "
+                                            "task resolved: %s",
+                                            resolved_task_id,
+                                        )
 
                                     logger.info(
                                         "[CognitiveCore] Durable workflow "
