@@ -414,7 +414,10 @@ async def bootstrap_application() -> ServiceRegistry:
         "[BOOT TEST] ConversationManager configured"
     )
 
-    goal_manager = GoalManager()
+    goal_manager = GoalManager(
+        working_memory=working_memory
+    )
+
     task_manager = TaskManager()
 
     registry.register(
