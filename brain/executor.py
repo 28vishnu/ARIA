@@ -539,19 +539,36 @@ class Executor:
         """
         return await self.execute_task(task, context)
 
-    async def execute_plan(self, plan, context=None):
+    async def execute_plan(
+        self,
+        plan,
+        context=None,
+        resume_state=None,
+        confirmed_task_id=None,
+    ):
         """
-        Compatibility execution path for legacy planner callers.
+        Canonical workflow execution gateway.
 
-        The canonical ExecutionPlan path remains _execute_full_plan_object().
+        Supports:
+        - normal ExecutionPlan execution
+        - resumable workflows
+        - confirmation-based workflow continuation
+        - legacy planner callers
         """
         context = context or {}
+        resume_state = resume_state or {}
 
         if isinstance(plan, ExecutionPlan):
             return await self._execute_full_plan_object(
-                plan,
-                context,
+                plan=plan,
+                base_context=context,
+                resume_state=resume_state,
+                confirmed_task_id=confirmed_task_id,
             )
+
+        # ---------------------------------------------------------
+        # Legacy planner compatibility path
+        # ---------------------------------------------------------
 
         results = []
 
@@ -586,7 +603,10 @@ class Executor:
             if result is None:
                 result = {
                     "success": False,
-                    "error": str(last_error or "Task execution failed."),
+                    "error": str(
+                        last_error
+                        or "Task execution failed."
+                    ),
                 }
 
             step["status"] = (
@@ -594,8 +614,8 @@ class Executor:
                 if result.get("success")
                 else "failed"
             )
-            step["result"] = result
 
+            step["result"] = result
             results.append(result)
 
             if not result.get("success"):
