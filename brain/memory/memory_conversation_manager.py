@@ -511,6 +511,187 @@ class MemoryConversationManager:
             )
             return []
 
+    async def consolidate_episodes(
+        self,
+        episodes: Optional[List[Dict[str, Any]]] = None,
+        limit: int = 10,
+    ) -> int:
+        """
+        Promote only durable, explicitly stated information from
+        episodic conversations into semantic/personal memory.
+
+        This is intentionally conservative:
+        - No episode is promoted blindly.
+        - The LLM must identify explicit durable facts/preferences.
+        - MemoryEngine remains responsible for actual storage.
+        """
+        if not self.memory_engine:
+            return 0
+
+        try:
+            if episodes is None:
+                episodes = await self.retrieve_episodes(
+                    query="",
+                    limit=limit,
+                )
+
+            if not episodes:
+                return 0
+
+            episodes = [
+                episode
+                for episode in episodes
+                if isinstance(episode, dict)
+                and episode.get("query")
+                and episode.get("response")
+            ][:max(1, min(int(limit), 20))]
+
+            if not episodes:
+                return 0
+
+            # Without an LLM, do not guess what should become
+            # permanent memory.
+            if not self.llm_router:
+                logger.debug(
+                    "[MemoryConversationManager] "
+                    "Consolidation skipped: LLMRouter unavailable."
+                )
+                return 0
+
+            conversation_text = []
+
+            for episode in episodes:
+                conversation_text.append(
+                    "USER: "
+                    + str(episode.get("query", "")).strip()
+                )
+                conversation_text.append(
+                    "ARIA: "
+                    + str(episode.get("response", "")).strip()
+                )
+
+            prompt = f"""
+Review the following past ARIA conversations.
+
+Identify ONLY information that is:
+1. explicitly stated by the user,
+2. about the user personally,
+3. likely to remain useful over time,
+4. a stable preference, fact, plan, goal, or recurring choice.
+
+Do NOT infer, guess, or invent anything.
+
+Do NOT include:
+- temporary situations,
+- one-time questions,
+- casual conversation,
+- facts about other people,
+- information that exists only in ARIA's response,
+- uncertain conclusions.
+
+Return ONLY a JSON array.
+
+Each item must have:
+{{
+    "key": "short_snake_case_key",
+    "value": "concise value"
+}}
+
+If there is nothing suitable, return [].
+
+CONVERSATIONS:
+{chr(10).join(conversation_text)}
+"""
+
+            answer = await self.llm_router.answer_from_memories(
+                query=prompt,
+                memories=[],
+            )
+
+            if not answer:
+                return 0
+
+            text = str(answer).strip()
+
+            # Remove optional markdown JSON fencing.
+            if text.startswith("```"):
+                text = re.sub(
+                    r"^```(?:json)?\s*",
+                    "",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                text = re.sub(
+                    r"\s*```$",
+                    "",
+                    text,
+                ).strip()
+
+            import json
+
+            try:
+                candidates = json.loads(text)
+            except Exception:
+                logger.warning(
+                    "[MemoryConversationManager] "
+                    "Consolidation returned invalid JSON."
+                )
+                return 0
+
+            if not isinstance(candidates, list):
+                return 0
+
+            stored_count = 0
+
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+
+                key = str(
+                    item.get("key") or ""
+                ).strip()
+
+                value = str(
+                    item.get("value") or ""
+                ).strip()
+
+                if not key or not value:
+                    continue
+
+                # Strict key validation prevents arbitrary fields
+                # from being written into semantic memory.
+                if not re.fullmatch(
+                    r"[a-z0-9]+(?:_[a-z0-9]+)*",
+                    key.lower(),
+                ):
+                    continue
+
+                if len(key) > 100 or len(value) > 500:
+                    continue
+
+                result = await self.memory_engine.process_and_store(
+                    f"Remember this about me: {key} is {value}"
+                )
+
+                if result and result.get("success"):
+                    stored_count += 1
+
+            if stored_count:
+                logger.info(
+                    "[MemoryConversationManager] "
+                    "Consolidated %d durable memories from episodes.",
+                    stored_count,
+                )
+
+            return stored_count
+
+        except Exception:
+            logger.exception(
+                "[MemoryConversationManager] "
+                "Episode consolidation failed."
+            )
+            return 0
+
     def _build_direct_answer(
         self,
         query: str,
