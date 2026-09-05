@@ -2320,11 +2320,62 @@ Execution Results:
                 episode_context = dict(context or {})
                 episode_context["session_id"] = session_id
 
-                await self.memory_conversation_manager.record_episode(
-                    query=resolved_query,
-                    response=response_text,
-                    context=episode_context,
+                recorded = (
+                    await self.memory_conversation_manager.record_episode(
+                        query=resolved_query,
+                        response=response_text,
+                        context=episode_context,
+                    )
                 )
+
+                # -------------------------------------------------
+                # PHASE 5 — AUTOMATIC MEMORY CONSOLIDATION
+                # -------------------------------------------------
+                # Consolidate periodically rather than on every
+                # conversation. This prevents unnecessary LLM calls
+                # while allowing durable user information to become
+                # long-term memory automatically.
+                if recorded:
+                    try:
+                        episode_count = None
+
+                        episode_col = getattr(
+                            self.memory_conversation_manager,
+                            "episode_col",
+                            None,
+                        )
+
+                        if episode_col is not None:
+                            episode_count = (
+                                await episode_col.count_documents({})
+                            )
+
+                        if (
+                            episode_count is not None
+                            and episode_count > 0
+                            and episode_count % 10 == 0
+                        ):
+                            consolidated = (
+                                await self.memory_conversation_manager
+                                .consolidate_episodes(
+                                    limit=10
+                                )
+                            )
+
+                            if consolidated:
+                                logger.info(
+                                    "[CognitiveCore] Automatically "
+                                    "consolidated %d durable memories "
+                                    "from episodic memory.",
+                                    consolidated,
+                                )
+
+                    except Exception as e:
+                        logger.warning(
+                            "[CognitiveCore] Automatic memory "
+                            "consolidation skipped: %s",
+                            e,
+                        )
 
             except Exception as e:
                 logger.warning(
