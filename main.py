@@ -791,6 +791,88 @@ Rules:
     }
 
 
+def is_computer_control_command(text: str) -> bool:
+    """
+    Detect explicit natural-language computer-control requests.
+
+    This intentionally requires an action-oriented phrase so ordinary
+    conversation such as "my computer is slow" is not executed.
+    """
+    query = str(text or "").lower().strip()
+
+    if not query:
+        return False
+
+    action_terms = (
+        "open ",
+        "launch ",
+        "start ",
+        "close ",
+        "click ",
+        "double click ",
+        "type ",
+        "enter ",
+        "press ",
+        "scroll ",
+        "go to ",
+        "navigate to ",
+        "select ",
+        "find ",
+        "search ",
+        "look for ",
+        "move to ",
+    )
+
+    target_terms = (
+        "on my computer",
+        "on my pc",
+        "on the computer",
+        "on the pc",
+        "on screen",
+        "on my screen",
+        "computer",
+        "pc",
+        "screen",
+        "browser",
+        "chrome",
+        "firefox",
+        "edge",
+        "window",
+        "desktop",
+    )
+
+    return any(query.startswith(term) for term in action_terms) and (
+        any(term in query for term in target_terms)
+        or query.startswith(("click ", "type ", "press ", "scroll ",
+                             "open ", "launch ", "start ", "close ",
+                             "double click ", "go to ", "navigate to ",
+                             "select ", "find ", "search ", "look for ",
+                             "move to "))
+    )
+
+
+async def execute_natural_language_computer_command(
+    text: str,
+    req: Request,
+    session_id: str,
+) -> dict:
+    """Run an explicit natural-language computer command safely."""
+    if not COMPUTER_CONTROL_ENABLED:
+        return {
+            "success": False,
+            "completed": False,
+            "error": "Computer control is disabled.",
+            "steps": [],
+        }
+
+    return await computer_action_loop(
+        goal=str(text).strip(),
+        req=req,
+        session_id=session_id,
+        max_steps=5,
+    )
+
+
 class BackgroundTaskManager:
     def __init__(self):
         self.tasks = set()
@@ -1883,6 +1965,51 @@ async def telegram_webhook(req: Request):
         }
 
     await status.update("Working on it...")
+
+    # Explicit natural-language computer commands are routed through
+    # the bounded screen -> vision -> action -> verification loop.
+    if is_computer_control_command(text):
+        computer_result = await execute_natural_language_computer_command(
+            text=text,
+            req=req,
+            session_id=str(chat_id),
+        )
+
+        await status.delete()
+
+        if computer_result.get("success"):
+            reply_text = computer_result.get(
+                "message",
+                (
+                    "Computer task completed."
+                    if computer_result.get("completed")
+                    else "I completed the safe computer-control steps "
+                         "I could verify."
+                ),
+            )
+        else:
+            reply_text = computer_result.get(
+                "error",
+                "I could not safely execute that computer command.",
+            )
+
+        telegram_text = format_telegram_response(str(reply_text))
+
+        await http_client.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": telegram_text,
+                "parse_mode": "HTML",
+            },
+        )
+
+        return {
+            "status": "computer_command",
+            "success": bool(computer_result.get("success")),
+            "completed": bool(computer_result.get("completed")),
+        }
+
     result = await process_task(
         text,
         str(chat_id),
@@ -2257,6 +2384,36 @@ async def web_chat(
     request_id = str(uuid.uuid4())
 
     try:
+
+        # Explicit natural-language computer commands use the
+        # bounded visual action loop instead of ordinary chat.
+        if is_computer_control_command(request.message):
+            computer_result = await execute_natural_language_computer_command(
+                text=request.message,
+                req=req,
+                session_id=request.session_id,
+            )
+
+            if computer_result.get("success"):
+                reply = computer_result.get(
+                    "message",
+                    (
+                        "Computer task completed."
+                        if computer_result.get("completed")
+                        else "I completed the safe computer-control steps "
+                             "I could verify."
+                    ),
+                )
+            else:
+                reply = computer_result.get(
+                    "error",
+                    "I could not safely execute that computer command.",
+                )
+
+            return ChatResponse(
+                success=bool(computer_result.get("success")),
+                reply=str(reply),
+            )
 
         result = await process_task(
             user_text=request.message,
