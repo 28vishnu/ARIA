@@ -207,6 +207,71 @@ class CognitiveCore:
 
         return normalized
 
+    async def _reflect_execution_outcome(
+        self,
+        *,
+        query: str,
+        execution_result: Any,
+        verification: Optional[Dict[str, Any]] = None,
+        attempt: int = 1,
+        session_id: str = "",
+        execution_id: str = "",
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send an observable execution outcome through SelfReflection.
+
+        Reflection is deliberately best-effort: a reflection failure must
+        never break the actual ARIA task execution path.
+        """
+        if self.self_reflection is None:
+            return {}
+
+        try:
+            result = (
+                dict(execution_result)
+                if isinstance(execution_result, dict)
+                else execution_result
+            )
+
+            if isinstance(result, dict):
+                result.setdefault(
+                    "verified",
+                    bool(
+                        isinstance(verification, dict)
+                        and verification.get("goal_completed") is True
+                    ),
+                )
+
+                if verification:
+                    result["verification"] = verification
+
+                if error:
+                    result["error"] = error
+
+                result["retry_count"] = max(0, int(attempt) - 1)
+
+            reflection_context = {
+                "query": query,
+                "session_id": session_id,
+                "execution_id": execution_id,
+                "execution_attempt": attempt,
+                "verification": verification or {},
+            }
+
+            return await self.self_reflection.reflect(
+                "execution",
+                execution_result=result,
+                context=reflection_context,
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "[CognitiveCore] Execution reflection skipped: %s",
+                exc,
+            )
+            return {}
+
     def _validate_persisted_execution(
         self,
         execution: Any,
@@ -1425,6 +1490,19 @@ class CognitiveCore:
                     )
                 )
 
+                execution_reflection = (
+                    await self._reflect_execution_outcome(
+                        query=query,
+                        execution_result=last_result,
+                        verification=verification,
+                        attempt=attempt,
+                        session_id=session_id,
+                        execution_id=execution_id,
+                    )
+                )
+
+                context["execution_reflection"] = execution_reflection
+
                 await self._persist_execution_state(
                     session_id,
                     execution_id=execution_id,
@@ -1457,6 +1535,7 @@ class CognitiveCore:
                         "plan": current_plan,
                         "evaluation": evaluation,
                         "verification": verification,
+                        "execution_reflection": execution_reflection,
                         "attempts": attempt,
                         "recovered": attempt > 1,
                         "success": True,
@@ -1502,6 +1581,7 @@ class CognitiveCore:
                             "plan": current_plan,
                             "evaluation": evaluation,
                             "verification": verification,
+                            "execution_reflection": execution_reflection,
                             "attempts": attempt,
                             "recovered": attempt > 1,
                             "success": True,
@@ -1582,6 +1662,10 @@ class CognitiveCore:
             "plan": current_plan,
             "evaluation": evaluation if isinstance(evaluation, dict) else {},
             "verification": verification,
+            "execution_reflection": context.get(
+                "execution_reflection",
+                {},
+            ),
             "attempts": max_attempts,
             "recovered": False,
             "success": False,
@@ -2293,6 +2377,50 @@ Execution Results:
 
         if self.self_reflection:
             try:
+                reflection_context = {
+                    "query": resolved_query,
+                    "resolved_query": resolved_query,
+                    "confidence": confidence,
+                    "failed": not bool(answer),
+                    "execution_result": execution_result,
+                    "execution_verification": context.get(
+                        "execution_verification",
+                        {},
+                    ),
+                    "execution_reflection": context.get(
+                        "execution_reflection",
+                        {},
+                    ),
+                    "verified": (
+                        context.get(
+                            "execution_verification",
+                            {}
+                        ).get("goal_completed")
+                        if isinstance(
+                            context.get(
+                                "execution_verification",
+                                {}
+                            ),
+                            dict,
+                        )
+                        else None
+                    ),
+                    "session_id": session_id,
+                    "execution_id": context.get(
+                        "execution_id",
+                        "",
+                    ),
+                }
+
+                response_evaluation = await self.self_reflection.reflect(
+                    "evaluate_response",
+                    response=answer,
+                    context=reflection_context,
+                )
+
+                context["response_reflection"] = response_evaluation
+
+                # Preserve the existing learning/review contract.
                 await self.self_reflection.reflect(
                     "review",
                     query=resolved_query,
@@ -2336,6 +2464,14 @@ Execution Results:
                             "confidence": confidence,
                             "knowledge_source": source,
                             "session_id": session_id,
+                            "reflection": context.get(
+                                "response_reflection",
+                                {},
+                            ),
+                            "execution_reflection": context.get(
+                                "execution_reflection",
+                                {},
+                            ),
                         }
                     )
                 )
@@ -2463,145 +2599,13 @@ Execution Results:
 
         return formatted_response
 
-    async def _format_response(
-        self,
-        answer: Any,
-        source: str,
-        context: Dict[str, Any],
-        confidence: float = 1.0,
-    ) -> SystemResponse:
-        """
-        Convert internal cognitive results into a clean user-facing response.
-
-        Internal dictionaries/lists from memory, knowledge, tools, and
-        reasoning must never be exposed directly to the user.
-        """
-
-        # ---------------------------------------------------------
-        # 1. Normalize structured internal results
-        # ---------------------------------------------------------
-
+    async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
         formatted_answer = answer
-
-        if isinstance(answer, list):
-            # Memory results commonly arrive as a list of dictionaries.
-            memory_items = []
-
-            for item in answer:
-                if isinstance(item, dict):
-                    key = item.get("key")
-                    value = item.get("value")
-
-                    if key is not None and value is not None:
-                        memory_items.append(
-                            f"{str(key).replace('_', ' ').strip().title()}: "
-                            f"{str(value).strip()}"
-                        )
-                    elif item.get("message") is not None:
-                        memory_items.append(
-                            str(item["message"]).strip()
-                        )
-                    elif item.get("response") is not None:
-                        memory_items.append(
-                            str(item["response"]).strip()
-                        )
-                    elif item:
-                        memory_items.append(
-                            ", ".join(
-                                f"{k}: {v}"
-                                for k, v in item.items()
-                                if k not in {
-                                    "retrieval_score",
-                                    "confidence",
-                                    "updated_at",
-                                }
-                            )
-                        )
-                elif item is not None:
-                    memory_items.append(str(item).strip())
-
-            formatted_answer = "\n".join(
-                item for item in memory_items if item
-            ).strip()
-
-        elif isinstance(answer, dict):
-            # Prefer a human-facing response field.
-            formatted_answer = (
-                answer.get("response")
-                or answer.get("message")
-                or answer.get("text")
-                or answer.get("answer")
-            )
-
-            # If this is a memory record, expose only useful information.
-            if not formatted_answer:
-                key = answer.get("key")
-                value = answer.get("value")
-
-                if key is not None and value is not None:
-                    formatted_answer = (
-                        f"{str(key).replace('_', ' ').strip().title()}: "
-                        f"{str(value).strip()}"
-                    )
-
-            # Last-resort safe conversion.
-            if not formatted_answer:
-                useful_items = {
-                    k: v
-                    for k, v in answer.items()
-                    if k not in {
-                        "retrieval_score",
-                        "confidence",
-                        "updated_at",
-                    }
-                }
-
-                formatted_answer = (
-                    ", ".join(
-                        f"{k}: {v}"
-                        for k, v in useful_items.items()
-                    )
-                    if useful_items
-                    else ""
-                )
-
-        if formatted_answer is None:
-            formatted_answer = ""
-
-        formatted_answer = str(formatted_answer).strip()
-
-        # ---------------------------------------------------------
-        # 2. Prevent completely empty user responses
-        # ---------------------------------------------------------
-
-        if not formatted_answer:
-            formatted_answer = (
-                "I processed that, but I don't have a useful "
-                "response to give yet."
-            )
-
-        # ---------------------------------------------------------
-        # 3. Personality formatting
-        # ---------------------------------------------------------
-
-        if (
-            self.personality_engine
-            and hasattr(self.personality_engine, "format")
-        ):
+        if self.personality_engine and hasattr(self.personality_engine, "format"):
             try:
-                formatted_answer = await self.personality_engine.format(
-                    formatted_answer,
-                    context,
-                )
+                formatted_answer = await self.personality_engine.format(answer, context)
             except Exception as e:
-                logger.warning(
-                    "Personality engine formatting skipped: %s",
-                    e,
-                )
-
-        # ---------------------------------------------------------
-        # 4. Return clean SystemResponse
-        # ---------------------------------------------------------
+                logger.warning("Personality engine formatting skipped: %s", e)
 
         return SystemResponse(
             success=True,
