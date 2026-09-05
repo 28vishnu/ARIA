@@ -1034,6 +1034,128 @@ Then return the JSON only.
                 self.plan_history.pop(0)
             return plan
 
+    async def dynamic_replan(
+        self,
+        goal: str,
+        context: Dict[str, Any],
+        failed_task=None,
+        failure_reason: str = "",
+        previous_plan=None,
+    ) -> ExecutionPlan:
+        """
+        Phase 4 — Replan an active workflow after failure.
+
+        Creates a fresh plan while preserving:
+        - the original autonomous goal
+        - available capabilities
+        - failure information
+        - the previous workflow context
+        """
+
+        replan_context = dict(context or {})
+
+        replan_context["replanning"] = True
+        replan_context["failure_reason"] = (
+            str(failure_reason or "")
+        )
+
+        if failed_task is not None:
+            replan_context["failed_task"] = {
+                "id": str(
+                    getattr(
+                        failed_task,
+                        "id",
+                        "",
+                    )
+                    or ""
+                ),
+                "name": str(
+                    getattr(
+                        failed_task,
+                        "name",
+                        "",
+                    )
+                    or ""
+                ),
+                "action_name": str(
+                    getattr(
+                        failed_task,
+                        "action_name",
+                        "",
+                    )
+                    or ""
+                ),
+                "skill": str(
+                    getattr(
+                        failed_task,
+                        "skill",
+                        "",
+                    )
+                    or ""
+                ),
+                "error": str(
+                    getattr(
+                        failed_task,
+                        "error",
+                        "",
+                    )
+                    or ""
+                ),
+            }
+
+        if previous_plan is not None:
+            replan_context["previous_plan"] = {
+                "goal": str(
+                    getattr(
+                        previous_plan,
+                        "goal",
+                        "",
+                    )
+                    or ""
+                ),
+                "completed_tasks": list(
+                    getattr(
+                        previous_plan,
+                        "completed_tasks",
+                        [],
+                    )
+                    or []
+                ),
+                "failed_tasks": list(
+                    getattr(
+                        previous_plan,
+                        "failed_tasks",
+                        [],
+                    )
+                    or []
+                ),
+                "skipped_tasks": list(
+                    getattr(
+                        previous_plan,
+                        "skipped_tasks",
+                        [],
+                    )
+                    or []
+                ),
+            }
+
+        logger.info(
+            "[Planner] Dynamic replan requested | goal=%s | "
+            "failed_task=%s | reason=%s",
+            goal,
+            getattr(
+                failed_task,
+                "id",
+                None,
+            ),
+            failure_reason,
+        )
+
+        return await self.create_plan(
+            goal=goal,
+            context=replan_context,
+        )
+
     def next_step(self, plan):
 
         for step in plan.steps:
