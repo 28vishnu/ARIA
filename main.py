@@ -22,8 +22,435 @@ from personality.response import SystemResponse
 from api.upload import router as upload_router
 from vision_engine import VisionEngine
 
+try:
+    import pyautogui
+except ImportError:
+    pyautogui = None
+
 setup_logging("INFO")
 logger = logging.getLogger("aria")
+
+
+# =============================================================
+# COMPUTER CONTROL
+# =============================================================
+
+COMPUTER_CONTROL_ENABLED = (
+    os.getenv(
+        "ARIA_COMPUTER_CONTROL",
+        "false",
+    ).lower()
+    in {"1", "true", "yes", "on"}
+)
+
+
+def computer_control_status() -> dict:
+    """Return the current backend computer-control capability."""
+
+    if pyautogui is None:
+        return {
+            "available": False,
+            "enabled": COMPUTER_CONTROL_ENABLED,
+            "error": "PyAutoGUI is not installed.",
+        }
+
+    try:
+        width, height = pyautogui.size()
+
+        return {
+            "available": True,
+            "enabled": COMPUTER_CONTROL_ENABLED,
+            "screen_width": width,
+            "screen_height": height,
+        }
+
+    except Exception as exc:
+        logger.warning(
+            "[ComputerControl] Backend unavailable: %s",
+            exc,
+        )
+
+        return {
+            "available": False,
+            "enabled": COMPUTER_CONTROL_ENABLED,
+            "error": str(exc),
+        }
+
+
+async def computer_screenshot(
+    output_path: str = "aria_screenshot.png",
+) -> dict:
+    """Capture the screen of the machine running this backend."""
+
+    if not COMPUTER_CONTROL_ENABLED:
+        return {
+            "success": False,
+            "error": "Computer control is disabled.",
+        }
+
+    if pyautogui is None:
+        return {
+            "success": False,
+            "error": "PyAutoGUI is not installed.",
+        }
+
+    try:
+        path = Path(output_path).expanduser()
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        image = pyautogui.screenshot()
+        image.save(path)
+
+        return {
+            "success": True,
+            "path": str(path.resolve()),
+            "width": image.width,
+            "height": image.height,
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "[ComputerControl] Screenshot failed."
+        )
+
+        return {
+            "success": False,
+            "error": str(exc),
+        }
+
+
+async def computer_action(
+    operation: str,
+    **kwargs,
+) -> dict:
+    """
+    Execute a controlled computer action.
+
+    Supported operations:
+        move
+        click
+        type
+        press
+        hotkey
+        scroll
+        screenshot
+    """
+
+    if not COMPUTER_CONTROL_ENABLED:
+        return {
+            "success": False,
+            "error": "Computer control is disabled.",
+        }
+
+    if pyautogui is None:
+        return {
+            "success": False,
+            "error": "PyAutoGUI is not installed.",
+        }
+
+    try:
+        if operation == "move":
+            x = int(kwargs["x"])
+            y = int(kwargs["y"])
+
+            width, height = pyautogui.size()
+
+            if not (0 <= x < width and 0 <= y < height):
+                return {
+                    "success": False,
+                    "error": (
+                        f"Coordinates ({x}, {y}) are outside "
+                        f"the {width}x{height} screen."
+                    ),
+                }
+
+            pyautogui.moveTo(
+                x,
+                y,
+                duration=0.15,
+            )
+
+            return {
+                "success": True,
+                "operation": "move",
+                "x": x,
+                "y": y,
+            }
+
+        if operation == "click":
+            x = int(kwargs["x"])
+            y = int(kwargs["y"])
+
+            width, height = pyautogui.size()
+
+            if not (0 <= x < width and 0 <= y < height):
+                return {
+                    "success": False,
+                    "error": (
+                        f"Coordinates ({x}, {y}) are outside "
+                        f"the {width}x{height} screen."
+                    ),
+                }
+
+            button = str(
+                kwargs.get(
+                    "button",
+                    "left",
+                )
+            ).lower()
+
+            if button not in {"left", "middle", "right"}:
+                return {
+                    "success": False,
+                    "error": "Invalid mouse button.",
+                }
+
+            clicks = int(
+                kwargs.get(
+                    "clicks",
+                    1,
+                )
+            )
+
+            if clicks < 1 or clicks > 2:
+                return {
+                    "success": False,
+                    "error": "Clicks must be 1 or 2.",
+                }
+
+            pyautogui.click(
+                x=x,
+                y=y,
+                button=button,
+                clicks=clicks,
+                interval=0.1,
+            )
+
+            return {
+                "success": True,
+                "operation": "click",
+                "x": x,
+                "y": y,
+                "button": button,
+                "clicks": clicks,
+            }
+
+        if operation == "type":
+            text = str(
+                kwargs.get(
+                    "text",
+                    "",
+                )
+            )
+
+            if not text:
+                return {
+                    "success": False,
+                    "error": "No text supplied.",
+                }
+
+            if len(text) > 5000:
+                return {
+                    "success": False,
+                    "error": "Text input exceeds the 5000-character limit.",
+                }
+
+            pyautogui.write(
+                text,
+                interval=0.01,
+            )
+
+            return {
+                "success": True,
+                "operation": "type",
+                "characters": len(text),
+            }
+
+        if operation == "press":
+            key = str(
+                kwargs.get(
+                    "key",
+                    "",
+                )
+            ).lower().strip()
+
+            if not key:
+                return {
+                    "success": False,
+                    "error": "No key supplied.",
+                }
+
+            allowed_keys = {
+                "enter",
+                "esc",
+                "escape",
+                "tab",
+                "space",
+                "backspace",
+                "delete",
+                "insert",
+                "home",
+                "end",
+                "pageup",
+                "pagedown",
+                "up",
+                "down",
+                "left",
+                "right",
+                "shift",
+                "ctrl",
+                "alt",
+                "win",
+                "command",
+                "capslock",
+                "num0",
+                "num1",
+                "num2",
+                "num3",
+                "num4",
+                "num5",
+                "num6",
+                "num7",
+                "num8",
+                "num9",
+                "f1",
+                "f2",
+                "f3",
+                "f4",
+                "f5",
+                "f6",
+                "f7",
+                "f8",
+                "f9",
+                "f10",
+                "f11",
+                "f12",
+            }
+
+            if (
+                key not in allowed_keys
+                and not re.fullmatch(
+                    r"[a-z0-9]",
+                    key,
+                )
+            ):
+                return {
+                    "success": False,
+                    "error": f"Unsupported key: {key}",
+                }
+
+            pyautogui.press(key)
+
+            return {
+                "success": True,
+                "operation": "press",
+                "key": key,
+            }
+
+        if operation == "hotkey":
+            keys = kwargs.get(
+                "keys",
+                [],
+            )
+
+            if not keys:
+                return {
+                    "success": False,
+                    "error": "No hotkey supplied.",
+                }
+
+            if not isinstance(keys, (list, tuple)):
+                return {
+                    "success": False,
+                    "error": "Hotkeys must be provided as a list.",
+                }
+
+            if len(keys) > 6:
+                return {
+                    "success": False,
+                    "error": "A maximum of 6 keys is allowed in one hotkey.",
+                }
+
+            normalized_keys = [
+                str(key).lower().strip()
+                for key in keys
+            ]
+
+            if any(not key for key in normalized_keys):
+                return {
+                    "success": False,
+                    "error": "Hotkey contains an empty key.",
+                }
+
+            pyautogui.hotkey(
+                *normalized_keys
+            )
+
+            return {
+                "success": True,
+                "operation": "hotkey",
+                "keys": normalized_keys,
+            }
+
+        if operation == "scroll":
+            amount = int(
+                kwargs.get(
+                    "amount",
+                    0,
+                )
+            )
+
+            if amount < -20 or amount > 20:
+                return {
+                    "success": False,
+                    "error": "Scroll amount must be between -20 and 20.",
+                }
+
+            pyautogui.scroll(amount)
+
+            return {
+                "success": True,
+                "operation": "scroll",
+                "amount": amount,
+            }
+
+        if operation == "screenshot":
+            return await computer_screenshot(
+                kwargs.get(
+                    "output_path",
+                    "aria_screenshot.png",
+                )
+            )
+
+        return {
+            "success": False,
+            "error": (
+                f"Unknown computer operation: "
+                f"{operation}"
+            ),
+        }
+
+    except KeyError as exc:
+        return {
+            "success": False,
+            "operation": operation,
+            "error": f"Missing required parameter: {exc}",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "[ComputerControl] Action failed: %s",
+            operation,
+        )
+
+        return {
+            "success": False,
+            "operation": operation,
+            "error": str(exc),
+        }
 
 class BackgroundTaskManager:
     def __init__(self):
