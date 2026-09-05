@@ -1646,12 +1646,29 @@ class CognitiveCore:
 
         if self.context_builder:
             try:
+                # Preserve multimodal/vision context before rebuilding context.
+                vision_result = context.get("vision_result")
+                image_metadata = context.get("image_metadata")
+                vision_active = context.get("vision_active", False)
+
                 context = await self.context_builder.build(
                     query=resolved_query,
                     session_id=session_id,
                     user_id=context.get("user_id", session_id),
                     base_context=context,
                 )
+
+                # ContextBuilder may rebuild the dictionary, so explicitly
+                # restore vision information for the downstream cognitive pipeline.
+                if vision_result:
+                    context["vision_result"] = vision_result
+
+                if image_metadata:
+                    context["image_metadata"] = image_metadata
+
+                if vision_active:
+                    context["vision_active"] = True
+
             except Exception as e:
                 logger.warning("Context builder skipped: %s", e)
                 context.setdefault("query", resolved_query)
@@ -2173,10 +2190,47 @@ Execution Results:
                                     "\nUse these memories when answering if relevant."
                             })
 
+                        # ---------------------------------------------------------
+                        # VISION CONTEXT
+                        # ---------------------------------------------------------
+                        vision_result = context.get("vision_result")
+
+                        if vision_result:
+                            if isinstance(vision_result, dict):
+                                vision_text = vision_result.get("text", "")
+                                vision_description = vision_result.get(
+                                    "description",
+                                    "",
+                                )
+                                vision_entities = vision_result.get(
+                                    "entities",
+                                    [],
+                                )
+
+                                vision_context = (
+                                    "Visual information available from the image:\n"
+                                    f"OCR/Text:\n{vision_text}\n\n"
+                                    f"Visual description:\n{vision_description}\n\n"
+                                    f"Detected entities:\n{vision_entities}\n\n"
+                                    "Use this visual information when answering the "
+                                    "user's request. Do not invent visual details."
+                                )
+                            else:
+                                vision_context = (
+                                    "Visual information available from the image:\n"
+                                    f"{vision_result}"
+                                )
+
+                            messages.append({
+                                "role": "system",
+                                "content": vision_context,
+                            })
+
                         messages.append({
                             "role": "user",
                             "content": resolved_query
                         })
+
                         reply = await self.llm_router.chat(messages)
                         if isinstance(reply, dict) and not reply.get("success", True):
                             answer = None
