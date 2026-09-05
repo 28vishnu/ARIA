@@ -2285,6 +2285,26 @@ Execution Results:
             except Exception as e:
                 logger.warning("Conversation manager update_turn skipped: %s", e)
 
+        # =========================================================
+        # PHASE 5 — PERSIST EPISODIC MEMORY
+        # =========================================================
+        if self.memory_conversation_manager:
+            try:
+                episode_context = dict(context or {})
+                episode_context["session_id"] = session_id
+
+                await self.memory_conversation_manager.record_episode(
+                    query=resolved_query,
+                    response=response_text,
+                    context=episode_context,
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "[CognitiveCore] Episodic memory recording skipped: %s",
+                    e,
+                )
+
         if self.state_manager:
             try:
                 self.state_manager.add_conversation_turn(
