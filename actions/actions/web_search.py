@@ -1,173 +1,157 @@
-import os
+import asyncio
 import logging
+import os
 from typing import Dict, Any
 
-from tavily import TavilyClient
-
 from actions.base import BaseAction, ActionResult
+from brain.tools.search_tool import SearchTool
 
 logger = logging.getLogger("aria")
+
 
 class WebSearchAction(BaseAction):
     """
     Read-only internet search action for ARIA.
 
-    Uses Tavily to retrieve current web information.  
-    This action is considered safe because it does not modify  
-    files, databases, accounts, or external systems.  
-    """  
+    Delegates web-search execution to the shared SearchTool so the
+    action layer and ToolManager use the same provider, timeout,
+    normalization, and error-handling logic.
+    """
 
-    name = "web_search_action"  
+    name = "web_search_action"
 
-    description = (  
-        "Searches the live web for current information and returns "  
-        "relevant results including titles, URLs, and extracted content."  
-    )  
+    description = (
+        "Searches the live web for current information and returns "
+        "relevant results including titles, URLs, and extracted content."
+    )
 
-    permission_level = "safe"  
+    permission_level = "safe"
+    timeout_seconds = 30
 
-    timeout_seconds = 30  
+    def __init__(self):
+        self.search_tool = SearchTool(
+            max_results=10,
+            timeout=self.timeout_seconds,
+        )
 
-    async def validate(  
-        self,  
-        params: Dict[str, Any]  
-    ) -> bool:  
+    async def validate(
+        self,
+        params: Dict[str, Any],
+    ) -> bool:
+        query = str(params.get("query", "")).strip()
 
-        query = str(  
-            params.get("query", "")  
-        ).strip()  
+        if not query or len(query) > 1000:
+            return False
 
-        if not query:  
-            return False  
+        try:
+            max_results = int(params.get("max_results", 5))
+        except (TypeError, ValueError):
+            return False
 
-        if len(query) > 1000:  
-            return False  
+        return 1 <= max_results <= 10
 
-        max_results = params.get(  
-            "max_results",  
-            5  
-        )  
-
-        try:  
-            max_results = int(max_results)  
-        except (TypeError, ValueError):  
-            return False  
-
-        if max_results < 1 or max_results > 10:  
-            return False  
-
-        return True  
-
-    async def execute(  
-        self,  
-        params: Dict[str, Any]  
-    ) -> ActionResult:  
-
-        query = str(  
-            params.get("query", "")  
-        ).strip()  
-
-        max_results = int(  
-            params.get("max_results", 5)  
-        )  
-
-        api_key = os.getenv("TAVILY_API_KEY")  
-
-        if not api_key:  
-            return ActionResult(  
-                success=False,  
-                action_name=self.name,  
-                error="TAVILY_API_KEY is not configured."  
-            )  
-
-        try:  
-
-            client = TavilyClient(  
-                api_key=api_key  
-            )  
-
-            response = client.search(  
-                query=query,  
-                search_depth="advanced",  
-                max_results=max_results,  
-                include_answer=False,  
-                include_raw_content=False,  
-            )  
-
-            raw_results = response.get(  
-                "results",  
-                []  
-            )  
-
-            results = []  
-
-            for item in raw_results:  
-
-                results.append(  
-                    {  
-                        "title": item.get(  
-                            "title",  
-                            ""  
-                        ),  
-                        "url": item.get(  
-                            "url",  
-                            ""  
-                        ),  
-                        "content": item.get(  
-                            "content",  
-                            ""  
-                        ),  
-                        "score": item.get(  
-                            "score"  
-                        ),  
-                    }  
-                )  
-
-            logger.info(  
-                "[WebSearchAction] Search completed. "  
-                "query=%r results=%d",  
-                query,  
-                len(results),  
-            )  
-
-            # Build a human/LLM-readable representation of the results.
-            content_parts = []
-
-            for index, item in enumerate(results, start=1):
-                title = item.get("title", "").strip()
-                url = item.get("url", "").strip()
-                text = item.get("content", "").strip()
-
-                content_parts.append(
-                    f"{index}. {title}\n"
-                    f"URL: {url}\n"
-                    f"{text}"
-                )
-
-            content = "\n\n".join(content_parts)
-
+    async def execute(
+        self,
+        params: Dict[str, Any],
+    ) -> ActionResult:
+        if not await self.validate(params):
             return ActionResult(
-                success=True,
+                success=False,
                 action_name=self.name,
-                data={
-                    # Standardized text output for downstream tasks.
-                    "content": content,
-
-                    # Structured output for agents and advanced workflows.
-                    "query": query,
-                    "results": results,
-                    "result_count": len(results),
-                }
-            )  
-
-        except Exception as exc:  
-
-            logger.exception(  
-                "[WebSearchAction] Search failed."  
-            )  
-
-            return ActionResult(  
-                success=False,  
-                action_name=self.name,  
-                error=str(exc)  
+                error="Invalid web search parameters.",
             )
+
+        query = str(params.get("query", "")).strip()
+        max_results = int(params.get("max_results", 5))
+
+        # Reuse the shared search implementation rather than creating
+        # a separate provider client for every action invocation.
+        self.search_tool.max_results = max_results
+
+        try:
+            result = await asyncio.wait_for(
+                self.search_tool.execute(
+                    query=query,
+                    context={
+                        "search_depth": params.get(
+                            "search_depth",
+                            "advanced",
+                        ),
+                    },
+                ),
+                timeout=self.timeout_seconds,
+            )
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[WebSearchAction] Search timed out. query=%r",
+                query,
+            )
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error="Web search timed out.",
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "[WebSearchAction] Search failed."
+            )
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error=f"Web search failed: {type(exc).__name__}.",
+            )
+
+        if not result.get("success"):
+            return ActionResult(
+                success=False,
+                action_name=self.name,
+                error=result.get(
+                    "error",
+                    "Web search failed.",
+                ),
+                data={
+                    "query": query,
+                    "results": [],
+                    "result_count": 0,
+                },
+            )
+
+        results = result.get("results", [])
+
+        # Preserve the existing downstream contract while also exposing
+        # the normalized result structure from SearchTool.
+        content_parts = []
+
+        for index, item in enumerate(results, start=1):
+            title = str(item.get("title", "")).strip()
+            url = str(item.get("url", "")).strip()
+            text = str(item.get("snippet", "")).strip()
+
+            content_parts.append(
+                f"{index}. {title}\n"
+                f"URL: {url}\n"
+                f"{text}"
+            )
+
+        content = "\n\n".join(content_parts)
+
+        logger.info(
+            "[WebSearchAction] Search completed. "
+            "query=%r results=%d",
+            query,
+            len(results),
+        )
+
+        return ActionResult(
+            success=True,
+            action_name=self.name,
+            data={
+                "content": content,
+                "query": query,
+                "results": results,
+                "result_count": len(results),
+                "duration_ms": result.get("duration_ms"),
+            },
+        )
