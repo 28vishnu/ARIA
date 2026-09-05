@@ -587,6 +587,14 @@ class GoalManager:
         self,
         goal_id: Optional[str] = None,
     ):
+        """
+        Return the complete autonomous-goal context.
+
+        This context is intentionally stable so CognitiveCore,
+        CognitiveController, Planner, and workflow recovery can
+        all identify the same autonomous goal.
+        """
+
         goal = (
             self.get_goal(goal_id)
             if goal_id
@@ -599,24 +607,38 @@ class GoalManager:
         next_goal = self.next_subgoal(goal)
 
         return {
+            # Stable Phase-4 goal identity
             "goal_id": goal.id,
+            "title": goal.title,
+
+            # Backward-compatible aliases
             "goal_title": goal.title,
+
+            "status": goal.status,
             "goal_status": goal.status,
+
             "progress": goal.progress,
+
             "subgoals": [
                 {
                     "title": subgoal.title,
                     "status": subgoal.status,
-                    "metadata": subgoal.metadata,
+                    "metadata": dict(
+                        subgoal.metadata or {}
+                    ),
                 }
                 for subgoal in goal.subgoals
             ],
+
             "next_subgoal": (
                 next_goal.title
                 if next_goal
                 else None
             ),
-            "metadata": goal.metadata,
+
+            "metadata": dict(
+                goal.metadata or {}
+            ),
         }
 
     # =========================================================
@@ -729,7 +751,7 @@ class GoalManager:
             "title": goal.title,
             "status": goal.status,
             "progress": goal.progress,
-            "created_at": goal.created_at.isoformat(),
+            "created_z": goal.created_at.isoformat(),
             "updated_at": goal.updated_at.isoformat(),
             "metadata": goal.metadata,
             "subgoals": [
