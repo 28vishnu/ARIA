@@ -4,6 +4,8 @@ import asyncio
 import logging
 import html
 import re
+from collections import deque
+from datetime import datetime, timezone
 from typing import Any
 import base64
 import binascii
@@ -35,6 +37,17 @@ logger = logging.getLogger("aria")
 # =============================================================
 # COMPUTER CONTROL
 # =============================================================
+
+COMPUTER_CONTROL_LOCK = asyncio.Lock()
+COMPUTER_ACTION_AUDIT = deque(maxlen=100)
+
+
+def _record_computer_event(event: dict) -> None:
+    """Keep a small in-memory audit trail without storing screen contents."""
+    safe_event = dict(event)
+    safe_event["timestamp"] = datetime.now(timezone.utc).isoformat()
+    COMPUTER_ACTION_AUDIT.append(safe_event)
+
 
 COMPUTER_CONTROL_ENABLED = (
     os.getenv(
@@ -503,7 +516,7 @@ async def capture_screen_for_vision() -> dict:
 
 
 
-async def computer_action_loop(
+async def _computer_action_loop_unlocked(
     goal: str,
     req: Request,
     session_id: str = "web",
@@ -2439,9 +2452,76 @@ async def web_chat(
         )
 
 
+async def computer_action_loop(
+    goal: str,
+    req: Request,
+    session_id: str = "web",
+    max_steps: int = 5,
+) -> dict:
+    """Run computer control exclusively, preventing concurrent PyAutoGUI use."""
+    goal = str(goal or "").strip()
+    if not goal:
+        return {"success": False, "error": "No computer-control goal was supplied.", "steps": []}
+
+    if COMPUTER_CONTROL_LOCK.locked():
+        _record_computer_event({
+            "event": "rejected_busy",
+            "session_id": session_id,
+            "goal": goal[:200],
+        })
+        return {
+            "success": False,
+            "completed": False,
+            "error": "Computer control is busy with another task. Try again shortly.",
+            "steps": [],
+        }
+
+    async with COMPUTER_CONTROL_LOCK:
+        _record_computer_event({
+            "event": "started",
+            "session_id": session_id,
+            "goal": goal[:200],
+            "max_steps": max(1, min(int(max_steps), 5)),
+        })
+        result = await _computer_action_loop_unlocked(
+            goal=goal,
+            req=req,
+            session_id=session_id,
+            max_steps=max_steps,
+        )
+        _record_computer_event({
+            "event": "finished",
+            "session_id": session_id,
+            "goal": goal[:200],
+            "success": bool(result.get("success")),
+            "completed": bool(result.get("completed")),
+            "step_count": len(result.get("steps", [])),
+        })
+        return result
+
+
 # =============================================================
 # COMPUTER ACTION LOOP API
 # =============================================================
+
+@app.get("/computer/status")
+async def computer_status():
+    """Return safe capability and execution-state information."""
+    status = computer_control_status()
+    status.update({
+        "busy": COMPUTER_CONTROL_LOCK.locked(),
+        "audit_events": len(COMPUTER_ACTION_AUDIT),
+        "max_action_steps": 5,
+        "safety": {
+            "bounded_steps": True,
+            "screen_content_untrusted": True,
+            "dangerous_operations_blocked": True,
+            "concurrent_control_blocked": True,
+            "audit_retention": "100 in-memory events; no screen contents stored",
+        },
+    })
+    return status
+
 
 class ComputerActionRequest(BaseModel):
     goal: str
