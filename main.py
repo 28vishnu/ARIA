@@ -112,7 +112,14 @@ def build_request_context(session_id: str, request_id: str, registry) -> Request
         personality_engine=registry.get("personality_engine")
     )
 
-async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> Any:
+async def process_task(
+    user_text: str,
+    session_id: str,
+    request_id: str,
+    app_state,
+    vision_result: dict | None = None,
+    image_metadata: dict | None = None,
+) -> Any:
     registry = app_state.registry
     ctx = build_request_context(session_id, request_id, registry)
 
@@ -133,12 +140,19 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
     base_context = {
         "app_state": app_state,
         "session": session,
-        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
+        "memory_engine": (
+            registry.get("memory_engine")
+            if registry.has("memory_engine")
+            else None
+        ),
         "document_intelligence": (
             registry.get("document_intelligence")
             if registry.has("document_intelligence")
             else None
         ),
+        "vision_result": vision_result,
+        "image_metadata": image_metadata,
+        "vision_active": vision_result is not None,
     }
 
     # ---------------------------------------------------------
@@ -1521,10 +1535,21 @@ async def web_vision(
     req: Request,
 ):
     """
-    Web frontend vision endpoint.
+    Full multimodal vision endpoint.
 
-    Accepts a Base64/data-URL image from the frontend,
-    decodes it, and sends the image bytes to VisionEngine.
+    Pipeline:
+
+        Browser image
+            ↓
+        Base64 decode
+            ↓
+        VisionEngine
+            ↓
+        CognitiveCore
+            ↓
+        Personality layer
+            ↓
+        Final ARIA response
     """
 
     request_id = str(uuid.uuid4())
@@ -1541,7 +1566,10 @@ async def web_vision(
                 "metadata": {},
             }
 
-        # Support browser data URLs: data:image/jpeg;base64,...
+        # -----------------------------------------------------
+        # 1. Decode browser data URL
+        # -----------------------------------------------------
+
         if image_data.startswith("data:"):
             try:
                 header, encoded = image_data.split(",", 1)
@@ -1554,7 +1582,12 @@ async def web_vision(
                     "metadata": {},
                 }
 
-            mime_type = header.split(";", 1)[0].replace("data:", "").strip()
+            mime_type = (
+                header
+                .split(";", 1)[0]
+                .replace("data:", "")
+                .strip()
+            )
 
             extension_map = {
                 "image/jpeg": "jpg",
@@ -1562,15 +1595,28 @@ async def web_vision(
                 "image/webp": "webp",
                 "image/gif": "gif",
                 "image/tiff": "tiff",
+                "image/bmp": "bmp",
             }
 
-            file_name = f"vision.{extension_map.get(mime_type, 'jpg')}"
+            file_name = (
+                f"vision."
+                f"{extension_map.get(mime_type, 'jpg')}"
+            )
+
         else:
             encoded = image_data
+            mime_type = "image/jpeg"
             file_name = "vision.jpg"
 
+        # -----------------------------------------------------
+        # 2. Decode Base64
+        # -----------------------------------------------------
+
         try:
-            image_bytes = base64.b64decode(encoded, validate=True)
+            image_bytes = base64.b64decode(
+                encoded,
+                validate=True,
+            )
         except (binascii.Error, ValueError):
             return {
                 "success": False,
@@ -1589,28 +1635,111 @@ async def web_vision(
                 "metadata": {},
             }
 
-        vision_engine = getattr(req.app.state, "vision_engine", None)
+        # -----------------------------------------------------
+        # 3. Vision Engine
+        # -----------------------------------------------------
+
+        vision_engine = getattr(
+            req.app.state,
+            "vision_engine",
+            None,
+        )
 
         if vision_engine is None:
             vision_engine = VisionEngine()
             req.app.state.vision_engine = vision_engine
 
-        result = await vision_engine.analyze_visual(
+        vision_result = await vision_engine.analyze_visual(
             image_bytes=image_bytes,
             file_name=file_name,
             prompt=request.prompt,
         )
 
-        result.setdefault("metadata", {})
-        result["metadata"].update({
+        if not vision_result.get("success", False):
+            return vision_result
+
+        # -----------------------------------------------------
+        # 4. Build image metadata
+        # -----------------------------------------------------
+
+        image_metadata = {
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "size_bytes": len(image_bytes),
             "session_id": request.session_id,
             "request_id": request_id,
-        })
+        }
 
-        return result
+        # -----------------------------------------------------
+        # 5. Send vision result through CognitiveCore
+        # -----------------------------------------------------
+
+        cognitive_prompt = request.prompt.strip()
+
+        if not cognitive_prompt:
+            cognitive_prompt = (
+                "Analyze the image and answer based only on "
+                "the visual information available."
+            )
+
+        cognitive_result = await process_task(
+            user_text=cognitive_prompt,
+            session_id=request.session_id,
+            request_id=request_id,
+            app_state=req.app.state,
+            vision_result=vision_result,
+            image_metadata=image_metadata,
+        )
+
+        # -----------------------------------------------------
+        # 6. Extract final ARIA response
+        # -----------------------------------------------------
+
+        if isinstance(cognitive_result, SystemResponse):
+            final_text = str(
+                getattr(
+                    cognitive_result,
+                    "message",
+                    cognitive_result,
+                )
+            )
+        else:
+            final_text = str(cognitive_result)
+
+        final_text = final_text.strip()
+
+        # -----------------------------------------------------
+        # 7. Return unified multimodal response
+        # -----------------------------------------------------
+
+        return {
+            "success": True,
+            "text": final_text,
+            "description": vision_result.get(
+                "description",
+                "",
+            ),
+            "entities": vision_result.get(
+                "entities",
+                [],
+            ),
+            "metadata": {
+                **image_metadata,
+                "vision": True,
+                "cognitive": True,
+                "pipeline": (
+                    "image"
+                    " -> vision"
+                    " -> cognitive"
+                    " -> personality"
+                ),
+            },
+        }
 
     except Exception as e:
-        logger.exception("[WEB VISION] Vision analysis failed.")
+        logger.exception(
+            "[WEB VISION] Multimodal vision pipeline failed."
+        )
 
         return {
             "success": False,
