@@ -540,10 +540,77 @@ class CognitiveController:
             decision.evidence_sources.append("research")
 
         # -----------------------------------------------------
-        # Goal
+        # GOAL / AUTONOMOUS GOAL AWARENESS
         # -----------------------------------------------------
 
+        # The immediate user request remains the decision goal.
         decision.goal = query.strip()
+
+        # Phase 4: preserve the larger autonomous goal so downstream
+        # planning can understand what this request is advancing.
+        autonomous_goal = (
+            context.get("autonomous_goal")
+            or context.get("goal")
+        )
+
+        if isinstance(autonomous_goal, dict):
+            decision.constraints["autonomous_goal"] = autonomous_goal
+
+            autonomous_goal_id = str(
+                autonomous_goal.get(
+                    "goal_id",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            autonomous_goal_title = str(
+                autonomous_goal.get(
+                    "title",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            next_subgoal = autonomous_goal.get(
+                "next_subgoal"
+            )
+
+            decision.constraints["autonomous_goal_id"] = (
+                autonomous_goal_id
+            )
+
+            decision.constraints["autonomous_goal_title"] = (
+                autonomous_goal_title
+            )
+
+            decision.constraints["next_subgoal"] = (
+                next_subgoal
+            )
+
+            # If the user is interacting with an active autonomous
+            # goal, planning should remain available even when the
+            # immediate request does not contain words such as
+            # "plan" or "steps".
+            if autonomous_goal_id:
+                decision.use_planner = True
+
+                if "planner" not in decision.required_tools:
+                    decision.required_tools.append(
+                        "planner"
+                    )
+
+                if "autonomous_goal" not in decision.evidence_sources:
+                    decision.evidence_sources.append(
+                        "autonomous_goal"
+                    )
+
+                logger.info(
+                    "[CognitiveController] Active autonomous goal: "
+                    "%s | next_subgoal=%s",
+                    autonomous_goal_title,
+                    next_subgoal,
+                )
 
         # -----------------------------------------------------
         # Entities
