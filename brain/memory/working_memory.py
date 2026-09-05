@@ -26,6 +26,11 @@ class WorkingMemory:
         self._active_entities: List[Any] = []
         self._last_question: Optional[str] = None
         self._last_answer: Optional[str] = None
+        # Phase 5 — bounded recent interaction memory.
+        # Keeps short-term conversational context without
+        # allowing working memory to grow indefinitely.
+        self._recent_events: List[Dict[str, Any]] = []
+        self._max_recent_events = 20
         self._active_person: Optional[str] = None
         self._active_company: Optional[str] = None
         self._active_place: Optional[str] = None
@@ -123,6 +128,7 @@ class WorkingMemory:
         self._active_entities = []
         self._last_question = None
         self._last_answer = None
+        self._recent_events.clear()
         self._active_person = None
         self._active_company = None
         self._active_place = None
@@ -201,6 +207,64 @@ class WorkingMemory:
     def remember_exchange(self, question: str, answer: str) -> None:
         self._last_question = question
         self._last_answer = answer
+
+    # =========================================================
+    # PHASE 5 — RECENT INTERACTION MEMORY
+    # =========================================================
+
+    def remember_event(
+        self,
+        event_type: str,
+        data: Any = None,
+        *,
+        source: Optional[str] = None,
+    ) -> None:
+        """
+        Store a bounded recent event in working memory.
+
+        This is intentionally short-term. Long-term persistence
+        belongs to the episodic/semantic memory layers.
+        """
+
+        event = {
+            "timestamp": time.time(),
+            "type": str(event_type or "unknown"),
+            "source": str(source) if source else None,
+            "data": data,
+        }
+
+        self._recent_events.append(event)
+
+        if len(self._recent_events) > self._max_recent_events:
+            self._recent_events = (
+                self._recent_events[
+                    -self._max_recent_events:
+                ]
+            )
+
+    def get_recent_events(
+        self,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return the most recent working-memory events."""
+
+        if limit is None:
+            limit = self._max_recent_events
+
+        try:
+            limit = max(0, int(limit))
+        except (TypeError, ValueError):
+            limit = self._max_recent_events
+
+        if limit == 0:
+            return []
+
+        return list(self._recent_events[-limit:])
+
+    def clear_recent_events(self) -> None:
+        """Clear only the recent interaction buffer."""
+
+        self._recent_events.clear()
 
     def last_question(self) -> Optional[str]:
         return self._last_question
