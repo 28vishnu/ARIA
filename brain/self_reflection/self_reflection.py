@@ -11,17 +11,20 @@ class SelfReflection:
     """
     ARIA's internal self-reflection and improvement coordinator.
 
-    Responsibilities:
+    Phase 10 responsibilities:
     - Evaluate response quality.
-    - Detect knowledge gaps and repeated failures.
+    - Evaluate plans and observable reasoning metadata.
+    - Detect knowledge gaps, execution failures, and repeated failures.
     - Track confidence and outcome trends.
-    - Detect recurring weak patterns.
-    - Generate actionable improvement recommendations.
-    - Feed successful/failing patterns into the learning subsystem.
-    - Perform daily/weekly maintenance reviews.
+    - Generate deterministic, actionable improvement recommendations.
+    - Feed validated success/failure patterns into the learning subsystem.
+    - Preserve bounded telemetry for daily/weekly reviews.
+    - Provide a single reflection entry point for CognitiveCore,
+      execution systems, and the event bus.
 
-    This class does not generate the final conversational response.
-    It observes outcomes and coordinates improvement.
+    This class observes outcomes and coordinates improvement.
+    It does not expose hidden chain-of-thought and does not directly
+    modify source code, permissions, credentials, or safety controls.
     """
 
     def __init__(
@@ -56,12 +59,16 @@ class SelfReflection:
             "high_quality_reviews": 0,
             "failure_patterns": 0,
             "improvement_suggestions": 0,
+            "execution_reviews": 0,
+            "reasoning_reviews": 0,
+            "verified_outcomes": 0,
+            "unverified_outcomes": 0,
         }
 
-        # Small bounded in-memory telemetry buffers.
-        # These are intentionally bounded so reflection cannot
-        # become an unbounded memory consumer.
+        # Bounded telemetry only. Reflection must never become
+        # an unbounded memory consumer.
         self._recent_reviews = deque(maxlen=100)
+        self._recent_improvements = deque(maxlen=100)
         self._failure_patterns = Counter()
         self._success_patterns = Counter()
 
@@ -71,12 +78,14 @@ class SelfReflection:
 
     @staticmethod
     def _now() -> datetime:
-        """Return a timezone-aware UTC timestamp."""
         return datetime.now(timezone.utc)
 
     @staticmethod
-    def _clamp(value: Any, minimum: float = 0.0, maximum: float = 1.0) -> float:
-        """Safely clamp a numeric value."""
+    def _clamp(
+        value: Any,
+        minimum: float = 0.0,
+        maximum: float = 1.0,
+    ) -> float:
         try:
             value = float(value)
         except (TypeError, ValueError):
@@ -89,17 +98,10 @@ class SelfReflection:
 
     @staticmethod
     def _normalise_text(value: Any) -> str:
-        """Safely convert arbitrary values into normalized text."""
         return str(value or "").strip()
 
     @staticmethod
     def _pattern_key(query: str) -> str:
-        """
-        Create a conservative pattern key.
-
-        We intentionally avoid storing the entire query as a pattern
-        because that would create unnecessary memory growth.
-        """
         text = " ".join(
             str(query or "").lower().split()
         )
@@ -107,21 +109,23 @@ class SelfReflection:
         if not text:
             return ""
 
-        words = text.split()
+        return " ".join(text.split()[:12])
 
-        # Keep enough information to identify repeated failures
-        # while preventing huge keys.
-        return " ".join(words[:12])
+    @staticmethod
+    def _as_list(value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, (list, tuple, set)):
+            return list(value)
+        return [value]
 
-    async def _has_results(
-        self,
-        result: Any,
-    ) -> bool:
+    async def _has_results(self, result: Any) -> bool:
         """
-        Safely inspect database search results without calling bool()
+        Safely inspect database results without blindly calling bool()
         on collection/cursor objects.
         """
-
         if result is None:
             return False
 
@@ -131,12 +135,9 @@ class SelfReflection:
         if hasattr(result, "to_list"):
             try:
                 items = result.to_list(length=1)
-
                 if hasattr(items, "__await__"):
                     items = await items
-
                 return bool(items)
-
             except Exception:
                 logger.exception(
                     "[SelfReflection] Failed to inspect cursor."
@@ -162,31 +163,26 @@ class SelfReflection:
     async def reflect_on_response(
         self,
         response: Any,
-        context: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Evaluate response quality using observable signals.
+        Deterministically evaluate observable response quality.
 
-        No LLM is required here. This is deterministic telemetry.
+        Upstream systems can provide explicit outcome signals through
+        context. No LLM or hidden chain-of-thought is required.
         """
-
         self.statistics["reflection_evaluations"] += 1
 
         context = context or {}
         text = self._normalise_text(response)
-
         issues: List[str] = []
 
         if not text:
             issues.append("empty_response")
-
-        if text and len(text) < 10:
+        elif len(text) < 10:
             issues.append("too_short")
 
-        query = self._normalise_text(
-            context.get("query", "")
-        )
-
+        query = self._normalise_text(context.get("query", ""))
         resolved_query = self._normalise_text(
             context.get("resolved_query", query)
         )
@@ -195,23 +191,28 @@ class SelfReflection:
             issues.append("missing_resolved_context")
 
         confidence = self._clamp(
-            context.get("confidence", 0.5),
-            0.0,
-            1.0,
+            context.get("confidence", 0.5)
         )
 
-        # Explicit failure signals from upstream components.
-        if context.get("failed") is True:
-            issues.append("execution_failure")
+        # Explicit upstream outcome signals.
+        signal_map = (
+            ("failed", "execution_failure"),
+            ("tool_error", "tool_error"),
+            ("timeout", "timeout"),
+            ("low_confidence", "low_confidence_signal"),
+        )
 
-        if context.get("tool_error") is True:
-            issues.append("tool_error")
+        for key, issue in signal_map:
+            if context.get(key) is True:
+                issues.append(issue)
 
-        if context.get("timeout") is True:
-            issues.append("timeout")
+        # Verification is optional, but if an upstream verifier explicitly
+        # says the result failed, reflection must record that outcome.
+        verified = context.get("verified")
+        verification_failed = context.get("verification_failed")
 
-        if context.get("low_confidence") is True:
-            issues.append("low_confidence_signal")
+        if verification_failed is True:
+            issues.append("verification_failure")
 
         quality_score = 1.0
 
@@ -223,23 +224,18 @@ class SelfReflection:
             "tool_error": 0.25,
             "timeout": 0.25,
             "low_confidence_signal": 0.10,
+            "verification_failure": 0.35,
         }
 
         for issue in issues:
             quality_score -= penalties.get(issue, 0.0)
 
-        # Confidence should influence the evaluation, but should
-        # never completely override observable response quality.
         if confidence < 0.25:
             quality_score -= 0.10
         elif confidence >= 0.85 and not issues:
             quality_score += 0.03
 
-        quality_score = self._clamp(
-            quality_score,
-            0.0,
-            1.0,
-        )
+        quality_score = self._clamp(quality_score)
 
         if quality_score >= 0.85:
             quality = "high"
@@ -258,24 +254,152 @@ class SelfReflection:
         if not issues:
             self.statistics["successful_reviews"] += 1
 
+        if verified is True:
+            self.statistics["verified_outcomes"] += 1
+        elif verified is False:
+            self.statistics["unverified_outcomes"] += 1
+
         evaluation = {
             "quality": quality,
-            "quality_score": round(
-                quality_score,
-                3,
-            ),
+            "quality_score": round(quality_score, 3),
             "complete": not bool(issues),
-            "issues": issues,
+            "issues": list(dict.fromkeys(issues)),
             "confidence": round(confidence, 3),
             "query": query,
             "resolved_query": resolved_query,
             "response_length": len(text),
+            "verified": verified,
             "evaluated_at": self._now(),
         }
 
         self._recent_reviews.append(evaluation)
-
         return evaluation
+
+    # =========================================================
+    # EXECUTION / ACTION REFLECTION
+    # =========================================================
+
+    async def reflect_on_execution(
+        self,
+        execution_result: Any,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Evaluate observable execution results.
+
+        This is intentionally separate from plan reflection so computer
+        control, tools, actions, and automation can report whether their
+        intended outcome was actually verified.
+        """
+        self.statistics["execution_reviews"] += 1
+
+        context = context or {}
+
+        if isinstance(execution_result, dict):
+            data = dict(execution_result)
+        else:
+            data = {
+                "success": getattr(
+                    execution_result,
+                    "success",
+                    False,
+                ),
+                "error": getattr(
+                    execution_result,
+                    "error",
+                    None,
+                ),
+                "result": getattr(
+                    execution_result,
+                    "result",
+                    None,
+                ),
+            }
+
+        success = data.get("success")
+        if success is None:
+            success = data.get("ok")
+
+        errors = self._as_list(data.get("errors"))
+        error = data.get("error")
+        if error:
+            errors.append(error)
+
+        verification = data.get("verified")
+        if verification is None:
+            verification = data.get("verification")
+
+        verification_failed = (
+            verification is False
+            or data.get("verification_failed") is True
+        )
+
+        if success is None:
+            success = not bool(errors) and not verification_failed
+
+        duration = data.get(
+            "duration_seconds",
+            data.get("duration"),
+        )
+
+        try:
+            duration = (
+                float(duration)
+                if duration is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            duration = None
+
+        issues: List[str] = []
+
+        if not bool(success):
+            issues.append("execution_failure")
+
+        if errors:
+            issues.append("execution_error")
+
+        if verification_failed:
+            issues.append("verification_failure")
+
+        if duration is not None and duration > 30:
+            issues.append("slow_execution")
+
+        if data.get("retry_count", 0):
+            issues.append("retry_required")
+
+        if not verification and bool(success):
+            issues.append("unverified_success")
+
+        if not issues:
+            quality = "high"
+        elif "execution_failure" in issues or "verification_failure" in issues:
+            quality = "low"
+        else:
+            quality = "medium"
+
+        improvements = await self.suggest_improvements(
+            {
+                "issues": issues,
+                "execution": True,
+                "duration_seconds": duration,
+            }
+        )
+
+        return {
+            "success": bool(success),
+            "quality": quality,
+            "issues": list(dict.fromkeys(issues)),
+            "errors": [self._normalise_text(item) for item in errors],
+            "duration_seconds": duration,
+            "verified": verification,
+            "improvements": improvements,
+            "context": {
+                "task_id": context.get("task_id"),
+                "session_id": context.get("session_id"),
+            },
+            "evaluated_at": self._now(),
+        }
 
     # =========================================================
     # PLAN REFLECTION
@@ -286,19 +410,18 @@ class SelfReflection:
         plan: Any,
         execution_results: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Critique workflow plans and execution efficiency.
-        """
-
         execution_results = execution_results or {}
 
         success = bool(
-            execution_results.get("success", False)
+            execution_results.get(
+                "success",
+                execution_results.get("ok", False),
+            )
         )
 
-        errors = execution_results.get("errors", [])
-        if isinstance(errors, str):
-            errors = [errors]
+        errors = self._as_list(
+            execution_results.get("errors")
+        )
 
         duration = execution_results.get(
             "duration",
@@ -306,11 +429,15 @@ class SelfReflection:
         )
 
         try:
-            duration = float(duration) if duration is not None else None
+            duration = (
+                float(duration)
+                if duration is not None
+                else None
+            )
         except (TypeError, ValueError):
             duration = None
 
-        bottlenecks = []
+        bottlenecks: List[str] = []
 
         if not success:
             bottlenecks.append(
@@ -325,6 +452,11 @@ class SelfReflection:
         if duration is not None and duration > 30:
             bottlenecks.append(
                 "Execution duration exceeded 30 seconds"
+            )
+
+        if execution_results.get("verification_failed") is True:
+            bottlenecks.append(
+                "Execution verification failed"
             )
 
         if success and not bottlenecks:
@@ -351,10 +483,11 @@ class SelfReflection:
         reasoning_result: Any,
     ) -> Dict[str, Any]:
         """
-        Inspect reasoning confidence and observable reasoning metadata.
+        Inspect only observable reasoning metadata.
 
-        This method does not attempt to expose hidden chain-of-thought.
+        Hidden chain-of-thought is never requested, stored, or returned.
         """
+        self.statistics["reasoning_reviews"] += 1
 
         if reasoning_result is None:
             return {
@@ -363,21 +496,33 @@ class SelfReflection:
                 "reasoning_available": False,
             }
 
-        conf = getattr(
-            reasoning_result,
-            "confidence",
-            None,
-        )
-
-        if conf is None and isinstance(reasoning_result, dict):
+        if isinstance(reasoning_result, dict):
             conf = reasoning_result.get(
                 "confidence",
                 0.5,
             )
+            contradictions = self._as_list(
+                reasoning_result.get("contradictions")
+            )
+        else:
+            conf = getattr(
+                reasoning_result,
+                "confidence",
+                0.5,
+            )
+            contradictions = self._as_list(
+                getattr(
+                    reasoning_result,
+                    "contradictions",
+                    None,
+                )
+            )
 
-        conf = self._clamp(conf, 0.0, 1.0)
+        conf = self._clamp(conf)
 
-        if conf >= 0.80:
+        if contradictions:
+            soundness = "weak"
+        elif conf >= 0.80:
             soundness = "strong"
         elif conf >= 0.50:
             soundness = "moderate"
@@ -387,6 +532,7 @@ class SelfReflection:
         return {
             "reasoning_soundness": soundness,
             "confidence_assessment": round(conf, 3),
+            "contradictions_detected": len(contradictions),
             "reasoning_available": True,
         }
 
@@ -398,13 +544,6 @@ class SelfReflection:
         self,
         query: str,
     ) -> bool:
-        """
-        Determine whether a similar failure has occurred before.
-
-        Checks both the bounded local failure history and the
-        persistent knowledge database when available.
-        """
-
         query = self._normalise_text(query)
 
         if not query:
@@ -412,11 +551,9 @@ class SelfReflection:
 
         pattern = self._pattern_key(query)
 
-        # Fast local check.
         if pattern and self._failure_patterns.get(pattern, 0) > 0:
             return True
 
-        # Persistent database check.
         if (
             self.database is None
             or not hasattr(self.database, "search")
@@ -425,9 +562,7 @@ class SelfReflection:
 
         try:
             result = await self.database.search(query)
-
             return await self._has_results(result)
-
         except Exception:
             logger.exception(
                 "[SelfReflection] Repeated-mistake detection failed."
@@ -442,60 +577,61 @@ class SelfReflection:
         self,
         evaluation_data: Dict[str, Any],
     ) -> List[str]:
-        """
-        Generate concrete, deterministic improvement recommendations.
-        """
-
         evaluation_data = evaluation_data or {}
 
         suggestions: List[str] = []
+        issues = self._as_list(
+            evaluation_data.get("issues")
+        )
 
-        issues = evaluation_data.get("issues", [])
-        if isinstance(issues, str):
-            issues = [issues]
+        mapping = {
+            "empty_response":
+                "Verify response generation before returning the result.",
+            "too_short":
+                "Increase response completeness when the task requires explanation.",
+            "missing_resolved_context":
+                "Preserve resolved query context through the reasoning pipeline.",
+            "execution_failure":
+                "Inspect failed execution steps and use an appropriate bounded fallback.",
+            "execution_error":
+                "Capture structured tool/action errors and validate inputs before retrying.",
+            "tool_error":
+                "Validate tool availability and improve tool-failure recovery.",
+            "timeout":
+                "Reduce unnecessary work or apply a bounded fallback when execution times out.",
+            "low_confidence_signal":
+                "Prefer stronger evidence or retrieval before committing to an answer.",
+            "verification_failure":
+                "Do not treat an action as complete until its observable outcome is verified.",
+            "unverified_success":
+                "Add an explicit verification step before marking the operation successful.",
+            "slow_execution":
+                "Reduce unnecessary execution steps and use bounded timeouts.",
+            "retry_required":
+                "Prefer bounded retries with backoff instead of repeated blind retries.",
+        }
 
-        if "empty_response" in issues:
-            suggestions.append(
-                "Verify response generation before returning the result."
-            )
-
-        if "too_short" in issues:
-            suggestions.append(
-                "Increase response completeness when the task requires explanation."
-            )
-
-        if "missing_resolved_context" in issues:
-            suggestions.append(
-                "Preserve resolved query context through the reasoning pipeline."
-            )
-
-        if "execution_failure" in issues:
-            suggestions.append(
-                "Inspect failed execution steps and retry through an appropriate fallback."
-            )
-
-        if "tool_error" in issues:
-            suggestions.append(
-                "Validate tool availability and improve tool-failure recovery."
-            )
-
-        if "timeout" in issues:
-            suggestions.append(
-                "Reduce unnecessary work or apply a bounded fallback when execution times out."
-            )
-
-        if "low_confidence_signal" in issues:
-            suggestions.append(
-                "Prefer stronger evidence or retrieval before committing to an answer."
-            )
+        for issue in issues:
+            recommendation = mapping.get(str(issue))
+            if recommendation:
+                suggestions.append(recommendation)
 
         if not suggestions:
             suggestions.append(
                 "Continue reinforcing successful retrieval and execution pathways."
             )
 
+        suggestions = list(dict.fromkeys(suggestions))
         self.statistics["improvement_suggestions"] += len(
             suggestions
+        )
+
+        self._recent_improvements.append(
+            {
+                "suggestions": suggestions,
+                "issues": [str(item) for item in issues],
+                "created_at": self._now(),
+            }
         )
 
         return suggestions
@@ -509,11 +645,6 @@ class SelfReflection:
         response: Any,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Perform a complete response reflection and return
-        evaluation + improvement recommendations.
-        """
-
         context = context or {}
 
         evaluation = await self.reflect_on_response(
@@ -549,34 +680,31 @@ class SelfReflection:
         query = self._normalise_text(query)
         answer = self._normalise_text(answer)
 
-        # -----------------------------------------------------
-        # Empty response
-        # -----------------------------------------------------
-
         if not answer:
             self.statistics["mistakes"] += 1
 
             pattern = self._pattern_key(query)
+            repeated = False
 
             if pattern:
                 self._failure_patterns[pattern] += 1
+                repeated = self._failure_patterns[pattern] > 1
 
-            await self.learn_from_failure(query)
+                if repeated:
+                    self.statistics["repeated_mistakes"] += 1
+                    self.statistics["failure_patterns"] += 1
+
+            await self.learn_from_failure(
+                query,
+                pattern_already_recorded=bool(pattern),
+            )
 
             return {
                 "success": False,
                 "reason": "empty_response",
                 "query": query,
-                "repeated": (
-                    self._failure_patterns.get(pattern, 0) > 1
-                    if pattern
-                    else False
-                ),
+                "repeated": repeated,
             }
-
-        # -----------------------------------------------------
-        # Detect knowledge gaps
-        # -----------------------------------------------------
 
         lower_answer = answer.lower()
 
@@ -612,14 +740,18 @@ class SelfReflection:
             pattern = self._pattern_key(query)
 
             if pattern:
+                previous_count = self._failure_patterns.get(
+                    pattern,
+                    0,
+                )
                 self._failure_patterns[pattern] += 1
 
-                if self._failure_patterns[pattern] >= 2:
+                if previous_count > 0:
                     self.statistics["failure_patterns"] += 1
 
-            if self.database is not None and hasattr(
-                self.database,
-                "store",
+            if (
+                self.database is not None
+                and hasattr(self.database, "store")
             ):
                 try:
                     await self.database.store(
@@ -638,7 +770,10 @@ class SelfReflection:
                         "[SelfReflection] Failed to persist knowledge gap."
                     )
 
-            await self.learn_from_failure(query)
+            await self.learn_from_failure(
+                query,
+                pattern_already_recorded=bool(pattern),
+            )
 
             return {
                 "success": False,
@@ -648,10 +783,6 @@ class SelfReflection:
                 "pattern": pattern,
             }
 
-        # -----------------------------------------------------
-        # Successful response
-        # -----------------------------------------------------
-
         pattern = self._pattern_key(query)
 
         if pattern:
@@ -660,6 +791,7 @@ class SelfReflection:
         await self.learn_from_success(
             query,
             answer,
+            pattern_already_recorded=bool(pattern),
         )
 
         return {
@@ -672,10 +804,7 @@ class SelfReflection:
     # CONFIDENCE MANAGEMENT
     # =========================================================
 
-    async def improve_confidence(
-        self,
-        knowledge_id,
-    ):
+    async def improve_confidence(self, knowledge_id):
         if (
             self.database is None
             or not hasattr(
@@ -689,23 +818,15 @@ class SelfReflection:
             await self.database.increase_confidence(
                 knowledge_id
             )
-
-            self.statistics[
-                "confidence_updates"
-            ] += 1
-
+            self.statistics["confidence_updates"] += 1
             return True
-
         except Exception:
             logger.exception(
                 "[SelfReflection] Failed to increase confidence."
             )
             return False
 
-    async def reduce_confidence(
-        self,
-        knowledge_id,
-    ):
+    async def reduce_confidence(self, knowledge_id):
         if (
             self.database is None
             or not hasattr(
@@ -719,13 +840,8 @@ class SelfReflection:
             await self.database.decrease_confidence(
                 knowledge_id
             )
-
-            self.statistics[
-                "confidence_updates"
-            ] += 1
-
+            self.statistics["confidence_updates"] += 1
             return True
-
         except Exception:
             logger.exception(
                 "[SelfReflection] Failed to decrease confidence."
@@ -739,17 +855,21 @@ class SelfReflection:
     async def learn_from_failure(
         self,
         query,
+        pattern_already_recorded: bool = False,
     ):
         self.statistics["improvements"] += 1
 
         query = self._normalise_text(query)
-
         pattern = self._pattern_key(query)
 
-        if pattern:
+        if pattern and not pattern_already_recorded:
+            previous_count = self._failure_patterns.get(
+                pattern,
+                0,
+            )
             self._failure_patterns[pattern] += 1
 
-            if self._failure_patterns[pattern] >= 2:
+            if previous_count > 0:
                 self.statistics["failure_patterns"] += 1
 
         if (
@@ -774,15 +894,15 @@ class SelfReflection:
         self,
         query,
         answer,
+        pattern_already_recorded: bool = False,
     ):
         self.statistics["improvements"] += 1
 
         query = self._normalise_text(query)
         answer = self._normalise_text(answer)
-
         pattern = self._pattern_key(query)
 
-        if pattern:
+        if pattern and not pattern_already_recorded:
             self._success_patterns[pattern] += 1
 
         if (
@@ -804,14 +924,6 @@ class SelfReflection:
     # =========================================================
 
     async def detect_duplicates(self):
-        """
-        Detect duplicate knowledge through the knowledge database.
-
-        If the database exposes a dedicated duplicate detector,
-        use it. Otherwise safely report that only snapshot-level
-        inspection is available.
-        """
-
         if self.database is None:
             return {
                 "checked": 0,
@@ -819,7 +931,6 @@ class SelfReflection:
                 "status": "database_unavailable",
             }
 
-        # Prefer a real database duplicate detector when available.
         for method_name in (
             "detect_duplicates",
             "find_duplicates",
@@ -916,21 +1027,12 @@ class SelfReflection:
     # =========================================================
 
     async def improve_graph(self):
-        """
-        Ask the existing graph-building layer to reinforce
-        relationships discovered by the learning system.
-
-        Reflection does not invent graph facts.
-        """
-
         if self.graph_builder is None:
             return {
                 "status": "graph_builder_unavailable",
             }
 
         try:
-            # Support future graph builders that expose an explicit
-            # reflection/reinforcement operation.
             for method_name in (
                 "review",
                 "reflect",
@@ -961,10 +1063,6 @@ class SelfReflection:
                     "result": result,
                 }
 
-            self.statistics[
-                "graph_improvements"
-            ] += 1
-
             return {
                 "status": "graph_review_ready",
             }
@@ -979,17 +1077,10 @@ class SelfReflection:
             }
 
     # =========================================================
-    # DAILY REFLECTION — ARIA'S "SLEEP"
+    # DAILY REVIEW
     # =========================================================
 
     async def daily_review(self):
-        """
-        ARIA's daily internal maintenance cycle.
-
-        Reflection observes system state and delegates actual
-        knowledge operations to the appropriate subsystems.
-        """
-
         self.statistics["daily_reviews"] += 1
 
         duplicate_result = await self.detect_duplicates()
@@ -1008,10 +1099,13 @@ class SelfReflection:
                 "pattern": pattern,
                 "count": count,
             }
-            for pattern, count
-            in self._failure_patterns.most_common(10)
+            for pattern, count in self._failure_patterns.most_common(10)
             if count >= 2
         ]
+
+        improvement_items = list(
+            self._recent_improvements
+        )[-10:]
 
         return {
             "type": "daily_reflection",
@@ -1020,9 +1114,8 @@ class SelfReflection:
             "recent_review_count": len(recent),
             "recent_low_quality_reviews": low_quality,
             "repeated_failure_patterns": repeated_failures,
-            "statistics": dict(
-                self.statistics
-            ),
+            "recent_improvements": improvement_items,
+            "statistics": dict(self.statistics),
             "generated_at": self._now(),
         }
 
@@ -1031,13 +1124,6 @@ class SelfReflection:
     # =========================================================
 
     async def weekly_review(self):
-        """
-        Weekly meta-review.
-
-        Produces internal telemetry for future consolidation.
-        It does not generate a user-facing answer.
-        """
-
         self.statistics["weekly_reviews"] += 1
 
         duplicate_result = await self.detect_duplicates()
@@ -1048,8 +1134,7 @@ class SelfReflection:
                 "pattern": pattern,
                 "count": count,
             }
-            for pattern, count
-            in self._failure_patterns.most_common(20)
+            for pattern, count in self._failure_patterns.most_common(20)
             if count >= 2
         ]
 
@@ -1058,8 +1143,7 @@ class SelfReflection:
                 "pattern": pattern,
                 "count": count,
             }
-            for pattern, count
-            in self._success_patterns.most_common(20)
+            for pattern, count in self._success_patterns.most_common(20)
             if count >= 2
         ]
 
@@ -1069,9 +1153,7 @@ class SelfReflection:
             "graph": graph_result,
             "repeated_failure_patterns": repeated_failures,
             "successful_patterns": successful_patterns,
-            "statistics": dict(
-                self.statistics
-            ),
+            "statistics": dict(self.statistics),
             "generated_at": self._now(),
         }
 
@@ -1080,14 +1162,13 @@ class SelfReflection:
     # =========================================================
 
     def summary(self):
-        """
-        Return a safe snapshot of reflection telemetry.
-        """
-
         return {
             **self.statistics,
             "recent_reviews_buffer": len(
                 self._recent_reviews
+            ),
+            "recent_improvements_buffer": len(
+                self._recent_improvements
             ),
             "tracked_failure_patterns": len(
                 self._failure_patterns
@@ -1095,17 +1176,29 @@ class SelfReflection:
             "tracked_success_patterns": len(
                 self._success_patterns
             ),
+            "top_failure_patterns": [
+                {
+                    "pattern": pattern,
+                    "count": count,
+                }
+                for pattern, count
+                in self._failure_patterns.most_common(10)
+            ],
+            "top_success_patterns": [
+                {
+                    "pattern": pattern,
+                    "count": count,
+                }
+                for pattern, count
+                in self._success_patterns.most_common(10)
+            ],
         }
 
     # =========================================================
     # UNIVERSAL ENTRY POINT
     # =========================================================
 
-    async def reflect(
-        self,
-        event: str,
-        **kwargs,
-    ):
+    async def reflect(self, event: str, **kwargs):
         event = self._normalise_text(event).lower()
 
         if event == "review":
@@ -1118,6 +1211,12 @@ class SelfReflection:
         if event == "evaluate_response":
             return await self.evaluate_response(
                 kwargs.get("response"),
+                kwargs.get("context", {}),
+            )
+
+        if event == "execution":
+            return await self.reflect_on_execution(
+                kwargs.get("execution_result"),
                 kwargs.get("context", {}),
             )
 
@@ -1167,13 +1266,18 @@ class SelfReflection:
     async def handle(self, event):
         """
         Event-bus compatible entry point.
-        """
 
+        Supports event.data as a mapping and safely handles events
+        that do not provide data.
+        """
         data = getattr(
             event,
             "data",
             {},
         ) or {}
+
+        if not isinstance(data, dict):
+            data = {}
 
         return await self.reflect(
             getattr(event, "type", ""),
