@@ -4,6 +4,7 @@ import asyncio
 import logging
 import html
 import re
+import json
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any
@@ -24,6 +25,7 @@ from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
 from vision_engine import VisionEngine
+from brain.tools.search_tool import SearchTool
 
 try:
     import pyautogui
@@ -912,6 +914,23 @@ pending_document_actions = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     registry = await bootstrap_application()
+
+    # ---------------------------------------------------------
+    # SHARED REAL-WORLD SEARCH SERVICE
+    #
+    # Register one SearchTool instance for the whole application.
+    # This keeps web intelligence consistent across chat, actions,
+    # ToolManager integrations, and future scheduled workflows.
+    # ---------------------------------------------------------
+    search_tool = SearchTool(
+        max_results=10,
+        timeout=20,
+    )
+    registry.register(
+        "search_tool",
+        search_tool,
+    )
+
     app.state.registry = registry
     app.state.bg_manager = background_manager
     logger.info("[Lifespan] ARIA Platform successfully started.")
@@ -1010,6 +1029,16 @@ async def process_task(
             registry.get("document_intelligence")
             if registry.has("document_intelligence")
             else None
+        ),
+        "search_tool": (
+            registry.get("search_tool")
+            if registry.has("search_tool")
+            else None
+        ),
+        "web_search_available": (
+            registry.get("search_tool").is_available()
+            if registry.has("search_tool")
+            else False
         ),
         "vision_result": vision_result,
         "image_metadata": image_metadata,
@@ -2334,6 +2363,110 @@ async def telegram_webhook(req: Request):
         "status": "ok"
     }
 
+class SearchRequest(BaseModel):
+    query: str
+    max_results: int = 5
+    search_depth: str = "advanced"
+
+
+@app.post("/search")
+async def web_search(
+    request: SearchRequest,
+    req: Request,
+):
+    """
+    Shared real-world web intelligence endpoint.
+
+    The endpoint uses the same SearchTool instance registered during
+    application startup, so search behavior is consistent with the
+    rest of ARIA's tool ecosystem.
+    """
+
+    request_id = str(uuid.uuid4())
+    query = str(request.query or "").strip()
+
+    if not query:
+        return {
+            "success": False,
+            "error": "Search query is empty.",
+            "results": [],
+            "metadata": {
+                "request_id": request_id,
+            },
+        }
+
+    if len(query) > 1000:
+        return {
+            "success": False,
+            "error": "Search query exceeds the 1000-character limit.",
+            "results": [],
+            "metadata": {
+                "request_id": request_id,
+            },
+        }
+
+    if request.max_results < 1 or request.max_results > 10:
+        return {
+            "success": False,
+            "error": "max_results must be between 1 and 10.",
+            "results": [],
+            "metadata": {
+                "request_id": request_id,
+            },
+        }
+
+    search_tool = getattr(
+        req.app.state.registry,
+        "_services",
+        {},
+    ).get("search_tool")
+
+    if search_tool is None:
+        return {
+            "success": False,
+            "error": "Search service is not registered.",
+            "results": [],
+            "metadata": {
+                "request_id": request_id,
+            },
+        }
+
+    search_tool.max_results = request.max_results
+
+    try:
+        result = await search_tool.execute(
+            query=query,
+            context={
+                "search_depth": (
+                    request.search_depth
+                    if request.search_depth in {"basic", "advanced"}
+                    else "advanced"
+                ),
+                "request_id": request_id,
+            },
+        )
+
+        result.setdefault("metadata", {})
+        result["metadata"].update({
+            "request_id": request_id,
+            "provider": "tavily",
+            "shared_search_tool": True,
+        })
+
+        return result
+
+    except Exception as exc:
+        logger.exception("[WebSearch] Endpoint failed.")
+        return {
+            "success": False,
+            "error": f"Web search failed: {type(exc).__name__}.",
+            "results": [],
+            "metadata": {
+                "request_id": request_id,
+            },
+        }
+
+
 @app.get("/health")
 async def health(req: Request):
     registry = req.app.state.registry
@@ -2359,6 +2492,12 @@ async def health(req: Request):
             "plugin_manager": registry.has("plugin_manager"),
             "scheduler": registry.has("scheduler"),
             "http_client": registry.has("http_client"),
+            "search_tool": registry.has("search_tool"),
+            "web_search_available": (
+                registry.get("search_tool").is_available()
+                if registry.has("search_tool")
+                else False
+            ),
         },
         "plugins_loaded": (
             list(registry.get("plugin_manager").plugins.keys())
