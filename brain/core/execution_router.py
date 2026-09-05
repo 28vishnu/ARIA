@@ -178,8 +178,47 @@ def contains_file_reference(q: str) -> bool:
     )
 
 
-def decide(query: str) -> RouteDecision:
+def decide(
+    query: str,
+    context: dict | None = None,
+) -> RouteDecision:
     q = query.lower().strip()
+
+    # =========================================================
+    # PHASE 4 — ACTIVE AUTONOMOUS GOAL
+    # =========================================================
+    #
+    # If ARIA is currently working toward an autonomous goal,
+    # ordinary follow-up requests should remain inside the
+    # planner/workflow pipeline even when the user does not
+    # explicitly say "plan", "goal", or "steps".
+    # =========================================================
+    context = context or {}
+
+    autonomous_goal = (
+        context.get("autonomous_goal")
+        or context.get("goal")
+    )
+
+    if isinstance(autonomous_goal, dict):
+        autonomous_goal_id = str(
+            autonomous_goal.get(
+                "goal_id",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if autonomous_goal_id:
+            logger.info(
+                "[ExecutionRouter] Active autonomous goal detected: %s",
+                autonomous_goal.get("title", ""),
+            )
+
+            return RouteDecision(
+                Route.PLANNER,
+                0.99,
+            )
 
     # Greetings
     if any(q.startswith(x) for x in (
