@@ -593,7 +593,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # Reuse the same search provider in the action layer when supported.
-    web_search_action = action_manager.get("web_search_action")
+    web_search_action = action_manager.actions.get("web_search_action")
     if web_search_action is not None:
         try:
             web_search_action.search_tool = search_tool
