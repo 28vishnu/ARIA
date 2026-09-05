@@ -5,6 +5,8 @@ import logging
 import html
 import re
 from typing import Any
+import base64
+import binascii
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
@@ -18,6 +20,7 @@ from core.dependency_injection import RequestContext
 from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
+from vision_engine import VisionEngine
 
 setup_logging("INFO")
 logger = logging.getLogger("aria")
@@ -1497,3 +1500,126 @@ async def web_chat(
             success=False,
             reply=f"System Error: {e}"
         )
+
+# =============================================================
+# VISION API
+# =============================================================
+
+class VisionRequest(BaseModel):
+    image: str
+    session_id: str = "web"
+    prompt: str = (
+        "Perform deep OCR and describe all visible text, "
+        "layout, objects, people, charts, and visual contents "
+        "in detail."
+    )
+
+
+@app.post("/vision")
+async def web_vision(
+    request: VisionRequest,
+    req: Request,
+):
+    """
+    Web frontend vision endpoint.
+
+    Accepts a Base64/data-URL image from the frontend,
+    decodes it, and sends the image bytes to VisionEngine.
+    """
+
+    request_id = str(uuid.uuid4())
+
+    try:
+        image_data = request.image.strip()
+
+        if not image_data:
+            return {
+                "success": False,
+                "text": "",
+                "description": "No image data was provided.",
+                "entities": [],
+                "metadata": {},
+            }
+
+        # Support browser data URLs: data:image/jpeg;base64,...
+        if image_data.startswith("data:"):
+            try:
+                header, encoded = image_data.split(",", 1)
+            except ValueError:
+                return {
+                    "success": False,
+                    "text": "",
+                    "description": "Invalid image data URL.",
+                    "entities": [],
+                    "metadata": {},
+                }
+
+            mime_type = header.split(";", 1)[0].replace("data:", "").strip()
+
+            extension_map = {
+                "image/jpeg": "jpg",
+                "image/png": "png",
+                "image/webp": "webp",
+                "image/gif": "gif",
+                "image/tiff": "tiff",
+            }
+
+            file_name = f"vision.{extension_map.get(mime_type, 'jpg')}"
+        else:
+            encoded = image_data
+            file_name = "vision.jpg"
+
+        try:
+            image_bytes = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            return {
+                "success": False,
+                "text": "",
+                "description": "Invalid Base64 image data.",
+                "entities": [],
+                "metadata": {},
+            }
+
+        if not image_bytes:
+            return {
+                "success": False,
+                "text": "",
+                "description": "Decoded image is empty.",
+                "entities": [],
+                "metadata": {},
+            }
+
+        vision_engine = getattr(req.app.state, "vision_engine", None)
+
+        if vision_engine is None:
+            vision_engine = VisionEngine()
+            req.app.state.vision_engine = vision_engine
+
+        result = await vision_engine.analyze_visual(
+            image_bytes=image_bytes,
+            file_name=file_name,
+            prompt=request.prompt,
+        )
+
+        result.setdefault("metadata", {})
+        result["metadata"].update({
+            "session_id": request.session_id,
+            "request_id": request_id,
+        })
+
+        return result
+
+    except Exception as e:
+        logger.exception("[WEB VISION] Vision analysis failed.")
+
+        return {
+            "success": False,
+            "text": "",
+            "description": f"Vision analysis failed: {e}",
+            "entities": [],
+            "metadata": {
+                "session_id": request.session_id,
+                "request_id": request_id,
+            },
+        }
+
