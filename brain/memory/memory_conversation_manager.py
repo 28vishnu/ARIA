@@ -449,10 +449,15 @@ class MemoryConversationManager:
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve recent episodic conversations.
+        Retrieve relevant episodic conversations using:
 
-        This intentionally starts with recent episodes. Semantic
-        ranking of episodes will be added in a later Phase-5 step.
+        1. lexical subject matching,
+        2. response/query word overlap,
+        3. recency weighting,
+        4. deterministic relevance ranking.
+
+        This keeps episodic retrieval lightweight while making
+        related wording more useful than exact regex matching.
         """
 
         if self.episode_col is None:
@@ -464,45 +469,219 @@ class MemoryConversationManager:
                 min(int(limit), 20),
             )
 
+            normalized_query = self._normalize(
+                str(query or "")
+            )
+
+            query_words = self._meaningful_words(
+                normalized_query
+            )
+
+            generic_words = self._generic_memory_words()
+
+            # Fetch a wider recent candidate set first.
+            # Ranking is performed locally so semantically related
+            # wording can still be considered.
+            candidate_limit = min(
+                max(limit * 5, 25),
+                100,
+            )
+
             cursor = (
                 self.episode_col
-                .find(
-                    {
-                        "$or": [
-                            {
-                                "query": {
-                                    "$regex": str(
-                                        query or ""
-                                    ).strip(),
-                                    "$options": "i",
-                                }
-                            },
-                            {
-                                "response": {
-                                    "$regex": str(
-                                        query or ""
-                                    ).strip(),
-                                    "$options": "i",
-                                }
-                            },
-                        ]
-                    }
-                )
+                .find({})
                 .sort(
                     "timestamp",
                     -1,
                 )
-                .limit(limit)
+                .limit(candidate_limit)
             )
 
             episodes = await cursor.to_list(
-                length=limit
+                length=candidate_limit
             )
 
-            for episode in episodes:
-                episode.pop("_id", None)
+            if not episodes:
+                return []
 
-            return episodes
+            now = datetime.now(
+                timezone.utc
+            )
+
+            ranked = []
+
+            for episode in episodes:
+
+                if not isinstance(episode, dict):
+                    continue
+
+                episode_query = str(
+                    episode.get("query") or ""
+                ).strip()
+
+                episode_response = str(
+                    episode.get("response") or ""
+                ).strip()
+
+                if not episode_query:
+                    continue
+
+                normalized_episode_query = self._normalize(
+                    episode_query
+                )
+
+                normalized_episode_response = self._normalize(
+                    episode_response
+                )
+
+                episode_query_words = (
+                    self._meaningful_words(
+                        normalized_episode_query
+                    )
+                )
+
+                episode_response_words = (
+                    self._meaningful_words(
+                        normalized_episode_response
+                    )
+                )
+
+                # -------------------------------------------------
+                # RELEVANCE
+                # -------------------------------------------------
+
+                meaningful_query_words = {
+                    word
+                    for word in query_words
+                    if word not in generic_words
+                }
+
+                if meaningful_query_words:
+
+                    query_overlap = (
+                        meaningful_query_words
+                        .intersection(
+                            episode_query_words
+                        )
+                    )
+
+                    response_overlap = (
+                        meaningful_query_words
+                        .intersection(
+                            episode_response_words
+                        )
+                    )
+
+                    query_score = (
+                        len(query_overlap)
+                        / len(meaningful_query_words)
+                    )
+
+                    response_score = (
+                        len(response_overlap)
+                        / len(meaningful_query_words)
+                    )
+
+                    relevance_score = (
+                        (query_score * 0.65)
+                        + (response_score * 0.35)
+                    )
+
+                else:
+                    # Generic/empty queries should rely primarily
+                    # on recency rather than accidental word overlap.
+                    relevance_score = 0.0
+
+                # -------------------------------------------------
+                # TEMPORAL SCORE
+                # -------------------------------------------------
+
+                timestamp = episode.get(
+                    "timestamp"
+                )
+
+                if isinstance(timestamp, datetime):
+
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(
+                            tzinfo=timezone.utc
+                        )
+
+                    age_days = max(
+                        0.0,
+                        (
+                            now - timestamp
+                        ).total_seconds()
+                        / 86400.0,
+                    )
+
+                    # Smooth decay:
+                    # recent episodes score higher, but old
+                    # memories never become automatically useless.
+                    recency_score = 1.0 / (
+                        1.0
+                        + (age_days / 30.0)
+                    )
+
+                else:
+                    recency_score = 0.0
+
+                # -------------------------------------------------
+                # FINAL SCORE
+                # -------------------------------------------------
+
+                if meaningful_query_words:
+                    final_score = (
+                        (relevance_score * 0.75)
+                        + (recency_score * 0.25)
+                    )
+                else:
+                    final_score = recency_score
+
+                ranked.append(
+                    (
+                        final_score,
+                        recency_score,
+                        episode,
+                    )
+                )
+
+            # Highest relevance first.
+            # Recency breaks ties.
+            ranked.sort(
+                key=lambda item: (
+                    item[0],
+                    item[1],
+                ),
+                reverse=True,
+            )
+
+            results = []
+
+            for (
+                final_score,
+                recency_score,
+                episode,
+            ) in ranked[:limit]:
+
+                episode.pop(
+                    "_id",
+                    None,
+                )
+
+                # Do not expose internal ranking fields
+                # to the rest of ARIA.
+                results.append(
+                    episode
+                )
+
+            logger.debug(
+                "[MemoryConversationManager] "
+                "Retrieved %d ranked episodic memories.",
+                len(results),
+            )
+
+            return results
 
         except Exception:
             logger.exception(
