@@ -7,6 +7,7 @@ import re
 from typing import Any
 import base64
 import binascii
+import io
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
@@ -451,6 +452,55 @@ async def computer_action(
             "operation": operation,
             "error": str(exc),
         }
+
+async def capture_screen_for_vision() -> dict:
+    """
+    Capture the current backend screen entirely in memory.
+
+    The screenshot is intentionally not written to disk because
+    screen understanding only needs the image bytes for VisionEngine.
+    """
+
+    if not COMPUTER_CONTROL_ENABLED:
+        return {
+            "success": False,
+            "error": "Computer control is disabled.",
+        }
+
+    if pyautogui is None:
+        return {
+            "success": False,
+            "error": "PyAutoGUI is not installed.",
+        }
+
+    try:
+        image = pyautogui.screenshot()
+
+        buffer = io.BytesIO()
+
+        image.save(
+            buffer,
+            format="PNG",
+        )
+
+        return {
+            "success": True,
+            "image_bytes": buffer.getvalue(),
+            "width": image.width,
+            "height": image.height,
+            "mime_type": "image/png",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "[ComputerVision] Screen capture failed."
+        )
+
+        return {
+            "success": False,
+            "error": str(exc),
+        }
+
 
 class BackgroundTaskManager:
     def __init__(self):
@@ -1941,6 +1991,226 @@ async def web_chat(
             success=False,
             reply=f"System Error: {e}"
         )
+
+# =============================================================
+# COMPUTER SCREEN UNDERSTANDING API
+# =============================================================
+
+class ComputerScreenRequest(BaseModel):
+    session_id: str = "web"
+    prompt: str = (
+        "Analyze the current computer screen in detail. "
+        "Identify visible applications, windows, buttons, "
+        "menus, text, fields, icons, dialogs, and important "
+        "interactive elements. Extract exact visible text. "
+        "Do not invent elements that are not visible."
+    )
+
+
+@app.post("/computer/screen")
+async def computer_screen(
+    request: ComputerScreenRequest,
+    req: Request,
+):
+    """
+    Capture and understand the current computer screen.
+
+    Pipeline:
+
+        Computer Screen
+             ↓
+        In-memory PNG
+             ↓
+        VisionEngine
+             ↓
+        CognitiveCore
+             ↓
+        Personality
+             ↓
+        ARIA response
+    """
+
+    request_id = str(uuid.uuid4())
+
+    if not COMPUTER_CONTROL_ENABLED:
+        return {
+            "success": False,
+            "text": "",
+            "description": "Computer control is disabled.",
+            "entities": [],
+            "metadata": {
+                "request_id": request_id,
+                "computer_control": False,
+            },
+        }
+
+    try:
+        # ---------------------------------------------------------
+        # 1. Capture current screen
+        # ---------------------------------------------------------
+
+        capture = await capture_screen_for_vision()
+
+        if not capture.get("success"):
+            return {
+                "success": False,
+                "text": "",
+                "description": capture.get(
+                    "error",
+                    "Unable to capture the computer screen.",
+                ),
+                "entities": [],
+                "metadata": {
+                    "request_id": request_id,
+                },
+            }
+
+        image_bytes = capture["image_bytes"]
+
+        # ---------------------------------------------------------
+        # 2. Get the shared VisionEngine
+        # ---------------------------------------------------------
+
+        vision_engine = getattr(
+            req.app.state,
+            "vision_engine",
+            None,
+        )
+
+        if vision_engine is None:
+            vision_engine = VisionEngine()
+            req.app.state.vision_engine = vision_engine
+
+        # ---------------------------------------------------------
+        # 3. Analyze screen
+        # ---------------------------------------------------------
+
+        prompt = request.prompt.strip()
+
+        if not prompt:
+            prompt = (
+                "Analyze the current computer screen in detail. "
+                "Identify visible applications, windows, buttons, "
+                "menus, text, fields, icons, dialogs, and important "
+                "interactive elements. Extract exact visible text. "
+                "Do not invent elements that are not visible."
+            )
+
+        vision_result = await vision_engine.analyze_visual(
+            image_bytes=image_bytes,
+            file_name="computer_screen.png",
+            prompt=prompt,
+        )
+
+        if not vision_result.get("success", False):
+            return vision_result
+
+        # ---------------------------------------------------------
+        # 4. Build screen metadata
+        # ---------------------------------------------------------
+
+        image_metadata = {
+            "file_name": "computer_screen.png",
+            "mime_type": "image/png",
+            "size_bytes": len(image_bytes),
+            "screen_width": capture["width"],
+            "screen_height": capture["height"],
+            "session_id": request.session_id,
+            "request_id": request_id,
+            "computer_screen": True,
+        }
+
+        # ---------------------------------------------------------
+        # 5. Send screen understanding into CognitiveCore
+        # ---------------------------------------------------------
+
+        cognitive_prompt = (
+            "Understand the current computer screen using the "
+            "visual information supplied by ARIA's vision system. "
+            "Answer the user's screen-related instruction using "
+            "only the observed screen state. "
+            "If the user asks what is on screen, describe it. "
+            "If an interactive element is mentioned, identify its "
+            "visible location or distinguishing characteristics "
+            "when the vision result provides them. "
+            "Do not invent coordinates or UI elements.\n\n"
+            f"User instruction:\n{prompt}"
+        )
+
+        cognitive_result = await process_task(
+            user_text=cognitive_prompt,
+            session_id=request.session_id,
+            request_id=request_id,
+            app_state=req.app.state,
+            vision_result=vision_result,
+            image_metadata=image_metadata,
+        )
+
+        # ---------------------------------------------------------
+        # 6. Extract final ARIA response
+        # ---------------------------------------------------------
+
+        if isinstance(cognitive_result, SystemResponse):
+            final_text = str(
+                getattr(
+                    cognitive_result,
+                    "message",
+                    cognitive_result,
+                )
+            )
+        else:
+            final_text = str(cognitive_result)
+
+        final_text = final_text.strip()
+
+        # ---------------------------------------------------------
+        # 7. Return structured screen intelligence
+        # ---------------------------------------------------------
+
+        return {
+            "success": True,
+            "text": final_text,
+            "description": vision_result.get(
+                "description",
+                "",
+            ),
+            "entities": vision_result.get(
+                "entities",
+                [],
+            ),
+            "metadata": {
+                **image_metadata,
+                "vision": True,
+                "cognitive": True,
+                "screen_understanding": True,
+                "pipeline": (
+                    "screen"
+                    " -> vision"
+                    " -> cognitive"
+                    " -> personality"
+                ),
+            },
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "[ComputerVision] Screen understanding failed."
+        )
+
+        return {
+            "success": False,
+            "text": "",
+            "description": (
+                f"Screen understanding failed: {exc}"
+            ),
+            "entities": [],
+            "metadata": {
+                "session_id": request.session_id,
+                "request_id": request_id,
+                "screen_understanding": False,
+            },
+        }
+
 
 # =============================================================
 # VISION API
