@@ -2463,13 +2463,145 @@ Execution Results:
 
         return formatted_response
 
-    async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
+    async def _format_response(
+        self,
+        answer: Any,
+        source: str,
+        context: Dict[str, Any],
+        confidence: float = 1.0,
+    ) -> SystemResponse:
+        """
+        Convert internal cognitive results into a clean user-facing response.
+
+        Internal dictionaries/lists from memory, knowledge, tools, and
+        reasoning must never be exposed directly to the user.
+        """
+
+        # ---------------------------------------------------------
+        # 1. Normalize structured internal results
+        # ---------------------------------------------------------
+
         formatted_answer = answer
-        if self.personality_engine and hasattr(self.personality_engine, "format"):
+
+        if isinstance(answer, list):
+            # Memory results commonly arrive as a list of dictionaries.
+            memory_items = []
+
+            for item in answer:
+                if isinstance(item, dict):
+                    key = item.get("key")
+                    value = item.get("value")
+
+                    if key is not None and value is not None:
+                        memory_items.append(
+                            f"{str(key).replace('_', ' ').strip().title()}: "
+                            f"{str(value).strip()}"
+                        )
+                    elif item.get("message") is not None:
+                        memory_items.append(
+                            str(item["message"]).strip()
+                        )
+                    elif item.get("response") is not None:
+                        memory_items.append(
+                            str(item["response"]).strip()
+                        )
+                    elif item:
+                        memory_items.append(
+                            ", ".join(
+                                f"{k}: {v}"
+                                for k, v in item.items()
+                                if k not in {
+                                    "retrieval_score",
+                                    "confidence",
+                                    "updated_at",
+                                }
+                            )
+                        )
+                elif item is not None:
+                    memory_items.append(str(item).strip())
+
+            formatted_answer = "\n".join(
+                item for item in memory_items if item
+            ).strip()
+
+        elif isinstance(answer, dict):
+            # Prefer a human-facing response field.
+            formatted_answer = (
+                answer.get("response")
+                or answer.get("message")
+                or answer.get("text")
+                or answer.get("answer")
+            )
+
+            # If this is a memory record, expose only useful information.
+            if not formatted_answer:
+                key = answer.get("key")
+                value = answer.get("value")
+
+                if key is not None and value is not None:
+                    formatted_answer = (
+                        f"{str(key).replace('_', ' ').strip().title()}: "
+                        f"{str(value).strip()}"
+                    )
+
+            # Last-resort safe conversion.
+            if not formatted_answer:
+                useful_items = {
+                    k: v
+                    for k, v in answer.items()
+                    if k not in {
+                        "retrieval_score",
+                        "confidence",
+                        "updated_at",
+                    }
+                }
+
+                formatted_answer = (
+                    ", ".join(
+                        f"{k}: {v}"
+                        for k, v in useful_items.items()
+                    )
+                    if useful_items
+                    else ""
+                )
+
+        if formatted_answer is None:
+            formatted_answer = ""
+
+        formatted_answer = str(formatted_answer).strip()
+
+        # ---------------------------------------------------------
+        # 2. Prevent completely empty user responses
+        # ---------------------------------------------------------
+
+        if not formatted_answer:
+            formatted_answer = (
+                "I processed that, but I don't have a useful "
+                "response to give yet."
+            )
+
+        # ---------------------------------------------------------
+        # 3. Personality formatting
+        # ---------------------------------------------------------
+
+        if (
+            self.personality_engine
+            and hasattr(self.personality_engine, "format")
+        ):
             try:
-                formatted_answer = await self.personality_engine.format(answer, context)
+                formatted_answer = await self.personality_engine.format(
+                    formatted_answer,
+                    context,
+                )
             except Exception as e:
-                logger.warning("Personality engine formatting skipped: %s", e)
+                logger.warning(
+                    "Personality engine formatting skipped: %s",
+                    e,
+                )
+
+        # ---------------------------------------------------------
+        # 4. Return clean SystemResponse
+        # ---------------------------------------------------------
 
         return SystemResponse(
             success=True,
