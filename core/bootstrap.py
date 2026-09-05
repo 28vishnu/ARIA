@@ -1,4 +1,5 @@
 import logging
+import os
 
 import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -69,6 +70,10 @@ from actions.actions.notification import NotificationAction
 from actions.actions.web_search import WebSearchAction
 from actions.actions.time import TimeAction
 from actions.actions.weather import WeatherAction
+
+from brain.tools.search_tool import SearchTool
+from autonomy.scheduler import BackgroundScheduler
+from automation_watchers import AutomationWatchers
 
 from brain.planner import Planner
 from brain.executor import Executor
@@ -238,18 +243,14 @@ async def bootstrap_application() -> ServiceRegistry:
         llm_router
     )
 
-    # Connect LLM intelligence to long-term memory
     if memory_engine is not None:
-
         memory_engine.llm_router = llm_router
 
         logger.info(
             "[BOOT TEST] LLM Router connected to MemoryEngine"
         )
 
-    # Connect semantic reasoning to memory conversation layer
     if memory_conversation_manager is not None:
-
         memory_conversation_manager.llm_router = llm_router
 
         logger.info(
@@ -305,7 +306,6 @@ async def bootstrap_application() -> ServiceRegistry:
         event_bus=event_bus,
     )
 
-    # Connect LearningEngine to MemoryEngine
     if memory_engine is not None:
         memory_engine.learning_engine = learning_engine
 
@@ -328,16 +328,14 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Memory Router Setup
     # ---------------------------------------------------------
+
     working_memory = WorkingMemory()
     graph = working_memory.semantic().load_semantic_graph()
 
     if graph:
-
         semantic = working_memory.semantic()
 
-        # Restore nodes
         for node_id, node in graph.get("nodes", {}).items():
-
             semantic.add_node(
                 node_id=node_id,
                 node_type=node["node_type"],
@@ -345,9 +343,7 @@ async def bootstrap_application() -> ServiceRegistry:
                 metadata=node.get("metadata", {}),
             )
 
-        # Restore edges
         for edge in graph.get("edges", []):
-
             semantic.add_relation(
                 edge["source"],
                 edge["relation"],
@@ -438,10 +434,10 @@ async def bootstrap_application() -> ServiceRegistry:
         working_memory=working_memory,
     )
 
-    # Group registrations
     # ---------------------------------------------------------
     # Knowledge & Memory
     # ---------------------------------------------------------
+
     registry.register("knowledge_database", knowledge_database)
     registry.register("knowledge_graph", knowledge_graph)
     registry.register("world_model", world_model)
@@ -451,6 +447,7 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Learning & Events
     # ---------------------------------------------------------
+
     registry.register("learning_engine", learning_engine)
     registry.register("self_reflection", self_reflection)
     registry.register("autonomous_learning", autonomous_learning)
@@ -464,6 +461,7 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Knowledge & Learning Engine
     # ---------------------------------------------------------
+
     document_manager = DocumentManager()
     chunker = Chunker()
     concept_extractor = ConceptExtractor()
@@ -496,30 +494,12 @@ async def bootstrap_application() -> ServiceRegistry:
         semantic_search=semantic_search,
     )
 
-    document_manager.register_parser(
-        ".pdf",
-        PDFParser(),
-    )
-    document_manager.register_parser(
-        ".docx",
-        DOCXParser(),
-    )
-    document_manager.register_parser(
-        ".jpg",
-        ImageParser(),
-    )
-    document_manager.register_parser(
-        ".jpeg",
-        ImageParser(),
-    )
-    document_manager.register_parser(
-        ".png",
-        ImageParser(),
-    )
-    document_manager.register_parser(
-        ".zip",
-        ZIPParser(),
-    )
+    document_manager.register_parser(".pdf", PDFParser())
+    document_manager.register_parser(".docx", DOCXParser())
+    document_manager.register_parser(".jpg", ImageParser())
+    document_manager.register_parser(".jpeg", ImageParser())
+    document_manager.register_parser(".png", ImageParser())
+    document_manager.register_parser(".zip", ZIPParser())
 
     registry.register("document_manager", document_manager)
     registry.register("document_pipeline", pipeline)
@@ -539,6 +519,7 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Agents, Coordinator & Lead Agent
     # ---------------------------------------------------------
+
     logger.info(
         "[BOOT TEST] 8 - Starting AgentManager"
     )
@@ -547,25 +528,15 @@ async def bootstrap_application() -> ServiceRegistry:
     agent_coordinator = AgentCoordinator(agent_manager)
     lead_agent = LeadAgent()
 
-    # Register ARIA's specialist reasoning agents.
     agent_manager.register(CodeAgent())
     agent_manager.register(MathAgent())
     agent_manager.register(PlanningAgent())
     agent_manager.register(ResearchAgent())
     agent_manager.register(WritingAgent())
 
-    registry.register(
-        "agent_manager",
-        agent_manager
-    )
-    registry.register(
-        "agent_coordinator",
-        agent_coordinator,
-    )
-    registry.register(
-        "lead_agent",
-        lead_agent,
-    )
+    registry.register("agent_manager", agent_manager)
+    registry.register("agent_coordinator", agent_coordinator)
+    registry.register("lead_agent", lead_agent)
 
     logger.info(
         "[BOOT TEST] Registered %d specialist agents",
@@ -587,7 +558,6 @@ async def bootstrap_application() -> ServiceRegistry:
     skill_manager.register(ResearchSkill())
     skill_manager.register(CalculatorSkill())
 
-    # Action Manager
     action_manager = ActionManager(
         permission_mode=config.permission_mode
     )
@@ -597,6 +567,89 @@ async def bootstrap_application() -> ServiceRegistry:
     action_manager.register(WebSearchAction())
     action_manager.register(TimeAction())
     action_manager.register(WeatherAction())
+
+    # ---------------------------------------------------------
+    # Phase 9 — Shared Real-World Intelligence
+    # ---------------------------------------------------------
+
+    # One shared search service is created at bootstrap. Actions,
+    # watchers, and future integrations can reuse the same provider.
+    search_tool = SearchTool(
+        max_results=10,
+        timeout=max(
+            3.0,
+            float(getattr(config, "timeout_seconds", 20.0)),
+        ),
+    )
+
+    registry.register(
+        "search_tool",
+        search_tool,
+    )
+
+    logger.info(
+        "[Bootstrap] SearchTool registered | available=%s",
+        search_tool.is_available(),
+    )
+
+    # Reuse the same search provider in the action layer when supported.
+    web_search_action = action_manager.get("web_search_action")
+    if web_search_action is not None:
+        try:
+            web_search_action.search_tool = search_tool
+            logger.info(
+                "[Bootstrap] Shared SearchTool connected to WebSearchAction."
+            )
+        except Exception:
+            logger.exception(
+                "[Bootstrap] Failed to connect SearchTool to WebSearchAction."
+            )
+
+    # Shared autonomous scheduler.
+    scheduler = BackgroundScheduler(
+        max_concurrent_jobs=int(
+            os.getenv("ARIA_MAX_CONCURRENT_JOBS", "5")
+        ),
+        default_timeout_seconds=float(
+            os.getenv("ARIA_JOB_TIMEOUT_SECONDS", "300")
+        ),
+    )
+
+    registry.register(
+        "scheduler",
+        scheduler,
+    )
+
+    # Real-world read-only watchers.
+    tavily_client = getattr(
+        web_search_action,
+        "tavily",
+        None,
+    )
+
+    automation_watchers = AutomationWatchers(
+        tavily_client=tavily_client,
+        telegram_token=getattr(config, "telegram_token", None),
+        admin_chat_id=os.getenv("ADMIN_CHAT_ID"),
+        search_tool=search_tool,
+        http_timeout=max(
+            3.0,
+            float(getattr(config, "timeout_seconds", 20.0)),
+        ),
+    )
+
+    registry.register(
+        "automation_watchers",
+        automation_watchers,
+    )
+
+    logger.info(
+        "[Bootstrap] Phase 9 integrations ready | "
+        "search=%s scheduler=%s watchers=%s",
+        search_tool.is_available(),
+        True,
+        True,
+    )
 
     planner = Planner(
         llm_router=llm_router,
@@ -641,6 +694,7 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Core Services & AI
     # ---------------------------------------------------------
+
     registry.register("session_manager", session_manager)
     registry.register("state_manager", state_manager)
     registry.register("skill_manager", skill_manager)
@@ -653,6 +707,7 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("reasoning_engine", reasoning_engine)
 
     # ---------- Cross Wiring ----------
+
     planner.executor = executor
     planner.memory_engine = memory_engine
     planner.reasoning_engine = reasoning_engine
@@ -666,9 +721,11 @@ async def bootstrap_application() -> ServiceRegistry:
     decision_engine.memory_engine = memory_engine
     agent_coordinator.reasoning_engine = reasoning_engine
     agent_coordinator.memory_engine = memory_engine
+
     if memory_engine is not None:
         memory_engine.reasoning_engine = reasoning_engine
         memory_engine.planner = planner
+
     logger.info("[Bootstrap] Cross wiring complete.")
 
     # ---------------------------------------------------------
