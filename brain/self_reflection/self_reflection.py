@@ -1064,4 +1064,118 @@ class SelfReflection:
         ]
 
         return {
-            "type": "
+            "type": "weekly_reflection",
+            "duplicates": duplicate_result,
+            "graph": graph_result,
+            "repeated_failure_patterns": repeated_failures,
+            "successful_patterns": successful_patterns,
+            "statistics": dict(
+                self.statistics
+            ),
+            "generated_at": self._now(),
+        }
+
+    # =========================================================
+    # SUMMARY
+    # =========================================================
+
+    def summary(self):
+        """
+        Return a safe snapshot of reflection telemetry.
+        """
+
+        return {
+            **self.statistics,
+            "recent_reviews_buffer": len(
+                self._recent_reviews
+            ),
+            "tracked_failure_patterns": len(
+                self._failure_patterns
+            ),
+            "tracked_success_patterns": len(
+                self._success_patterns
+            ),
+        }
+
+    # =========================================================
+    # UNIVERSAL ENTRY POINT
+    # =========================================================
+
+    async def reflect(
+        self,
+        event: str,
+        **kwargs,
+    ):
+        event = self._normalise_text(event).lower()
+
+        if event == "review":
+            return await self.review(
+                kwargs.get("query"),
+                kwargs.get("answer"),
+                kwargs.get("source"),
+            )
+
+        if event == "evaluate_response":
+            return await self.evaluate_response(
+                kwargs.get("response"),
+                kwargs.get("context", {}),
+            )
+
+        if event == "plan":
+            return await self.reflect_on_plan(
+                kwargs.get("plan"),
+                kwargs.get("execution_results", {}),
+            )
+
+        if event == "reasoning":
+            return await self.reflect_on_reasoning(
+                kwargs.get("reasoning_result"),
+            )
+
+        if event == "failure":
+            return await self.learn_from_failure(
+                kwargs.get("query"),
+            )
+
+        if event == "success":
+            return await self.learn_from_success(
+                kwargs.get("query"),
+                kwargs.get("answer"),
+            )
+
+        if event == "daily":
+            return await self.daily_review()
+
+        if event == "weekly":
+            return await self.weekly_review()
+
+        if event == "duplicates":
+            return await self.detect_duplicates()
+
+        if event == "graph":
+            return await self.improve_graph()
+
+        if event == "summary":
+            return self.summary()
+
+        return {
+            "success": False,
+            "error": "unknown_reflection_event",
+            "event": event,
+        }
+
+    async def handle(self, event):
+        """
+        Event-bus compatible entry point.
+        """
+
+        data = getattr(
+            event,
+            "data",
+            {},
+        ) or {}
+
+        return await self.reflect(
+            getattr(event, "type", ""),
+            **data,
+        )
