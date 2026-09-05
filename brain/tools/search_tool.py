@@ -1,4 +1,4 @@
- """
+"""
 ARIA Search Tool
 ----------------
 A provider-agnostic web search tool for ARIA.
@@ -20,7 +20,7 @@ logger = logging.getLogger("aria")
 
 try:
     from tavily import TavilyClient
-except ImportError:  # Optional dependency
+except ImportError:
     TavilyClient = None
 
 
@@ -51,7 +51,6 @@ class SearchTool(BaseTool):
                 logger.exception("[SearchTool] Failed to initialize Tavily client")
 
     def is_available(self) -> bool:
-        """Return whether a search provider is configured and usable."""
         return self._client is not None
 
     async def can_handle(
@@ -59,7 +58,6 @@ class SearchTool(BaseTool):
         query: str,
         context: Dict[str, Any],
     ) -> float:
-        """Return a routing score for search-oriented requests."""
         if not query or not query.strip():
             return 0.0
 
@@ -110,7 +108,6 @@ class SearchTool(BaseTool):
         query: str,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Execute a search and return a stable structured response."""
         started = time.monotonic()
         context = context or {}
 
@@ -163,7 +160,6 @@ class SearchTool(BaseTool):
             )
 
     def _normalize_results(self, response: Any) -> List[Dict[str, Any]]:
-        """Normalize provider-specific results into ARIA's common format."""
         raw_results = []
 
         if isinstance(response, dict):
@@ -213,5 +209,4 @@ class SearchTool(BaseTool):
         }
 
 
-# Backward-compatible alias for code that uses the shorter name.
 WebSearchTool = SearchTool
