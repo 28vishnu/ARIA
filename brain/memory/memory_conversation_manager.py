@@ -1,6 +1,7 @@
 import logging
 import re
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from datetime import datetime, timezone
 
 from brain.memory.memory_engine import MemoryEngine
 
@@ -26,6 +27,28 @@ class MemoryConversationManager:
     ):
         self.memory_engine = memory_engine
         self.llm_router = llm_router
+
+        # Phase 5 — persistent episodic memory.
+        # Keep episodes separate from personal/factual memory.
+        self.episode_col = None
+
+        try:
+            db = getattr(
+                memory_engine,
+                "db",
+                None,
+            )
+
+            if db is not None:
+                self.episode_col = db[
+                    "memory_episodes"
+                ]
+
+        except Exception:
+            logger.exception(
+                "[MemoryConversationManager] "
+                "Failed to initialize episodic memory."
+            )
 
     async def handle(
         self,
@@ -344,6 +367,149 @@ class MemoryConversationManager:
     # =========================================================
     # DIRECT MEMORY ANSWERING
     # =========================================================
+    # PHASE 5 — EPISODIC MEMORY
+    # =========================================================
+
+    async def record_episode(
+        self,
+        query: str,
+        response: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Persist a conversation episode.
+
+        Episodic memory stores what happened in an interaction,
+        while personal_memory stores durable facts/preferences.
+        """
+
+        if self.episode_col is None:
+            return False
+
+        try:
+            context = context or {}
+
+            intent = context.get("intent")
+
+            if hasattr(intent, "name"):
+                intent = intent.name
+
+            goal = (
+                context.get("autonomous_goal")
+                or context.get("goal")
+            )
+
+            episode = {
+                "query": str(query or "").strip(),
+                "response": str(response or "").strip(),
+                "timestamp": datetime.now(
+                    timezone.utc
+                ),
+                "session_id": str(
+                    context.get("session_id") or ""
+                ),
+                "intent": str(
+                    intent or ""
+                ),
+                "goal": (
+                    dict(goal)
+                    if isinstance(goal, dict)
+                    else None
+                ),
+                "metadata": {
+                    "source": "conversation",
+                    "schema_version": 1,
+                },
+            }
+
+            if not episode["query"]:
+                return False
+
+            await self.episode_col.insert_one(
+                episode
+            )
+
+            logger.debug(
+                "[MemoryConversationManager] "
+                "Recorded episodic memory."
+            )
+
+            return True
+
+        except Exception:
+            logger.exception(
+                "[MemoryConversationManager] "
+                "Failed to record episodic memory."
+            )
+            return False
+
+    async def retrieve_episodes(
+        self,
+        query: str,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve recent episodic conversations.
+
+        This intentionally starts with recent episodes. Semantic
+        ranking of episodes will be added in a later Phase-5 step.
+        """
+
+        if self.episode_col is None:
+            return []
+
+        try:
+            limit = max(
+                1,
+                min(int(limit), 20),
+            )
+
+            cursor = (
+                self.episode_col
+                .find(
+                    {
+                        "$or": [
+                            {
+                                "query": {
+                                    "$regex": str(
+                                        query or ""
+                                    ).strip(),
+                                    "$options": "i",
+                                }
+                            },
+                            {
+                                "response": {
+                                    "$regex": str(
+                                        query or ""
+                                    ).strip(),
+                                    "$options": "i",
+                                }
+                            },
+                        ]
+                    }
+                )
+                .sort(
+                    "timestamp",
+                    -1,
+                )
+                .limit(limit)
+            )
+
+            episodes = await cursor.to_list(
+                length=limit
+            )
+
+            for episode in episodes:
+                episode.pop("_id", None)
+
+            return episodes
+
+        except Exception:
+            logger.exception(
+                "[MemoryConversationManager] "
+                "Failed to retrieve episodic memory."
+            )
+            return []
 
     def _build_direct_answer(
         self,
