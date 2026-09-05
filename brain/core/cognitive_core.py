@@ -1708,6 +1708,33 @@ class CognitiveCore:
             "world": world_state,
         })
 
+        # =========================================================
+        # PHASE 5 — RETRIEVE RELEVANT EPISODIC MEMORY
+        # =========================================================
+        if self.memory_conversation_manager:
+            try:
+                episodic_memories = (
+                    await self.memory_conversation_manager.retrieve_episodes(
+                        query=resolved_query,
+                        limit=5,
+                    )
+                )
+
+                context["episodic_memory"] = episodic_memories
+
+                if episodic_memories:
+                    logger.info(
+                        "[CognitiveCore] Retrieved %d episodic memories.",
+                        len(episodic_memories),
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "[CognitiveCore] Episodic memory retrieval skipped: %s",
+                    e,
+                )
+                context["episodic_memory"] = []
+
         if self._looks_like_name_recall_request(query):
             user_name = conversation_context.get("user_name")
 
