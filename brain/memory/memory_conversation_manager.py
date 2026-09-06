@@ -64,6 +64,16 @@ class MemoryConversationManager:
 
         lower_q = query.lower().strip()
 
+        # Basic Fix Step 4 — never answer sensitive identity/security
+        # questions from whatever nearest-neighbour memories happen to
+        # be present in CognitiveCore context. MemoryEngine is the primary
+        # protection layer; this manager is a second defensive boundary.
+        if self._is_sensitive_query(lower_q):
+            return (
+                "I can't provide or expose sensitive identity or security "
+                "information, Sir."
+            )
+
         # -----------------------------------------------------
         # 1. FORGET / DELETE
         # -----------------------------------------------------
@@ -221,6 +231,12 @@ class MemoryConversationManager:
             )
 
             memories = await self.memory_engine.retrieve(query)
+
+        # Retrieval systems return nearest candidates, not guaranteed answers.
+        # Filter them against the actual subject of the user's question before
+        # deterministic answering or LLM semantic fallback. Broad memory
+        # summary requests intentionally keep all safe memories.
+        memories = self._filter_relevant_memories(query, memories)
 
         if memories:
 
@@ -871,6 +887,247 @@ CONVERSATIONS:
             )
             return 0
 
+    def _filter_relevant_memories(
+        self,
+        query: str,
+        memories: Any,
+    ) -> List[Dict[str, Any]]:
+        """
+        Keep only memory candidates whose subject agrees with the query.
+
+        Vector/nearest-neighbour retrieval is allowed to return weak or
+        unrelated candidates. Those candidates must never become facts just
+        because they were retrieved.
+
+        Broad requests such as "what do you remember about me" are the
+        deliberate exception: all non-sensitive, well-formed memories are
+        useful there.
+        """
+        if not isinstance(memories, list):
+            return []
+
+        safe = []
+
+        for memory in memories:
+            if not isinstance(memory, dict):
+                continue
+
+            key = str(memory.get("key") or "").strip()
+            value = str(memory.get("value") or "").strip()
+
+            if not key or not value:
+                continue
+
+            if self._is_sensitive_memory(memory):
+                continue
+
+            safe.append(memory)
+
+        normalized_query = self._normalize(query)
+
+        if self._is_broad_memory_query(normalized_query):
+            return safe
+
+        if not safe:
+            return []
+
+        filtered = []
+
+        for memory in safe:
+            score = self._memory_subject_score(
+                normalized_query,
+                memory,
+            )
+
+            if score >= 0.75:
+                filtered.append(memory)
+
+        logger.debug(
+            "[MemoryConversationManager] Relevance filter kept %d/%d "
+            "memory candidates for query '%s'.",
+            len(filtered),
+            len(safe),
+            query,
+        )
+
+        return filtered
+
+    def _memory_subject_score(
+        self,
+        normalized_query: str,
+        memory: Dict[str, Any],
+    ) -> float:
+        """Return deterministic subject agreement between query and memory key."""
+        key = self._normalize(
+            str(memory.get("key") or "")
+        )
+
+        if not key or not normalized_query:
+            return 0.0
+
+        query_words = self._meaningful_words(normalized_query)
+        key_words = self._meaningful_words(key)
+
+        generic = self._generic_memory_words()
+        query_specific = {w for w in query_words if w not in generic}
+        key_specific = {w for w in key_words if w not in generic}
+
+        if not query_specific or not key_specific:
+            return 0.0
+
+        # Normalize common wording variants so "favourite colour" and
+        # "favorite color" refer to the same memory subject.
+        query_specific = {self._subject_alias(w) for w in query_specific}
+        key_specific = {self._subject_alias(w) for w in key_specific}
+
+        shared = query_specific.intersection(key_specific)
+
+        if not shared:
+            # A few multi-word concepts need explicit subject aliases.
+            query_subject = self._query_subject_aliases(normalized_query)
+            key_subject = self._key_subject_aliases(key)
+            shared = query_subject.intersection(key_subject)
+
+        if not shared:
+            return 0.0
+
+        # One matching specific subject is enough when the memory key is
+        # itself a single clear subject. For compound keys require stronger
+        # coverage.
+        coverage = len(shared) / max(1, len(key_specific))
+
+        if len(key_specific) <= 1:
+            return 1.0
+
+        return coverage
+
+    def _query_subject_aliases(self, query: str) -> set:
+        """Map natural-language query phrases to stable memory subjects."""
+        q = self._normalize(query)
+        aliases = set()
+
+        groups = {
+            "name": ("my name", "what am i called", "who am i"),
+            "education": (
+                "what am i studying", "what do i study",
+                "my degree", "current degree", "education level",
+                "what year am i", "which year am i"
+            ),
+            "postgraduate": (
+                "masters", "master", "master's", "postgraduate",
+                "study destination", "where do i want to study",
+                "where am i planning to study"
+            ),
+            "goal": ("future plan", "my plan", "goal", "goals"),
+            "preference": (
+                "preference", "priority", "what do i want from education"
+            ),
+            "favorite_movie": ("favorite movie", "favourite movie"),
+            "favorite_color": ("favorite color", "favourite colour"),
+            "favorite_game": ("favorite game", "favourite game"),
+            "favorite_food": ("favorite food", "favourite food"),
+        }
+
+        for subject, phrases in groups.items():
+            if any(phrase in q for phrase in phrases):
+                aliases.add(subject)
+
+        return aliases
+
+    def _key_subject_aliases(self, key: str) -> set:
+        """Map common memory-key shapes to the same stable subjects."""
+        k = self._normalize(key)
+        aliases = set()
+
+        if k in {"name", "user name", "full name"}:
+            aliases.add("name")
+
+        if any(token in k for token in (
+            "degree", "education", "education level", "current year"
+        )):
+            aliases.add("education")
+
+        if any(token in k for token in (
+            "postgraduate", "study destination", "preferred country",
+            "planned postgraduate location", "postgraduate location"
+        )):
+            aliases.add("postgraduate")
+
+        if "goal" in k or "plan" in k or "future" in k:
+            aliases.add("goal")
+
+        if "preference" in k or "priority" in k:
+            aliases.add("preference")
+
+        for subject in ("movie", "color", "game", "food"):
+            if "favorite " + subject in k or "favourite " + subject in k:
+                aliases.add("favorite_" + subject)
+
+        return aliases
+
+    def _subject_alias(self, word: str) -> str:
+        return {
+            "favourite": "favorite",
+            "colour": "color",
+            "masters": "master",
+        }.get(word, word)
+
+    def _is_broad_memory_query(self, query: str) -> bool:
+        return self._contains_any(
+            query,
+            (
+                "what do you remember about me",
+                "what do you know about me",
+                "what have you remembered about me",
+                "what have you learned about me",
+                "tell me what you remember about me",
+                "tell me what you know about me",
+                "show me what you remember about me",
+                "show me what you know about me",
+                "what information do you remember about me",
+                "what information do you know about me",
+            ),
+        )
+
+    def _is_sensitive_query(self, query: str) -> bool:
+        """Second-layer protection for identity/security-sensitive requests."""
+        normalized = self._normalize(query)
+        patterns = (
+            r"\baadhaar\b",
+            r"\baadhar\b",
+            r"\bpan\s*(?:number|card)?\b",
+            r"\bpassport\s*(?:number|id)?\b",
+            r"\botp\b",
+            r"\bone[- ]time password\b",
+            r"\bpin\b",
+            r"\bpassword\b",
+            r"\bsecurity code\b",
+            r"\bverification code\b",
+            r"\bcredit card\b",
+            r"\bdebit card\b",
+            r"\bbank account\b",
+            r"\baccount number\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in patterns)
+
+    def _is_sensitive_memory(self, memory: Dict[str, Any]) -> bool:
+        """Reject sensitive records even if they slipped into route context."""
+        key = self._normalize(str(memory.get("key") or ""))
+        value = self._normalize(str(memory.get("value") or ""))
+
+        sensitive_terms = (
+            "aadhaar", "aadhar", "pan number", "pan card",
+            "passport", "otp", "one time password", "pin",
+            "password", "security code", "verification code",
+            "credit card", "debit card", "bank account",
+            "account number",
+        )
+
+        return any(
+            term in key or term in value
+            for term in sensitive_terms
+        )
+
     def _build_direct_answer(
         self,
         query: str,
@@ -925,20 +1182,8 @@ CONVERSATIONS:
         # the semantic LLM when ARIA already has the memories.
         # -----------------------------------------------------
 
-        if self._contains_any(
-            q,
-            (
-                "what do you remember about me",
-                "what do you know about me",
-                "what have you remembered about me",
-                "what have you learned about me",
-                "tell me what you remember about me",
-                "tell me what you know about me",
-                "show me what you remember about me",
-                "show me what you know about me",
-                "what information do you remember about me",
-                "what information do you know about me",
-            )
+        if self._is_broad_memory_query(
+            self._normalize(q)
         ):
             lines = []
 
@@ -1180,6 +1425,16 @@ CONVERSATIONS:
             if not key_words or not query_words:
                 continue
 
+            query_words = {
+                self._subject_alias(word)
+                for word in query_words
+            }
+
+            key_words = {
+                self._subject_alias(word)
+                for word in key_words
+            }
+
             shared_words = (
                 key_words.intersection(query_words)
             )
@@ -1357,6 +1612,8 @@ CONVERSATIONS:
 
         text = text.lower()
         text = text.replace("_", " ")
+        text = text.replace("favourite", "favorite")
+        text = text.replace("colour", "color")
 
         text = re.sub(
             r"[^a-z0-9\s]",
