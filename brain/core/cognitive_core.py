@@ -64,6 +64,7 @@ class CognitiveCore:
     - agents
     - skills
     - direct actions
+    - centralized tools
     - planning
     - multi-step execution
     - workflow confirmation
@@ -106,11 +107,13 @@ class CognitiveCore:
         document_pipeline=None,
         study_engine=None,
         repository_memory=None,
+        tool_manager=None,
     ):
         self.planner = planner
         self.executor = executor
         self.skill_manager = skill_manager
         self.action_manager = action_manager
+        self.tool_manager = tool_manager
         self.memory_router = memory_router
         self.state_manager = state_manager
         self.intent_analyzer = intent_analyzer
@@ -206,6 +209,266 @@ class CognitiveCore:
             normalized["error"] = str(error)
 
         return normalized
+
+    # =============================================================
+    # PHASE 11 — DECISION / CONTEXT / MEMORY SAFETY HELPERS
+    # =============================================================
+
+    @staticmethod
+    def _decision_value(decision: Any, key: str, default: Any = None) -> Any:
+        if decision is None:
+            return default
+        if isinstance(decision, dict):
+            return decision.get(key, default)
+        return getattr(decision, key, default)
+
+    def _merge_decisions(
+        self,
+        controller_decision: Any,
+        engine_decision: Any,
+    ) -> Any:
+        """Merge the rich CognitiveController decision with the
+        specialized DecisionEngine result without allowing two
+        independent decisions to compete.
+
+        CognitiveController remains the canonical decision object.
+        DecisionEngine may override only when it expresses an explicit
+        capability/action decision.
+        """
+        if controller_decision is None:
+            return engine_decision
+        if engine_decision is None:
+            return controller_decision
+
+        engine_action = str(
+            self._decision_value(engine_decision, "action", "") or ""
+        ).strip().lower()
+
+        explicit = bool(
+            engine_action
+            and engine_action not in {"chat", "conversation"}
+        )
+
+        for key in (
+            "use_memory",
+            "use_planner",
+            "use_executor",
+            "use_tools",
+            "use_documents",
+            "use_world_model",
+            "use_multi_agent",
+            "required_tools",
+            "selected_agents",
+        ):
+            value = self._decision_value(engine_decision, key, None)
+            if value:
+                explicit = True
+                break
+
+        if not explicit:
+            return controller_decision
+
+        if engine_action:
+            setattr(controller_decision, "action", engine_action)
+
+        for key in (
+            "reasoning_mode",
+            "use_memory",
+            "use_planner",
+            "use_executor",
+            "use_tools",
+            "use_documents",
+            "use_world_model",
+            "use_multi_agent",
+        ):
+            value = self._decision_value(engine_decision, key, None)
+            if value is not None:
+                try:
+                    setattr(controller_decision, key, value)
+                except Exception:
+                    pass
+
+        required_tools = self._decision_value(
+            engine_decision,
+            "required_tools",
+            None,
+        )
+        if required_tools:
+            existing = list(
+                self._decision_value(
+                    controller_decision,
+                    "required_tools",
+                    [],
+                )
+                or []
+            )
+            for tool in list(required_tools):
+                if tool not in existing:
+                    existing.append(tool)
+            setattr(controller_decision, "required_tools", existing)
+
+        selected_agents = self._decision_value(
+            engine_decision,
+            "selected_agents",
+            None,
+        )
+        if selected_agents:
+            existing_agents = list(
+                self._decision_value(
+                    controller_decision,
+                    "selected_agents",
+                    [],
+                )
+                or []
+            )
+            for agent in list(selected_agents):
+                if agent not in existing_agents:
+                    existing_agents.append(agent)
+            setattr(controller_decision, "selected_agents", existing_agents)
+
+        explanation = self._decision_value(
+            engine_decision,
+            "explanation",
+            None,
+        )
+        if explanation:
+            setattr(
+                controller_decision,
+                "decision_reason",
+                str(explanation),
+            )
+
+        engine_confidence = self._decision_value(
+            engine_decision,
+            "confidence",
+            None,
+        )
+        if engine_confidence is not None:
+            try:
+                setattr(
+                    controller_decision,
+                    "confidence",
+                    max(
+                        0.0,
+                        min(1.0, float(engine_confidence)),
+                    ),
+                )
+            except (TypeError, ValueError):
+                pass
+
+        return controller_decision
+
+    @staticmethod
+    def _safe_memory_items(memories: Any) -> List[Dict[str, Any]]:
+        """Normalize memory records before they reach prompts/logging."""
+        if not isinstance(memories, (list, tuple)):
+            return []
+
+        safe: List[Dict[str, Any]] = []
+        blocked = {
+            "id",
+            "_id",
+            "memory_id",
+            "record_id",
+            "embedding",
+            "metadata",
+        }
+
+        for item in memories:
+            if not isinstance(item, dict):
+                continue
+
+            key = item.get("key")
+            value = item.get("value")
+
+            if key is None or value is None:
+                continue
+
+            normalized_key = str(key).strip().lower()
+            value_text = str(value).strip()
+
+            if normalized_key in {
+                "aadhaar",
+                "aadhar",
+                "pan",
+                "password",
+                "otp",
+                "pin",
+                "cvv",
+                "secret",
+                "token",
+            }:
+                continue
+
+            # Defense-in-depth: do not inject obvious government-ID,
+            # OTP, card-security, or secret-like values into LLM prompts.
+            if (
+                re.fullmatch(r"\d{12}", value_text)
+                or re.fullmatch(
+                    r"[A-Z]{5}\d{4}[A-Z]",
+                    value_text.upper(),
+                )
+                or re.fullmatch(r"\d{6}", value_text)
+            ):
+                continue
+
+            record = {
+                str(k): v
+                for k, v in item.items()
+                if str(k) not in blocked
+            }
+            record["key"] = str(key)
+            record["value"] = value
+            safe.append(record)
+
+        return safe
+
+    def _should_store_natural_memory(
+        self,
+        query: str,
+        intent: Any = None,
+        route: Any = None,
+    ) -> bool:
+        """Only write natural memory when the request is clearly memory-like."""
+        intent_name = str(
+            getattr(intent, "name", "")
+            or getattr(intent, "intent", "")
+            or ""
+        ).lower()
+
+        if intent_name in {
+            "memory_store",
+            "memory_update",
+            "memory_save",
+            "remember",
+        }:
+            return True
+
+        route_name = str(
+            getattr(route, "route", route) or ""
+        ).lower()
+
+        if "memory" in route_name:
+            return True
+
+        text = str(query or "").lower()
+        return any(
+            phrase in text
+            for phrase in (
+                "remember that",
+                "remember this",
+                "please remember",
+                "don't forget",
+                "do not forget",
+                "my name is",
+                "i am from",
+                "i live in",
+                "i study",
+                "i prefer",
+                "my favorite",
+                "my favourite",
+            )
+        )
 
     async def _reflect_execution_outcome(
         self,
@@ -1104,68 +1367,103 @@ class CognitiveCore:
         query,
         context,
     ):
+        """Execute required capabilities through ToolManager first.
+
+        Legacy capability fallbacks remain for compatibility with existing
+        Phase 1-10 registrations that have not yet been converted into
+        BaseTool implementations.
+        """
         evidence = {}
 
-        for tool in decision.required_tools:
+        required_tools = self._decision_value(
+            decision,
+            "required_tools",
+            [],
+        ) or []
+
+        if not isinstance(required_tools, (list, tuple, set)):
+            required_tools = [required_tools]
+
+        for tool in required_tools:
+            tool_name = str(tool).strip()
+            if not tool_name:
+                continue
+
+            executed_by_manager = False
+
+            if self.tool_manager and hasattr(self.tool_manager, "execute"):
+                try:
+                    managed_result = await self.tool_manager.execute(
+                        query=query,
+                        context=context,
+                        tool_name=tool_name,
+                    )
+
+                    if managed_result is not None:
+                        evidence[tool_name] = managed_result
+                        executed_by_manager = True
+                        logger.info(
+                            "[ToolManager] Executed required tool: %s",
+                            tool_name,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[ToolManager] Named tool %s failed; "
+                        "falling back to legacy capability: %s",
+                        tool_name,
+                        exc,
+                    )
+
+            if executed_by_manager:
+                continue
 
             try:
-
-                if tool == "memory" and self.memory_engine:
-
+                if tool_name == "memory" and self.memory_engine:
                     evidence["memory"] = await self.memory_engine.retrieve(
                         query=query
                     )
 
-                elif tool == "document" and self.document_pipeline:
-
+                elif tool_name == "document" and self.document_pipeline:
                     evidence["documents"] = await self.document_pipeline.search(
                         query=query
                     )
 
-                elif tool == "repository" and self.repository_memory:
-
+                elif tool_name == "repository" and self.repository_memory:
                     evidence["repository"] = await self.repository_memory.search(
                         query=query
                     )
 
-                elif tool == "study" and self.study_engine:
-
+                elif tool_name == "study" and self.study_engine:
                     evidence["study"] = await self.study_engine.prepare_context(
                         query=query
                     )
 
-                elif tool == "planner" and self.planner:
-
+                elif tool_name == "planner" and self.planner:
                     evidence["plan"] = await self.planner.create_plan(
                         query=query,
                         context=context,
                     )
 
-                elif tool == "coding" and self.agent_coordinator:
-
+                elif tool_name == "coding" and self.agent_coordinator:
                     evidence["coding"] = await self.agent_coordinator.prepare(
                         "coding",
                         query=query,
                     )
 
-                elif tool == "semantic_memory":
+                elif tool_name == "semantic_memory":
+                    semantic = await self._retrieve_semantic_memory(query)
+                    if semantic is not None:
+                        evidence["semantic_memory"] = semantic
 
-                    evidence["semantic_memory"] = (
-                        await self._retrieve_semantic_memory(query)
-                    )
-
-            except Exception as e:
+            except Exception as exc:
                 logger.exception(
-                    "[Tool Error] %s",
-                    tool
+                    "[CognitiveCore] Required capability failed: %s",
+                    tool_name,
                 )
-
-                print(
-                    f"\n========== {tool.upper()} ERROR =========="
-                )
-                print(type(e).__name__)
-                print(str(e))
-                print("=====================================\n")
+                evidence.setdefault(
+                    "tool_errors",
+                    {},
+                )[tool_name] = str(exc)
 
         return evidence
 
@@ -1717,18 +2015,32 @@ class CognitiveCore:
                     e,
                 )
 
-        if self.reasoning_engine:
-            resolved_query = await self.reasoning_engine.resolve_references(
-                query,
-                context,
+        if context.get("references_resolved"):
+            resolved_query = str(
+                context.get("resolved_query")
+                or context.get("query")
+                or query
             )
+        elif self.reasoning_engine:
+            try:
+                resolved_query = await self.reasoning_engine.resolve_references(
+                    query,
+                    context,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Reference resolution skipped: %s",
+                    exc,
+                )
+                resolved_query = query
         else:
             resolved_query = query
 
         context["original_query"] = query
         context["resolved_query"] = resolved_query
+        context["references_resolved"] = True
 
-        if self.context_builder:
+        if self.context_builder and not context.get("_context_built"):
             try:
                 # Preserve multimodal/vision context before rebuilding context.
                 vision_result = context.get("vision_result")
@@ -1794,7 +2106,9 @@ class CognitiveCore:
             }
 
         conversation_context = context.get("conversation", {})
-        memory_context = context.get("memory", [])
+        memory_context = self._safe_memory_items(
+            context.get("memory", [])
+        )
         world_state = context.get("world", {})
 
         context = dict(context)
@@ -1805,7 +2119,7 @@ class CognitiveCore:
             "user_id": context.get("user_id", session_id),
             "working_memory": working_memory_context,
             "conversation": conversation_context,
-            "memory": memory_context,
+            "memory": self._safe_memory_items(memory_context),
             "world": world_state,
         })
 
@@ -2060,7 +2374,16 @@ class CognitiveCore:
                         answer = result.get("response") or result.get("message") or (result.get("task_outputs") and str(result.get("task_outputs")))
                         if answer:
                             source = "planner_executor"
-                            confidence = getattr(reasoning, "plan", {}).get("confidence", 0.92)
+                            plan_confidence = self._decision_value(
+                                getattr(reasoning, "plan", None),
+                                "confidence",
+                                None,
+                            )
+                            confidence = (
+                                float(plan_confidence)
+                                if plan_confidence is not None
+                                else 0.92
+                            )
                 except Exception as e:
                     logger.warning("Executor plan execution skipped: %s", e)
 
@@ -2121,9 +2444,9 @@ class CognitiveCore:
 
                 if mem_res:
                     if isinstance(mem_res, list):
-                        context["memory"] = mem_res
+                        context["memory"] = self._safe_memory_items(mem_res)
                     elif isinstance(mem_res, dict):
-                        context["memory"] = [mem_res]
+                        context["memory"] = self._safe_memory_items([mem_res])
                     else:
                         context["memory"] = [str(mem_res)]
 
@@ -2258,12 +2581,14 @@ Execution Results:
                             }
                         ]
 
-                        memory_items = context.get("memory", [])
+                        memory_items = self._safe_memory_items(
+                            context.get("memory", [])
+                        )
 
                         if memory_items:
                             memory_text = "\n".join(
-                                f"{m['key']}: {m['value']}"
-                                for m in memory_items
+                                f"{item['key']}: {item['value']}"
+                                for item in memory_items
                             )
 
                             messages.append({
@@ -2321,8 +2646,9 @@ Execution Results:
                         else:
                             answer = str(reply).strip() if reply else None
 
-                        source = "llm_generated"
-                        confidence = 0.70
+                        if answer:
+                            source = "llm_generated"
+                            confidence = 0.70
                     except Exception as e:
                         logger.warning("LLM fallback generation skipped: %s", e)
 
@@ -3866,15 +4192,20 @@ Execution Results:
                 )
 
                 try:
+                    if not self.memory_engine:
+                        raise RuntimeError("Memory engine is unavailable.")
+
                     memories = await self.memory_engine.retrieve(query)
 
-                    if memories:
+                    safe_memories = self._safe_memory_items(memories)
+
+                    if safe_memories:
                         return SystemResponse(
                             success=True,
                             confidence=1.0,
                             source="memory",
                             data={
-                                "memories": memories,
+                                "memories": safe_memories,
                             },
                         )
 
@@ -3910,6 +4241,14 @@ Execution Results:
             )
 
             if route.route == Route.MEMORY:
+                if not self.memory_engine:
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="memory",
+                        error="Memory engine is unavailable.",
+                    )
+
                 await self.memory_engine.deterministic_extract_and_store(query)
 
                 return SystemResponse(
@@ -4203,13 +4542,14 @@ Execution Results:
                 "session_id": session_id,
                 "user_id": user_id,
                 "state": state,
-                "memory": self.memory_engine,
+                "memory": [],
+                "memory_engine": self.memory_engine,
                 "planner": self.planner,
                 "executor": self.executor,
                 "reasoning": self.reasoning_engine,
                 "decision": self.decision_engine,
                 "agent_manager": getattr(self, "agent_manager", None),
-                "tool_manager": getattr(self, "tool_manager", None),
+                "tool_manager": self.tool_manager,
                 "action_manager": self.action_manager,
                 "skill_manager": self.skill_manager,
                 "conversation_manager": self.conversation_manager,
@@ -4270,6 +4610,7 @@ Execution Results:
                         query = resolved_query
 
                     context["query"] = query
+                    context["references_resolved"] = True
 
                 except Exception as e:
                     logger.warning(
@@ -4282,7 +4623,8 @@ Execution Results:
                 "user_id": user_id,
                 "state": state,
                 "base_context": base_context,
-                "context": context,
+                # Never store the context dictionary inside itself.
+                "cognitive_context_id": execution_id,
             })
             
             controller_decision = self.cognitive_controller.analyze(
@@ -4291,15 +4633,6 @@ Execution Results:
             )
 
             context["cognitive_decision"] = controller_decision
-
-            def _decision_value(decision, key, default=None):
-                if decision is None:
-                    return default
-
-                if isinstance(decision, dict):
-                    return decision.get(key, default)
-
-                return getattr(decision, key, default)
 
             decision_contract = {
                 "intent": _decision_value(
@@ -4363,16 +4696,34 @@ Execution Results:
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
                     self.working_memory.metadata["required_tools"] = (
-                        controller_decision.required_tools
+                        self._decision_value(
+                            decision,
+                            "required_tools",
+                            [],
+                        )
+                        or []
                     )
                 else:
-                    setattr(self.working_memory, "required_tools", controller_decision.required_tools)
+                    setattr(
+                        self.working_memory,
+                        "required_tools",
+                        self._decision_value(
+                            decision,
+                            "required_tools",
+                            [],
+                        )
+                        or [],
+                    )
 
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
-                    self.working_memory.metadata["cognitive_decision"] = controller_decision
+                    self.working_memory.metadata["cognitive_decision"] = decision
                 else:
-                    setattr(self.working_memory, "cognitive_decision", controller_decision)
+                    setattr(
+                        self.working_memory,
+                        "cognitive_decision",
+                        decision,
+                    )
 
             if (
                 self.state_manager
@@ -4508,19 +4859,33 @@ Execution Results:
                 pre_ctx["intent"] = intent
 
             decision = controller_decision
-            if self.decision_engine and hasattr(self.decision_engine, "decide"):
+            engine_decision = None
 
-                engine_decision = await self.decision_engine.decide(
-                    query=query,
-                    intent=intent,
-                    context=pre_ctx,
-                )
+            if self.decision_engine and hasattr(
+                self.decision_engine,
+                "decide",
+            ):
+                try:
+                    engine_decision = await self.decision_engine.decide(
+                        query=query,
+                        intent=intent,
+                        context=pre_ctx,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[CognitiveCore] DecisionEngine skipped: %s",
+                        exc,
+                    )
 
-                if engine_decision:
-                    decision = engine_decision
+            decision = self._merge_decisions(
+                controller_decision,
+                engine_decision,
+            )
+
+            context["decision_engine_result"] = engine_decision
 
             logger.info(
-                "[CognitiveCore] Using decision: %s",
+                "[CognitiveCore] Using unified decision: %s",
                 decision,
             )
 
@@ -4582,10 +4947,14 @@ Execution Results:
                     )
                 ),
                 "requires_planning": bool(
-                    getattr(
+                    self._decision_value(
                         decision,
                         "requires_planning",
-                        False,
+                        self._decision_value(
+                            decision,
+                            "use_planner",
+                            False,
+                        ),
                     )
                 ),
             }
@@ -4711,7 +5080,12 @@ Execution Results:
                     memory=memories,
                     state=state,
                 )
-                context.update(ctx)
+                if isinstance(ctx, dict):
+                    context.update(ctx)
+                else:
+                    logger.warning(
+                        "[CognitiveCore] ContextBuilder returned non-dict context."
+                    )
 
             else:
                 context["query"] = query
@@ -4724,7 +5098,10 @@ Execution Results:
             context.setdefault("session_id", session_id)
             context.setdefault("user_id", user_id)
             context.setdefault("state", state)
-            context.setdefault("memory", memories)
+            context["memory"] = self._safe_memory_items(
+                context.get("memory", memories)
+            )
+            context["_context_built"] = True
 
             if intent:
                 context["intent"] = intent
@@ -4774,14 +5151,26 @@ Execution Results:
             context["document_repository"] = document_repository
 
             context["capabilities"] = {
-                "memory": self.memory_router is not None,
-                "documents": document_ai is not None,
+                "memory": self.memory_router is not None
+                or self.memory_engine is not None,
+                "documents": document_ai is not None
+                or self.document_pipeline is not None,
                 "document_repository":
                     document_repository is not None,
                 "skills": self.skill_manager is not None,
                 "actions": self.action_manager is not None,
+                "tools": self.tool_manager is not None,
                 "planner": self.planner is not None,
                 "executor": self.executor is not None,
+                "reasoning": self.reasoning_engine is not None,
+                "agents": self.agent_coordinator is not None,
+                "goals": self.goal_manager is not None,
+                "tasks": self.task_manager is not None,
+                "web": self.tool_manager is not None,
+                "learning": self.autonomous_learning is not None
+                or self.learning_engine is not None,
+                "reflection": self.self_reflection is not None,
+                "world_model": self.world_model is not None,
             }
 
             if self.state_manager:
@@ -4828,7 +5217,14 @@ Execution Results:
                     },
                 )
 
-            if self.memory_router:
+            if (
+                self.memory_router
+                and self._should_store_natural_memory(
+                    query=query,
+                    intent=intent,
+                    route=route,
+                )
+            ):
 
                 try:
 
@@ -4864,8 +5260,10 @@ Execution Results:
                             )
 
                             if refreshed is not None:
-                                memories = refreshed
-                                context["memory"] = refreshed
+                                memories = self._safe_memory_items(
+                                    refreshed
+                                )
+                                context["memory"] = memories
 
                         except Exception:
                             logger.exception(
