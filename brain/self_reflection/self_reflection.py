@@ -35,7 +35,6 @@ class SelfReflection:
             "knowledge_gaps": 0,
             "confidence_updates": 0,
             "reflection_evaluations": 0,
-            "execution_reflections": 0,
             "repeated_mistakes": 0,
             "duplicates_detected": 0,
             "graph_improvements": 0,
@@ -195,94 +194,6 @@ class SelfReflection:
             "plan_efficiency": "optimal" if success else "suboptimal",
             "bottlenecks": [] if success else ["Task failure or inefficiency detected"],
         }
-
-    async def reflect_on_execution(
-        self,
-        execution_result: Any,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Evaluate an observable execution outcome.
-
-        This is deliberately deterministic and side-effect-light:
-        it records the execution assessment but never retries or
-        changes the execution itself.
-        """
-        self.statistics["execution_reflections"] += 1
-
-        context = dict(context or {})
-
-        if isinstance(execution_result, dict):
-            result = dict(execution_result)
-        else:
-            result = {"result": execution_result}
-
-        verification = result.get("verification")
-        if not isinstance(verification, dict):
-            verification = context.get("verification", {})
-        if not isinstance(verification, dict):
-            verification = {}
-
-        success_value = result.get("success")
-        if success_value is None:
-            success_value = (
-                verification.get("goal_completed")
-                if "goal_completed" in verification
-                else None
-            )
-
-        success = bool(success_value) if success_value is not None else False
-        error = result.get("error") or verification.get("error")
-        retry_count = result.get("retry_count", 0)
-
-        try:
-            retry_count = max(0, int(retry_count))
-        except (TypeError, ValueError):
-            retry_count = 0
-
-        if success and retry_count == 0:
-            assessment = "successful"
-        elif success:
-            assessment = "recovered_success"
-        elif error:
-            assessment = "failed"
-        else:
-            assessment = "unverified"
-
-        improvements = []
-        if assessment == "failed":
-            improvements.append("Inspect the failed execution path before repeating it.")
-        elif assessment == "recovered_success":
-            improvements.append("Prefer the successful recovery path on similar tasks.")
-        elif assessment == "unverified":
-            improvements.append("Require verification before treating the task as complete.")
-
-        reflection = {
-            "type": "execution_reflection",
-            "assessment": assessment,
-            "success": success,
-            "verified": verification.get("goal_completed") is True,
-            "retry_count": retry_count,
-            "error": str(error) if error else None,
-            "improvements": improvements,
-            "execution_id": context.get("execution_id", ""),
-            "session_id": context.get("session_id", ""),
-        }
-
-        # Feed the observable outcome into the existing learning layer.
-        # Learning is best-effort so reflection can never break execution.
-        try:
-            if self.learning is not None and hasattr(self.learning, "learn"):
-                await self.learning.learn(
-                    f"Execution reflection: {reflection}",
-                    source="reflection_execution",
-                )
-        except Exception:
-            logger.exception(
-                "[SelfReflection] Execution learning failed."
-            )
-
-        return reflection
 
     async def reflect_on_reasoning(self, reasoning_result: Any) -> Dict[str, Any]:
         """
@@ -511,7 +422,10 @@ class SelfReflection:
     ):
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
-            await self.learning.learn(f"Failure or Gap: {query}", source="reflection_failure")
+            await self.learning.learn(
+                "failure",
+                query=query,
+            )
 
     # =========================================================
     # 7. LEARN FROM SUCCESS
@@ -524,7 +438,11 @@ class SelfReflection:
     ):
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
-            await self.learning.learn(f"Success Q: {query} A: {answer}", source="reflection_success")
+            await self.learning.learn(
+                "success",
+                query=query,
+                answer=answer,
+            )
 
     # =========================================================
     # 8. DETECT DUPLICATE KNOWLEDGE
@@ -675,44 +593,63 @@ class SelfReflection:
         event: str,
         **kwargs,
     ):
+        event = str(event or "").strip().lower()
+
         if event == "review":
             return await self.review(
                 kwargs.get("query"),
                 kwargs.get("answer"),
                 kwargs.get("source"),
             )
-        elif event == "failure":
+
+        if event == "failure":
             return await self.learn_from_failure(
                 kwargs.get("query"),
             )
-        elif event == "success":
+
+        if event == "success":
             return await self.learn_from_success(
                 kwargs.get("query"),
                 kwargs.get("answer"),
             )
-        elif event == "daily":
+
+        if event == "daily":
             return await self.daily_review()
-        elif event == "weekly":
+
+        if event == "weekly":
             return await self.weekly_review()
-        elif event == "duplicates":
+
+        if event == "duplicates":
             return await self.detect_duplicates()
-        elif event == "graph":
+
+        if event == "graph":
             return await self.improve_graph()
-        elif event == "execution":
+
+        if event == "execution":
             return await self.reflect_on_execution(
                 kwargs.get("execution_result"),
                 kwargs.get("context"),
             )
-        elif event == "evaluate_response":
+
+        if event == "evaluate_response":
             return await self.reflect_on_response(
                 kwargs.get("response"),
                 kwargs.get("context", {}),
             )
 
+        return {
+            "success": False,
+            "error": "unknown_reflection_event",
+            "event": event,
+        }
+
     async def handle(self, event):
         data = getattr(event, "data", {}) or {}
 
+        if not isinstance(data, dict):
+            data = {}
+
         return await self.reflect(
-            event.type,
+            getattr(event, "type", ""),
             **data,
         )
