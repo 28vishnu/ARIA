@@ -4798,7 +4798,7 @@ Execution Results:
                 if hasattr(self.working_memory, "metadata"):
                     self.working_memory.metadata["required_tools"] = (
                         self._decision_value(
-                            decision,
+                            controller_decision,
                             "required_tools",
                             [],
                         )
@@ -4809,7 +4809,7 @@ Execution Results:
                         self.working_memory,
                         "required_tools",
                         self._decision_value(
-                            decision,
+                            controller_decision,
                             "required_tools",
                             [],
                         )
@@ -4818,12 +4818,12 @@ Execution Results:
 
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
-                    self.working_memory.metadata["cognitive_decision"] = decision
+                    self.working_memory.metadata["cognitive_decision"] = controller_decision
                 else:
                     setattr(
                         self.working_memory,
                         "cognitive_decision",
-                        decision,
+                        controller_decision,
                     )
 
             if (
