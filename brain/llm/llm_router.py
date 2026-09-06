@@ -29,12 +29,44 @@ class LLMRouter:
         self.openrouter_api_key = config.openrouter_api_key
         self.mistral_api_key = config.mistral_api_key
 
-        self.groq_model = config.groq_model
-        self.gemini_model = config.gemini_model
-        self.openrouter_model = config.openrouter_model
-        self.mistral_model = config.mistral_model
+        # Keep environment/configured model IDs when valid, but protect ARIA
+        # from stale model settings left over from older deployments.
+        self.groq_model = self._normalize_model(
+            getattr(config, "groq_model", None),
+            "llama-3.3-70b-versatile",
+            {"", "none", "null"},
+        )
+        self.gemini_model = self._normalize_model(
+            getattr(config, "gemini_model", None),
+            "gemini-3.8-flash",
+            {
+                "", "none", "null",
+                "gemini-2.0-flash",
+                "gemini-2.0-flash-001",
+                "gemini-2.0-flash-exp",
+            },
+        )
+        self.openrouter_model = self._normalize_model(
+            getattr(config, "openrouter_model", None),
+            "openrouter/free",
+            {"", "none", "null"},
+        )
+        self.mistral_model = self._normalize_model(
+            getattr(config, "mistral_model", None),
+            "mistral-small-latest",
+            {"", "none", "null"},
+        )
 
-        self.timeout = config.timeout_seconds
+        self.timeout = getattr(config, "timeout_seconds", 30.0)
+
+        # Known-good fallbacks used if an existing deployment contains a
+        # stale provider model and the API responds with HTTP 404.
+        self._fallback_models = {
+            "Groq": "llama-3.3-70b-versatile",
+            "Gemini": "gemini-3.8-flash",
+            "OpenRouter": "openrouter/free",
+            "Mistral": "mistral-small-latest",
+        }
 
         # Provider health / circuit-breaker state.
         # A provider that rate-limits ARIA should not be hammered again
@@ -52,6 +84,35 @@ class LLMRouter:
         # Response cache for optimization (30-second TTL)
         self._cache: Dict[str, tuple[str, float]] = {}
         self._cache_ttl = 30.0
+
+    @staticmethod
+    def _normalize_model(
+        value: Any,
+        default: str,
+        retired: set[str] | None = None,
+    ) -> str:
+        value = str(value or "").strip()
+        if value.lower() in (retired or set()):
+            return default
+        return value or default
+
+    def _get_provider_model(self, provider_name: str) -> str:
+        return {
+            "Groq": self.groq_model,
+            "Gemini": self.gemini_model,
+            "OpenRouter": self.openrouter_model,
+            "Mistral": self.mistral_model,
+        }.get(provider_name, "")
+
+    def _set_provider_model(self, provider_name: str, model: str) -> None:
+        if provider_name == "Groq":
+            self.groq_model = model
+        elif provider_name == "Gemini":
+            self.gemini_model = model
+        elif provider_name == "OpenRouter":
+            self.openrouter_model = model
+        elif provider_name == "Mistral":
+            self.mistral_model = model
 
     def is_allowed_for_llm(self, context: dict | None = None) -> bool:
         """
@@ -128,16 +189,14 @@ class LLMRouter:
         """
         Generate a response using ARIA's provider failover chain.
 
-        Provider behaviour:
-        - Protected ARIA routes bypass the LLM.
-        - Cached responses are reused briefly.
-        - Healthy providers are tried first.
-        - 429 providers enter cooldown.
-        - Temporary failures receive one retry.
-        - If all providers are temporarily cooling down,
-          the provider with the shortest remaining cooldown
-          is given one recovery attempt.
-        - Successful providers immediately recover.
+        Provider health is tracked so ARIA does not repeatedly call
+        providers that are currently rate-limited or temporarily down.
+
+        Behaviour:
+        - 429: no immediate retry; provider enters cooldown.
+        - Temporary server/network failure: one short retry.
+        - Provider in cooldown: skip immediately.
+        - Permanent failure: move to next provider.
         """
 
         if not self.is_allowed_for_llm(context):
@@ -146,347 +205,383 @@ class LLMRouter:
             )
             return None
 
-        if not messages:
-            logger.warning(
-                "[LLMRouter] Empty message list received."
-            )
-            return None
-
         # -------------------------------------------------
         # CACHE CHECK
         # -------------------------------------------------
-
-        try:
-            cache_key = (
-                json.dumps(
-                    messages,
-                    sort_keys=True,
-                    ensure_ascii=False,
-                )
-                + f"_{temperature}_{max_tokens}_{task}"
-            )
-        except Exception:
-            cache_key = (
-                str(messages)
-                + f"_{temperature}_{max_tokens}_{task}"
-            )
-
+        cache_key = json.dumps(messages, sort_keys=True) + f"_{temperature}_{max_tokens}_{task}"
         now = time.monotonic()
 
-        cached = self._cache.get(cache_key)
-
-        if cached:
-            cached_response, timestamp = cached
-
+        if cache_key in self._cache:
+            cached_response, timestamp = self._cache[cache_key]
             if (now - timestamp) < self._cache_ttl:
-                logger.info(
-                    "[LLMRouter] Serving response from cache."
-                )
+                logger.info("[LLMRouter] Serving response from cache.")
                 return cached_response
-
-            self._cache.pop(cache_key, None)
+            else:
+                del self._cache[cache_key]
 
         logger.info(
-            "[LLMRouter] Processing LLM request. task=%s",
-            task,
+            "[LLMRouter] Messages being sent:\n%s",
+            json.dumps(messages, indent=2, ensure_ascii=False),
         )
 
+        errors = []
+
         available_providers = {
-            "Mistral": (
-                self.mistral_api_key,
-                self._mistral_chat,
-            ),
             "Groq": (
                 self.groq_api_key,
-                self._groq_chat,
+                self._groq_chat
             ),
             "Gemini": (
                 self.gemini_api_key,
-                self._gemini_chat,
+                self._gemini_chat
             ),
             "OpenRouter": (
                 self.openrouter_api_key,
-                self._openrouter_chat,
+                self._openrouter_chat
+            ),
+            "Mistral": (
+                self.mistral_api_key,
+                self._mistral_chat
             ),
         }
 
+        # Provider order is task-aware.
+        # Mistral is prioritized first across tasks to avoid 404 issues on others.
+
         task_orders = {
             "command_reasoning": [
-                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
+                "Mistral",
             ],
             "planning": [
-                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
+                "Mistral",
             ],
             "memory_relevance": [
-                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
+                "Mistral",
             ],
             "memory_extraction": [
-                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
+                "Mistral",
             ],
             "memory_reasoning": [
-                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
+                "Mistral",
             ],
             "general": [
-                "Mistral",
                 "Groq",
                 "Gemini",
                 "OpenRouter",
+                "Mistral",
             ],
         }
 
         provider_order = task_orders.get(
             task,
-            task_orders["general"],
+            task_orders["general"]
         )
 
         providers = [
             (
-                name,
-                available_providers[name][0],
-                available_providers[name][1],
+                provider_name,
+                available_providers[provider_name][0],
+                available_providers[provider_name][1]
             )
-            for name in provider_order
-            if available_providers[name][0]
+            for provider_name in provider_order
         ]
 
-        if not providers:
-            logger.error(
-                "[LLMRouter] No LLM providers are configured."
-            )
-            return None
-
-        errors = []
-        skipped = []
-
-        # -------------------------------------------------
-        # FIRST PASS — HEALTHY PROVIDERS
-        # -------------------------------------------------
+        configured_providers = 0
 
         for provider_name, api_key, provider_method in providers:
+
+            if not api_key:
+                continue
+
+            configured_providers += 1
+
+            # -------------------------------------------------
+            # PROVIDER CIRCUIT BREAKER
+            # -------------------------------------------------
 
             now = time.monotonic()
 
             cooldown_until = self._provider_cooldowns.get(
                 provider_name,
-                0.0,
+                0.0
             )
 
             if cooldown_until > now:
-                skipped.append(
-                    (
-                        provider_name,
-                        cooldown_until - now,
-                        provider_method,
-                    )
-                )
+
+                remaining = cooldown_until - now
 
                 logger.info(
-                    "[LLMRouter] Skipping %s; %.1fs cooldown "
-                    "remaining.",
+                    "[LLMRouter] Skipping %s; provider is in "
+                    "cooldown for another %.1f seconds.",
                     provider_name,
-                    cooldown_until - now,
+                    remaining
                 )
 
                 continue
 
-            self._provider_cooldowns.pop(
-                provider_name,
-                None,
-            )
+            # Remove expired cooldown state.
 
-            try:
-                result = await provider_method(
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-
-                if result is None:
-                    raise RuntimeError(
-                        f"{provider_name} returned None."
-                    )
-
-                result = str(result).strip()
-
-                if not result:
-                    raise RuntimeError(
-                        f"{provider_name} returned an empty response."
-                    )
-
+            if provider_name in self._provider_cooldowns:
                 self._provider_cooldowns.pop(
                     provider_name,
-                    None,
+                    None
                 )
 
-                self._cache[cache_key] = (
-                    result,
-                    time.monotonic(),
-                )
+            # Normally one attempt.
+            # A temporary network/server failure may receive
+            # one additional attempt.
 
-                logger.info(
-                    "[LLMRouter] Response generated successfully "
-                    "using %s.",
-                    provider_name,
-                )
+            attempt = 0
 
-                return result
+            while attempt < 2:
 
-            except Exception as exc:
+                attempt += 1
 
-                status_code = None
+                try:
 
-                if isinstance(
-                    exc,
-                    httpx.HTTPStatusError,
-                ):
-                    status_code = (
-                        exc.response.status_code
+                    result = await provider_method(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
                     )
 
-                # -----------------------------------------
-                # RATE LIMIT
-                # -----------------------------------------
+                    # Provider recovered successfully.
+                    self._provider_cooldowns.pop(
+                        provider_name,
+                        None
+                    )
 
-                if status_code == 429:
+                    logger.info(
+                        "[LLMRouter] Response generated successfully "
+                        "using %s.",
+                        provider_name
+                    )
 
-                    retry_after = None
+                    # Save to cache
+                    self._cache[cache_key] = (result, time.monotonic())
+
+                    return result
+
+                except Exception as exc:
+
+                    status_code = None
 
                     if isinstance(
                         exc,
-                        httpx.HTTPStatusError,
+                        httpx.HTTPStatusError
                     ):
-                        retry_after = (
-                            exc.response.headers.get(
+                        status_code = (
+                            exc.response.status_code
+                        )
+
+                    # -----------------------------------------
+                    # RATE LIMIT
+                    #
+                    # Do NOT retry immediately.
+                    # Route around the provider.
+                    # -----------------------------------------
+
+                    if status_code == 429:
+
+                        retry_after = None
+
+                        if isinstance(exc, httpx.HTTPStatusError):
+                            retry_after = exc.response.headers.get(
                                 "Retry-After"
                             )
+
+                        cooldown_seconds = self._rate_limit_cooldown
+
+                        if retry_after:
+                            try:
+                                cooldown_seconds = max(
+                                    float(retry_after),
+                                    1.0
+                                )
+                            except (TypeError, ValueError):
+                                pass
+
+                        self._provider_cooldowns[
+                            provider_name
+                        ] = (
+                            time.monotonic()
+                            + cooldown_seconds
                         )
 
-                    cooldown_seconds = (
-                        self._rate_limit_cooldown
-                    )
-
-                    if retry_after:
-                        try:
-                            cooldown_seconds = max(
-                                float(retry_after),
-                                1.0,
-                            )
-                        except (
-                            TypeError,
-                            ValueError,
-                        ):
-                            pass
-
-                    self._provider_cooldowns[
-                        provider_name
-                    ] = (
-                        time.monotonic()
-                        + cooldown_seconds
-                    )
-
-                    errors.append(
-                        f"{provider_name}: HTTP 429"
-                    )
-
-                    logger.warning(
-                        "[LLMRouter] %s rate-limited. "
-                        "Cooldown %.1fs.",
-                        provider_name,
-                        cooldown_seconds,
-                    )
-
-                    continue
-
-                # -----------------------------------------
-                # TEMPORARY FAILURE
-                # -----------------------------------------
-
-                temporary = (
-                    status_code in {
-                        408,
-                        409,
-                        425,
-                        500,
-                        502,
-                        503,
-                        504,
-                    }
-                    or isinstance(
-                        exc,
-                        (
-                            httpx.TimeoutException,
-                            httpx.NetworkError,
-                        ),
-                    )
-                )
-
-                if temporary:
-
-                    logger.warning(
-                        "[LLMRouter] %s temporary failure: %s",
-                        provider_name,
-                        exc,
-                    )
-
-                    # One short retry.
-                    try:
-                        await asyncio.sleep(0.5)
-
-                        result = await provider_method(
-                            messages=messages,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                        )
-
-                        if result is not None:
-                            result = str(result).strip()
-
-                        if result:
-                            self._provider_cooldowns.pop(
-                                provider_name,
-                                None,
-                            )
-
-                            self._cache[cache_key] = (
-                                result,
-                                time.monotonic(),
-                            )
-
-                            logger.info(
-                                "[LLMRouter] %s recovered "
-                                "on retry.",
-                                provider_name,
-                            )
-
-                            return result
-
-                    except Exception as retry_exc:
                         logger.warning(
-                            "[LLMRouter] %s retry failed: %s",
+                            "[LLMRouter] %s rate-limited (429). "
+                            "Cooling provider down for %.1f seconds.",
                             provider_name,
-                            retry_exc,
+                            cooldown_seconds
                         )
 
-                    self._provider_cooldowns[
-                        provider_name
-                    ] = (
-                        time.monotonic()
-                        + self._temporary_failure_cooldown
+                        errors.append(
+                            f"{provider_name}: HTTP 429"
+                        )
+
+                        break
+
+                    # -----------------------------------------
+                    # TEMPORARY FAILURE
+                    # -----------------------------------------
+
+                    temporary = (
+                        status_code in {
+                            408,
+                            409,
+                            425,
+                            500,
+                            502,
+                            503,
+                            504
+                        }
+                        or isinstance(
+                            exc,
+                            (
+                                httpx.TimeoutException,
+                                httpx.NetworkError
+                            )
+                        )
+                    )
+
+                    if temporary:
+
+                        logger.warning(
+                            "[LLMRouter] %s temporary failure "
+                            "on attempt %d: %s",
+                            provider_name,
+                            attempt,
+                            exc
+                        )
+
+                        # One short retry only.
+                        if attempt < 2:
+
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        # Repeated temporary failure:
+                        # temporarily open circuit.
+
+                        self._provider_cooldowns[
+                            provider_name
+                        ] = (
+                            time.monotonic()
+                            + self._temporary_failure_cooldown
+                        )
+
+                        logger.warning(
+                            "[LLMRouter] %s entered temporary "
+                            "cooldown for %.0f seconds.",
+                            provider_name,
+                            self._temporary_failure_cooldown
+                        )
+
+                        errors.append(
+                            f"{provider_name}: "
+                            f"{type(exc).__name__}"
+                        )
+
+                        break
+
+                    # -----------------------------------------
+                    # STALE / INVALID MODEL (404)
+                    # -----------------------------------------
+
+                    if status_code == 404:
+                        configured_model = self._get_provider_model(
+                            provider_name
+                        )
+                        fallback_model = self._fallback_models.get(
+                            provider_name
+                        )
+
+                        # A provider 404 is usually a model-ID problem.
+                        # Try one known-good model before abandoning the
+                        # provider, then retain the fallback for future calls.
+                        if (
+                            fallback_model
+                            and configured_model != fallback_model
+                        ):
+                            logger.warning(
+                                "[LLMRouter] %s returned 404 for model %s; "
+                                "retrying with %s.",
+                                provider_name,
+                                configured_model,
+                                fallback_model,
+                            )
+
+                            self._set_provider_model(
+                                provider_name,
+                                fallback_model,
+                            )
+
+                            try:
+                                fallback_result = await provider_method(
+                                    messages=messages,
+                                    temperature=temperature,
+                                    max_tokens=max_tokens,
+                                )
+
+                                if fallback_result is not None:
+                                    fallback_result = str(
+                                        fallback_result
+                                    ).strip()
+
+                                if fallback_result:
+                                    self._provider_cooldowns.pop(
+                                        provider_name,
+                                        None,
+                                    )
+                                    self._cache[cache_key] = (
+                                        fallback_result,
+                                        time.monotonic(),
+                                    )
+                                    logger.info(
+                                        "[LLMRouter] %s recovered using "
+                                        "fallback model %s.",
+                                        provider_name,
+                                        fallback_model,
+                                    )
+                                    return fallback_result
+
+                            except Exception as fallback_exc:
+                                logger.warning(
+                                    "[LLMRouter] %s fallback model failed: %s",
+                                    provider_name,
+                                    fallback_exc,
+                                )
+
+                        # Avoid retrying a known-bad model on every internal
+                        # request. This is long enough for the other providers
+                        # to take over without making ARIA appear stuck.
+                        self._provider_cooldowns[
+                            provider_name
+                        ] = time.monotonic() + 300.0
+
+                    # -----------------------------------------
+                    # NON-TEMPORARY FAILURE
+                    # -----------------------------------------
+
+                    logger.warning(
+                        "[LLMRouter] %s failed: %s",
+                        provider_name,
+                        exc
                     )
 
                     errors.append(
@@ -494,95 +589,16 @@ class LLMRouter:
                         f"{type(exc).__name__}"
                     )
 
-                    continue
+                    break
 
-                # -----------------------------------------
-                # PERMANENT FAILURE
-                # -----------------------------------------
-
-                logger.warning(
-                    "[LLMRouter] %s failed: %s",
-                    provider_name,
-                    exc,
-                )
-
-                errors.append(
-                    f"{provider_name}: "
-                    f"{type(exc).__name__}"
-                )
-
-        # -------------------------------------------------
-        # RECOVERY PASS
-        #
-        # If every provider was cooling down, don't simply
-        # return None. Give the provider whose cooldown
-        # expires soonest one recovery attempt.
-        # -------------------------------------------------
-
-        if skipped:
-            skipped.sort(
-                key=lambda item: item[1]
-            )
-
-            provider_name, remaining, provider_method = (
-                skipped[0]
-            )
-
-            logger.info(
-                "[LLMRouter] All providers currently cooling "
-                "down. Attempting recovery with %s "
-                "(%.1fs remaining).",
-                provider_name,
-                remaining,
-            )
-
-            try:
-                result = await provider_method(
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-
-                if result is not None:
-                    result = str(result).strip()
-
-                if result:
-                    self._provider_cooldowns.pop(
-                        provider_name,
-                        None,
-                    )
-
-                    self._cache[cache_key] = (
-                        result,
-                        time.monotonic(),
-                    )
-
-                    logger.info(
-                        "[LLMRouter] Recovery succeeded "
-                        "using %s.",
-                        provider_name,
-                    )
-
-                    return result
-
-            except Exception as exc:
-                logger.warning(
-                    "[LLMRouter] Recovery attempt with %s "
-                    "failed: %s",
-                    provider_name,
-                    exc,
-                )
-
-                errors.append(
-                    f"{provider_name}: "
-                    f"recovery:{type(exc).__name__}"
-                )
+        if configured_providers == 0:
+            return None
 
         logger.error(
-            "[LLMRouter] All LLM providers failed: %s",
+            "[LLMRouter] All available LLM providers failed: %s",
             " | ".join(errors)
             if errors
-            else "no provider produced a response",
+            else "all configured providers were in cooldown"
         )
 
         return None
