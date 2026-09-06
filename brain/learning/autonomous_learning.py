@@ -52,13 +52,10 @@ class AutonomousLearning:
 
             "executions_learned": 0,
             "improvement_signals": 0,
-
-            "planner_feedback": 0,
-
-            "reasoning_feedback": 0,
-            "improvement_signals": 0,
             "planner_feedback": 0,
             "reasoning_feedback": 0,
+            "consolidations": 0,
+
 
         }
 
@@ -606,7 +603,88 @@ class AutonomousLearning:
     async def consolidate(
         self,
     ):
-        pass
+        """Safely reinforce and consolidate learned signals."""
+        try:
+            collection = getattr(self.database, "collection", None)
+            if collection is None:
+                return {
+                    "status": "consolidation_unavailable",
+                    "processed": 0,
+                    "reinforced": 0,
+                }
+
+            cursor = collection.find(
+                {
+                    "active": True,
+                    "source": {
+                        "$in": [
+                            "self_reflection",
+                            "reflection_improvement",
+                            "execution_success",
+                            "execution_failure",
+                            "planner_improvement",
+                            "reasoning_improvement",
+                        ]
+                    },
+                },
+                {
+                    "_id": 1,
+                    "title": 1,
+                    "content": 1,
+                    "access_count": 1,
+                },
+            ).sort("updated_at", -1).limit(100)
+
+            records = await cursor.to_list(100)
+            seen = set()
+            reinforced = 0
+
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+
+                key = (
+                    str(record.get("title", "")).strip().lower(),
+                    str(record.get("content", "")).strip(),
+                )
+                if not key[0] or not key[1] or key in seen:
+                    continue
+                seen.add(key)
+
+                record_id = record.get("_id")
+                if not record_id:
+                    continue
+
+                try:
+                    access_count = int(record.get("access_count", 0))
+                except (TypeError, ValueError):
+                    access_count = 0
+
+                if access_count > 0 and hasattr(
+                    self.database, "increase_confidence"
+                ):
+                    await self.database.increase_confidence(
+                        str(record_id)
+                    )
+                    reinforced += 1
+
+            self.statistics["consolidations"] += 1
+            return {
+                "status": "consolidation_complete",
+                "processed": len(records),
+                "unique": len(seen),
+                "reinforced": reinforced,
+            }
+
+        except Exception:
+            logger.exception(
+                "[AutonomousLearning] Consolidation failed."
+            )
+            return {
+                "status": "consolidation_failed",
+                "processed": 0,
+                "reinforced": 0,
+            }
 
     def summary(
         self,
