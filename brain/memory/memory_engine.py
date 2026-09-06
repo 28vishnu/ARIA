@@ -32,6 +32,197 @@ IMPORTANCE = {
 }
 
 
+# =========================================================
+# SENSITIVE / PII MEMORY PROTECTION
+# =========================================================
+#
+# ARIA must never store or expose highly sensitive identity,
+# financial, authentication, or security credentials.
+#
+# Protection is applied at multiple layers:
+#
+#   1. Input extraction
+#   2. LLM-extracted memory validation
+#   3. Database storage
+#   4. Database retrieval
+#   5. Broad personal-memory retrieval
+#
+# Existing sensitive records are filtered during retrieval.
+# =========================================================
+
+SENSITIVE_MEMORY_KEY_PATTERNS = (
+    "aadhaar",
+    "aadhar",
+    "uidai",
+    "pan_number",
+    "pan_card",
+    "passport_number",
+    "passport_id",
+    "voter_id",
+    "voter_number",
+    "driving_license",
+    "driver_license",
+    "license_number",
+    "bank_account",
+    "account_number",
+    "credit_card",
+    "debit_card",
+    "card_number",
+    "cvv",
+    "cvc",
+    "pin",
+    "password",
+    "passcode",
+    "otp",
+    "one_time_password",
+    "secret",
+    "private_key",
+    "api_key",
+    "access_token",
+    "refresh_token",
+    "auth_token",
+    "security_answer",
+)
+
+SENSITIVE_QUERY_PATTERNS = (
+    r"\baadhaar\b",
+    r"\baadhar\b",
+    r"\buidai\b",
+    r"\bpan\s+(?:number|card)\b",
+    r"\bpassport\s+(?:number|id)\b",
+    r"\bvoter\s*(?:id|number)\b",
+    r"\bdriving\s*licen[cs]e\b",
+    r"\blicen[cs]e\s+number\b",
+    r"\bbank\s+account\b",
+    r"\baccount\s+number\b",
+    r"\bcredit\s+card\b",
+    r"\bdebit\s+card\b",
+    r"\bcard\s+number\b",
+    r"\bcvv\b",
+    r"\bcvc\b",
+    r"\botp\b",
+    r"\bpassword\b",
+    r"\bpasscode\b",
+    r"\bprivate\s+key\b",
+    r"\bapi\s+key\b",
+    r"\baccess\s+token\b",
+    r"\brefresh\s+token\b",
+    r"\bauth(?:entication)?\s+token\b",
+)
+
+# Highly sensitive numeric identifiers.
+SENSITIVE_VALUE_PATTERNS = (
+    re.compile(
+        r"\b\d{4}\s?\d{4}\s?\d{4}\b"
+    ),
+    re.compile(
+        r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+        re.IGNORECASE
+    ),
+)
+
+
+def _normalized_memory_key(key: Any) -> str:
+    """
+    Convert a memory key into a safe comparison form.
+    """
+
+    return re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(key or "").lower()
+    ).strip("_")
+
+
+def _is_sensitive_memory_key(key: Any) -> bool:
+    """
+    Determine whether a memory key refers to sensitive data.
+    """
+
+    normalized = _normalized_memory_key(key)
+
+    if not normalized:
+        return False
+
+    return any(
+        pattern in normalized
+        for pattern in SENSITIVE_MEMORY_KEY_PATTERNS
+    )
+
+
+def _contains_sensitive_query(query: Any) -> bool:
+    """
+    Detect queries requesting highly sensitive information.
+    """
+
+    text = str(query or "").lower()
+
+    return any(
+        re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+        for pattern in SENSITIVE_QUERY_PATTERNS
+    )
+
+
+def _contains_sensitive_value(value: Any) -> bool:
+    """
+    Detect highly sensitive identifiers inside a value.
+
+    This intentionally focuses on high-confidence identifiers such
+    as Aadhaar and PAN rather than blocking ordinary numbers.
+    """
+
+    if value is None:
+        return False
+
+    if isinstance(value, (list, tuple, set)):
+        return any(
+            _contains_sensitive_value(item)
+            for item in value
+        )
+
+    if isinstance(value, dict):
+        return any(
+            _contains_sensitive_value(item)
+            for item in value.values()
+        )
+
+    text = str(value).strip()
+
+    if not text:
+        return False
+
+    for pattern in SENSITIVE_VALUE_PATTERNS:
+        if pattern.search(text):
+            return True
+
+    return False
+
+
+def _is_sensitive_memory(memory: Any) -> bool:
+    """
+    Determine whether an entire memory record is sensitive.
+    """
+
+    if not isinstance(memory, dict):
+        return False
+
+    key = memory.get("key")
+
+    if _is_sensitive_memory_key(key):
+        return True
+
+    value = memory.get("value")
+
+    if _contains_sensitive_value(value):
+        return True
+
+    return False
+
+
 class MemoryEngine:
 
     def __init__(
@@ -61,6 +252,10 @@ class MemoryEngine:
 
         self.short_term_memory = []
 
+    # =========================================================
+    # SHORT-TERM MEMORY
+    # =========================================================
+
     def add_short_term_memory(
         self,
         user,
@@ -88,14 +283,16 @@ class MemoryEngine:
 
         self.short_term_memory.clear()
 
+    # =========================================================
+    # PREFETCH
+    # =========================================================
+
     async def prefetch(self, route, session_id):
         """
         Prepare memory required by the current route.
 
         Prefetch is intentionally lightweight. It does not generate
-        responses and does not mutate long-term memory. It prepares
-        route/session context so downstream reasoning can retrieve
-        the correct memories without repeatedly rebuilding state.
+        responses and does not mutate long-term memory.
         """
 
         if not route:
@@ -106,7 +303,9 @@ class MemoryEngine:
         if route_name is None:
             route_name = str(route)
 
-        route_name = str(route_name).lower().strip()
+        route_name = str(
+            route_name
+        ).lower().strip()
 
         context = {
             "route": route_name,
@@ -114,7 +313,6 @@ class MemoryEngine:
             "memory_available": self.memory_col is not None,
         }
 
-        # Personal-memory routes benefit from recent conversation context.
         if any(
             token in route_name
             for token in (
@@ -125,24 +323,33 @@ class MemoryEngine:
                 "profile",
             )
         ):
-            context["recent_context"] = self.recent_context(limit=5)
+            context["recent_context"] = self.recent_context(
+                limit=5
+            )
 
-        # Keep the prepared state available to the working-memory layer
-        # when one is connected.
         if self.working_memory is not None:
             try:
                 semantic = self.working_memory.semantic()
 
-                context["semantic_memory_available"] = semantic is not None
+                context["semantic_memory_available"] = (
+                    semantic is not None
+                )
+
             except Exception:
                 logger.exception(
                     "[MemoryEngine] Semantic memory prefetch failed."
                 )
+
                 context["semantic_memory_available"] = False
+
         else:
             context["semantic_memory_available"] = False
 
         return context
+
+    # =========================================================
+    # SEMANTIC MEMORY
+    # =========================================================
 
     def _update_semantic_memory(
         self,
@@ -155,39 +362,83 @@ class MemoryEngine:
         if not self.working_memory:
             return
 
-        semantic = self.working_memory.semantic()
+        # Never mirror sensitive memory into semantic memory.
+        if _is_sensitive_memory(memory):
+            logger.warning(
+                "[MemorySecurity] Blocked sensitive memory "
+                "from semantic memory."
+            )
+            return
 
-        semantic.add_node(
-            node_id=memory.get("key"),
-            node_type=memory.get("category", "general"),
-            value=str(memory.get("value")),
-            metadata={
-                "importance": memory.get("importance"),
-                "confidence": memory.get("confidence"),
-            },
-        )
+        try:
+            semantic = self.working_memory.semantic()
 
-        logger.info(
-            "[SemanticMemory] Mirrored memory '%s' into graph.",
-            memory.get("key", "unknown"),
-        )
+            if semantic is None:
+                return
+
+            semantic.add_node(
+                node_id=memory.get("key"),
+                node_type=memory.get(
+                    "category",
+                    "general"
+                ),
+                value=str(
+                    memory.get("value")
+                ),
+                metadata={
+                    "importance": memory.get(
+                        "importance"
+                    ),
+                    "confidence": memory.get(
+                        "confidence"
+                    ),
+                },
+            )
+
+            logger.info(
+                "[SemanticMemory] Mirrored memory '%s' into graph.",
+                memory.get(
+                    "key",
+                    "unknown"
+                ),
+            )
+
+        except Exception:
+            logger.exception(
+                "[MemoryEngine] Semantic memory update failed."
+            )
 
     # =========================================================
     # DATABASE INITIALISATION
     # =========================================================
 
     async def initialize_indexes(self):
+
         if self.memory_col is None:
             return
 
         try:
-            await self.memory_col.create_index("key")
-            await self.memory_col.create_index("category")
-            await self.memory_col.create_index("memory_type")
-            await self.memory_col.create_index("updated_at")
+            await self.memory_col.create_index(
+                "key"
+            )
 
             await self.memory_col.create_index(
-                [("key", 1), ("value", 1)]
+                "category"
+            )
+
+            await self.memory_col.create_index(
+                "memory_type"
+            )
+
+            await self.memory_col.create_index(
+                "updated_at"
+            )
+
+            await self.memory_col.create_index(
+                [
+                    ("key", 1),
+                    ("value", 1)
+                ]
             )
 
             logger.info(
@@ -215,21 +466,42 @@ class MemoryEngine:
             if not profile:
                 return {}
 
-            profile.pop("_id", None)
+            profile.pop(
+                "_id",
+                None
+            )
 
-            return profile
+            # Never expose sensitive profile fields through
+            # this general profile method.
+            safe_profile = {}
+
+            for key, value in profile.items():
+
+                if _is_sensitive_memory_key(key):
+                    continue
+
+                if _contains_sensitive_value(value):
+                    continue
+
+                safe_profile[key] = value
+
+            return safe_profile
 
         except Exception:
             logger.exception(
                 "[MemoryEngine] Failed to load profile."
             )
+
             return {}
 
     # =========================================================
     # NORMALISATION
     # =========================================================
 
-    def _normalize(self, value: str) -> str:
+    def _normalize(
+        self,
+        value: str
+    ) -> str:
 
         value = value.strip()
 
@@ -239,32 +511,37 @@ class MemoryEngine:
             value
         )
 
-        return value.strip(" .,!?")
+        return value.strip(
+            " .,!? "
+        )
 
-    def _normalize_key(self, subject: str) -> str:
+    def _normalize_key(
+        self,
+        subject: str
+    ) -> str:
         """
-        Convert equivalent human wording into one canonical memory key.
-
-        Examples:
-            favourite color  -> favorite_color
-            favorite colour  -> favorite_color
-            favourite colour -> favorite_color
+        Convert equivalent human wording into one canonical
+        memory key.
         """
 
         subject = subject.lower().strip()
 
-        # British -> American spelling
-        subject = subject.replace("favourite", "favorite")
-        subject = subject.replace("colour", "color")
+        subject = subject.replace(
+            "favourite",
+            "favorite"
+        )
 
-        # Remove duplicate favorite prefix.
+        subject = subject.replace(
+            "colour",
+            "color"
+        )
+
         subject = re.sub(
             r"^favorite\s+",
             "",
             subject
         )
 
-        # Keep only safe key characters.
         subject = re.sub(
             r"[^a-z0-9\s_]",
             "",
@@ -279,7 +556,10 @@ class MemoryEngine:
 
         return f"favorite_{subject}"
 
-    def _validate_value(self, value: str) -> bool:
+    def _validate_value(
+        self,
+        value: str
+    ) -> bool:
 
         if not value:
             return False
@@ -305,30 +585,43 @@ class MemoryEngine:
     # SHOULD MEMORY BE USED?
     # =========================================================
 
-    def should_use_memory(self, query: str, intent: Optional[Any] = None) -> bool:
+    def should_use_memory(
+        self,
+        query: str,
+        intent: Optional[Any] = None
+    ) -> bool:
         """
         Determine whether the query should use personal memory.
-
-        Personal-reference questions must be allowed to use memory even
-        when they begin with phrases such as "what is", "where is", etc.
-
-        General knowledge questions should still bypass memory.
         """
+
         if not query:
             return False
 
         q = query.lower().strip()
 
-        intent_name = getattr(intent, "name", "").lower() if intent else ""
+        intent_name = (
+            getattr(
+                intent,
+                "name",
+                ""
+            ).lower()
+            if intent
+            else ""
+        )
 
-        # These routes normally do not require personal-memory retrieval.
-        if intent_name in ("research", "coding", "web search", "tool"):
+        if intent_name in (
+            "research",
+            "coding",
+            "web search",
+            "tool"
+        ):
             return False
 
-        # ---------------------------------------------------------
-        # PERSONAL MEMORY QUESTIONS
-        # ---------------------------------------------------------
-        # These must take priority over generic factual starters.
+        # Never use personal memory as a source for highly
+        # sensitive identity/security requests.
+        if _contains_sensitive_query(q):
+            return False
+
         personal_patterns = (
             r"\bmy\b",
             r"\bmine\b",
@@ -343,13 +636,15 @@ class MemoryEngine:
             r"\bwhat have i told you\b",
         )
 
-        # Questions explicitly referring to the user should use memory.
-        if any(re.search(pattern, q) for pattern in personal_patterns):
+        if any(
+            re.search(
+                pattern,
+                q
+            )
+            for pattern in personal_patterns
+        ):
             return True
 
-        # ---------------------------------------------------------
-        # GENERAL KNOWLEDGE / FACTUAL QUESTIONS
-        # ---------------------------------------------------------
         factual_starters = (
             "who founded",
             "who is",
@@ -365,33 +660,46 @@ class MemoryEngine:
             "calculate",
         )
 
-        if q.startswith(factual_starters):
+        if q.startswith(
+            factual_starters
+        ):
             return False
 
-        # Default: allow memory for conversational/personal queries.
         return True
 
     # =========================================================
     # SHOULD THIS MESSAGE BE STORED?
     # =========================================================
 
-    def _should_extract(self, text: str) -> bool:
+    def _should_extract(
+        self,
+        text: str
+    ) -> bool:
 
         if not text:
             return False
 
-        # Aadhaar
-        if re.search(
-            r"\b\d{4}\s?\d{4}\s?\d{4}\b",
-            text
-        ):
+        # -----------------------------------------------------
+        # SENSITIVE DATA PROTECTION
+        # -----------------------------------------------------
+        #
+        # Never extract highly sensitive identity/security data.
+        # This happens before deterministic or LLM extraction.
+        # -----------------------------------------------------
+
+        if _contains_sensitive_value(text):
+
+            logger.warning(
+                "[MemorySecurity] Sensitive identifier detected; "
+                "memory extraction blocked."
+            )
+
             return False
 
-        # PAN
-        if re.search(
-            r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
-            text.upper()
-        ):
+        if _contains_sensitive_query(text):
+
+            # Questions requesting sensitive information are
+            # not personal memories and must never be stored.
             return False
 
         lower = text.lower().strip()
@@ -424,7 +732,9 @@ class MemoryEngine:
             "can i "
         )
 
-        if lower.startswith(question_prefixes):
+        if lower.startswith(
+            question_prefixes
+        ):
             return False
 
         if re.fullmatch(
@@ -585,7 +895,9 @@ class MemoryEngine:
             )
 
             return {
-                "key": self._normalize_key(subject),
+                "key": self._normalize_key(
+                    subject
+                ),
                 "value": value,
                 "category": "preference",
                 "memory_type": "preference",
@@ -700,7 +1012,9 @@ class MemoryEngine:
             flags=re.IGNORECASE
         )[0]
 
-        return self._normalize(value)
+        return self._normalize(
+            value
+        )
 
     # =========================================================
     # LIST PREFERENCES
@@ -711,7 +1025,9 @@ class MemoryEngine:
         segment: str
     ) -> list[str]:
 
-        segment = self._normalize(segment)
+        segment = self._normalize(
+            segment
+        )
 
         segment = re.split(
             r"\s+(?:but|however|although|except)\s+",
@@ -731,7 +1047,9 @@ class MemoryEngine:
 
         for raw in segment.split(","):
 
-            item = self._normalize(raw)
+            item = self._normalize(
+                raw
+            )
 
             item = re.sub(
                 r"^(?:that|this|it|something)\s+",
@@ -740,7 +1058,9 @@ class MemoryEngine:
                 flags=re.IGNORECASE
             )
 
-            item = self._normalize(item)
+            item = self._normalize(
+                item
+            )
 
             if self._validate_value(item):
                 items.append(item)
@@ -748,6 +1068,7 @@ class MemoryEngine:
         unique_items = []
 
         for item in items:
+
             if item.lower() not in {
                 existing.lower()
                 for existing in unique_items
@@ -764,21 +1085,35 @@ class MemoryEngine:
         self,
         memory: Dict[str, Any]
     ):
+
         now = datetime.now(
             timezone.utc
         ).isoformat()
 
-        imp = memory.get("importance", 0.5)
+        imp = memory.get(
+            "importance",
+            0.5
+        )
+
         if isinstance(imp, str):
+
             imp = {
                 "low": 0.25,
                 "medium": 0.5,
                 "high": 0.75,
                 "critical": 1.0,
-            }.get(imp.lower(), 0.5)
+            }.get(
+                imp.lower(),
+                0.5
+            )
+
         try:
             imp = float(imp)
-        except (TypeError, ValueError):
+
+        except (
+            TypeError,
+            ValueError
+        ):
             imp = 0.5
 
         return {
@@ -859,14 +1194,44 @@ class MemoryEngine:
         }
 
     # =========================================================
-    # STORE MEMORY (UPDATED TO PREVENT DUPLICATES)
+    # STORE MEMORY
     # =========================================================
 
-    async def get_memory(self, key: str) -> Optional[dict]:
-        """Helper to fetch an existing memory by its key."""
+    async def get_memory(
+        self,
+        key: str
+    ) -> Optional[dict]:
+        """
+        Fetch an existing memory by key.
+
+        Sensitive records are never returned through this helper.
+        """
+
         if self.memory_col is None:
             return None
-        return await self.memory_col.find_one({"key": key})
+
+        try:
+
+            memory = await self.memory_col.find_one(
+                {"key": key}
+            )
+
+            if _is_sensitive_memory(memory):
+                logger.warning(
+                    "[MemorySecurity] Blocked sensitive memory retrieval "
+                    "for key: %s",
+                    _normalized_memory_key(key)
+                )
+                return None
+
+            return memory
+
+        except Exception:
+            logger.exception(
+                "[MemoryEngine] Failed to get memory."
+            )
+
+            return None
 
     async def _store_extracted_memory(
         self,
@@ -874,43 +1239,127 @@ class MemoryEngine:
     ) -> dict:
 
         if self.memory_col is None:
-            return {"success": False}
+            return {
+                "success": False
+            }
 
-        key = str(memory["key"]).strip()
-        value = memory["value"]
+        if not isinstance(memory, dict):
+            return {
+                "success": False
+            }
+
+        # =====================================================
+        # FINAL SECURITY GATE
+        # =====================================================
+        #
+        # This protects both deterministic extraction and
+        # LLM-generated memory extraction.
+        # =====================================================
+
+        if _is_sensitive_memory(memory):
+
+            logger.warning(
+                "[MemorySecurity] Blocked sensitive memory storage: %s",
+                _normalized_memory_key(
+                    memory.get("key")
+                )
+            )
+
+            return {
+                "success": False,
+                "action": "blocked_sensitive_memory",
+            }
+
+        key = str(
+            memory.get(
+                "key",
+                ""
+            )
+        ).strip()
+
+        if not key:
+            return {
+                "success": False
+            }
+
+        value = memory.get(
+            "value"
+        )
+
+        if value in (
+            None,
+            ""
+        ):
+            return {
+                "success": False
+            }
+
+        # Never allow a sensitive identifier to pass through
+        # under an unrelated/custom key.
+        if _contains_sensitive_value(value):
+
+            logger.warning(
+                "[MemorySecurity] Blocked sensitive memory value."
+            )
+
+            return {
+                "success": False,
+                "action": "blocked_sensitive_memory",
+            }
 
         # Always store canonical keys.
-        if key.startswith("favorite_"):
+        if key.startswith(
+            "favorite_"
+        ):
             key = self._normalize_key(
-                key.replace("favorite_", "", 1)
+                key.replace(
+                    "favorite_",
+                    "",
+                    1
+                )
             )
+
+        # Final key security check after normalization.
+        if _is_sensitive_memory_key(key):
+
+            logger.warning(
+                "[MemorySecurity] Blocked sensitive normalized "
+                "memory key: %s",
+                key
+            )
+
+            return {
+                "success": False,
+                "action": "blocked_sensitive_memory",
+            }
 
         memory["key"] = key
 
         existing = await self.memory_col.find_one(
-            {"key": key}
+            {
+                "key": key
+            }
         )
 
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
         # Legacy-key migration
-        # ---------------------------------------------------------
-        # Merge old spelling variants into the canonical key.
-        #
-        # Example:
-        #   favorite_colour -> favorite_color
-        #
-        # Only applies to favorite keys.
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
 
         if key == "favorite_color":
+
             legacy = await self.memory_col.find_one(
                 {
                     "key": "favorite_colour"
                 }
             )
 
-            if legacy is not None and existing is None:
+            if (
+                legacy is not None
+                and existing is None
+            ):
+
                 existing = legacy
+
                 await self.memory_col.update_one(
                     {
                         "_id": legacy["_id"]
@@ -918,25 +1367,61 @@ class MemoryEngine:
                     {
                         "$set": {
                             "key": "favorite_color",
-                            "updated_at": datetime.now(timezone.utc).isoformat()
+                            "updated_at": datetime.now(
+                                timezone.utc
+                            ).isoformat()
                         }
                     }
                 )
 
         if existing is not None:
+
+            # Existing sensitive record protection.
+            if _is_sensitive_memory(existing):
+
+                logger.warning(
+                    "[MemorySecurity] Refusing to update "
+                    "sensitive existing memory: %s",
+                    key
+                )
+
+                return {
+                    "success": False,
+                    "action": "blocked_sensitive_memory",
+                }
+
             existing["value"] = value
-            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-            # Keep MongoDB memory and semantic memory synchronized.
-            await self.update_memory(existing.get("_id"), existing)
+            existing["updated_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
 
-            updated_memory = dict(existing)
-            updated_memory.update(memory)
+            await self.update_memory(
+                existing.get("_id"),
+                existing
+            )
+
+            updated_memory = dict(
+                existing
+            )
+
+            updated_memory.update(
+                memory
+            )
+
             updated_memory["key"] = key
             updated_memory["value"] = value
-            updated_memory["updated_at"] = existing["updated_at"]
+            updated_memory["updated_at"] = (
+                existing["updated_at"]
+            )
 
-            self._update_semantic_memory(updated_memory)
+            # Never mirror sensitive data.
+            if not _is_sensitive_memory(
+                updated_memory
+            ):
+                self._update_semantic_memory(
+                    updated_memory
+                )
 
             logger.info(
                 "[Memory] Updated existing memory: %s",
@@ -950,56 +1435,143 @@ class MemoryEngine:
                 "action": "update"
             }
 
-        imp_val = memory.get("importance", 0.5)
-        if isinstance(imp_val, str):
-            is_perm = imp_val in ("high", "critical")
+        imp_val = memory.get(
+            "importance",
+            0.5
+        )
+
+        if isinstance(
+            imp_val,
+            str
+        ):
+
+            is_perm = imp_val in (
+                "high",
+                "critical"
+            )
+
         else:
+
             try:
-                is_perm = float(imp_val) >= 0.75
-            except (TypeError, ValueError):
+                is_perm = (
+                    float(imp_val) >= 0.75
+                )
+
+            except (
+                TypeError,
+                ValueError
+            ):
                 is_perm = False
+
         memory["is_permanent"] = is_perm
 
-        if memory.get("is_list"):
+        # -----------------------------------------------------
+        # LIST MEMORY
+        # -----------------------------------------------------
+
+        if memory.get(
+            "is_list"
+        ):
 
             stored = []
 
             for item in value:
 
-                if not self._validate_value(item):
+                if not self._validate_value(
+                    item
+                ):
                     continue
 
-                item_memory = dict(memory)
-                item_memory["value"] = item
-                record = self._build_memory_record(item_memory)
+                # Protect individual list items.
+                if _contains_sensitive_value(
+                    item
+                ):
+                    logger.warning(
+                        "[MemorySecurity] Blocked sensitive "
+                        "list-memory item."
+                    )
+                    continue
 
-                existing_item = await self.memory_col.find_one(
-                    {
-                        "key": key,
-                        "value": item
-                    }
+                item_memory = dict(
+                    memory
                 )
 
-                if existing_item and existing_item.get("value") == item:
-                    stored.append(item)
+                item_memory["value"] = item
+
+                record = self._build_memory_record(
+                    item_memory
+                )
+
+                existing_item = (
+                    await self.memory_col.find_one(
+                        {
+                            "key": key,
+                            "value": item
+                        }
+                    )
+                )
+
+                if (
+                    existing_item
+                    and existing_item.get(
+                        "value"
+                    ) == item
+                ):
+
+                    stored.append(
+                        item
+                    )
+
                     continue
 
                 version = 1
                 history = []
 
                 if existing_item:
-                    version = existing_item.get("version", 1) + 1
-                    history = existing_item.get("history", [])
-                    history.append({
-                        "value": existing_item.get("value"),
-                        "updated_at": existing_item.get("updated_at")
-                    })
-                    record["created_at"] = existing_item.get("created_at", record["created_at"])
-                    record["access_count"] = existing_item.get("access_count", 0)
+
+                    version = (
+                        existing_item.get(
+                            "version",
+                            1
+                        )
+                        + 1
+                    )
+
+                    history = existing_item.get(
+                        "history",
+                        []
+                    )
+
+                    history.append(
+                        {
+                            "value": existing_item.get(
+                                "value"
+                            ),
+                            "updated_at": existing_item.get(
+                                "updated_at"
+                            )
+                        }
+                    )
+
+                    record["created_at"] = (
+                        existing_item.get(
+                            "created_at",
+                            record["created_at"]
+                        )
+                    )
+
+                    record["access_count"] = (
+                        existing_item.get(
+                            "access_count",
+                            0
+                        )
+                    )
 
                 record["version"] = version
                 record["history"] = history
-                record["is_permanent"] = memory["is_permanent"]
+                record["is_permanent"] = (
+                    memory["is_permanent"]
+                )
 
                 await self.memory_col.update_one(
                     {
@@ -1015,9 +1587,13 @@ class MemoryEngine:
                     upsert=True
                 )
 
-                self._update_semantic_memory(item_memory)
+                self._update_semantic_memory(
+                    item_memory
+                )
 
-                stored.append(item)
+                stored.append(
+                    item
+                )
 
             return {
                 "success": bool(stored),
@@ -1026,18 +1602,49 @@ class MemoryEngine:
                 "action": "stored"
             }
 
-        if not self._validate_value(str(value)):
-            return {"success": False}
+        # -----------------------------------------------------
+        # SINGLE MEMORY
+        # -----------------------------------------------------
 
-        record = self._build_memory_record(memory)
+        if not self._validate_value(
+            str(value)
+        ):
+            return {
+                "success": False
+            }
+
+        record = self._build_memory_record(
+            memory
+        )
 
         record["version"] = 1
         record["history"] = []
-        record["is_permanent"] = memory["is_permanent"]
+        record["is_permanent"] = (
+            memory["is_permanent"]
+        )
 
-        insert_result = await self.memory_col.insert_one(record)
+        # Final record-level security gate.
+        if _is_sensitive_memory(
+            record
+        ):
 
-        self._update_semantic_memory(memory)
+            logger.warning(
+                "[MemorySecurity] Final record gate "
+                "blocked sensitive memory."
+            )
+
+            return {
+                "success": False,
+                "action": "blocked_sensitive_memory",
+            }
+
+        insert_result = await self.memory_col.insert_one(
+            record
+        )
+
+        self._update_semantic_memory(
+            memory
+        )
 
         logger.info(
             "[MemoryEngine] Stored memory — Key: %s | Value: %s",
@@ -1063,7 +1670,9 @@ class MemoryEngine:
 
         if (
             self.memory_col is None
-            or not self._should_extract(user_text)
+            or not self._should_extract(
+                user_text
+            )
         ):
             return
 
@@ -1072,6 +1681,17 @@ class MemoryEngine:
         )
 
         if memory:
+
+            # Defense-in-depth.
+            if _is_sensitive_memory(
+                memory
+            ):
+                logger.warning(
+                    "[MemorySecurity] Deterministic extraction "
+                    "blocked sensitive memory."
+                )
+                return
+
             await self._store_extracted_memory(
                 memory
             )
@@ -1083,27 +1703,63 @@ class MemoryEngine:
 
         if (
             self.memory_col is None
-            or not self._should_extract(user_text)
+            or not self._should_extract(
+                user_text
+            )
         ):
-            return {"success": False}
+            return {
+                "success": False
+            }
 
         memory = self._extract_memory(
             user_text
         )
 
         if memory:
+
+            if _is_sensitive_memory(
+                memory
+            ):
+                logger.warning(
+                    "[MemorySecurity] Deterministic memory "
+                    "blocked before storage."
+                )
+
+                return {
+                    "success": False,
+                    "action": "blocked_sensitive_memory",
+                }
+
             res = await self._store_extracted_memory(
                 memory
             )
-            if res.get("success"):
-                if hasattr(self, "learning_engine") and self.learning_engine:
-                    await self.learning_engine.learn_from_memory(memory)
+
+            if (
+                res.get("success")
+                and hasattr(
+                    self,
+                    "learning_engine"
+                )
+                and self.learning_engine
+            ):
+                await self.learning_engine.learn_from_memory(
+                    memory
+                )
+
             return res
+
+        # -----------------------------------------------------
+        # LLM MEMORY EXTRACTION
+        # -----------------------------------------------------
 
         if (
             self.llm_router is not None
-            and hasattr(self.llm_router, "extract_memories")
+            and hasattr(
+                self.llm_router,
+                "extract_memories"
+            )
         ):
+
             try:
 
                 memories = await self.llm_router.extract_memories(
@@ -1116,9 +1772,19 @@ class MemoryEngine:
 
                     for extracted in memories:
 
+                        if not isinstance(
+                            extracted,
+                            dict
+                        ):
+                            continue
+
                         memory_data = {
-                            "key": extracted.get("key"),
-                            "value": extracted.get("value"),
+                            "key": extracted.get(
+                                "key"
+                            ),
+                            "value": extracted.get(
+                                "value"
+                            ),
                             "category": extracted.get(
                                 "category",
                                 "general"
@@ -1140,14 +1806,51 @@ class MemoryEngine:
                         ):
                             continue
 
+                        # -------------------------------------------------
+                        # CRITICAL SECURITY GATE
+                        # -------------------------------------------------
+                        #
+                        # LLMs can produce arbitrary keys. Do not trust
+                        # the key alone; inspect both key and value.
+                        # -------------------------------------------------
+
+                        if _is_sensitive_memory(
+                            memory_data
+                        ):
+
+                            logger.warning(
+                                "[MemorySecurity] LLM extraction "
+                                "blocked sensitive memory: %s",
+                                _normalized_memory_key(
+                                    memory_data.get("key")
+                                )
+                            )
+
+                            continue
+
                         result = await self._store_extracted_memory(
                             memory_data
                         )
 
-                        if result.get("success"):
-                            stored_results.append(result)
-                            if hasattr(self, "learning_engine") and self.learning_engine:
-                                await self.learning_engine.learn_from_memory(memory_data)
+                        if result.get(
+                            "success"
+                        ):
+
+                            stored_results.append(
+                                result
+                            )
+
+                            if (
+                                hasattr(
+                                    self,
+                                    "learning_engine"
+                                )
+                                and self.learning_engine
+                            ):
+
+                                await self.learning_engine.learn_from_memory(
+                                    memory_data
+                                )
 
                     if stored_results:
 
@@ -1163,14 +1866,17 @@ class MemoryEngine:
                         }
 
             except Exception:
+
                 logger.exception(
                     "[MemoryEngine] Intelligent memory extraction failed."
                 )
 
-        return {"success": False}
+        return {
+            "success": False
+        }
 
     # =========================================================
-    # MEMORY RETRIEVAL
+    # MEMORY SCORING
     # =========================================================
 
     def _calculate_score(
@@ -1184,17 +1890,30 @@ class MemoryEngine:
             0.5
         )
 
-        if isinstance(importance, str):
+        if isinstance(
+            importance,
+            str
+        ):
+
             importance = {
                 "low": 0.25,
                 "medium": 0.5,
                 "high": 0.75,
                 "critical": 1.0,
-            }.get(importance.lower(), 0.5)
+            }.get(
+                importance.lower(),
+                0.5
+            )
 
         try:
-            importance = float(importance)
-        except (TypeError, ValueError):
+            importance = float(
+                importance
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
             importance = 0.5
 
         confidence = memory.get(
@@ -1207,27 +1926,29 @@ class MemoryEngine:
             0
         )
 
-        capped_accesses = min(accesses, 10)
-
-        return (
-
-            semantic_score
-
-            +
-
-            importance * 0.15
-
-            +
-
-            confidence * 5
-
-            +
-
-            capped_accesses * 0.08
-
+        capped_accesses = min(
+            accesses,
+            10
         )
 
-    def _consolidate_broad_memories(self, memories):
+        return (
+            semantic_score
+            +
+            importance * 0.15
+            +
+            confidence * 5
+            +
+            capped_accesses * 0.08
+        )
+
+    # =========================================================
+    # BROAD MEMORY CONSOLIDATION
+    # =========================================================
+
+    def _consolidate_broad_memories(
+        self,
+        memories
+    ):
         """
         Consolidate semantically duplicate memories for broad
         personal-memory queries.
@@ -1251,6 +1972,7 @@ class MemoryEngine:
         key_to_group = {}
 
         for canonical, keys in canonical_groups.items():
+
             for key in keys:
                 key_to_group[key] = canonical
 
@@ -1258,66 +1980,122 @@ class MemoryEngine:
         output = []
 
         for memory in memories:
-            key = memory.get("key")
+
+            # Never allow sensitive memories into consolidation.
+            if _is_sensitive_memory(
+                memory
+            ):
+                continue
+
+            key = memory.get(
+                "key"
+            )
 
             if not key:
                 continue
 
-            group = key_to_group.get(key)
+            group = key_to_group.get(
+                key
+            )
 
-            # Normal memory — keep it.
             if group is None:
+
                 if key not in consolidated:
+
                     consolidated[key] = memory
-                    output.append(memory)
+                    output.append(
+                        memory
+                    )
+
                 continue
 
-            # First memory in this semantic group.
-            existing = consolidated.get(group)
+            existing = consolidated.get(
+                group
+            )
 
             if existing is None:
+
                 consolidated[group] = memory
-                output.append(memory)
+                output.append(
+                    memory
+                )
+
                 continue
 
-            # If duplicate semantic memory exists,
-            # keep the most recently updated one.
             existing_updated = str(
-                existing.get("updated_at") or ""
+                existing.get(
+                    "updated_at"
+                ) or ""
             )
 
             current_updated = str(
-                memory.get("updated_at") or ""
+                memory.get(
+                    "updated_at"
+                ) or ""
             )
 
             if current_updated > existing_updated:
-                index = output.index(existing)
+
+                index = output.index(
+                    existing
+                )
+
                 output[index] = memory
+
                 consolidated[group] = memory
 
         return output
+
+    # =========================================================
+    # MEMORY RELEVANCE
+    # =========================================================
 
     def _memory_relevance_score(
         self,
         memory: Dict[str, Any],
         query: str,
-        conversation_state: Optional[Dict[str, Any]] = None,
-    ) -> float:
-        """
-        Rank long-term memories against the current request.
+        conversation_state: Optional[
+            Dict[str, Any]
+        ] = None,
+    ):
 
-        Conversation relevance is deliberately stronger than generic
-        semantic similarity so unrelated memories do not hijack the
-        active topic.
-        """
+        # Sensitive records must never participate in ranking.
+        if _is_sensitive_memory(
+            memory
+        ):
+            return -999999.0
 
         text_parts = [
-            memory.get("key", ""),
-            memory.get("value", ""),
-            memory.get("summary", ""),
-            " ".join(memory.get("topics", []) or []),
-            " ".join(memory.get("entities", []) or []),
-            " ".join(memory.get("tags", []) or []),
+            memory.get(
+                "key",
+                ""
+            ),
+            memory.get(
+                "value",
+                ""
+            ),
+            memory.get(
+                "summary",
+                ""
+            ),
+            " ".join(
+                memory.get(
+                    "topics",
+                    []
+                ) or []
+            ),
+            " ".join(
+                memory.get(
+                    "entities",
+                    []
+                ) or []
+            ),
+            " ".join(
+                memory.get(
+                    "tags",
+                    []
+                ) or []
+            ),
         ]
 
         memory_text = " ".join(
@@ -1326,7 +2104,9 @@ class MemoryEngine:
             if part
         ).lower()
 
-        query_text = str(query or "").lower()
+        query_text = str(
+            query or ""
+        ).lower()
 
         query_tokens = {
             token
@@ -1347,12 +2127,15 @@ class MemoryEngine:
         }
 
         overlap = len(
-            query_tokens & memory_tokens
+            query_tokens
+            &
+            memory_tokens
         )
 
         score = overlap * 0.20
 
         if conversation_state:
+
             active_topic = str(
                 conversation_state.get(
                     "active_topic",
@@ -1381,20 +2164,36 @@ class MemoryEngine:
                 str(entity).lower()
                 for entity in (
                     entities + compared
-                    if isinstance(entities, list)
-                    and isinstance(compared, list)
+                    if isinstance(
+                        entities,
+                        list
+                    )
+                    and isinstance(
+                        compared,
+                        list
+                    )
                     else []
                 )
             ]
 
-            if active_topic and active_topic in memory_text:
+            if (
+                active_topic
+                and active_topic in memory_text
+            ):
                 score += 0.40
 
-            if active_subject and active_subject in memory_text:
+            if (
+                active_subject
+                and active_subject in memory_text
+            ):
                 score += 0.35
 
             for entity in current_entities:
-                if entity and entity in memory_text:
+
+                if (
+                    entity
+                    and entity in memory_text
+                ):
                     score += 0.25
 
         importance = memory.get(
@@ -1408,13 +2207,25 @@ class MemoryEngine:
         )
 
         try:
-            importance = float(importance)
-        except (TypeError, ValueError):
+            importance = float(
+                importance
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
             importance = 0.5
 
         try:
-            confidence = float(confidence)
-        except (TypeError, ValueError):
+            confidence = float(
+                confidence
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
             confidence = 0.5
 
         score += importance * 0.10
@@ -1422,30 +2233,59 @@ class MemoryEngine:
 
         return score
 
+    # =========================================================
+    # MEMORY RETRIEVAL
+    # =========================================================
+
     async def get_relevant_memories(
         self,
         query: str,
         limit: int = 50,
-        conversation_state: Optional[Dict[str, Any]] = None,
+        conversation_state: Optional[
+            Dict[str, Any]
+        ] = None,
     ) -> list[dict]:
 
         if self.memory_col is None:
             return []
 
         try:
-            lower = query.lower().strip()
+
+            lower = str(
+                query or ""
+            ).lower().strip()
+
+            # =================================================
+            # SENSITIVE QUERY PROTECTION
+            # =================================================
+            #
+            # Do this BEFORE any MongoDB retrieval.
+            #
+            # This prevents queries such as:
+            #
+            #   "Give me my Aadhaar number"
+            #   "Which number is linked to my Aadhaar?"
+            #   "What is my PAN number?"
+            #
+            # from accidentally retrieving an unrelated memory.
+            # =================================================
+
+            if _contains_sensitive_query(
+                lower
+            ):
+
+                logger.warning(
+                    "[MemorySecurity] Sensitive-memory query blocked: %s",
+                    lower
+                )
+
+                return []
 
             filter_query = None
 
             # ---------------------------------------------------------
             # BROAD PERSONAL MEMORY QUERY
             # ---------------------------------------------------------
-            # Questions such as:
-            #   "What do you remember about me?"
-            #   "What do you know about me?"
-            #   "Tell me everything you remember about me"
-            # should retrieve the user's complete memory profile rather
-            # than relying on semantic ranking.
 
             broad_memory_query = bool(
                 re.search(
@@ -1460,13 +2300,25 @@ class MemoryEngine:
             )
 
             if re.search(
-                r"\b(?:what(?:'s| is) my name|who am i|do you know my name|tell me my name|remember my name|what's my name again|say my name)\b",
+                r"\b(?:what(?:'s| is) my name|"
+                r"who am i|"
+                r"do you know my name|"
+                r"tell me my name|"
+                r"remember my name|"
+                r"what's my name again|"
+                r"say my name)\b",
                 lower
             ):
-                filter_query = {"key": "name"}
+
+                filter_query = {
+                    "key": "name"
+                }
 
             elif "preferred name" in lower:
-                filter_query = {"key": "preferred_name"}
+
+                filter_query = {
+                    "key": "preferred_name"
+                }
 
             elif any(
                 token in lower
@@ -1477,7 +2329,10 @@ class MemoryEngine:
                     "when was i born"
                 )
             ):
-                filter_query = {"key": "birthday"}
+
+                filter_query = {
+                    "key": "birthday"
+                }
 
             elif any(
                 token in lower
@@ -1487,7 +2342,10 @@ class MemoryEngine:
                     "field of study"
                 )
             ):
-                filter_query = {"key": "field_of_study"}
+
+                filter_query = {
+                    "key": "field_of_study"
+                }
 
             elif any(
                 token in lower
@@ -1497,9 +2355,15 @@ class MemoryEngine:
                     "my likes"
                 )
             ):
-                filter_query = {"key": "user_likes"}
 
-            if filter_query is None and not broad_memory_query:
+                filter_query = {
+                    "key": "user_likes"
+                }
+
+            if (
+                filter_query is None
+                and not broad_memory_query
+            ):
 
                 favorite_match = re.search(
                     r"(?:what(?:'s| is)|remember|recall)\s+"
@@ -1509,55 +2373,134 @@ class MemoryEngine:
                 )
 
                 if favorite_match:
-                    subject = favorite_match.group(1).strip()
+
+                    subject = (
+                        favorite_match.group(
+                            1
+                        ).strip()
+                    )
 
                     filter_query = {
-                        "key": self._normalize_key(subject)
+                        "key": self._normalize_key(
+                            subject
+                        )
                     }
+
+            # =========================================================
+            # BROAD PERSONAL MEMORY
+            # =========================================================
 
             if broad_memory_query:
-                cursor = self.memory_col.find({
-                    "category": {
-                        "$nin": [
-                            "document",
-                            "document_chunk"
-                        ]
-                    }
-                })
 
-                memories = await cursor.to_list(length=limit)
+                cursor = self.memory_col.find(
+                    {
+                        "category": {
+                            "$nin": [
+                                "document",
+                                "document_chunk"
+                            ]
+                        }
+                    }
+                )
+
+                memories = await cursor.to_list(
+                    length=limit
+                )
+
+                # Defense-in-depth against old sensitive records.
+                memories = [
+                    memory
+                    for memory in memories
+                    if not _is_sensitive_memory(
+                        memory
+                    )
+                ]
 
                 deduplicated = {}
 
                 for memory in memories:
-                    key = str(memory.get("key", "")).strip()
-                    value = memory.get("value")
 
-                    if not key or value in (None, ""):
+                    key = str(
+                        memory.get(
+                            "key",
+                            ""
+                        )
+                    ).strip()
+
+                    value = memory.get(
+                        "value"
+                    )
+
+                    if (
+                        not key
+                        or value in (
+                            None,
+                            ""
+                        )
+                    ):
                         continue
 
-                    existing = deduplicated.get(key)
+                    existing = deduplicated.get(
+                        key
+                    )
 
                     if existing is None:
+
                         deduplicated[key] = memory
+
                         continue
 
-                    existing_updated = existing.get("updated_at", "")
-                    current_updated = memory.get("updated_at", "")
+                    existing_updated = (
+                        existing.get(
+                            "updated_at",
+                            ""
+                        )
+                    )
 
-                    if current_updated > existing_updated:
+                    current_updated = (
+                        memory.get(
+                            "updated_at",
+                            ""
+                        )
+                    )
+
+                    if (
+                        current_updated
+                        >
+                        existing_updated
+                    ):
+
                         deduplicated[key] = memory
 
-                memories = list(deduplicated.values())
+                memories = list(
+                    deduplicated.values()
+                )
 
-                def _importance_score(memory):
-                    value = memory.get("importance", 0.5)
+                def _importance_score(
+                    memory
+                ):
 
-                    if isinstance(value, (int, float)):
-                        return float(value)
+                    value = memory.get(
+                        "importance",
+                        0.5
+                    )
 
-                    if isinstance(value, str):
-                        normalized = value.strip().lower()
+                    if isinstance(
+                        value,
+                        (int, float)
+                    ):
+                        return float(
+                            value
+                        )
+
+                    if isinstance(
+                        value,
+                        str
+                    ):
+
+                        normalized = (
+                            value.strip().lower()
+                        )
 
                         importance_map = {
                             "critical": 1.0,
@@ -1570,25 +2513,40 @@ class MemoryEngine:
                         }
 
                         if normalized in importance_map:
-                            return importance_map[normalized]
+
+                            return importance_map[
+                                normalized
+                            ]
 
                         try:
-                            return float(normalized)
-                        except (ValueError, TypeError):
+                            return float(
+                                normalized
+                            )
+
+                        except (
+                            ValueError,
+                            TypeError
+                        ):
                             return 0.5
 
                     return 0.5
 
-
                 memories.sort(
                     key=lambda m: (
                         _importance_score(m),
-                        str(m.get("updated_at", ""))
+                        str(
+                            m.get(
+                                "updated_at",
+                                ""
+                            )
+                        )
                     ),
                     reverse=True
                 )
 
-                now_iso = datetime.now(timezone.utc).isoformat()
+                now_iso = datetime.now(
+                    timezone.utc
+                ).isoformat()
 
                 matched_ids = [
                     m["_id"]
@@ -1597,6 +2555,7 @@ class MemoryEngine:
                 ]
 
                 if matched_ids:
+
                     await self.memory_col.update_many(
                         {
                             "_id": {
@@ -1613,41 +2572,65 @@ class MemoryEngine:
                         }
                     )
 
-                memories = self._consolidate_broad_memories(memories)
+                memories = (
+                    self._consolidate_broad_memories(
+                        memories
+                    )
+                )
 
                 conversation_state = (
                     conversation_state
-                    if isinstance(conversation_state, dict)
+                    if isinstance(
+                        conversation_state,
+                        dict
+                    )
                     else {}
                 )
 
                 memories.sort(
-                    key=lambda memory: self._memory_relevance_score(
-                        memory,
-                        query,
-                        conversation_state,
-                    ),
+                    key=lambda memory:
+                        self._memory_relevance_score(
+                            memory,
+                            query,
+                            conversation_state,
+                        ),
                     reverse=True,
                 )
 
                 memories = memories[:limit]
 
                 logger.info(
-                    "[MemoryEngine] Broad personal-memory query retrieved %d consolidated memories.",
+                    "[MemoryEngine] Broad personal-memory "
+                    "query retrieved %d consolidated memories.",
                     len(memories)
                 )
 
                 return memories
 
+            # =========================================================
+            # DIRECT KEY FILTER
+            # =========================================================
+
             if filter_query is not None:
 
                 cursor = self.memory_col.find(
                     filter_query
-                ).limit(limit)
+                ).limit(
+                    limit
+                )
 
                 memories = await cursor.to_list(
                     length=limit
                 )
+
+                # Never return sensitive records.
+                memories = [
+                    memory
+                    for memory in memories
+                    if not _is_sensitive_memory(
+                        memory
+                    )
+                ]
 
                 if memories:
 
@@ -1662,6 +2645,7 @@ class MemoryEngine:
                     ]
 
                     if matched_ids:
+
                         await self.memory_col.update_many(
                             {
                                 "_id": {
@@ -1680,8 +2664,12 @@ class MemoryEngine:
 
                     filtered_memories = [
                         {
-                            "key": m.get("key"),
-                            "value": m.get("value"),
+                            "key": m.get(
+                                "key"
+                            ),
+                            "value": m.get(
+                                "value"
+                            ),
                             "category": m.get(
                                 "category",
                                 "general"
@@ -1701,41 +2689,69 @@ class MemoryEngine:
                             "retrieval_score": 1.0,
                             "updated_at": m.get(
                                 "updated_at"
+                            ),
+                            "_id": m.get(
+                                "_id"
                             )
                         }
                         for m in memories
-                        if m.get("key") and m.get("value")
+                        if (
+                            m.get("key")
+                            and m.get("value")
+                            and not _is_sensitive_memory(
+                                m
+                            )
+                        )
                     ]
 
                     conversation_state = (
                         conversation_state
-                        if isinstance(conversation_state, dict)
+                        if isinstance(
+                            conversation_state,
+                            dict
+                        )
                         else {}
                     )
 
                     filtered_memories.sort(
-                        key=lambda memory: self._memory_relevance_score(
-                            memory,
-                            query,
-                            conversation_state,
-                        ),
+                        key=lambda memory:
+                            self._memory_relevance_score(
+                                memory,
+                                query,
+                                conversation_state,
+                            ),
                         reverse=True,
                     )
 
                     return filtered_memories[:limit]
 
-            cursor = self.memory_col.find({
-                "category": {
-                    "$nin": [
-                        "document",
-                        "document_chunk"
-                    ]
+            # =========================================================
+            # GENERAL MEMORY RETRIEVAL
+            # =========================================================
+
+            cursor = self.memory_col.find(
+                {
+                    "category": {
+                        "$nin": [
+                            "document",
+                            "document_chunk"
+                        ]
+                    }
                 }
-            })
+            )
 
             all_memories = await cursor.to_list(
                 length=200
             )
+
+            # Critical defense-in-depth filter.
+            all_memories = [
+                memory
+                for memory in all_memories
+                if not _is_sensitive_memory(
+                    memory
+                )
+            ]
 
             if not all_memories:
                 return []
@@ -1780,11 +2796,14 @@ class MemoryEngine:
                     r"[a-zA-Z0-9]+",
                     lower
                 )
-                if len(word) > 1
-                and word not in stop_words
+                if (
+                    len(word) > 1
+                    and word not in stop_words
+                )
             }
 
             aliases = {
+
                 "plan": {
                     "plan",
                     "planned",
@@ -1870,8 +2889,7 @@ class MemoryEngine:
                     "prefer",
                     "favorite",
                     "favourite",
-                    "love",
-                    "prefer"
+                    "love"
                 }
             }
 
@@ -1879,9 +2897,12 @@ class MemoryEngine:
                 query_words
             )
 
-            for word in list(query_words):
+            for word in list(
+                query_words
+            ):
 
                 if word in aliases:
+
                     expanded_query_words.update(
                         aliases[word]
                     )
@@ -1889,6 +2910,12 @@ class MemoryEngine:
             scored = []
 
             for memory in all_memories:
+
+                # Additional safety check.
+                if _is_sensitive_memory(
+                    memory
+                ):
+                    continue
 
                 key = str(
                     memory.get(
@@ -1919,7 +2946,10 @@ class MemoryEngine:
                 ).lower()
 
                 searchable = (
-                    key.replace("_", " ")
+                    key.replace(
+                        "_",
+                        " "
+                    )
                     + " "
                     + value
                     + " "
@@ -1939,39 +2969,51 @@ class MemoryEngine:
 
                 direct_matches = (
                     query_words
-                    & memory_words
+                    &
+                    memory_words
                 )
 
-                semantic_score += len(
-                    direct_matches
-                ) * 3.0
+                semantic_score += (
+                    len(direct_matches)
+                    * 3.0
+                )
 
                 semantic_matches = (
                     expanded_query_words
-                    & memory_words
+                    &
+                    memory_words
                 )
 
-                semantic_score += len(
-                    semantic_matches
-                ) * 1.5
+                semantic_score += (
+                    len(semantic_matches)
+                    * 1.5
+                )
 
                 key_words = set(
                     re.findall(
                         r"[a-zA-Z0-9]+",
-                        key.replace("_", " ")
+                        key.replace(
+                            "_",
+                            " "
+                        )
                     )
                 )
 
                 key_matches = (
                     expanded_query_words
-                    & key_words
+                    &
+                    key_words
                 )
 
-                semantic_score += len(
-                    key_matches
-                ) * 2.5
+                semantic_score += (
+                    len(key_matches)
+                    * 2.5
+                )
 
-                score = self._calculate_score(memory, semantic_score)
+                score = self._calculate_score(
+                    memory,
+                    semantic_score
+                )
 
                 if semantic_score > 0:
 
@@ -1987,6 +3029,10 @@ class MemoryEngine:
                 reverse=True
             )
 
+            # =========================================================
+            # LLM MEMORY SELECTION
+            # =========================================================
+
             if (
                 self.llm_router is not None
                 and hasattr(
@@ -1999,16 +3045,25 @@ class MemoryEngine:
 
                     candidates = [
                         {
-                            "key": m.get("key"),
-                            "value": m.get("value"),
+                            "key": m.get(
+                                "key"
+                            ),
+                            "value": m.get(
+                                "value"
+                            ),
                             "category": m.get(
                                 "category",
                                 "general"
                             )
                         }
                         for m in all_memories
-                        if m.get("key")
-                        and m.get("value")
+                        if (
+                            m.get("key")
+                            and m.get("value")
+                            and not _is_sensitive_memory(
+                                m
+                            )
+                        )
                     ]
 
                     selected_keys = (
@@ -2027,8 +3082,13 @@ class MemoryEngine:
                         llm_selected = [
                             m
                             for m in all_memories
-                            if m.get("key")
-                            in selected_key_set
+                            if (
+                                m.get("key")
+                                in selected_key_set
+                                and not _is_sensitive_memory(
+                                    m
+                                )
+                            )
                         ]
 
                         existing_keys = {
@@ -2042,9 +3102,13 @@ class MemoryEngine:
                                 memory.get("key")
                                 not in existing_keys
                             ):
+
                                 scored.append(
                                     (
-                                        self._calculate_score(memory, 2.0),
+                                        self._calculate_score(
+                                            memory,
+                                            2.0
+                                        ),
                                         memory
                                     )
                                 )
@@ -2052,7 +3116,8 @@ class MemoryEngine:
                 except Exception:
 
                     logger.exception(
-                        "[MemoryEngine] Semantic memory selection failed."
+                        "[MemoryEngine] Semantic memory "
+                        "selection failed."
                     )
 
             if not scored:
@@ -2068,85 +3133,129 @@ class MemoryEngine:
 
             for score, memory in scored:
 
-                key = memory.get("key")
-                value = memory.get("value")
+                if _is_sensitive_memory(
+                    memory
+                ):
+                    continue
 
-                if not key or not value:
+                key = memory.get(
+                    "key"
+                )
+
+                value = memory.get(
+                    "value"
+                )
+
+                if (
+                    not key
+                    or not value
+                ):
                     continue
 
                 if key in seen_keys:
                     continue
 
-                seen_keys.add(key)
+                seen_keys.add(
+                    key
+                )
 
-                final_memories.append({
-                    "key": key,
-                    "value": value,
-                    "category": memory.get(
-                        "category",
-                        "general"
-                    ),
-                    "memory_type": memory.get(
-                        "memory_type",
-                        "fact"
-                    ),
-                    "importance": memory.get(
-                        "importance",
-                        0.5
-                    ),
-                    "confidence": memory.get(
-                        "confidence",
-                        1.0
-                    ),
-                    "retrieval_score": round(
-                        float(score),
-                        3
-                    ),
-                    "updated_at": memory.get(
-                        "updated_at"
-                    )
-                })
+                final_memories.append(
+                    {
+                        "key": key,
+                        "value": value,
+                        "category": memory.get(
+                            "category",
+                            "general"
+                        ),
+                        "memory_type": memory.get(
+                            "memory_type",
+                            "fact"
+                        ),
+                        "importance": memory.get(
+                            "importance",
+                            0.5
+                        ),
+                        "confidence": memory.get(
+                            "confidence",
+                            1.0
+                        ),
+                        "retrieval_score": round(
+                            float(score),
+                            3
+                        ),
+                        "updated_at": memory.get(
+                            "updated_at"
+                        ),
+                        # Preserve ID so access tracking works.
+                        "_id": memory.get(
+                            "_id"
+                        )
+                    }
+                )
 
-                if len(final_memories) >= limit:
+                if len(
+                    final_memories
+                ) >= limit:
                     break
 
             conversation_state = (
                 conversation_state
-                if isinstance(conversation_state, dict)
+                if isinstance(
+                    conversation_state,
+                    dict
+                )
                 else {}
             )
 
             final_memories.sort(
-                key=lambda memory: self._memory_relevance_score(
-                    memory,
-                    query,
-                    conversation_state,
-                ),
+                key=lambda memory:
+                    self._memory_relevance_score(
+                        memory,
+                        query,
+                        conversation_state,
+                    ),
                 reverse=True,
             )
 
-            final_memories = final_memories[:limit]
+            final_memories = [
+                memory
+                for memory in final_memories
+                if not _is_sensitive_memory(
+                    memory
+                )
+            ]
 
-            selected = final_memories[:1]
-            # Record access for every memory actually used by retrieval.
-            # This keeps long-term memory importance and recency signals
-            # accurate without artificially favoring only the first result.
-            for memory in selected:
-                memory_id = memory.get("_id")
+            final_memories = final_memories[
+                :limit
+            ]
+
+            # Record access for every memory actually used.
+            for memory in final_memories:
+
+                memory_id = memory.get(
+                    "_id"
+                )
 
                 if not memory_id:
                     continue
 
                 try:
-                    await self.record_access(memory_id)
+
+                    await self.record_access(
+                        memory_id
+                    )
+
                 except Exception:
+
                     logger.exception(
-                        "[MemoryEngine] Failed to record memory access: %s",
+                        "[MemoryEngine] Failed to record "
+                        "memory access: %s",
                         memory_id,
                     )
 
             logger.info(
-                "[MemoryEngine] Retrieved %d relevant memories for query: %s",
+                "[MemoryEngine] Retrieved %d relevant "
+                "memories for query: %s",
                 len(final_memories),
                 query
             )
@@ -2155,24 +3264,28 @@ class MemoryEngine:
 
         except Exception:
 
-            logger.exception("[Memory Retrieval Error]")
+            logger.exception(
+                "[Memory Retrieval Error]"
+            )
 
             traceback.print_exc()
 
             return []
 
+    # =========================================================
+    # PUBLIC RETRIEVE
+    # =========================================================
+
     async def retrieve(
         self,
         query: str,
-        conversation_state: Optional[Dict[str, Any]] = None,
+        conversation_state: Optional[
+            Dict[str, Any]
+        ] = None,
         limit: int = 50,
     ) -> list[dict]:
         """
         Public memory-retrieval entry point.
-
-        Keeps conversational context available to the retrieval layer
-        so long-term memory is ranked according to the active dialogue
-        instead of being treated as an isolated query.
         """
 
         return await self.get_relevant_memories(
@@ -2211,27 +3324,61 @@ class MemoryEngine:
                 flags=re.IGNORECASE
             ).strip()
 
+            # Never process a sensitive deletion query as an
+            # ordinary memory lookup.
+            if _contains_sensitive_query(
+                cleaned
+            ):
+
+                logger.warning(
+                    "[MemorySecurity] Sensitive memory "
+                    "operation blocked."
+                )
+
+                return False
+
             target_key = (
-                self._normalize_key(cleaned)
-                if cleaned else ""
+                self._normalize_key(
+                    cleaned
+                )
+                if cleaned
+                else ""
             )
 
             if target_key:
+
+                # Do not delete sensitive records through
+                # generalized matching.
+                if _is_sensitive_memory_key(
+                    target_key
+                ):
+                    return False
+
                 res = await self.memory_col.delete_one(
-                    {"key": target_key}
+                    {
+                        "key": target_key
+                    }
                 )
+
                 if res.deleted_count > 0:
                     return True
 
             res_direct = await self.memory_col.delete_one(
-                {"key": query_or_key}
+                {
+                    "key": query_or_key
+                }
             )
 
             if res_direct.deleted_count > 0:
                 return True
 
             res_regex = await self.memory_col.delete_one(
-                {"key": {"$regex": cleaned, "$options": "i"}}
+                {
+                    "key": {
+                        "$regex": cleaned,
+                        "$options": "i"
+                    }
+                }
             )
 
             if res_regex.deleted_count > 0:
@@ -2240,24 +3387,72 @@ class MemoryEngine:
             return False
 
         except Exception:
-            logger.exception("[MemoryEngine Delete Error]")
+
+            logger.exception(
+                "[MemoryEngine Delete Error]"
+            )
+
             return False
 
     # =========================================================
     # ADDITIONAL ROUTER METHODS
     # =========================================================
 
-    async def store_chat(self, chat):
-        return await self.process_and_store(chat)
+    async def store_chat(
+        self,
+        chat
+    ):
+        return await self.process_and_store(
+            chat
+        )
 
-    async def store_profile(self, profile):
+    async def store_profile(
+        self,
+        profile
+    ):
+
         if self.profile_col is None:
+            return
+
+        if not isinstance(
+            profile,
+            dict
+        ):
+            return
+
+        # Filter sensitive profile fields before persistence.
+        safe_profile = {}
+
+        for key, value in profile.items():
+
+            if _is_sensitive_memory_key(
+                key
+            ):
+                logger.warning(
+                    "[MemorySecurity] Blocked sensitive "
+                    "profile field: %s",
+                    key
+                )
+                continue
+
+            if _contains_sensitive_value(
+                value
+            ):
+                logger.warning(
+                    "[MemorySecurity] Blocked sensitive "
+                    "profile value."
+                )
+                continue
+
+            safe_profile[key] = value
+
+        if not safe_profile:
             return
 
         await self.profile_col.update_one(
             {},
             {
-                "$set": profile
+                "$set": safe_profile
             },
             upsert=True
         )
@@ -2267,7 +3462,26 @@ class MemoryEngine:
         memory_id,
         data
     ):
+
         if self.memory_col is None:
+            return False
+
+        if not isinstance(
+            data,
+            dict
+        ):
+            return False
+
+        # Never allow an update to introduce sensitive data.
+        if _is_sensitive_memory(
+            data
+        ):
+
+            logger.warning(
+                "[MemorySecurity] Blocked sensitive "
+                "memory update."
+            )
+
             return False
 
         await self.memory_col.update_one(
@@ -2285,16 +3499,102 @@ class MemoryEngine:
         self,
         query
     ):
+
         if self.memory_col is None:
+            return False
+
+        # Sensitive information must not be checked through
+        # the general memory existence API.
+        if _contains_sensitive_query(
+            query
+        ):
+            return False
+
+        if _contains_sensitive_value(
+            query
+        ):
             return False
 
         memory = await self.memory_col.find_one(
             {
                 "$or": [
-                    {"key": query},
-                    {"value": query}
+                    {
+                        "key": query
+                    },
+                    {
+                        "value": query
+                    }
                 ]
             }
         )
 
+        if _is_sensitive_memory(
+            memory
+        ):
+            return False
+
         return memory is not None
+
+    # =========================================================
+    # MEMORY ACCESS TRACKING
+    # =========================================================
+
+    async def record_access(
+        self,
+        memory_id
+    ):
+        """
+        Record that a memory was actually used.
+
+        Sensitive records are not eligible for access tracking
+        through this general method.
+        """
+
+        if (
+            self.memory_col is None
+            or memory_id is None
+        ):
+            return False
+
+        try:
+
+            memory = await self.memory_col.find_one(
+                {
+                    "_id": memory_id
+                }
+            )
+
+            if _is_sensitive_memory(
+                memory
+            ):
+                logger.warning(
+                    "[MemorySecurity] Blocked access tracking "
+                    "for sensitive memory."
+                )
+                return False
+
+            await self.memory_col.update_one(
+                {
+                    "_id": memory_id
+                },
+                {
+                    "$inc": {
+                        "access_count": 1
+                    },
+                    "$set": {
+                        "last_accessed": datetime.now(
+                            timezone.utc
+                        ).isoformat()
+                    }
+                }
+            )
+
+            return True
+
+        except Exception:
+
+            logger.exception(
+                "[MemoryEngine] Failed to record memory access."
+            )
+
+            return False
