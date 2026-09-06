@@ -651,6 +651,104 @@ async def bootstrap_application() -> ServiceRegistry:
         True,
     )
 
+    # ---------------------------------------------------------
+    # Phase 10 — Autonomous Self-Improvement Cycle
+    # ---------------------------------------------------------
+    # The scheduler is deliberately configured here, after all
+    # reflection/learning services exist. This makes the cycle
+    # persistent across application restarts without creating
+    # duplicate jobs inside a single bootstrap.
+
+    async def _run_daily_reflection():
+        result = await self_reflection.daily_review()
+        logger.info(
+            "[Phase10] Daily reflection completed: %s",
+            result.get("type") if isinstance(result, dict) else "completed",
+        )
+        return result
+
+    async def _run_weekly_reflection():
+        result = await self_reflection.weekly_review()
+        logger.info(
+            "[Phase10] Weekly reflection completed: %s",
+            result.get("type") if isinstance(result, dict) else "completed",
+        )
+        return result
+
+    async def _run_learning_consolidation():
+        result = await autonomous_learning.consolidate()
+        logger.info(
+            "[Phase10] Learning consolidation completed: %s",
+            result.get("status") if isinstance(result, dict) else "completed",
+        )
+        return result
+
+    # Keep intervals configurable while providing safe production
+    # defaults: consolidation every 6 hours, daily review every
+    # 24 hours, and weekly review every 7 days.
+    consolidation_interval = max(
+        3600.0,
+        float(os.getenv("ARIA_LEARNING_CONSOLIDATION_INTERVAL", "21600")),
+    )
+    daily_review_interval = max(
+        3600.0,
+        float(os.getenv("ARIA_DAILY_REFLECTION_INTERVAL", "86400")),
+    )
+    weekly_review_interval = max(
+        3600.0,
+        float(os.getenv("ARIA_WEEKLY_REFLECTION_INTERVAL", "604800")),
+    )
+
+    consolidation_job_id = scheduler.schedule_recurring(
+        consolidation_interval,
+        _run_learning_consolidation,
+        goal_id="phase10_learning_consolidation",
+        timeout_seconds=min(
+            scheduler.default_timeout_seconds,
+            300.0,
+        ),
+        run_immediately=False,
+    )
+
+    daily_reflection_job_id = scheduler.schedule_recurring(
+        daily_review_interval,
+        _run_daily_reflection,
+        goal_id="phase10_daily_reflection",
+        timeout_seconds=min(
+            scheduler.default_timeout_seconds,
+            300.0,
+        ),
+        run_immediately=False,
+    )
+
+    weekly_reflection_job_id = scheduler.schedule_recurring(
+        weekly_review_interval,
+        _run_weekly_reflection,
+        goal_id="phase10_weekly_reflection",
+        timeout_seconds=min(
+            scheduler.default_timeout_seconds,
+            600.0,
+        ),
+        run_immediately=False,
+    )
+
+    registry.register(
+        "phase10_jobs",
+        {
+            "consolidation": consolidation_job_id,
+            "daily_reflection": daily_reflection_job_id,
+            "weekly_reflection": weekly_reflection_job_id,
+        },
+    )
+
+    logger.info(
+        "[Bootstrap] Phase 10 self-improvement cycle active | "
+        "consolidation=%ss daily=%ss weekly=%ss",
+        consolidation_interval,
+        daily_review_interval,
+        weekly_review_interval,
+    )
+
     planner = Planner(
         llm_router=llm_router,
     )
