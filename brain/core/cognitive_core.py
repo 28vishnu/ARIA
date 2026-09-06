@@ -2646,7 +2646,25 @@ Execution Results:
                             "content": resolved_query
                         })
 
-                        reply = await self.llm_router.chat(messages)
+                        # Compound requests need enough output budget to complete
+                        # every requested subtask. The router default is intentionally
+                        # conservative for ordinary turns, but using that default here
+                        # can truncate long multi-part answers mid-code or mid-section.
+                        compound_request = self._looks_like_compound_request(
+                            resolved_query
+                        )
+                        llm_max_tokens = 4096 if compound_request else 2048
+
+                        reply = await self.llm_router.chat(
+                            messages,
+                            max_tokens=llm_max_tokens,
+                            task=(
+                                "compound_response"
+                                if compound_request
+                                else "general_response"
+                            ),
+                            context=context,
+                        )
                         if isinstance(reply, dict) and not reply.get("success", True):
                             answer = None
                         else:
