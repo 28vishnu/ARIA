@@ -1,8 +1,9 @@
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import re
+import copy
 
 
 logger = logging.getLogger("aria")
@@ -26,14 +27,14 @@ class Route(str, Enum):
 @dataclass
 class CognitiveDecision:
     """
-    Structured representation of ARIA's cognitive strategy.
+    Structured, side-effect-free representation of ARIA's cognitive strategy.
 
-    The controller does not answer the user.
-    It decides what ARIA needs in order to answer correctly.
+    CognitiveController determines requirements and preferences.
+    It does not execute tools, agents, planners, memory operations,
+    or answer the user.
     """
 
     expertise: str = "general"
-
     mood: str = "neutral"
     emotion: str = "neutral"
 
@@ -53,6 +54,7 @@ class CognitiveDecision:
     use_agents: bool = False
     use_planner: bool = False
     use_web: bool = False
+    use_tools: bool = False
 
     # Decision metadata
     evidence_sources: List[str] = field(default_factory=list)
@@ -63,53 +65,79 @@ class CognitiveDecision:
     reasoning_mode: str = "balanced"
     confidence: float = 0.5
 
-    # New cognitive information
+    # Cognitive information
     intent: str = "conversation"
     goal: str = ""
     entities: List[str] = field(default_factory=list)
     constraints: Dict[str, Any] = field(default_factory=dict)
     decision_reason: str = ""
 
+    # Phase 11 orchestration metadata
+    route: str = "chat"
+    decision_version: int = 2
+    requires_clarification: bool = False
+    orchestration: Dict[str, Any] = field(default_factory=dict)
+
 
 class CognitiveController:
     """
-    ARIA Cognitive Controller.
+    ARIA's canonical cognitive decision layer.
 
-    Responsibility:
-        Understand the user's goal and determine HOW ARIA
-        should think before execution.
+    Responsibilities:
+      - interpret the immediate request
+      - combine upstream routing evidence with semantic signals
+      - determine capability requirements
+      - determine response preferences
+      - produce one structured CognitiveDecision
 
-    This layer does NOT answer the user.
+    Non-responsibilities:
+      - no LLM calls
+      - no tool execution
+      - no agent execution
+      - no planning execution
+      - no memory mutation
+      - no persistent state mutation
+      - no final answer generation
 
-    It creates a structured cognitive decision that downstream
-    reasoning, memory, tools and planners can execute.
+    CognitiveController is therefore safe to call repeatedly for the
+    same request and remains a deterministic upstream decision layer.
     """
 
-    def summary(self, decision: CognitiveDecision):
+    DECISION_VERSION = 2
+    MAX_ENTITIES = 12
+    MAX_TOOLS = 24
 
+    def summary(self, decision: CognitiveDecision) -> Dict[str, Any]:
         return {
             "intent": decision.intent,
             "goal": decision.goal,
             "expertise": decision.expertise,
             "action": decision.action,
+            "route": decision.route,
             "reasoning_mode": decision.reasoning_mode,
             "emotion": decision.emotion,
-            "tools": decision.required_tools,
+            "tools": list(decision.required_tools),
             "tone": decision.tone,
             "detail": decision.detail_level,
             "teaching": decision.teaching_mode,
             "memory": decision.use_memory,
             "semantic_memory": decision.use_semantic_memory,
+            "documents": decision.use_documents,
+            "repository": decision.use_repository,
             "web": decision.use_web,
+            "tools_required": decision.use_tools,
             "planner": decision.use_planner,
+            "agents": decision.use_agents,
             "confidence": decision.confidence,
+            "requires_clarification": decision.requires_clarification,
+            "decision_version": decision.decision_version,
         }
 
     def _build_user_profile(
         self,
         decision: CognitiveDecision,
         context: Dict[str, Any],
-    ):
+    ) -> None:
         decision.user_profile = {
             "expertise": decision.expertise,
             "preferred_detail": decision.detail_level,
@@ -117,40 +145,75 @@ class CognitiveController:
             "tone": decision.tone,
         }
 
-        # Preserve any profile information already supplied
         profile = context.get("user_profile")
-
         if isinstance(profile, dict):
-            decision.user_profile.update(profile)
+            decision.user_profile.update(copy.deepcopy(profile))
 
     # ---------------------------------------------------------
-    # Semantic helpers
+    # Generic helpers
     # ---------------------------------------------------------
 
     @staticmethod
-    def _text(query: str) -> str:
-        return re.sub(r"\s+", " ", (query or "").strip()).lower()
+    def _text(query: Any) -> str:
+        return re.sub(r"\s+", " ", str(query or "").strip()).lower()
 
     @staticmethod
     def _contains_any(text: str, phrases) -> bool:
-        return any(phrase in text for phrase in phrases)
+        return any(str(phrase).lower() in text for phrase in phrases)
 
     @staticmethod
-    def _extract_entities(query: str) -> List[str]:
+    def _append_unique(target: list, values) -> None:
+        for value in values:
+            if value and value not in target:
+                target.append(value)
 
+    @staticmethod
+    def _intent_value(intent: Any, key: str, default: Any = None) -> Any:
+        if intent is None:
+            return default
+        if isinstance(intent, dict):
+            return intent.get(key, default)
+        return getattr(intent, key, default)
+
+    def _extract_entities(self, query: str) -> List[str]:
         entities = []
 
-        # Preserve meaningful capitalized entities.
+        # Preserve meaningful capitalized entities from the original query.
         matches = re.findall(
             r"\b[A-Z][A-Za-z0-9&.-]{2,}(?:\s+[A-Z][A-Za-z0-9&.-]{2,})*\b",
             query or "",
         )
 
         for item in matches:
-            if item not in entities:
+            cleaned = re.sub(r"\s+", " ", item).strip()
+            if cleaned and cleaned not in entities:
+                entities.append(cleaned)
+
+        # Also preserve explicit quoted subjects.
+        quoted = re.findall(r'"([^"]{2,100})"|\'([^\']{2,100})\'', query or "")
+        for left, right in quoted:
+            item = (left or right).strip()
+            if item and item not in entities:
                 entities.append(item)
 
-        return entities[:12]
+        return entities[: self.MAX_ENTITIES]
+
+    def _set_action(
+        self,
+        decision: CognitiveDecision,
+        action: str,
+        *,
+        intent: Optional[str] = None,
+        reasoning_mode: Optional[str] = None,
+    ) -> None:
+        decision.action = action
+        decision.route = action
+
+        if intent:
+            decision.intent = intent
+
+        if reasoning_mode:
+            decision.reasoning_mode = reasoning_mode
 
     # ---------------------------------------------------------
     # Intent understanding
@@ -161,10 +224,9 @@ class CognitiveController:
         query: str,
         context: Dict[str, Any],
         decision: CognitiveDecision,
-    ):
+    ) -> None:
 
         text = self._text(query)
-
         previous = context.get("conversation")
 
         # -----------------------------------------------------
@@ -172,32 +234,21 @@ class CognitiveController:
         # -----------------------------------------------------
 
         contextual_terms = (
-            "it",
-            "that",
-            "this",
-            "those",
-            "them",
-            "the result",
-            "the previous",
-            "earlier",
-            "above",
-            "same",
-            "continue",
+            "it", "that", "this", "those", "them", "the result",
+            "the previous", "earlier", "above", "same", "continue",
             "again",
         )
 
         if self._contains_any(text, contextual_terms):
-
             decision.intent = "contextual_followup"
             decision.use_reasoning = True
             decision.use_semantic_memory = True
-
             decision.evidence_sources.append("conversation_context")
 
             if previous:
                 decision.decision_reason = (
-                    "The request contains contextual references and "
-                    "may depend on previous conversation state."
+                    "The request contains contextual references and may "
+                    "depend on previous conversation state."
                 )
 
         # -----------------------------------------------------
@@ -214,14 +265,22 @@ class CognitiveController:
             "remember that",
             "forget that",
             "about me",
+            "save this",
+            "store this",
+            "remember this",
+            "delete memory",
         )
 
         if self._contains_any(text, memory_patterns):
-
             decision.intent = "personal_memory"
-            decision.action = "memory"
+            self._set_action(
+                decision,
+                "memory",
+                intent="personal_memory",
+                reasoning_mode="fast",
+            )
             decision.use_memory = True
-            decision.reasoning_mode = "fast"
+            decision.use_reasoning = False
             decision.required_tools.append("memory")
             decision.evidence_sources.append("memory")
 
@@ -235,9 +294,7 @@ class CognitiveController:
         # -----------------------------------------------------
 
         calculation_signals = (
-            "%",
             "calculate",
-            "what is",
             "how much is",
             "multiply",
             "divide",
@@ -255,40 +312,25 @@ class CognitiveController:
             )
         )
 
-        if mathematical_expression or self._contains_any(
-            text,
-            calculation_signals,
+        if (
+            mathematical_expression
+            or self._contains_any(text, calculation_signals)
         ):
+            self._set_action(
+                decision,
+                "tool",
+                intent="calculation",
+                reasoning_mode="fast",
+            )
+            decision.use_reasoning = False
+            decision.use_tools = True
+            decision.required_tools.append("calculator")
+            decision.evidence_sources.append("calculator")
 
-            # Don't hijack ordinary "what is X?" questions.
-            if (
-                mathematical_expression
-                or any(char in text for char in "+-*/×÷%")
-                or self._contains_any(
-                    text,
-                    (
-                        "calculate",
-                        "multiply",
-                        "divide",
-                        "subtract",
-                        "add",
-                        "plus",
-                        "minus",
-                        "times",
-                    ),
-                )
-            ):
-                decision.intent = "calculation"
-                decision.action = "tool"
-                decision.use_reasoning = False
-                decision.reasoning_mode = "fast"
-                decision.required_tools.append("calculator")
-                decision.evidence_sources.append("calculator")
-
-                decision.decision_reason = (
-                    "The request contains a mathematical operation "
-                    "that should be evaluated deterministically."
-                )
+            decision.decision_reason = (
+                "The request contains a mathematical operation that "
+                "should be evaluated deterministically."
+            )
 
         # -----------------------------------------------------
         # Documents
@@ -306,9 +348,13 @@ class CognitiveController:
                 "from the document",
             ),
         ):
-
             decision.intent = "document_understanding"
-            decision.action = "document"
+            self._set_action(
+                decision,
+                "document",
+                intent="document_understanding",
+                reasoning_mode="deep",
+            )
             decision.use_documents = True
             decision.use_reasoning = True
             decision.required_tools.append("document")
@@ -324,35 +370,23 @@ class CognitiveController:
         # -----------------------------------------------------
 
         coding_signals = (
-            "code",
-            "coding",
-            "program",
-            "programming",
-            "python",
-            "javascript",
-            "typescript",
-            "html",
-            "css",
-            "fastapi",
-            "api",
-            "github",
-            "repository",
-            "repo",
-            "debug",
-            "bug",
-            "refactor",
-            "function",
-            "class",
+            "code", "coding", "program", "programming", "python",
+            "javascript", "typescript", "html", "css", "fastapi",
+            "api", "github", "repository", "repo", "debug", "bug",
+            "refactor", "function", "class",
         )
 
         if self._contains_any(text, coding_signals):
-
             decision.intent = "software_development"
-            decision.action = "coding"
+            self._set_action(
+                decision,
+                "coding",
+                intent="software_development",
+                reasoning_mode="expert",
+            )
             decision.expertise = "software_developer"
             decision.use_reasoning = True
-            decision.reasoning_mode = "expert"
-
+            decision.use_tools = True
             decision.required_tools.append("coding")
             decision.evidence_sources.append("software_context")
 
@@ -366,21 +400,11 @@ class CognitiveController:
         # -----------------------------------------------------
 
         teaching_signals = (
-            "explain",
-            "teach",
-            "learn",
-            "understand",
-            "how does",
-            "how do",
-            "why does",
-            "why do",
-            "study",
-            "notes",
-            "exam",
+            "explain", "teach", "learn", "understand", "how does",
+            "how do", "why does", "why do", "study", "notes", "exam",
         )
 
         if self._contains_any(text, teaching_signals):
-
             decision.intent = "learning_or_explanation"
             decision.teaching_mode = True
             decision.use_reasoning = True
@@ -403,33 +427,28 @@ class CognitiveController:
         current_information = self._contains_any(
             text,
             (
-                "latest",
-                "today",
-                "current",
-                "recent",
-                "news",
-                "now",
-                "research",
-                "look up",
-                "find information",
-                "what happened",
+                "latest", "today", "current", "recent", "news", "now",
+                "research", "look up", "find information", "what happened",
             ),
         )
 
         if current_information:
-
             decision.intent = "current_information"
-            decision.action = "research"
+            self._set_action(
+                decision,
+                "research",
+                intent="current_information",
+                reasoning_mode="deep",
+            )
             decision.use_web = True
             decision.use_reasoning = True
-            decision.reasoning_mode = "deep"
-
+            decision.use_tools = True
             decision.required_tools.append("web")
             decision.evidence_sources.append("web")
 
             decision.decision_reason = (
-                "The request depends on information that may have "
-                "changed and therefore requires current external evidence."
+                "The request depends on information that may have changed "
+                "and therefore requires current external evidence."
             )
 
         # -----------------------------------------------------
@@ -437,24 +456,20 @@ class CognitiveController:
         # -----------------------------------------------------
 
         planning_signals = (
-            "plan",
-            "roadmap",
-            "strategy",
-            "schedule",
-            "steps",
-            "how should i",
-            "what should i do",
-            "make me a plan",
+            "plan", "roadmap", "strategy", "schedule", "steps",
+            "how should i", "what should i do", "make me a plan",
         )
 
         if self._contains_any(text, planning_signals):
-
             decision.intent = "planning"
-            decision.action = "planner"
+            self._set_action(
+                decision,
+                "planner",
+                intent="planning",
+                reasoning_mode="deep",
+            )
             decision.use_planner = True
             decision.use_reasoning = True
-            decision.reasoning_mode = "deep"
-
             decision.required_tools.append("planner")
             decision.evidence_sources.append("planning")
 
@@ -468,23 +483,21 @@ class CognitiveController:
         # -----------------------------------------------------
 
         automation_signals = (
-            "remind me",
-            "reminder",
-            "every day",
-            "every week",
-            "schedule",
-            "automatically",
-            "monitor",
-            "notify me when",
+            "remind me", "reminder", "every day", "every week",
+            "schedule", "automatically", "monitor", "notify me when",
             "let me know when",
         )
 
         if self._contains_any(text, automation_signals):
-
             decision.intent = "automation"
-            decision.action = "automation"
+            self._set_action(
+                decision,
+                "automation",
+                intent="automation",
+                reasoning_mode="deep",
+            )
             decision.use_reasoning = True
-
+            decision.use_tools = True
             decision.required_tools.append("automation")
             decision.evidence_sources.append("automation")
 
@@ -498,24 +511,22 @@ class CognitiveController:
 
         if self._contains_any(
             text,
-            (
-                "trip",
-                "travel",
-                "itinerary",
-                "vacation",
-                "holiday",
-            ),
+            ("trip", "travel", "itinerary", "vacation", "holiday"),
         ):
-
             decision.intent = "travel_planning"
             decision.use_reasoning = True
             decision.reasoning_mode = "deep"
-
-            if "planner" not in decision.required_tools:
-                decision.required_tools.append("planner")
-
             decision.use_planner = True
+            decision.required_tools.append("planner")
             decision.evidence_sources.append("travel")
+
+            if decision.action == "chat":
+                self._set_action(
+                    decision,
+                    "planner",
+                    intent="travel_planning",
+                    reasoning_mode="deep",
+                )
 
             decision.decision_reason = (
                 "The request involves multi-step travel planning."
@@ -526,84 +537,89 @@ class CognitiveController:
         # -----------------------------------------------------
 
         if "research" in text:
-
             decision.intent = "research"
-            decision.action = "research"
+            self._set_action(
+                decision,
+                "research",
+                intent="research",
+                reasoning_mode="deep",
+            )
             decision.use_reasoning = True
-            decision.reasoning_mode = "deep"
-
             decision.use_web = True
-
-            if "web" not in decision.required_tools:
-                decision.required_tools.append("web")
-
+            decision.use_tools = True
+            decision.required_tools.append("web")
             decision.evidence_sources.append("research")
 
         # -----------------------------------------------------
-        # GOAL / AUTONOMOUS GOAL AWARENESS
+        # Vision / image understanding
         # -----------------------------------------------------
 
-        # The immediate user request remains the decision goal.
+        if self._contains_any(
+            text,
+            (
+                "image",
+                "photo",
+                "picture",
+                "screenshot",
+                "look at this",
+                "what is in this image",
+                "analyze this image",
+                "analyse this image",
+                "ocr",
+            ),
+        ):
+            decision.intent = "vision"
+            self._set_action(
+                decision,
+                "vision",
+                intent="vision",
+                reasoning_mode="deep",
+            )
+            decision.use_reasoning = True
+            decision.use_tools = True
+            decision.required_tools.append("vision")
+            decision.evidence_sources.append("vision")
+
+        # -----------------------------------------------------
+        # Goal / autonomous-goal awareness
+        # -----------------------------------------------------
+
         decision.goal = query.strip()
 
-        # Phase 4: preserve the larger autonomous goal so downstream
-        # planning can understand what this request is advancing.
         autonomous_goal = (
             context.get("autonomous_goal")
             or context.get("goal")
         )
 
         if isinstance(autonomous_goal, dict):
-            decision.constraints["autonomous_goal"] = autonomous_goal
+            safe_goal = copy.deepcopy(autonomous_goal)
+
+            decision.constraints["autonomous_goal"] = safe_goal
 
             autonomous_goal_id = str(
-                autonomous_goal.get(
-                    "goal_id",
-                    "",
-                )
-                or ""
+                safe_goal.get("goal_id", "") or ""
             ).strip()
 
             autonomous_goal_title = str(
-                autonomous_goal.get(
-                    "title",
-                    "",
-                )
-                or ""
+                safe_goal.get("title", "") or ""
             ).strip()
 
-            next_subgoal = autonomous_goal.get(
-                "next_subgoal"
-            )
+            next_subgoal = safe_goal.get("next_subgoal")
 
-            decision.constraints["autonomous_goal_id"] = (
-                autonomous_goal_id
-            )
-
+            decision.constraints["autonomous_goal_id"] = autonomous_goal_id
             decision.constraints["autonomous_goal_title"] = (
                 autonomous_goal_title
             )
+            decision.constraints["next_subgoal"] = copy.deepcopy(next_subgoal)
 
-            decision.constraints["next_subgoal"] = (
-                next_subgoal
-            )
-
-            # If the user is interacting with an active autonomous
-            # goal, planning should remain available even when the
-            # immediate request does not contain words such as
-            # "plan" or "steps".
             if autonomous_goal_id:
                 decision.use_planner = True
 
                 if "planner" not in decision.required_tools:
-                    decision.required_tools.append(
-                        "planner"
-                    )
+                    decision.required_tools.append("planner")
 
                 if "autonomous_goal" not in decision.evidence_sources:
-                    decision.evidence_sources.append(
-                        "autonomous_goal"
-                    )
+                    decision.evidence_sources.append("autonomous_goal")
 
                 logger.info(
                     "[CognitiveController] Active autonomous goal: "
@@ -626,8 +642,7 @@ class CognitiveController:
         self,
         query: str,
         decision: CognitiveDecision,
-    ):
-
+    ) -> None:
         text = self._text(query)
 
         if self._contains_any(
@@ -639,12 +654,8 @@ class CognitiveController:
         elif self._contains_any(
             text,
             (
-                "detailed",
-                "deep",
-                "comprehensive",
-                "complete",
-                "in detail",
-                "step by step",
+                "detailed", "deep", "comprehensive", "complete",
+                "in detail", "step by step",
             ),
         ):
             decision.detail_level = "detailed"
@@ -657,12 +668,176 @@ class CognitiveController:
 
         if decision.teaching_mode:
             decision.tone = "teacher"
-
         elif decision.expertise == "software_developer":
             decision.tone = "technical"
-
         else:
             decision.tone = "professional"
+
+    # ---------------------------------------------------------
+    # Decision normalization
+    # ---------------------------------------------------------
+
+    def _normalize_decision(
+        self,
+        decision: CognitiveDecision,
+        query: str,
+        context: Dict[str, Any],
+    ) -> None:
+        # Keep only supported, unique capability names.
+        decision.required_tools = list(
+            dict.fromkeys(
+                str(tool).strip()
+                for tool in decision.required_tools
+                if str(tool).strip()
+            )
+        )[: self.MAX_TOOLS]
+
+        decision.evidence_sources = list(
+            dict.fromkeys(
+                str(source).strip()
+                for source in decision.evidence_sources
+                if str(source).strip()
+            )
+        )
+
+        # Semantic memory for contextual/continuation requests.
+        if decision.intent == "contextual_followup":
+            decision.use_semantic_memory = True
+            self._append_unique(
+                decision.required_tools,
+                ["semantic_memory"],
+            )
+
+        if self._contains_any(
+            self._text(query),
+            (
+                "continue", "resume", "same project",
+                "previous project", "last conversation",
+                "our project", "our architecture",
+            ),
+        ):
+            decision.use_semantic_memory = True
+            self._append_unique(
+                decision.required_tools,
+                ["semantic_memory"],
+            )
+
+        if decision.use_memory:
+            self._append_unique(decision.required_tools, ["memory"])
+
+        if decision.use_documents:
+            self._append_unique(decision.required_tools, ["document"])
+
+        if decision.use_web:
+            self._append_unique(decision.required_tools, ["web"])
+
+        if decision.use_planner:
+            self._append_unique(decision.required_tools, ["planner"])
+
+        if decision.use_repository:
+            self._append_unique(decision.required_tools, ["repository"])
+
+        # Repository/codebase requests require repository capability.
+        if self._contains_any(
+            self._text(query),
+            ("repository", "repo", "codebase", "github"),
+        ):
+            decision.use_repository = True
+            self._append_unique(decision.required_tools, ["repository"])
+            self._append_unique(decision.evidence_sources, ["repository"])
+
+        # Any explicit executable capability means ToolManager may be needed.
+        executable_tools = {
+            "calculator", "coding", "web", "document", "vision",
+            "automation", "repository",
+        }
+
+        if any(
+            tool in executable_tools
+            for tool in decision.required_tools
+        ):
+            decision.use_tools = True
+
+        # Agent orchestration is needed when a specialist capability is
+        # requested. The coordinator remains responsible for execution.
+        specialist_intents = {
+            "software_development",
+            "document_understanding",
+            "current_information",
+            "research",
+            "planning",
+            "travel_planning",
+            "automation",
+            "vision",
+            "learning_or_explanation",
+        }
+
+        if decision.intent in specialist_intents:
+            decision.use_agents = bool(
+                context.get("agent_coordinator")
+                or context.get("capabilities", {}).get("agents")
+            )
+
+        # A request that has no stronger signal remains ordinary chat.
+        if decision.intent == "conversation" and decision.action == "chat":
+            decision.route = "chat"
+
+        # Keep route synchronized with the action unless an explicit route
+        # was already supplied by the upstream router.
+        if not decision.route:
+            decision.route = decision.action
+
+        try:
+            decision.confidence = float(decision.confidence)
+        except (TypeError, ValueError):
+            decision.confidence = 0.5
+
+        decision.confidence = max(
+            0.0,
+            min(1.0, decision.confidence),
+        )
+
+        # Deterministic confidence tiers.
+        if decision.intent in {
+            "calculation",
+            "personal_memory",
+            "document_understanding",
+            "software_development",
+            "current_information",
+            "planning",
+            "automation",
+            "vision",
+        }:
+            decision.confidence = max(decision.confidence, 0.95)
+        elif decision.intent in {
+            "contextual_followup",
+            "conversation",
+        }:
+            decision.confidence = max(decision.confidence, 0.55)
+        else:
+            decision.confidence = max(decision.confidence, 0.80)
+
+        # Clarification is only a signal. Do not generate a question here.
+        clean = self._text(query)
+        decision.requires_clarification = (
+            not clean
+            or (
+                len(clean.split()) <= 1
+                and clean not in {"hi", "hello", "help", "status"}
+                and not context.get("conversation")
+            )
+        )
+
+        decision.decision_version = self.DECISION_VERSION
+
+        decision.orchestration = {
+            "execution_owner": "cognitive_core",
+            "tool_owner": "tool_manager",
+            "agent_owner": "agent_coordinator",
+            "planning_owner": "planner",
+            "answer_owner": "personality_or_llm",
+            "controller_role": "decision_only",
+        }
 
     # ---------------------------------------------------------
     # Main cognitive analysis
@@ -671,163 +846,155 @@ class CognitiveController:
     def analyze(
         self,
         query: str,
-        context: Dict | None = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> CognitiveDecision:
 
-        context = context or {}
+        context = context if isinstance(context, dict) else {}
 
-        decision = CognitiveDecision()
+        clean_query = str(query or "").strip()
+        decision = CognitiveDecision(
+            decision_version=self.DECISION_VERSION,
+        )
 
-        # Preserve upstream execution-router information.
+        # -----------------------------------------------------
+        # Preserve upstream routing evidence.
+        # -----------------------------------------------------
+
         execution_decision = context.get("execution_decision")
 
         if execution_decision is not None:
-
-            route = getattr(
-                execution_decision,
-                "route",
-                None,
+            route = (
+                execution_decision.get("route")
+                if isinstance(execution_decision, dict)
+                else getattr(execution_decision, "route", None)
             )
 
-            # Upstream router is evidence, not the entire brain.
-            if route == Route.GREETING:
-                decision.intent = "greeting"
-                decision.action = "chat"
-                decision.reasoning_mode = "fast"
-                decision.use_reasoning = False
-                decision.confidence = 1.0
+            route_value = (
+                route.value
+                if isinstance(route, Route)
+                else str(route or "").lower()
+            )
 
-            elif route == Route.MEMORY:
-                decision.intent = "personal_memory"
-                decision.action = "memory"
-                decision.use_memory = True
-                decision.reasoning_mode = "fast"
-                decision.required_tools.append("memory")
+            route_mapping = {
+                Route.GREETING.value: (
+                    "greeting",
+                    "chat",
+                    "fast",
+                    False,
+                ),
+                Route.MEMORY.value: (
+                    "personal_memory",
+                    "memory",
+                    "fast",
+                    False,
+                ),
+                Route.CODING.value: (
+                    "software_development",
+                    "coding",
+                    "expert",
+                    True,
+                ),
+                Route.DOCUMENT.value: (
+                    "document_understanding",
+                    "document",
+                    "deep",
+                    True,
+                ),
+                Route.VISION.value: (
+                    "vision",
+                    "vision",
+                    "deep",
+                    True,
+                ),
+                Route.TOOL.value: (
+                    "tool",
+                    "tool",
+                    "fast",
+                    False,
+                ),
+                Route.PLANNER.value: (
+                    "planning",
+                    "planner",
+                    "deep",
+                    True,
+                ),
+                Route.RESEARCH.value: (
+                    "research",
+                    "research",
+                    "deep",
+                    True,
+                ),
+                Route.WEB.value: (
+                    "current_information",
+                    "research",
+                    "deep",
+                    True,
+                ),
+                Route.AUTOMATION.value: (
+                    "automation",
+                    "automation",
+                    "deep",
+                    True,
+                ),
+            }
+
+            mapped = route_mapping.get(route_value)
+            if mapped:
+                intent_name, action, mode, use_reasoning = mapped
+                decision.intent = intent_name
+                decision.action = action
+                decision.route = route_value
+                decision.reasoning_mode = mode
+                decision.use_reasoning = use_reasoning
                 decision.evidence_sources.append("router")
                 decision.confidence = 1.0
 
-            elif route == Route.CODING:
-                decision.intent = "software_development"
-                decision.action = "coding"
-                decision.expertise = "software_developer"
-                decision.reasoning_mode = "expert"
-                decision.required_tools.append("coding")
-                decision.evidence_sources.append("router")
-                decision.confidence = 1.0
+                if route_value == Route.MEMORY.value:
+                    decision.use_memory = True
+                    decision.required_tools.append("memory")
 
+                elif route_value in {
+                    Route.CODING.value,
+                    Route.TOOL.value,
+                    Route.WEB.value,
+                    Route.RESEARCH.value,
+                    Route.AUTOMATION.value,
+                }:
+                    decision.use_tools = True
+
+                elif route_value == Route.DOCUMENT.value:
+                    decision.use_documents = True
+                    decision.required_tools.append("document")
+                    decision.use_tools = True
+
+                elif route_value == Route.VISION.value:
+                    decision.required_tools.append("vision")
+                    decision.use_tools = True
+
+                elif route_value == Route.PLANNER.value:
+                    decision.use_planner = True
+                    decision.required_tools.append("planner")
+
+        # -----------------------------------------------------
         # Semantic cognitive analysis
+        # -----------------------------------------------------
+
         self._understand_intent(
-            query,
+            clean_query,
             context,
             decision,
         )
 
-        # Response strategy
         self._determine_response_strategy(
-            query,
+            clean_query,
             decision,
         )
 
-        # -----------------------------------------------------
-        # Required capability normalization
-        # -----------------------------------------------------
-
-        # Remove duplicate tools while preserving order.
-        decision.required_tools = list(
-            dict.fromkeys(decision.required_tools)
+        self._normalize_decision(
+            decision,
+            clean_query,
+            context,
         )
-
-        # Semantic memory is useful for contextual requests.
-        if decision.intent == "contextual_followup":
-            decision.use_semantic_memory = True
-
-            if "semantic_memory" not in decision.required_tools:
-                decision.required_tools.append(
-                    "semantic_memory"
-                )
-
-        # Personal memory should always be explicit.
-        if decision.use_memory:
-            if "memory" not in decision.required_tools:
-                decision.required_tools.append("memory")
-
-        # Web research requires current external evidence.
-        if decision.use_web:
-            if "web" not in decision.required_tools:
-                decision.required_tools.append("web")
-
-        # Planning requires planner.
-        if decision.use_planner:
-            if "planner" not in decision.required_tools:
-                decision.required_tools.append("planner")
-
-        # Repository requests require repository capability.
-        if self._contains_any(
-            self._text(query),
-            (
-                "repository",
-                "repo",
-                "codebase",
-                "github",
-            ),
-        ):
-
-            decision.use_repository = True
-            decision.evidence_sources.append("repository")
-
-            if "repository" not in decision.required_tools:
-                decision.required_tools.append("repository")
-
-        # Semantic memory for continuation requests.
-        if self._contains_any(
-            self._text(query),
-            (
-                "continue",
-                "resume",
-                "same project",
-                "previous project",
-                "last conversation",
-                "our project",
-                "our architecture",
-            ),
-        ):
-
-            decision.use_semantic_memory = True
-
-            if "semantic_memory" not in decision.required_tools:
-                decision.required_tools.append(
-                    "semantic_memory"
-                )
-
-        # -----------------------------------------------------
-        # Confidence
-        # -----------------------------------------------------
-
-        if decision.intent in (
-            "conversation",
-            "contextual_followup",
-        ):
-            decision.confidence = max(
-                0.55,
-                decision.confidence,
-            )
-        else:
-            decision.confidence = max(
-                0.80,
-                decision.confidence,
-            )
-
-        # Strong deterministic capabilities.
-        if decision.intent in (
-            "calculation",
-            "personal_memory",
-            "document_understanding",
-            "software_development",
-            "current_information",
-            "planning",
-            "automation",
-        ):
-            decision.confidence = 0.95
 
         self._build_user_profile(
             decision,
