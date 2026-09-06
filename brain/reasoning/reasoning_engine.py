@@ -89,6 +89,7 @@ class ReasoningEngine:
         agent_coordinator=None,
         lead_agent=None,
         memory_engine=None,
+        tool_manager=None,
     ):
         self.agent_manager = agent_manager
         self.planner = planner
@@ -105,6 +106,7 @@ class ReasoningEngine:
         self.agent_coordinator = agent_coordinator
         self.lead_agent = lead_agent
         self.memory_engine = memory_engine
+        self.tool_manager = tool_manager
         self.intent_analyzer = IntentAnalyzer(llm_router=llm_router)
 
         # Multi-topic conversation state
@@ -1557,33 +1559,8 @@ class ReasoningEngine:
     ) -> Dict[str, Any]:
         memory_query = query
 
-        if conversation_state:
-            context = getattr(
-                self,
-                "_temp_context",
-                {},
-            )
-
-            context["conversation_state_for_memory"] = {
-                "active_topic": conversation_state.get(
-                    "active_topic"
-                ),
-                "active_subject": conversation_state.get(
-                    "active_subject"
-                ),
-                "active_entities": conversation_state.get(
-                    "active_entities",
-                    [],
-                ),
-                "compared_entities": conversation_state.get(
-                    "compared_entities",
-                    [],
-                ),
-                "active_comparison": conversation_state.get(
-                    "active_comparison",
-                    False,
-                ),
-            }
+        # Conversation state is already supplied to the memory layer by the
+        # caller when supported. Do not keep request state on this singleton.
 
         async def safe_call(
             operation,
@@ -2116,18 +2093,33 @@ Return JSON:
 }}
 """
 
-        response = await self.llm_router.chat(
-            [
-                {
-                    "role": "system",
-                    "content": "Return only JSON.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ]
-        )
+        if not self.llm_router or not hasattr(self.llm_router, "chat"):
+            return {
+                "goal_completed": False,
+                "confidence": 0.0,
+                "missing": ["LLM evaluator unavailable"],
+            }
+
+        try:
+            response = await self.llm_router.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "Return only JSON.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ]
+            )
+        except Exception as exc:
+            logger.warning("[ReasoningEngine] Result evaluation failed: %s", exc)
+            return {
+                "goal_completed": False,
+                "confidence": 0.0,
+                "missing": ["LLM evaluator failed"],
+            }
 
         if not isinstance(response, str) or not response.strip():
             return {
@@ -2138,8 +2130,70 @@ Return JSON:
 
         return self.llm_router.extract_json(response)
 
+    @staticmethod
+    def _decision_value(decision: Any, key: str, default: Any = None) -> Any:
+        if decision is None:
+            return default
+        if isinstance(decision, dict):
+            return decision.get(key, default)
+        return getattr(decision, key, default)
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _safe_capability_names(self) -> List[str]:
+        names = []
+        manager = self.tool_manager
+        if manager is not None:
+            registry = getattr(manager, "tools", None)
+            if isinstance(registry, dict):
+                names.extend(str(k) for k in registry.keys())
+        return list(dict.fromkeys(names))
+
+    def _build_decision_contract(
+        self,
+        *,
+        intent: Any,
+        strategy: str,
+        goal: str,
+        selected_agents: List[str],
+        requires_memory: bool,
+        requires_documents: bool,
+        requires_tools: bool,
+        requires_web: bool,
+        requires_planning: bool,
+        requires_clarification: bool,
+        mode: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        intent_name = str(getattr(intent, "intent_type", "chat") or "chat")
+        return {
+            "version": "11.0",
+            "intent": intent_name,
+            "goal": goal,
+            "action": action,
+            "reasoning_mode": mode,
+            "strategy": strategy,
+            "selected_agents": list(selected_agents),
+            "requires": {
+                "memory": requires_memory,
+                "documents": requires_documents,
+                "tools": requires_tools,
+                "web": requires_web,
+                "planning": requires_planning,
+                "clarification": requires_clarification,
+            },
+            "available_tools": self._safe_capability_names(),
+            "execution_owner": "cognitive_core",
+        }
+
     async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
-        self._temp_context = context
+        # Reasoning is request-scoped. Never store the active request on the
+        # engine instance because concurrent conversations can otherwise leak
+        # context into one another.
         user_query = str(context.get("query", "")).strip()
 
         intent = await self.intent_analyzer.analyze(
@@ -2212,8 +2266,8 @@ Return JSON:
 
         logger.info(
             "[ReasoningEngine] Intent=%s confidence=%.2f",
-            intent.intent_type,
-            intent.confidence,
+            getattr(intent, "intent_type", "unknown"),
+            float(getattr(intent, "confidence", 0.0) or 0.0),
         )
 
         semantic_context = self._build_semantic_context()
@@ -2248,19 +2302,19 @@ Return JSON:
         decision = context.get("decision")
 
         if decision:
-            if getattr(decision, "use_memory", False):
+            if self._as_bool(self._decision_value(decision, "use_memory", False)):
                 strategy = "memory_first"
 
-            elif getattr(decision, "use_planner", False):
+            elif self._as_bool(self._decision_value(decision, "use_planner", False)):
                 strategy = "planning"
 
-            elif getattr(decision, "use_documents", False):
+            elif self._as_bool(self._decision_value(decision, "use_documents", False)):
                 strategy = "document"
 
-            elif getattr(decision, "use_world_model", False):
+            elif self._as_bool(self._decision_value(decision, "use_world_model", False)):
                 strategy = "knowledge_first"
 
-            elif getattr(decision, "use_reasoning", False):
+            elif self._as_bool(self._decision_value(decision, "use_reasoning", False)):
                 if strategy == "knowledge_first":
                     strategy = "deep_reasoning"
 
@@ -2275,11 +2329,12 @@ Return JSON:
         )
         context["execution_feedback"] = feedback
 
-        if self.goal_manager and hasattr(self.goal_manager, "observe"):
-            await self.goal_manager.observe(
-                query=user_query,
-                context=context,
-            )
+        if (
+            context.get("observe_goals_in_reasoning", False)
+            and self.goal_manager
+            and hasattr(self.goal_manager, "observe")
+        ):
+            await self.goal_manager.observe(query=user_query, context=context)
 
         active_goal = None
 
@@ -2423,19 +2478,19 @@ Return JSON:
         if decision:
             capability_agents = []
 
-            if getattr(decision, "use_memory", False):
+            if self._as_bool(self._decision_value(decision, "use_memory", False)):
                 capability_agents.append("memory")
 
-            if getattr(decision, "use_documents", False):
+            if self._as_bool(self._decision_value(decision, "use_documents", False)):
                 capability_agents.append("document")
 
-            if getattr(decision, "use_planner", False):
+            if self._as_bool(self._decision_value(decision, "use_planner", False)):
                 capability_agents.append("planning")
 
-            if getattr(decision, "use_web", False):
+            if self._as_bool(self._decision_value(decision, "use_web", False)):
                 capability_agents.append("research")
 
-            if getattr(decision, "use_tools", False):
+            if self._as_bool(self._decision_value(decision, "use_tools", False)):
                 capability_agents.append("coding")
 
             for agent_name in capability_agents:
@@ -2471,31 +2526,31 @@ Return JSON:
         # ---------------------------------------------------------
 
         requires_planning = (
-            getattr(decision, "use_planner", False)
+            self._as_bool(self._decision_value(decision, "use_planner", False))
             if decision
             else strategy == "planning_first"
         )
 
         requires_tools = (
-            getattr(decision, "use_tools", False)
+            self._as_bool(self._decision_value(decision, "use_tools", False))
             if decision
             else False
         )
 
         requires_memory = (
-            getattr(decision, "use_memory", False)
+            self._as_bool(self._decision_value(decision, "use_memory", False))
             if decision
             else strategy == "memory_first"
         )
 
         requires_documents = (
-            getattr(decision, "use_documents", False)
+            self._as_bool(self._decision_value(decision, "use_documents", False))
             if decision
             else strategy == "document_first"
         )
 
         requires_web = (
-            getattr(decision, "use_web", False)
+            self._as_bool(self._decision_value(decision, "use_web", False))
             if decision
             else strategy == "research_first"
         )
@@ -2535,7 +2590,7 @@ Return JSON:
 
         agent_results = []
 
-        if self.agent_coordinator and selected_agents:
+        if self.agent_coordinator and selected_agents and context.get("execute_agents_in_reasoning", False):
 
             execution_plan_payload = {
                 "agents": selected_agents,
@@ -2726,7 +2781,7 @@ Return JSON:
             if self.goal_manager and hasattr(self.goal_manager, "current_goal"):
                 goal_obj = self.goal_manager.current_goal()
 
-            use_memory = getattr(decision, "use_memory", False) if decision else False
+            use_memory = self._as_bool(self._decision_value(decision, "use_memory", False)) if decision else False
 
             summary_memories = []
             if use_memory and hasattr(self, "memory_engine") and self.memory_engine:
@@ -2766,9 +2821,10 @@ Return JSON:
             action = "planner"
 
         # Respect authoritative decision action if provided
-        if decision and getattr(decision, "action", None):
-            action = decision.action
-            if decision.action == "planner":
+        decision_action = self._decision_value(decision, "action")
+        if decision_action:
+            action = str(decision_action)
+            if action == "planner":
                 requires_planning = True
                 if "planning" not in selected_agents:
                     selected_agents.append("planning")
@@ -2890,6 +2946,21 @@ Return JSON:
             },
         }
 
+        metadata["decision_contract"] = self._build_decision_contract(
+            intent=intent,
+            strategy=strategy,
+            goal=goal,
+            selected_agents=selected_agents,
+            requires_memory=requires_memory,
+            requires_documents=requires_documents,
+            requires_tools=requires_tools,
+            requires_web=requires_web,
+            requires_planning=requires_planning,
+            requires_clarification=requires_clarification,
+            mode=mode,
+            action=action,
+        )
+
         if feedback["needs_replanning"]:
             metadata["replan"] = True
 
@@ -2899,19 +2970,16 @@ Return JSON:
             "[ReasoningEngine] Mode=%s Agents=%s Memory=%s Planner=%s",
             mode,
             selected_agents,
-            getattr(decision, "use_memory", False) if decision else False,
-            getattr(decision, "use_planner", False) if decision else False,
+            self._as_bool(self._decision_value(decision, "use_memory", False)) if decision else False,
+            self._as_bool(self._decision_value(decision, "use_planner", False)) if decision else False,
         )
 
-        if self.working_memory:
+        if self.working_memory and context.get("update_working_memory_in_reasoning", False):
             topic_str = conv_tracking.get("active_topic", conv_tracking.get("topic", ""))
             if topic_str and confidence > 0.7 and hasattr(self.working_memory, "set_topic"):
                 self.working_memory.set_topic(topic_str)
             if hasattr(self.working_memory, "remember_exchange"):
-                self.working_memory.remember_exchange(
-                    raw_query,
-                    response_to_store
-                )
+                self.working_memory.remember_exchange(raw_query, response_to_store)
 
         response_strategy = await self.decide_response_strategy(goal, context)
 
