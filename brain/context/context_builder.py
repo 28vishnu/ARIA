@@ -234,6 +234,38 @@ class ContextBuilder:
             return {}
 
     # ------------------------------------------------------------------
+    # Safe copying
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _safe_copy(value):
+        """
+        Copy application data without attempting to pickle runtime objects.
+
+        Context can legitimately contain live service objects such as Chroma
+        collections, HTTP clients, memory engines, and application state.
+        Those objects must remain shared references; only ordinary data
+        structures need defensive copying.
+        """
+        if isinstance(value, dict):
+            return {
+                key: ContextBuilder._safe_copy(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [ContextBuilder._safe_copy(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(ContextBuilder._safe_copy(item) for item in value)
+        if isinstance(value, set):
+            return {ContextBuilder._safe_copy(item) for item in value}
+
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            # Runtime/service objects are intentionally kept by reference.
+            return value
+
+    # ------------------------------------------------------------------
     # Main context construction
     # ------------------------------------------------------------------
 
@@ -249,10 +281,12 @@ class ContextBuilder:
         conversation_history=None,
     ) -> Dict[str, Any]:
 
-        # Never mutate caller-owned nested structures.
-        ctx = copy.deepcopy(base_context) if isinstance(base_context, dict) else {}
+        # Never mutate caller-owned ordinary data, but do not deepcopy live
+        # runtime objects (for example Chroma collections) because those
+        # objects may not support Python pickling.
+        ctx = self._safe_copy(base_context) if isinstance(base_context, dict) else {}
 
-        state_data = copy.deepcopy(state) if isinstance(state, dict) else {}
+        state_data = self._safe_copy(state) if isinstance(state, dict) else {}
 
         normalized_intent = self._normalize_intent(intent)
 
@@ -267,7 +301,7 @@ class ContextBuilder:
         )
 
         memory_items = (
-            copy.deepcopy(memory)
+            self._safe_copy(memory)
             if isinstance(memory, list)
             else []
         )
@@ -599,8 +633,8 @@ class ContextBuilder:
 
                 "follow_up": looks_like_follow_up,
                 "active_document": active_document,
-                "last_plan": copy.deepcopy(state_data.get("last_plan")),
-                "last_tool": copy.deepcopy(state_data.get("last_tool")),
+                "last_plan": self._safe_copy(state_data.get("last_plan")),
+                "last_tool": self._safe_copy(state_data.get("last_tool")),
                 "user_goal": state_data.get("current_goal"),
 
                 "is_short_query": is_short_query,
@@ -627,7 +661,7 @@ class ContextBuilder:
             "orchestration": orchestration,
 
             "execution": {
-                "result": copy.deepcopy(execution_result),
+                "result": self._safe_copy(execution_result),
                 "active": orchestration["execution_in_progress"],
                 "completed": orchestration["execution_completed"],
                 "failed": orchestration["execution_failed"],
