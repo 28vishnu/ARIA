@@ -1418,7 +1418,80 @@ class CognitiveCore:
                 continue
 
             try:
-                if tool_name == "memory" and self.memory_engine:
+                # ToolManager is the primary execution owner. For web/search,
+                # keep a compatibility fallback to the shared SearchTool
+                # already registered by bootstrap.
+                if tool_name in {
+                    "web",
+                    "web_search",
+                    "internet",
+                    "online_search",
+                    "search",
+                }:
+                    app_state = context.get("app_state")
+
+                    if app_state is not None:
+                        try:
+                            registry = getattr(app_state, "registry", None)
+                            search_tool = None
+
+                            if registry is not None:
+                                for registry_name in (
+                                    "search_tool",
+                                    "web_search",
+                                    "search",
+                                ):
+                                    try:
+                                        if registry.has(registry_name):
+                                            search_tool = registry.get(
+                                                registry_name
+                                            )
+                                            if search_tool is not None:
+                                                break
+                                    except Exception:
+                                        continue
+
+                            if search_tool is not None:
+                                search_result = None
+
+                                if hasattr(search_tool, "search"):
+                                    search_result = await search_tool.search(
+                                        query
+                                    )
+                                elif hasattr(search_tool, "execute"):
+                                    try:
+                                        search_result = await search_tool.execute(
+                                            query=query,
+                                            context=context,
+                                        )
+                                    except TypeError:
+                                        search_result = await search_tool.execute(
+                                            query
+                                        )
+
+                                if search_result:
+                                    evidence["web"] = search_result
+                                    logger.info(
+                                        "[CognitiveCore] Web search fallback "
+                                        "executed successfully."
+                                    )
+                                    continue
+
+                        except Exception as exc:
+                            logger.warning(
+                                "[CognitiveCore] Web search fallback failed: %s",
+                                exc,
+                            )
+
+                    evidence.setdefault(
+                        "tool_errors",
+                        {},
+                    ).setdefault(
+                        "web",
+                        "Web search tool returned no usable result.",
+                    )
+
+                elif tool_name == "memory" and self.memory_engine:
                     evidence["memory"] = await self.memory_engine.retrieve(
                         query=query
                     )
@@ -2569,6 +2642,22 @@ Execution Results:
 
 {execution_result}
 
+"""
+
+                        # Current-information requests must use actual
+                        # web/search evidence when it was retrieved.
+                        web_results = context.get("web_results")
+
+                        if web_results:
+                            system_context += f"""
+
+Live Web/Search Evidence:
+
+{web_results}
+
+Use this web/search evidence as the factual basis for the current-
+information answer. Do not claim that live access is unavailable when
+usable evidence is present. Do not invent details absent from the evidence.
 """
 
                         decision_obj = None
@@ -5072,6 +5161,13 @@ Execution Results:
                 query,
                 context,
             )
+
+            # Preserve executed tool evidence in the cognitive context so
+            # the final answer layer can actually use it.
+            context["tool_results"] = evidence
+
+            if "web" in evidence:
+                context["web_results"] = evidence.get("web")
 
             if self.working_memory:
                 if hasattr(self.working_memory, "metadata"):
