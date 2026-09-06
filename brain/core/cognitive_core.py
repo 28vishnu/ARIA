@@ -3038,6 +3038,39 @@ Execution Results:
             "remember my name",
         }
 
+    def _looks_like_compound_request(self, query: str) -> bool:
+        """Detect requests containing multiple explicit subtasks."""
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+
+        # Explicit sequential connectors are the strongest signal.
+        connector_count = len(re.findall(
+            r"\\b(?:then|also|and then|after that|next)\\b",
+            text,
+        ))
+
+        # Multiple imperative/question clauses commonly indicate a
+        # compound request. Keep this conservative to avoid changing
+        # ordinary single-task coding requests.
+        action_phrases = (
+            "remember that",
+            "tell me what",
+            "what do you know",
+            "make a plan",
+            "make a short plan",
+            "explain what",
+            "explain how",
+            "and explain",
+            "and tell",
+        )
+
+        matched_actions = sum(
+            1 for phrase in action_phrases if phrase in text
+        )
+
+        return connector_count >= 1 and matched_actions >= 2
+
     def _looks_like_web_search_request(
         self,
         query: str,
@@ -4537,8 +4570,7 @@ Execution Results:
                         error=f"Unable to retrieve weather: {e}",
                     )
 
-            if route.route == Route.CODING:
-
+            if route.route == Route.CODING and not self._looks_like_compound_request(query):
                 engine = self.engine_manager.get("coding")
 
                 reply = await engine.process(query)
@@ -4551,6 +4583,15 @@ Execution Results:
                         "response": reply,
                         "message": reply,
                     },
+                )
+
+            # Compound requests must stay inside the unified cognitive
+            # pipeline even when the execution router classifies one
+            # subtask (for example, "learn Python") as coding.
+            if route.route == Route.CODING:
+                logger.info(
+                    "[CognitiveCore] Compound request detected; "
+                    "bypassing terminal coding route."
                 )
 
             state: Dict[str, Any] = {}
