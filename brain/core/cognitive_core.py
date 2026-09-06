@@ -2002,6 +2002,11 @@ class CognitiveCore:
         context.setdefault("session_id", session_id)
         context.setdefault("execution_id", self._create_execution_id())
         context.setdefault("query", query)
+        compound_memory_request = bool(
+            context.get("memory_compound_request")
+            or self._is_compound_memory_request(query, context)
+        )
+        context["memory_compound_request"] = compound_memory_request
 
         if self.conversation_manager:
             try:
@@ -2452,6 +2457,7 @@ class CognitiveCore:
 
                     if (
                         not answer
+                        and not compound_memory_request
                         and self._looks_like_memory_recall_request(
                             resolved_query
                         )
@@ -2965,6 +2971,31 @@ Execution Results:
         return (
             self._normalize_confirmation_text(query)
             in REJECT_WORDS
+        )
+
+    def _is_compound_memory_request(self, query: str, context: Optional[Dict[str, Any]] = None) -> bool:
+        """Detect memory operations embedded in a larger request."""
+        ctx = context if isinstance(context, dict) else {}
+        manager = self.memory_conversation_manager
+        if manager and hasattr(manager, "_is_compound_memory_request"):
+            try:
+                intent = ctx.get("intent")
+                intent_name = (
+                    getattr(intent, "name", "")
+                    or getattr(intent, "intent", "")
+                    or ""
+                )
+                return bool(manager._is_compound_memory_request(
+                    str(query or ""),
+                    intent_name=str(intent_name),
+                    context=ctx,
+                ))
+            except Exception:
+                logger.debug("[CognitiveCore] Compound memory detection fallback used.", exc_info=True)
+        q = str(query or "").lower()
+        return (
+            any(x in q for x in ("remember", "memorize", "save this", "save that", "store this", "store that", "don't forget", "do not forget"))
+            and any(x in q for x in ("then", "and then", "also", "make a plan", "create a plan", "study plan", "roadmap", "explain", "what should i do", "what do i do first", "search", "write code", "generate"))
         )
 
     def _looks_like_memory_recall_request(self, query: str) -> bool:
@@ -4185,7 +4216,17 @@ Execution Results:
                     e,
                 )
 
-            if self._looks_like_memory_recall_request(query):
+            compound_memory_request = self._is_compound_memory_request(
+                query,
+                {"fast_route": getattr(fast_decision, "reason", None) if fast_decision else None},
+            )
+
+            if compound_memory_request:
+                logger.info(
+                    "[CognitiveCore] Compound memory request detected; bypassing terminal memory route."
+                )
+
+            if self._looks_like_memory_recall_request(query) and not compound_memory_request:
 
                 logger.info(
                     "[MemoryRecall] Retrieving existing memories."
@@ -4240,7 +4281,7 @@ Execution Results:
                 route.confidence,
             )
 
-            if route.route == Route.MEMORY:
+            if route.route == Route.MEMORY and not compound_memory_request:
                 if not self.memory_engine:
                     return SystemResponse(
                         success=False,
@@ -4533,6 +4574,7 @@ Execution Results:
                 )
 
             context = dict(base_context or {})
+            context["memory_compound_request"] = compound_memory_request
             context["persisted_execution"] = (
                 persisted_execution
             )
@@ -4635,47 +4677,47 @@ Execution Results:
             context["cognitive_decision"] = controller_decision
 
             decision_contract = {
-                "intent": _decision_value(
+                "intent": self._decision_value(
                     controller_decision,
                     "intent",
                 ),
-                "route": _decision_value(
+                "route": self._decision_value(
                     controller_decision,
                     "route",
                 ),
-                "action": _decision_value(
+                "action": self._decision_value(
                     controller_decision,
                     "action",
                 ),
                 "requires_reasoning": bool(
-                    _decision_value(
+                    self._decision_value(
                         controller_decision,
                         "requires_reasoning",
                         False,
                     )
                 ),
                 "requires_memory": bool(
-                    _decision_value(
+                    self._decision_value(
                         controller_decision,
                         "requires_memory",
                         False,
                     )
                 ),
                 "requires_tool": bool(
-                    _decision_value(
+                    self._decision_value(
                         controller_decision,
                         "requires_tool",
                         False,
                     )
                 ),
                 "requires_planning": bool(
-                    _decision_value(
+                    self._decision_value(
                         controller_decision,
                         "requires_planning",
                         False,
                     )
                 ),
-                "confidence": _decision_value(
+                "confidence": self._decision_value(
                     controller_decision,
                     "confidence",
                 ),
@@ -5204,18 +5246,24 @@ Execution Results:
                     )
                 )
 
-                return SystemResponse(
-                    success=True,
-                    confidence=getattr(
-                        intent,
-                        "confidence",
-                        1.0,
-                    ),
-                    source="memory_conversation",
-                    data={
-                        "message": reply,
-                    },
-                )
+                if context.get("memory_compound_request"):
+                    context["memory_result"] = reply or context.get("memory_result")
+                    logger.info(
+                        "[CognitiveCore] Compound memory operation handled; continuing unified pipeline."
+                    )
+                else:
+                    return SystemResponse(
+                        success=True,
+                        confidence=getattr(
+                            intent,
+                            "confidence",
+                            1.0,
+                        ),
+                        source="memory_conversation",
+                        data={
+                            "message": reply,
+                        },
+                    )
 
             if (
                 self.memory_router
