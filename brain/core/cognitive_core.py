@@ -4184,6 +4184,13 @@ Execution Results:
 
         execution_id = self._create_execution_id()
 
+        # Always initialize the unified decision before any early
+        # routing/exception path.  Some optional orchestration branches
+        # can reach the pipeline before controller/DecisionEngine merge;
+        # initializing here prevents an UnboundLocalError from masking
+        # the actual route handling.
+        decision = None
+
         try:
             if self.state_manager:
 
