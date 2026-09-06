@@ -1,10 +1,46 @@
 from dataclasses import dataclass, field
-from datetime import datetime
-import uuid
+from datetime import datetime, timezone
+import copy
 import logging
+import uuid
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("aria")
+
+
+def _utcnow() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_datetime(value: Any) -> datetime:
+    """Safely restore persisted timestamps, including legacy naive values."""
+    if isinstance(value, datetime):
+        result = value
+    elif isinstance(value, str):
+        try:
+            result = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return _utcnow()
+    else:
+        return _utcnow()
+
+    if result.tzinfo is None:
+        return result.replace(tzinfo=timezone.utc)
+
+    return result.astimezone(timezone.utc)
+
+
+def _clamp_progress(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = 0.0
+
+    if numeric != numeric:
+        numeric = 0.0
+
+    return max(0.0, min(100.0, numeric))
 
 
 @dataclass
@@ -12,8 +48,8 @@ class SubGoal:
     title: str
     status: str = "pending"
     metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
 
 
 @dataclass
@@ -22,20 +58,112 @@ class Goal:
     title: str = ""
     status: str = "active"
     progress: float = 0.0
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
     metadata: Dict[str, Any] = field(default_factory=dict)
     subgoals: List[SubGoal] = field(default_factory=list)
 
 
 class GoalManager:
+    """
+    Phase-11 autonomous goal lifecycle manager.
+
+    CognitiveCore remains the orchestration owner. GoalManager owns only
+    goal state, persistence, progress and goal-scoped observations.
+
+    No LLM, tool execution or local intelligence is introduced here.
+    """
+
+    VERSION = "11.10"
+    MAX_GOALS = 200
+    MAX_SUBGOALS_PER_GOAL = 50
+    VALID_STATUSES = {
+        "active",
+        "paused",
+        "completed",
+        "failed",
+        "cancelled",
+    }
+    VALID_SUBGOAL_STATUSES = {
+        "pending",
+        "active",
+        "completed",
+        "failed",
+        "cancelled",
+        "paused",
+    }
 
     def __init__(self, working_memory=None):
         self.goals: List[Goal] = []
         self.working_memory = working_memory
-
-        # Restore previously persisted goals when possible.
         self._restore_goals()
+
+    # =========================================================
+    # NORMALIZATION / SAFETY
+    # =========================================================
+
+    @staticmethod
+    def _safe_metadata(value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return dict(value)
+
+    @classmethod
+    def _normalize_status(
+        cls,
+        value: Any,
+        default: str = "active",
+    ) -> str:
+        status = str(value or default).strip().lower()
+        return (
+            status
+            if status in cls.VALID_STATUSES
+            else default
+        )
+
+    @classmethod
+    def _normalize_subgoal_status(
+        cls,
+        value: Any,
+        default: str = "pending",
+    ) -> str:
+        status = str(value or default).strip().lower()
+        return (
+            status
+            if status in cls.VALID_SUBGOAL_STATUSES
+            else default
+        )
+
+    @staticmethod
+    def _normalize_title(title: Any) -> str:
+        return str(title or "").strip()
+
+    @staticmethod
+    def _touch_goal(goal: Goal):
+        goal.updated_at = _utcnow()
+
+    @staticmethod
+    def _touch_subgoal(subgoal: SubGoal):
+        subgoal.updated_at = _utcnow()
+
+    def _trim_goals(self):
+        if len(self.goals) <= self.MAX_GOALS:
+            return
+
+        # Keep active/paused goals first, then newest historical goals.
+        self.goals.sort(
+            key=lambda goal: (
+                goal.status not in {"active", "paused"},
+                goal.updated_at,
+            ),
+            reverse=False,
+        )
+
+        retained = self.goals[:self.MAX_GOALS]
+        self.goals = retained
 
     # =========================================================
     # PERSISTENCE
@@ -43,36 +171,46 @@ class GoalManager:
 
     def _persist_goal(self, goal: Goal):
         """
-        Persist the complete goal state through semantic memory.
+        Best-effort persistence through semantic memory.
 
-        Persistence is best-effort and must never break the
-        cognitive pipeline.
+        Persistence failures never break the cognitive pipeline.
         """
-        if not self.working_memory:
+        if self.working_memory is None:
             return
 
         try:
             semantic = self.working_memory.semantic()
 
-            metadata = dict(goal.metadata or {})
+            if semantic is None:
+                return
 
-            metadata.update({
-                "goal_state": "persisted",
-                "status": goal.status,
-                "progress": goal.progress,
-                "created_at": goal.created_at.isoformat(),
-                "updated_at": goal.updated_at.isoformat(),
-                "subgoals": [
-                    {
-                        "title": subgoal.title,
-                        "status": subgoal.status,
-                        "metadata": dict(subgoal.metadata or {}),
-                        "created_at": subgoal.created_at.isoformat(),
-                        "updated_at": subgoal.updated_at.isoformat(),
-                    }
-                    for subgoal in goal.subgoals
-                ],
-            })
+            metadata = self._safe_metadata(
+                goal.metadata
+            )
+
+            metadata.update(
+                {
+                    "goal_state": "persisted",
+                    "status": goal.status,
+                    "progress": goal.progress,
+                    "created_at": goal.created_at.isoformat(),
+                    "updated_at": goal.updated_at.isoformat(),
+                    "subgoals": [
+                        {
+                            "title": subgoal.title,
+                            "status": subgoal.status,
+                            "metadata": self._safe_metadata(
+                                subgoal.metadata
+                            ),
+                            "created_at": subgoal.created_at.isoformat(),
+                            "updated_at": subgoal.updated_at.isoformat(),
+                        }
+                        for subgoal in goal.subgoals[
+                            : self.MAX_SUBGOALS_PER_GOAL
+                        ]
+                    ],
+                }
+            )
 
             semantic.add_node(
                 node_id=goal.id,
@@ -95,35 +233,53 @@ class GoalManager:
 
     def _restore_goals(self):
         """
-        Restore persisted goals from semantic memory.
+        Restore only explicitly persisted goal nodes.
 
-        Older goal nodes without complete goal_state metadata
-        are safely ignored.
+        Supports dict/list node containers and legacy naive timestamps.
         """
-        if not self.working_memory:
+        if self.working_memory is None:
             return
 
         try:
             semantic = self.working_memory.semantic()
 
-            nodes = getattr(semantic, "nodes", None)
+            if semantic is None:
+                return
+
+            nodes = getattr(
+                semantic,
+                "nodes",
+                None,
+            )
 
             if isinstance(nodes, dict):
-                iterable = nodes.values()
+                iterable = list(nodes.values())
             elif isinstance(nodes, list):
-                iterable = nodes
+                iterable = list(nodes)
             else:
                 return
 
             restored = 0
 
             for node in iterable:
+                if restored >= self.MAX_GOALS:
+                    break
+
                 try:
                     if isinstance(node, dict):
                         node_type = node.get("node_type")
-                        metadata = node.get("metadata", {})
-                        node_id = node.get("node_id") or node.get("id")
-                        title = node.get("value") or node.get("title")
+                        metadata = node.get(
+                            "metadata",
+                            {},
+                        )
+                        node_id = (
+                            node.get("node_id")
+                            or node.get("id")
+                        )
+                        title = (
+                            node.get("value")
+                            or node.get("title")
+                        )
                     else:
                         node_type = getattr(
                             node,
@@ -135,23 +291,29 @@ class GoalManager:
                             "metadata",
                             {},
                         )
-                        node_id = getattr(
-                            node,
-                            "node_id",
-                            None,
-                        ) or getattr(
-                            node,
-                            "id",
-                            None,
+                        node_id = (
+                            getattr(
+                                node,
+                                "node_id",
+                                None,
+                            )
+                            or getattr(
+                                node,
+                                "id",
+                                None,
+                            )
                         )
-                        title = getattr(
-                            node,
-                            "value",
-                            None,
-                        ) or getattr(
-                            node,
-                            "title",
-                            None,
+                        title = (
+                            getattr(
+                                node,
+                                "value",
+                                None,
+                            )
+                            or getattr(
+                                node,
+                                "title",
+                                None,
+                            )
                         )
 
                     if node_type != "goal":
@@ -160,79 +322,127 @@ class GoalManager:
                     if not isinstance(metadata, dict):
                         continue
 
-                    if metadata.get("goal_state") != "persisted":
+                    if metadata.get(
+                        "goal_state"
+                    ) != "persisted":
                         continue
+
+                    title = self._normalize_title(
+                        title
+                    )
 
                     if not node_id or not title:
                         continue
 
+                    goal_id = str(node_id)
+
                     if any(
-                        goal.id == str(node_id)
+                        goal.id == goal_id
                         for goal in self.goals
                     ):
                         continue
 
-                    subgoals = []
+                    subgoals: List[SubGoal] = []
 
-                    for item in metadata.get(
+                    raw_subgoals = metadata.get(
                         "subgoals",
                         [],
+                    )
+
+                    if isinstance(
+                        raw_subgoals,
+                        list,
                     ):
-                        if not isinstance(item, dict):
-                            continue
+                        for item in raw_subgoals[
+                            : self.MAX_SUBGOALS_PER_GOAL
+                        ]:
+                            if not isinstance(
+                                item,
+                                dict,
+                            ):
+                                continue
 
-                        subgoal = SubGoal(
-                            title=str(
-                                item.get(
-                                    "title",
-                                    "",
+                            subgoal_title = (
+                                self._normalize_title(
+                                    item.get(
+                                        "title",
+                                        "",
+                                    )
                                 )
-                            ),
-                            status=str(
-                                item.get(
-                                    "status",
-                                    "pending",
-                                )
-                            ),
-                            metadata=dict(
-                                item.get(
-                                    "metadata",
-                                    {},
-                                )
-                                or {}
-                            ),
-                        )
+                            )
 
-                        subgoals.append(subgoal)
+                            if not subgoal_title:
+                                continue
+
+                            subgoals.append(
+                                SubGoal(
+                                    title=subgoal_title,
+                                    status=self._normalize_subgoal_status(
+                                        item.get(
+                                            "status",
+                                            "pending",
+                                        )
+                                    ),
+                                    metadata=self._safe_metadata(
+                                        item.get(
+                                            "metadata",
+                                            {},
+                                        )
+                                    ),
+                                    created_at=_parse_datetime(
+                                        item.get(
+                                            "created_at"
+                                        )
+                                    ),
+                                    updated_at=_parse_datetime(
+                                        item.get(
+                                            "updated_at"
+                                        )
+                                    ),
+                                )
+                            )
+
+                    goal_metadata = {
+                        key: copy.deepcopy(value)
+                        for key, value in metadata.items()
+                        if key not in {
+                            "goal_state",
+                            "status",
+                            "progress",
+                            "created_at",
+                            "updated_at",
+                            "subgoals",
+                        }
+                    }
 
                     goal = Goal(
-                        id=str(node_id),
-                        title=str(title),
-                        status=str(
+                        id=goal_id,
+                        title=title,
+                        status=self._normalize_status(
                             metadata.get(
                                 "status",
                                 "active",
                             )
                         ),
-                        progress=float(
+                        progress=_clamp_progress(
                             metadata.get(
                                 "progress",
                                 0.0,
                             )
-                            or 0.0
                         ),
-                        metadata={
-                            key: value
-                            for key, value in metadata.items()
-                            if key not in {
-                                "goal_state",
-                                "status",
-                                "progress",
-                                "created_at",
-                                "updated_at",
-                                "subgoals",
-                            }
-                        },
+                        created_at=_parse_datetime(
+                            metadata.get(
+                                "created_at"
+                            )
+                        ),
+                        updated_at=_parse_datetime(
+                            metadata.get(
+                                "updated_at"
+                            )
+                        ),
+                        metadata=self._safe_metadata(
+                            goal_metadata
+                        ),
                         subgoals=subgoals,
                     )
 
@@ -259,11 +469,14 @@ class GoalManager:
     # SUBGOAL GENERATION
     # =========================================================
 
-    def generate_subgoals(self, title: str):
+    def generate_subgoals(
+        self,
+        title: str,
+    ) -> List[SubGoal]:
         title_lower = title.lower()
 
         if "weather app" in title_lower:
-            return [
+            result = [
                 SubGoal("Research libraries"),
                 SubGoal("Design roadmap"),
                 SubGoal("Create backend"),
@@ -272,8 +485,8 @@ class GoalManager:
                 SubGoal("Testing"),
             ]
 
-        if "telegram ai" in title_lower:
-            return [
+        elif "telegram ai" in title_lower:
+            result = [
                 SubGoal("Research architecture"),
                 SubGoal("Memory system"),
                 SubGoal("Reasoning engine"),
@@ -282,11 +495,16 @@ class GoalManager:
                 SubGoal("Optimization"),
             ]
 
-        return [
-            SubGoal("Understand objective"),
-            SubGoal("Plan required actions"),
-            SubGoal("Execute planned actions"),
-            SubGoal("Verify results"),
+        else:
+            result = [
+                SubGoal("Understand objective"),
+                SubGoal("Plan required actions"),
+                SubGoal("Execute planned actions"),
+                SubGoal("Verify results"),
+            ]
+
+        return result[
+            : self.MAX_SUBGOALS_PER_GOAL
         ]
 
     # =========================================================
@@ -296,8 +514,13 @@ class GoalManager:
     def add_goal(
         self,
         title: str,
-        metadata=None,
-    ):
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Goal]:
+        title = self._normalize_title(title)
+
+        if not title:
+            return None
+
         active = self.current_goal()
 
         if active and active.title.lower() == title.lower():
@@ -305,11 +528,16 @@ class GoalManager:
 
         goal = Goal(
             title=title,
-            metadata=dict(metadata or {}),
-            subgoals=self.generate_subgoals(title),
+            metadata=self._safe_metadata(
+                metadata
+            ),
+            subgoals=self.generate_subgoals(
+                title
+            ),
         )
 
         self.goals.append(goal)
+        self._trim_goals()
 
         logger.info(
             "[GoalManager] Created new goal: %s (%s)",
@@ -331,20 +559,25 @@ class GoalManager:
         self,
         goal_id: str,
     ) -> Optional[Goal]:
+        if not goal_id:
+            return None
+
+        target = str(goal_id)
+
         for goal in self.goals:
-            if goal.id == goal_id:
+            if goal.id == target:
                 return goal
 
         return None
 
-    def current_goal(self):
+    def current_goal(self) -> Optional[Goal]:
         for goal in reversed(self.goals):
             if goal.status == "active":
                 return goal
 
         return None
 
-    def list_active_goals(self):
+    def list_active_goals(self) -> List[Goal]:
         return [
             goal
             for goal in self.goals
@@ -358,7 +591,7 @@ class GoalManager:
     def complete_goal(
         self,
         goal_id: str,
-    ):
+    ) -> Optional[Goal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
@@ -366,7 +599,17 @@ class GoalManager:
 
         goal.status = "completed"
         goal.progress = 100.0
-        goal.updated_at = datetime.utcnow()
+        self._touch_goal(goal)
+
+        # Any unfinished subgoals become completed when the parent
+        # goal is explicitly completed.
+        for subgoal in goal.subgoals:
+            if subgoal.status not in {
+                "completed",
+                "cancelled",
+            }:
+                subgoal.status = "completed"
+                self._touch_subgoal(subgoal)
 
         self._persist_goal(goal)
 
@@ -380,14 +623,21 @@ class GoalManager:
     def pause_goal(
         self,
         goal_id: str,
-    ):
+    ) -> Optional[Goal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
             return None
 
+        if goal.status in {
+            "completed",
+            "failed",
+            "cancelled",
+        }:
+            return goal
+
         goal.status = "paused"
-        goal.updated_at = datetime.utcnow()
+        self._touch_goal(goal)
 
         self._persist_goal(goal)
 
@@ -396,14 +646,20 @@ class GoalManager:
     def resume_goal(
         self,
         goal_id: str,
-    ):
+    ) -> Optional[Goal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
             return None
 
+        if goal.status in {
+            "completed",
+            "cancelled",
+        }:
+            return goal
+
         goal.status = "active"
-        goal.updated_at = datetime.utcnow()
+        self._touch_goal(goal)
 
         self._persist_goal(goal)
 
@@ -413,17 +669,19 @@ class GoalManager:
         self,
         goal_id: str,
         reason: str = "",
-    ):
+    ) -> Optional[Goal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
             return None
 
         goal.status = "failed"
-        goal.updated_at = datetime.utcnow()
+        self._touch_goal(goal)
 
         if reason:
-            goal.metadata["failure_reason"] = reason
+            goal.metadata[
+                "failure_reason"
+            ] = str(reason)
 
         self._persist_goal(goal)
 
@@ -432,14 +690,14 @@ class GoalManager:
     def cancel_goal(
         self,
         goal_id: str,
-    ):
+    ) -> Optional[Goal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
             return None
 
         goal.status = "cancelled"
-        goal.updated_at = datetime.utcnow()
+        self._touch_goal(goal)
 
         self._persist_goal(goal)
 
@@ -451,26 +709,23 @@ class GoalManager:
 
     def update_progress(
         self,
-        goal_id,
-        progress,
-    ):
+        goal_id: str,
+        progress: Any,
+    ) -> Optional[Goal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
             return None
 
-        goal.progress = max(
-            0.0,
-            min(
-                100.0,
-                float(progress),
-            ),
+        goal.progress = _clamp_progress(
+            progress
         )
-
-        goal.updated_at = datetime.utcnow()
+        self._touch_goal(goal)
 
         if goal.progress >= 100.0:
-            return self.complete_goal(goal.id)
+            return self.complete_goal(
+                goal.id
+            )
 
         self._persist_goal(goal)
 
@@ -486,15 +741,10 @@ class GoalManager:
     # SUBGOALS
     # =========================================================
 
-    def next_subgoal(self, goal=None):
-        """
-        Return the next pending subgoal for the supplied goal.
-
-        If no goal is supplied, use the current active goal.
-        This keeps subgoal selection scoped correctly when multiple
-        autonomous goals exist.
-        """
-
+    def next_subgoal(
+        self,
+        goal: Optional[Goal] = None,
+    ) -> Optional[SubGoal]:
         target = goal or self.current_goal()
 
         if not target:
@@ -513,16 +763,34 @@ class GoalManager:
 
     def complete_subgoal(
         self,
-        goal,
-        title,
-    ):
-        for subgoal in goal.subgoals:
+        goal: Goal,
+        title: str,
+    ) -> Optional[SubGoal]:
+        if not isinstance(
+            goal,
+            Goal,
+        ):
+            return None
 
-            if subgoal.title.lower() != title.lower():
+        target_title = self._normalize_title(
+            title
+        ).lower()
+
+        if not target_title:
+            return None
+
+        for subgoal in goal.subgoals:
+            if (
+                subgoal.title.lower()
+                != target_title
+            ):
                 continue
 
+            if subgoal.status == "completed":
+                return subgoal
+
             subgoal.status = "completed"
-            subgoal.updated_at = datetime.utcnow()
+            self._touch_subgoal(subgoal)
 
             completed = sum(
                 1
@@ -531,14 +799,20 @@ class GoalManager:
             )
 
             if goal.subgoals:
-                goal.progress = (
-                    completed / len(goal.subgoals)
-                ) * 100.0
+                goal.progress = _clamp_progress(
+                    (
+                        completed
+                        / len(goal.subgoals)
+                    )
+                    * 100.0
+                )
 
-            goal.updated_at = datetime.utcnow()
+            self._touch_goal(goal)
 
             if goal.progress >= 100.0:
-                self.complete_goal(goal.id)
+                self.complete_goal(
+                    goal.id
+                )
             else:
                 self._persist_goal(goal)
 
@@ -559,21 +833,55 @@ class GoalManager:
         goal_id: str,
         title: str,
         status: str,
-    ):
+    ) -> Optional[SubGoal]:
         goal = self.get_goal(goal_id)
 
         if not goal:
             return None
 
-        for subgoal in goal.subgoals:
+        target_title = self._normalize_title(
+            title
+        ).lower()
 
-            if subgoal.title.lower() != title.lower():
+        normalized_status = (
+            self._normalize_subgoal_status(
+                status
+            )
+        )
+
+        for subgoal in goal.subgoals:
+            if (
+                subgoal.title.lower()
+                != target_title
+            ):
                 continue
 
-            subgoal.status = status
-            subgoal.updated_at = datetime.utcnow()
+            subgoal.status = normalized_status
+            self._touch_subgoal(subgoal)
 
-            self._persist_goal(goal)
+            if normalized_status == "completed":
+                completed = sum(
+                    1
+                    for item in goal.subgoals
+                    if item.status == "completed"
+                )
+                if goal.subgoals:
+                    goal.progress = _clamp_progress(
+                        (
+                            completed
+                            / len(goal.subgoals)
+                        )
+                        * 100.0
+                    )
+
+            self._touch_goal(goal)
+
+            if goal.progress >= 100.0:
+                self.complete_goal(
+                    goal.id
+                )
+            else:
+                self._persist_goal(goal)
 
             return subgoal
 
@@ -586,15 +894,7 @@ class GoalManager:
     def get_goal_context(
         self,
         goal_id: Optional[str] = None,
-    ):
-        """
-        Return the complete autonomous-goal context.
-
-        This context is intentionally stable so CognitiveCore,
-        CognitiveController, Planner, and workflow recovery can
-        all identify the same autonomous goal.
-        """
-
+    ) -> Optional[Dict[str, Any]]:
         goal = (
             self.get_goal(goal_id)
             if goal_id
@@ -604,41 +904,36 @@ class GoalManager:
         if not goal:
             return None
 
-        next_goal = self.next_subgoal(goal)
+        next_goal = self.next_subgoal(
+            goal
+        )
 
         return {
-            # Stable Phase-4 goal identity
             "goal_id": goal.id,
             "title": goal.title,
-
-            # Backward-compatible aliases
             "goal_title": goal.title,
-
             "status": goal.status,
             "goal_status": goal.status,
-
             "progress": goal.progress,
-
             "subgoals": [
                 {
                     "title": subgoal.title,
                     "status": subgoal.status,
-                    "metadata": dict(
-                        subgoal.metadata or {}
+                    "metadata": self._safe_metadata(
+                        subgoal.metadata
                     ),
                 }
                 for subgoal in goal.subgoals
             ],
-
             "next_subgoal": (
                 next_goal.title
                 if next_goal
                 else None
             ),
-
-            "metadata": dict(
-                goal.metadata or {}
+            "metadata": self._safe_metadata(
+                goal.metadata
             ),
+            "manager_version": self.VERSION,
         }
 
     # =========================================================
@@ -648,26 +943,38 @@ class GoalManager:
     async def observe(
         self,
         query,
-        context,
+        context=None,
     ):
+        """
+        Observe explicit goal-related user signals.
+
+        This method intentionally avoids inferring arbitrary goals from
+        unrelated conversation and performs only deterministic state
+        transitions.
+        """
         query_lower = str(
-            query
+            query or ""
         ).lower().strip()
 
-        if query_lower in [
+        if not query_lower:
+            return self.current_goal()
+
+        if query_lower in {
             "finished",
             "done",
             "complete",
             "completed",
             "it's done",
             "it is done",
-        ]:
+        }:
             active = self.current_goal()
 
             if active:
-                self.complete_goal(active.id)
+                return self.complete_goal(
+                    active.id
+                )
 
-            return
+            return None
 
         building_phrases = [
             "i'm building",
@@ -678,6 +985,7 @@ class GoalManager:
             "i am creating",
             "i'm making",
             "im making",
+            "i am making",
             "i want to build",
             "i want to create",
             "let's build",
@@ -688,25 +996,34 @@ class GoalManager:
         matched_title = None
 
         for phrase in building_phrases:
+            if phrase not in query_lower:
+                continue
 
-            if phrase in query_lower:
-                idx = (
-                    query_lower.find(phrase)
-                    + len(phrase)
+            idx = (
+                query_lower.find(
+                    phrase
+                )
+                + len(phrase)
+            )
+
+            subject = str(
+                query[idx:]
+            ).strip(
+                " .!?"
+            )
+
+            if subject:
+                matched_title = (
+                    "Build "
+                    + subject[:1].upper()
+                    + subject[1:]
+                )
+            else:
+                matched_title = (
+                    "New Project Goal"
                 )
 
-                subject = query[idx:].strip(
-                    " .!?"
-                )
-
-                if subject:
-                    matched_title = (
-                        f"Build {subject.capitalize()}"
-                    )
-                else:
-                    matched_title = "New Project Goal"
-
-                break
+            break
 
         if matched_title:
             return self.add_goal(
@@ -716,7 +1033,6 @@ class GoalManager:
         active = self.current_goal()
 
         if active:
-
             mapping = {
                 "roadmap": "Design roadmap",
                 "library": "Research libraries",
@@ -728,7 +1044,6 @@ class GoalManager:
             }
 
             for keyword, task in mapping.items():
-
                 if keyword in query_lower:
                     self.complete_subgoal(
                         active,
@@ -739,29 +1054,62 @@ class GoalManager:
         return active
 
     # =========================================================
-    # SERIALIZATION
+    # SERIALIZATION / STATUS
     # =========================================================
 
     def serialize_goal(
         self,
         goal: Goal,
-    ):
+    ) -> Dict[str, Any]:
+        if not isinstance(
+            goal,
+            Goal,
+        ):
+            return {}
+
         return {
             "id": goal.id,
             "title": goal.title,
             "status": goal.status,
             "progress": goal.progress,
+            "created_at": goal.created_at.isoformat(),
+            # Preserve the legacy typo key for compatibility.
             "created_z": goal.created_at.isoformat(),
             "updated_at": goal.updated_at.isoformat(),
-            "metadata": goal.metadata,
+            "metadata": self._safe_metadata(
+                goal.metadata
+            ),
             "subgoals": [
                 {
                     "title": subgoal.title,
                     "status": subgoal.status,
-                    "metadata": subgoal.metadata,
+                    "metadata": self._safe_metadata(
+                        subgoal.metadata
+                    ),
                     "created_at": subgoal.created_at.isoformat(),
                     "updated_at": subgoal.updated_at.isoformat(),
                 }
                 for subgoal in goal.subgoals
             ],
+        }
+
+    def list_goals(self) -> List[Dict[str, Any]]:
+        return [
+            self.serialize_goal(goal)
+            for goal in self.goals
+        ]
+
+    def health(self) -> Dict[str, Any]:
+        return {
+            "status": "healthy",
+            "version": self.VERSION,
+            "goal_count": len(self.goals),
+            "active_goals": len(
+                self.list_active_goals()
+            ),
+            "current_goal_id": (
+                self.current_goal().id
+                if self.current_goal()
+                else None
+            ),
         }
