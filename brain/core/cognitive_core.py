@@ -2803,11 +2803,27 @@ usable evidence is present. Do not invent details absent from the evidence.
                         )
 
                     if not answer:
-                        answer = (
-                            "I'm temporarily unable to reach my language models. "
-                            "Please try again in a few seconds."
-                        )
-                    confidence = 0.1
+                        web_fallback = context.get("web_results")
+                        if web_fallback:
+                            # A live search result is still useful even if the
+                            # synthesis LLM is temporarily unavailable. Keep
+                            # this fallback explicit so ARIA never pretends it
+                            # produced a polished synthesis.
+                            answer = (
+                                "I found live web results, but my language "
+                                "models are temporarily unavailable, so I "
+                                "can't summarize them reliably right now. "
+                                "Here are the retrieved results:\n\n"
+                                + str(web_fallback)
+                            )
+                            source = "web_fallback"
+                            confidence = 0.55
+                        else:
+                            answer = (
+                                "I'm temporarily unable to reach my language models. "
+                                "Please try again in a few seconds."
+                            )
+                            confidence = 0.1
 
         finally:
             self.brain_state["retrieving"] = False
@@ -3133,6 +3149,41 @@ usable evidence is present. Do not invent details absent from the evidence.
             for phrase in recall_phrases
         )
 
+    def _looks_like_sensitive_memory_recall_request(self, query: str) -> bool:
+        """
+        Detect requests for highly sensitive stored identifiers/secrets.
+
+        These requests must be handled by a dedicated secure-memory/vault
+        path rather than being injected into an LLM prompt.
+        """
+        q = str(query or "").strip().lower()
+
+        identifier_terms = (
+            "aadhaar",
+            "aadhar",
+            "pan number",
+            "passport number",
+            "driving licence number",
+            "driving license number",
+            "bank account number",
+        )
+        recall_verbs = (
+            "give me",
+            "tell me",
+            "show me",
+            "what is my",
+            "what's my",
+            "whats my",
+            "do you know my",
+            "find my",
+            "get my",
+        )
+
+        return (
+            any(term in q for term in identifier_terms)
+            and any(verb in q for verb in recall_verbs)
+        )
+
     def _looks_like_name_recall_request(self, query: str) -> bool:
         q = str(query or "").strip().lower()
 
@@ -3177,6 +3228,65 @@ usable evidence is present. Do not invent details absent from the evidence.
         )
 
         return connector_count >= 1 and matched_actions >= 2
+
+    @staticmethod
+    def _set_decision_value(decision: Any, key: str, value: Any) -> None:
+        """Set a decision field safely for dict- or object-style decisions."""
+        if decision is None:
+            return
+        if isinstance(decision, dict):
+            decision[key] = value
+            return
+        try:
+            setattr(decision, key, value)
+        except Exception:
+            pass
+
+    def _apply_deterministic_capability_overrides(
+        self,
+        query: str,
+        decision: Any,
+    ) -> Any:
+        """
+        Apply high-confidence capability routing after the LLM/controller
+        decision. Dynamic/current-information requests must never depend on
+        the classifier remembering to set use_web=True.
+
+        This is deliberately narrow: it only overrides capabilities when
+        the user's wording is an unambiguous match for an existing local
+        capability.
+        """
+        if decision is None:
+            return decision
+
+        # Current/latest/news requests -> live web search.
+        if self._looks_like_web_search_request(query):
+            self._set_decision_value(decision, "intent", "web_search")
+            self._set_decision_value(decision, "route", "web_search")
+            self._set_decision_value(decision, "action", "web_search")
+            self._set_decision_value(decision, "requires_web", True)
+            self._set_decision_value(decision, "requires_tool", True)
+            self._set_decision_value(decision, "requires_tools", True)
+            self._set_decision_value(decision, "use_web", True)
+            self._set_decision_value(decision, "use_tools", True)
+
+            existing = list(
+                self._decision_value(decision, "required_tools", [])
+                or []
+            )
+            if not any(
+                str(tool).strip().lower()
+                in {"web", "web_search", "internet", "online_search", "search"}
+                for tool in existing
+            ):
+                existing.append("web")
+            self._set_decision_value(decision, "required_tools", existing)
+
+            logger.info(
+                "[DeterministicRouting] Current-information request forced to web search."
+            )
+
+        return decision
 
     def _looks_like_web_search_request(
         self,
@@ -4827,6 +4937,14 @@ usable evidence is present. Do not invent details absent from the evidence.
             controller_decision = self.cognitive_controller.analyze(
                 query=query,
                 context=context,
+            )
+
+            # Deterministic capability guardrail:
+            # the LLM classifier is not authoritative for capabilities that
+            # can be recognized with high confidence from the user's wording.
+            controller_decision = self._apply_deterministic_capability_overrides(
+                query=query,
+                decision=controller_decision,
             )
 
             context["cognitive_decision"] = controller_decision
