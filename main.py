@@ -20,7 +20,74 @@ from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
 
+# ---------------------------------------------------------
+# LOG SECURITY
+# ---------------------------------------------------------
+# Telegram Bot API tokens are embedded in Telegram API URLs.
+# HTTP clients such as httpx/httpcore may log those URLs at INFO
+# level, which would expose the bot token in Render logs.
+# Sanitize Telegram URLs globally before they reach log handlers.
+
+_TELEGRAM_URL_RE = re.compile(
+    r"(https?://api\.telegram\.org/(?:file/)?bot)[^/\s?]+",
+    flags=re.IGNORECASE,
+)
+
+
+def _sanitize_log_text(value: Any) -> str:
+    """Remove Telegram bot tokens from log messages and trace text."""
+    if value is None:
+        return ""
+
+    text = str(value)
+
+    return _TELEGRAM_URL_RE.sub(
+        r"\1[REDACTED]",
+        text,
+    )
+
+
+class SensitiveLogFilter(logging.Filter):
+    """Prevent secrets embedded in log records from being emitted."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+            sanitized = _sanitize_log_text(rendered)
+
+            if sanitized != rendered:
+                record.msg = sanitized
+                record.args = ()
+
+            if getattr(record, "exc_text", None):
+                record.exc_text = _sanitize_log_text(record.exc_text)
+
+        except Exception:
+            # Logging must never break application execution.
+            pass
+
+        return True
+
+
 setup_logging("INFO")
+
+# httpx/httpcore request logs can contain the full Telegram Bot API URL.
+# Keep normal application logs at INFO while preventing those libraries
+# from emitting request URLs containing the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+_log_security_filter = SensitiveLogFilter()
+
+# Attach the sanitizer to every currently configured handler so it also
+# protects logs emitted by third-party libraries such as httpx/httpcore.
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_log_security_filter)
+
+for _logger_name in ("aria", "httpx", "httpcore"):
+    _named_logger = logging.getLogger(_logger_name)
+    _named_logger.addFilter(_log_security_filter)
+
 logger = logging.getLogger("aria")
 
 class BackgroundTaskManager:
