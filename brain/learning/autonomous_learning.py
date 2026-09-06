@@ -51,6 +51,14 @@ class AutonomousLearning:
             "reflections_learned": 0,
 
             "executions_learned": 0,
+            "improvement_signals": 0,
+
+            "planner_feedback": 0,
+
+            "reasoning_feedback": 0,
+            "improvement_signals": 0,
+            "planner_feedback": 0,
+            "reasoning_feedback": 0,
 
         }
 
@@ -214,56 +222,147 @@ class AutonomousLearning:
                 "reflections_learned"
             ] += 1
 
+            if isinstance(reflection_data, dict):
+                for suggestion in reflection_data.get("suggestions", []) or []:
+                    signal = self._normalize_text(suggestion)
+                    if self._is_learnable(signal):
+                        await self.database.store(
+                            title="Reflection Improvement Signal",
+                            content=signal,
+                            source="reflection_improvement",
+                            metadata={"evaluation": reflection_data.get("evaluation", {})},
+                        )
+                        self.statistics["improvement_signals"] += 1
+
         except Exception:
             logger.exception(
                 "[AutonomousLearning] "
                 "learn_from_reflection failed."
             )
 
-    async def learn_from_execution(self, execution_result: Dict[str, Any]):
+    async def learn_from_execution(
+        self,
+        execution_result: Dict[str, Any],
+    ):
         """
-        Learn from workflow execution successes or failures to refine timing, retries, and parameters.
+        Convert execution outcomes into reusable learning signals.
+
+        Reflection data is preserved when available so ARIA can learn
+        from verification, retries, recovery, and failures.
         """
         try:
-            success = execution_result.get("success", False)
-            content = str(execution_result)
-            source_type = "execution_success" if success else "execution_failure"
+            if not isinstance(execution_result, dict):
+                execution_result = {
+                    "result": self._normalize_text(execution_result),
+                }
+
+            content = self._normalize_text(execution_result)
+
+            if not self._is_learnable(content):
+                return
+
+            success = bool(
+                execution_result.get("success", False)
+            )
+
+            source_type = (
+                "execution_success"
+                if success
+                else "execution_failure"
+            )
+
             await self.database.store(
                 title=f"Execution Outcome: {source_type}",
                 content=content,
                 source=source_type,
             )
-            self.statistics["executions_learned"] += 1
-        except Exception:
-            logger.exception("[AutonomousLearning] learn_from_execution failed.")
 
-    async def improve_planner(self, plan: Any, feedback: str):
+            self.statistics["executions_learned"] += 1
+
+            reflection = (
+                execution_result.get("reflection")
+                or execution_result.get("execution_reflection")
+            )
+
+            if reflection:
+                await self.learn_from_reflection(reflection)
+                self.statistics["improvement_signals"] += 1
+
+        except Exception:
+            logger.exception(
+                "[AutonomousLearning] "
+                "learn_from_execution failed."
+            )
+
+    async def improve_planner(
+        self,
+        plan: Any,
+        feedback: str,
+    ):
         """
-        Fine-tune future planning strategies based on plan performance feedback.
+        Store reusable planner feedback from reflection.
         """
         try:
-            content = f"Plan Feedback: {feedback}\nPlan: {str(plan)}"
+            feedback_text = self._normalize_text(feedback)
+            plan_text = self._normalize_text(plan)
+
+            if not self._is_learnable(feedback_text):
+                return
+
+            content = (
+                f"Plan Feedback:\n{feedback_text}\n\n"
+                f"Plan:\n{plan_text}"
+            )
+
             await self.database.store(
                 title="Planner Optimization",
                 content=content,
                 source="planner_improvement",
             )
-        except Exception:
-            logger.exception("[AutonomousLearning] improve_planner failed.")
 
-    async def improve_reasoning(self, query: str, correction: str):
+            self.statistics["planner_feedback"] += 1
+            self.statistics["improvement_signals"] += 1
+
+        except Exception:
+            logger.exception(
+                "[AutonomousLearning] "
+                "improve_planner failed."
+            )
+
+    async def improve_reasoning(
+        self,
+        query: str,
+        correction: str,
+    ):
         """
-        Enhance reasoning logic and prompt structures based on corrections.
+        Store reusable reasoning corrections for future improvement.
         """
         try:
-            content = f"Query: {query}\nCorrection: {correction}"
+            query_text = self._normalize_text(query)
+            correction_text = self._normalize_text(correction)
+
+            if not self._is_learnable(correction_text):
+                return
+
+            content = (
+                f"Query:\n{query_text}\n\n"
+                f"Correction:\n{correction_text}"
+            )
+
             await self.database.store(
                 title="Reasoning Optimization",
                 content=content,
                 source="reasoning_improvement",
             )
+
+            self.statistics["reasoning_feedback"] += 1
+            self.statistics["improvement_signals"] += 1
+
         except Exception:
-            logger.exception("[AutonomousLearning] improve_reasoning failed.")
+            logger.exception(
+                "[AutonomousLearning] "
+                "improve_reasoning failed."
+            )
 
     # =========================================================
     # INDIVIDUAL PROCESSING METHODS
