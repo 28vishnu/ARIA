@@ -72,6 +72,7 @@ from actions.actions.time import TimeAction
 from actions.actions.weather import WeatherAction
 
 from brain.tools.search_tool import SearchTool
+from brain.tools.tool_manager import ToolManager
 from autonomy.scheduler import BackgroundScheduler
 from automation_watchers import AutomationWatchers
 
@@ -572,8 +573,40 @@ async def bootstrap_application() -> ServiceRegistry:
     # Phase 9 — Shared Real-World Intelligence
     # ---------------------------------------------------------
 
+    # ---------------------------------------------------------
+    # Phase 11 — Central Tool Orchestration
+    # ---------------------------------------------------------
+    # ToolManager is the canonical BaseTool orchestration layer. It is kept
+    # separate from ActionManager because ActionManager owns executable
+    # actions/permissions, while ToolManager owns tool discovery, selection,
+    # execution, timeout handling and telemetry.
+    tool_manager = ToolManager(
+        selection_threshold=max(
+            0.0,
+            min(
+                1.0,
+                float(os.getenv("ARIA_TOOL_SELECTION_THRESHOLD", "0.25")),
+            ),
+        ),
+        execution_timeout=max(
+            1.0,
+            float(os.getenv("ARIA_TOOL_EXECUTION_TIMEOUT", "60")),
+        ),
+    )
+
+    registry.register(
+        "tool_manager",
+        tool_manager,
+    )
+
+    logger.info(
+        "[Phase11] ToolManager initialized | threshold=%.2f timeout=%.1fs",
+        tool_manager.selection_threshold,
+        tool_manager.execution_timeout,
+    )
+
     # One shared search service is created at bootstrap. Actions,
-    # watchers, and future integrations can reuse the same provider.
+    # watchers, and the cognitive layer reuse the same provider.
     search_tool = SearchTool(
         max_results=10,
         timeout=max(
@@ -587,9 +620,28 @@ async def bootstrap_application() -> ServiceRegistry:
         search_tool,
     )
 
+    # SearchTool becomes the first canonical BaseTool managed by ToolManager.
+    # Aliases make explicit web-search intent resolvable without duplicating
+    # the underlying service instance.
+    try:
+        tool_manager.register(
+            search_tool,
+            aliases=[
+                "web",
+                "web_search",
+                "internet",
+                "online_search",
+            ],
+        )
+    except Exception:
+        logger.exception(
+            "[Phase11] Failed to register SearchTool with ToolManager."
+        )
+
     logger.info(
-        "[Bootstrap] SearchTool registered | available=%s",
+        "[Bootstrap] SearchTool registered | available=%s | tools=%s",
         search_tool.is_available(),
+        tool_manager.list_tools(),
     )
 
     # Reuse the same search provider in the action layer when supported.
@@ -804,6 +856,31 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register("intent_analyzer", intent_analyzer)
     registry.register("reasoning_engine", reasoning_engine)
 
+    # Phase 11 canonical capability graph. This is diagnostic/runtime metadata
+    # rather than a second dependency-injection container. CognitiveCore still
+    # receives the actual service instances explicitly below.
+    registry.register(
+        "phase11_capability_registry",
+        {
+            "tool_manager": tool_manager,
+            "search_tool": search_tool,
+            "agent_manager": agent_manager,
+            "agent_coordinator": agent_coordinator,
+            "planner": planner,
+            "executor": executor,
+            "reasoning_engine": reasoning_engine,
+            "decision_engine": decision_engine,
+            "intent_analyzer": intent_analyzer,
+            "goal_manager": goal_manager,
+            "task_manager": task_manager,
+        },
+    )
+
+    logger.info(
+        "[Phase11] Capability graph prepared | tools=%s",
+        tool_manager.list_tools(),
+    )
+
     # ---------- Cross Wiring ----------
 
     planner.executor = executor
@@ -834,6 +911,7 @@ async def bootstrap_application() -> ServiceRegistry:
         planner=planner,
         executor=executor,
         skill_manager=skill_manager,
+        tool_manager=tool_manager,
         action_manager=action_manager,
         memory_router=memory_router,
         state_manager=state_manager,
@@ -866,6 +944,20 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "cognitive_core",
         cognitive_core
+    )
+
+    registry.register(
+        "phase11_status",
+        {
+            "version": "11.2",
+            "tool_manager": tool_manager.list_tools(),
+            "cognitive_core": cognitive_core,
+            "planner": planner,
+            "executor": executor,
+            "reasoning_engine": reasoning_engine,
+            "decision_engine": decision_engine,
+            "intent_analyzer": intent_analyzer,
+        },
     )
 
     health_checker = HealthChecker(registry)
