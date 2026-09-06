@@ -66,6 +66,53 @@ class MemoryConversationManager:
     # MAIN MEMORY HANDLER
     # =========================================================
 
+    def _extract_explicit_memory_clause(self, query: str) -> str:
+        """
+        Extract only the memory-writing portion of a compound request.
+
+        Example:
+            "Remember that my favorite color is blue. Then tell me what you know"
+
+        becomes only:
+            "Remember that my favorite color is blue."
+
+        This prevents the LLM memory extractor from turning downstream
+        instructions or generated goals into persistent personal memories.
+        """
+        text = str(query or "").strip()
+        if not text:
+            return ""
+
+        # Prefer a clear sentence/connector boundary after the memory clause.
+        boundary_patterns = (
+            r"(?is)^(.*?)(?:[.!?]+\\s+)(?:then|after that|and then)\\b",
+            r"(?is)^(.*?)(?:\\s+)(?:then|after that|and then)\\b",
+        )
+
+        for pattern in boundary_patterns:
+            match = re.match(pattern, text)
+            if match:
+                clause = match.group(1).strip()
+                if clause:
+                    return clause
+
+        # Handle common compound forms without a punctuation boundary.
+        secondary_markers = (
+            r"\\s+(?=tell me what you know)",
+            r"\\s+(?=what do you know about me)",
+            r"\\s+(?=make (?:a|me a) (?:short )?plan)",
+            r"\\s+(?=create (?:a|me a) (?:short )?plan)",
+            r"\\s+(?=explain what i should do)",
+        )
+        for marker in secondary_markers:
+            match = re.search(marker, text, re.IGNORECASE)
+            if match:
+                clause = text[:match.start()].strip(" .;:")
+                if clause:
+                    return clause
+
+        return text
+
     async def handle(
         self,
         query: str,
@@ -218,8 +265,15 @@ class MemoryConversationManager:
         if intent_name in ("memory_store", "memory_update"):
             context["memory_operation"] = "store"
 
+            memory_clause = self._extract_explicit_memory_clause(query)
+
+            logger.info(
+                "[MemoryConversationManager] Memory extraction input "
+                "restricted to explicit memory clause."
+            )
+
             result = await self.memory_engine.process_and_store(
-                query
+                memory_clause
             )
 
             if not result or not result.get("success"):
