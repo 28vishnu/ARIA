@@ -1,11 +1,13 @@
 import logging
 import random
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from personality.response import SystemResponse
 from personality.conversation_style import ConversationStyle
 from personality.addressing import AddressingEngine
+
 logger = logging.getLogger("aria")
+
 class ResponseSource:
     """Constants for standardized routing of response sources."""
     CHAT = "chat"
@@ -20,36 +22,31 @@ class ResponseSource:
     PLANNER = "planner_executor"
     GREETING = "greeting_fast_path"
     PLANNER_CONVERSATIONAL = "planner_conversational"
+
+
 GLOBAL_ARIA_STYLE = """
 You are ARIA's final communication layer.
+
 Rewrite the supplied answer into the voice of a highly capable,
 calm, polished personal AI assistant.
+
 CORE PERSONALITY:
 - Be courteous, composed, intelligent, concise, and attentive.
 - Sound like you are speaking directly to one person.
 - Maintain a subtle sophisticated assistant personality.
-- Address the user naturally when appropriate.
+- Address the user as "Sir" naturally when appropriate.
+- Do not use "Sir" mechanically in every sentence.
 - Never sound robotic, cold, academic, or like a generic chatbot.
 - Never imitate or quote a specific fictional character.
-ADDRESSING:
-- Never call the user by their personal name unless explicitly requested.
-- Do not randomly call the user Sir, Master, Chief, Boss, Commander, or similar titles.
-- Never append a title to the end of a normal response.
-- Speak naturally without a forced form of address.
-- Only use a specific form of address when the user explicitly requests it.
-NATURAL CONVERSATION:
-- Behave like a long-term personal AI assistant, not a scripted chatbot.
-- Match the user's tone and situation.
-- Light humor is allowed when it naturally fits the conversation.
-- Natural expressions such as "haha", "lol", "yeah", "fair enough", or "exactly" may occasionally be used when appropriate.
-- Do not force jokes into serious, technical, educational, security, financial, medical, or important responses.
-- Use emojis rarely and only when they genuinely fit the situation.
-- Never add emojis just to decorate a response.
-- Do not repeatedly use the same joke, expression, emoji, or conversational phrase.
+
 SHORT ANSWERS:
 - Even very short answers should retain ARIA's personality.
-- Prefer concise forms.
+- Prefer concise forms such as:
+  "Tokyo, Sir."
+  "That comes to 143.65, Sir."
+  "Certainly, Sir. Here's the key point..."
 - Do not unnecessarily expand a simple answer.
+
 CONVERSATION:
 - Don't sound like an encyclopedia.
 - Answer naturally.
@@ -59,52 +56,30 @@ CONVERSATION:
 - Don't overuse bullet lists.
 - Only offer a follow-up if it genuinely helps.
 - If the user asks a simple question, don't write a mini article.
+
 DOCUMENTS:
 - Never dump raw document formatting unless the user explicitly asks for it.
-- Preserve useful Markdown structure when it improves readability.
-- Use **bold** for important terms, answers, keywords, and key points.
-- Use headings for major sections when they improve readability.
-- Use bullets for ordinary lists.
-IMPORTANT POINTS / QUOTES:
-- When the response contains an important conclusion, definition,
-  warning, recommendation, exam point, or key takeaway, highlight it
-  with a short Markdown blockquote beginning with `>`.
-- Prefer 1–3 meaningful blockquotes in a detailed educational response.
-- Do NOT quote every sentence.
-- The blockquote must contain only the important point itself.
-- Keep the quote concise and directly supported by the answer.
-COMPARISON QUESTIONS:
-- If the user asks for differences, comparison, compare, pros/cons,
-  feature comparison, or "X vs Y", ALWAYS use a Markdown table.
-- The table MUST use this exact standard structure:
+- Remove Markdown artifacts such as **, ###, ---, and unnecessary tables.
+- Summarize rather than reproduce.
+- Preserve only information relevant to the user's request.
+- If the user asks for a summary, do not reproduce the entire document.
+- Use short sections or bullets only when they genuinely improve readability.
+- Do not announce "Document processed successfully" unless that information
+  is actually useful to the user.
 
-| Feature | X | Y |
-| :--- | :--- | :--- |
-| Feature 1 | ... | ... |
-
-- Do NOT use spaces/aligned plain-text columns.
-- Do NOT replace the table with bullets unless the user explicitly
-  asks for a non-table format.
-- Keep table cells concise so they remain readable on mobile/Telegram.
-- Do not put extremely long paragraphs inside table cells.
-TELEGRAM READABILITY:
-- The final response may be converted to Telegram HTML.
-- Keep Markdown structures clean and valid.
-- Use **bold** for important terms.
-- Use `>` for important quoted/key statements.
-- Keep comparison tables compact and structurally valid.
-- Never create decorative formatting that can break Telegram rendering.
 UNCERTAINTY:
 - Never state predictions, speculation, or uncertain future events as facts.
 - Clearly distinguish known facts from estimates and predictions.
 - If something cannot currently be known, say so naturally and briefly.
 - Never manufacture certainty merely to provide a decisive answer.
+
 RESPONSE LENGTH:
 - Match the user's requested depth.
 - Simple question -> simple answer.
 - Summary -> actual summary.
 - Detailed explanation -> detailed answer.
 - Do not turn every response into a report.
+
 IMPORTANT:
 The supplied answer contains the underlying information.
 You may substantially rewrite its wording and structure.
@@ -112,157 +87,39 @@ Preserve facts, numbers, warnings, URLs, code, and important details.
 Do not invent new factual claims.
 Return ONLY the final user-facing response.
 """
+
+
 class PersonalityEngine:
     def __init__(self, llm_router=None):
         self.llm_router = llm_router
         self.addressing = AddressingEngine()
+
         self.conversation_style = {
-            "tone": "natural_assistant",
+            "tone": "assistant",
             "verbosity": "balanced",
-            "humor": True,
+            "humor": False,
         }
+
     def update_style(
         self,
         tone=None,
         verbosity=None,
         humor=None,
     ):
+
         if tone is not None:
             self.conversation_style["tone"] = tone
+
         if verbosity is not None:
             self.conversation_style["verbosity"] = verbosity
+
         if humor is not None:
             self.conversation_style["humor"] = humor
+
     def current_style(self):
+
         return self.conversation_style
-    def _add_natural_touch(self, reply: str, user_text: str) -> str:
-        """
-        Add occasional natural conversational reactions.
-        Never force humor into factual, technical, serious, or task responses.
-        """
-        if not reply or not self.conversation_style.get("humor", True):
-            return reply
-        query = (user_text or "").lower().strip()
-        # Never add casual reactions to these types of requests.
-        serious_patterns = (
-            "what is",
-            "explain",
-            "define",
-            "difference",
-            "compare",
-            "how does",
-            "how do",
-            "calculate",
-            "solve",
-            "code",
-            "python",
-            "javascript",
-            "error",
-            "bug",
-            "exam",
-            "study",
-            "search",
-            "find",
-            "latest",
-            "news",
-            "price",
-            "buy",
-            "purchase",
-            "document",
-            "file",
-        )
-        if any(pattern in query for pattern in serious_patterns):
-            return reply
-        # Keep humor occasional rather than deterministic.
-        if random.random() > 0.12:
-            return reply
-        humorous_reactions = (
-            "Haha.",
-            "Lol, fair enough.",
-            "Haha, I get you.",
-            "That was a good one.",
-        )
-        reaction = random.choice(humorous_reactions)
-        # Don't add a reaction if the response already has one.
-        if reply.lower().startswith(
-            ("haha", "lol", "lmao")
-        ):
-            return reply
-        return f"{reaction} {reply}"
-    def _add_contextual_emoji(self, reply: str, user_text: str) -> str:
-        """
-        Add an occasional emoji only when the conversation naturally calls
-        for one. Never decorate normal technical or factual responses.
-        """
-        if not reply:
-            return reply
-        query = (user_text or "").lower().strip()
-        # Technical/factual requests should stay clean.
-        serious_patterns = (
-            "what is",
-            "what are",
-            "explain",
-            "define",
-            "difference",
-            "compare",
-            "which is",
-            "how does",
-            "how do",
-            "calculate",
-            "solve",
-            "code",
-            "python",
-            "javascript",
-            "api",
-            "error",
-            "bug",
-            "exam",
-            "study",
-            "search",
-            "find",
-            "latest",
-            "news",
-            "price",
-            "buy",
-            "purchase",
-            "file",
-            "document",
-        )
-        if any(pattern in query for pattern in serious_patterns):
-            return reply
-        # Keep emojis uncommon.
-        if random.random() > 0.10:
-            return reply
-        emoji_map = {
-            "😂": (
-                "haha",
-                "lol",
-                "funny",
-                "joke",
-                "lmao",
-            ),
-            "😄": (
-                "great",
-                "awesome",
-                "nice",
-                "finally",
-                "done",
-                "worked",
-            ),
-            "🙂": (
-                "thanks",
-                "thank you",
-                "cool",
-                "okay",
-                "ok",
-            ),
-        }
-        for emoji, triggers in emoji_map.items():
-            if any(trigger in query for trigger in triggers):
-                if emoji not in reply:
-                    return f"{reply} {emoji}"
-                return reply
-        return reply
+
     async def apply_personality(
         self,
         session_id: str,
@@ -273,14 +130,16 @@ class PersonalityEngine:
         try:
             if not response.success:
                 return self._format_error(response.error)
+
             data = response.data or {}
             source = response.source
             intent = data.get("intent")
+
             # Route to specific private formatters
             if source == ResponseSource.TIME and "time" in data:
-                reply = f"The current time is {data['time']}."
+                reply = f"The current time is {data['time']}, Sir."
             elif source == ResponseSource.DATE and "date" in data:
-                reply = f"Today is {data['date']}."
+                reply = f"Today is {data['date']}, Sir."
             elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
                 reply = str(data["message"])
             elif source == ResponseSource.CHAT and "response" in data:
@@ -293,7 +152,7 @@ class PersonalityEngine:
                 else:
                     reply = self._format_fallback(data)
             elif source == ResponseSource.CALCULATOR and "result" in data:
-                reply = f"The answer is {data['result']}."
+                reply = f"The answer is {data['result']}, Sir."
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
                 reply = self._format_greeting(user_text)
             elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
@@ -304,6 +163,7 @@ class PersonalityEngine:
                 reply = self._format_action(data)
             else:
                 reply = self._format_fallback(data)
+
             # Apply conversation styling only to normal conversational replies.
             # Memory/profile responses are already structured and must remain intact.
             if source not in {
@@ -313,15 +173,34 @@ class PersonalityEngine:
             }:
                 reply = ConversationStyle.apply(reply)
                 reply = ConversationStyle.follow_up(reply, user_text)
+
             # ---------------------------------------------------------
             # FACTUAL / ROUTED RESPONSES MUST NOT BE REINTERPRETED
             # ---------------------------------------------------------
+            #
+            # These responses already contain the authoritative result
+            # produced by ARIA's routing, memory, tools, planners, etc.
+            #
+            # The universal personality LLM is presentation-only and must
+            # never be allowed to replace a correct answer with a different
+            # answer or claim that known information is unknown.
+            #
+            # This is especially important for memory questions such as:
+            # "What is my favorite color?"
+            # "What is my favorite language?"
+            #
+            # Example:
+            #   Draft: "Your favorite color is blue."
+            #   MUST remain: "Your favorite color is blue."
+            #
+            # The personality layer must never turn it into:
+            #   "I don't have that information."
+            # ---------------------------------------------------------
+
             protected_sources = {
                 ResponseSource.MEMORY,
-                "memory",
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
-                "conversation_memory",
                 ResponseSource.TIME,
                 ResponseSource.DATE,
                 ResponseSource.WEATHER,
@@ -336,62 +215,41 @@ class PersonalityEngine:
                 "agent",
                 "action_manager",
             }
+
             if source in protected_sources:
-                reply = self._apply_addressing(
-                    reply,
-                    context=self._addressing_context(source),
-                )
                 return self._post_process(reply)
+
             # ---------------------------------------------------------
             # UNIVERSAL ARIA PERSONALITY PASS
             # ---------------------------------------------------------
+            #
+            # Only genuinely conversational responses reach the LLM
+            # personality layer.
+            # ---------------------------------------------------------
+
             reply = await self._apply_aria_voice(
                 user_text=user_text,
                 reply=reply,
             )
+
             logger.info(
                 "[Personality] Reply before post_process: %r",
                 reply,
             )
-            reply = self._apply_addressing(
-                reply,
-                context="normal",
-            )
-            reply = self._post_process(reply)
-            reply = self._add_natural_touch(reply, user_text)
-            reply = self._add_contextual_emoji(reply, user_text)
-            return reply
+
+            return self._post_process(reply)
+
         except Exception as e:
-            logger.exception(
-                "[PersonalityEngine ERROR] Failed to format response: %s",
-                e,
-            )
-            return "Operation completed, though a formatting error occurred."
-    def _address(
-        self,
-        context: str = "normal",
-        preferred: Optional[str] = None,
-    ) -> str:
-        """
-        Return ARIA's current form of address.
-        All user-facing titles must pass through AddressingEngine.
-        The user's personal name is never used.
-        """
-        try:
-            return self.addressing.get_address(
-                context=context,
-                preferred=preferred,
-            )
-        except Exception:
-            logger.exception(
-                "[Personality] Addressing engine failed."
-            )
-            return "Sir"
+            logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
+            return "Operation completed, though a formatting error occurred, Sir."
+
     def _format_error(self, error_msg: str) -> str:
         error_msg = str(error_msg or "").strip()
         lowered = error_msg.lower()
+
         if "no profile" in lowered or "no relevant" in lowered:
-            return "I couldn't find anything matching that request."
+            return "I couldn't find anything matching that request, Sir."
+
         if (
             "429" in lowered
             or "too many requests" in lowered
@@ -399,76 +257,168 @@ class PersonalityEngine:
             or "quota" in lowered
             or "all configured llm providers failed" in lowered
         ):
-            return "My AI services are temporarily rate-limited. Try again shortly."
+            return (
+                "My AI services are temporarily rate-limited, Sir. "
+                "Try again shortly."
+            )
+
         if not error_msg:
-            return "I couldn't complete that request just now. Try again shortly."
+            return (
+                "I couldn't complete that request just now, Sir. "
+                "Try again shortly."
+            )
+
         logger.error(
             "[Personality] Internal operation error: %s",
-            error_msg,
+            error_msg
         )
-        return "I couldn't complete that operation."
+
+        return "I couldn't complete that operation, Sir."
+
     def _format_greeting(self, user_text: str) -> str:
-        query = user_text.lower().strip()
+        query = user_text.lower()
         if "how are you" in query:
-            return "All systems are running smoothly. How can I help?"
-        if "morning" in query:
-            return "Good morning. What are we working on today?"
-        if "evening" in query:
-            return "Good evening. What can I help you with?"
+            return "All systems operational and fully optimized, Sir. How may I assist you today?"
+        elif "morning" in query:
+            return "Good morning, Sir. All operational parameters are nominal."
+        elif "evening" in query:
+            return "Good evening, Sir. Ready for your instructions."
+
         responses = [
-            "Hello. How can I help?",
-            "Hey. What are we working on?",
-            "Hello. I'm ready.",
-            "Good to see you. What's up?",
-            "I'm here. What do you need?",
+            "Greetings, Sir. ARIA operational and ready.",
+            "Good to see you again, Sir.",
+            "At your service, Sir.",
+            "Systems online. How may I assist?",
+            "Ready whenever you are, Sir."
         ]
         return random.choice(responses)
+
     def _format_memory(self, data: Any) -> str:
         """
-        Converts retrieved memory records into a natural ARIA response.
-        MemoryEngine is responsible for retrieval.
-        PersonalityEngine is responsible for presentation.
+        Convert memory records into a natural user-facing response.
+
+        MemoryEngine handles retrieval.
+        PersonalityEngine handles presentation.
+
+        Never expose raw internal memory dictionaries.
         """
+
         data_dict = data if isinstance(data, dict) else {}
-        # If MemoryConversationManager already produced a natural response,
-        # preserve it.
+
         message = data_dict.get("message")
         if isinstance(message, str) and message.strip():
             return message.strip()
+
         memories = data_dict.get("memories", [])
-        if not memories:
+
+        if not isinstance(memories, list):
             return "I don't have any relevant memories about you yet."
-        # ---------------------------------------------------------
-        # Extract and normalize memories
-        # ---------------------------------------------------------
+
         normalized = {}
+
         for memory in memories:
             if not isinstance(memory, dict):
                 continue
+
             key = str(
                 memory.get("key")
                 or memory.get("field")
                 or memory.get("category")
                 or ""
             ).strip()
+
             value = (
                 memory.get("value")
                 or memory.get("content")
                 or memory.get("text")
                 or memory.get("summary")
             )
+
             if not key or value is None:
                 continue
+
             value = str(value).strip()
+
             if not value:
                 continue
-            # Prevent duplicate semantic fields.
+
+            if key.lower() in {
+                "id",
+                "memory_id",
+                "record_id",
+                "embedding",
+                "metadata",
+            }:
+                continue
+
             normalized[key] = value
+
         if not normalized:
             return "I don't have any relevant memories about you yet."
-        # ---------------------------------------------------------
-        # Important memories first
-        # ---------------------------------------------------------
+
+        labels = {
+            "name": "name",
+            "current_degree": "current degree",
+            "current_education_level": "current education",
+            "future_education_plan": "future education plan",
+            "planned_postgraduate_degree": "planned postgraduate degree",
+            "planned_postgraduate_location": "planned postgraduate location",
+            "study_destination": "study destination",
+            "intended_degree": "intended degree",
+            "backup_plan_country": "backup country",
+            "alternative_country": "alternative country",
+            "favorite_color": "favorite color",
+            "favorite_colour": "favorite color",
+            "favorite_language": "favorite programming language",
+            "favorite_superhero": "favorite superhero",
+            "favorite_movie": "favorite movie",
+            "favorite_food": "favorite food",
+            "favorite_car": "favorite car",
+            "favorite_animal": "favorite animal",
+            "favorite_planet": "favorite planet",
+            "favorite_dinosaur": "favorite dinosaur",
+            "project_name": "project",
+            "project_type": "project type",
+            "project": "project",
+            "exam_preparation": "exam preparation",
+            "education_preference": "education preference",
+            "education_priority": "education priority",
+            "preferred_education_region": "preferred education region",
+            "preferred_watch_material": "preferred watch material",
+            "watch_budget": "watch budget",
+            "favorite_shopping_platform": "favorite shopping platform",
+            "intended_purchase": "intended purchase",
+            "preferred_name": "preferred form of address",
+        }
+
+        ignored_keys = {
+            "user_likes",
+            "phase_3_test_animal",
+            "favorite_test_color",
+        }
+
+        filtered = {
+            key: value
+            for key, value in normalized.items()
+            if key not in ignored_keys
+        }
+
+        if not filtered:
+            return "I don't have any relevant memories about you yet."
+
+        if len(filtered) == 1:
+            key, value = next(iter(filtered.items()))
+
+            label = labels.get(
+                key,
+                key.replace("_", " ").strip().lower()
+            )
+
+            if key == "name":
+                return f"Your name is {value}."
+
+            return f"Your {label} is {value}."
+
         priority = [
             "name",
             "current_degree",
@@ -494,113 +444,93 @@ class PersonalityEngine:
             "project",
             "exam_preparation",
         ]
+
         ordered_keys = []
+
         for key in priority:
-            if key in normalized and key not in ordered_keys:
+            if key in filtered and key not in ordered_keys:
                 ordered_keys.append(key)
-        # Add any remaining useful memories.
-        for key in normalized:
+
+        for key in filtered:
             if key not in ordered_keys:
                 ordered_keys.append(key)
-        # ---------------------------------------------------------
-        # Human-friendly labels
-        # ---------------------------------------------------------
-        labels = {
-            "name": "Name",
-            "current_degree": "Current degree",
-            "current_education_level": "Current education",
-            "future_education_plan": "Future education plan",
-            "planned_postgraduate_degree": "Planned postgraduate degree",
-            "planned_postgraduate_location": "Planned postgraduate location",
-            "study_destination": "Study destination",
-            "intended_degree": "Intended degree",
-            "backup_plan_country": "Backup country",
-            "alternative_country": "Alternative country",
-            "favorite_color": "Favorite color",
-            "favorite_colour": "Favorite color",
-            "favorite_test_color": "Favorite test color",
-            "favorite_language": "Favorite programming language",
-            "favorite_superhero": "Favorite superhero",
-            "favorite_movie": "Favorite movie",
-            "favorite_food": "Favorite food",
-            "favorite_car": "Favorite car",
-            "favorite_animal": "Favorite animal",
-            "favorite_planet": "Favorite planet",
-            "favorite_dinosaur": "Favorite dinosaur",
-            "project_name": "Project",
-            "project_type": "Project type",
-            "project": "Other project",
-            "exam_preparation": "Exam preparation",
-            "education_preference": "Education preference",
-            "education_priority": "Education priority",
-            "preferred_education_region": "Preferred education region",
-            "preferred_watch_material": "Preferred watch material",
-            "watch_budget": "Watch budget",
-            "favorite_shopping_platform": "Favorite shopping platform",
-            "intended_purchase": "Intended purchase",
-            "preferred_name": "Preferred form of address",
-        }
-        # ---------------------------------------------------------
-        # Ignore low-quality/internal memories
-        # ---------------------------------------------------------
-        ignored_keys = {
-            "user_likes",
-            "phase_3_test_animal",
-            "favorite_test_color",
-        }
+
         lines = []
+
         for key in ordered_keys:
-            if key in ignored_keys:
-                continue
-            value = normalized[key]
+            value = filtered[key]
             label = labels.get(
                 key,
                 key.replace("_", " ").capitalize()
             )
-            lines.append(f"• {label}: {value}")
+            lines.append(f"• {label.capitalize()}: {value}")
+
         if not lines:
             return "I don't have any relevant memories about you yet."
+
         return (
             "Here's what I remember about you:\n\n"
             + "\n".join(lines)
         )
+
     def _format_planner(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Task executed successfully."
+            return "Task executed successfully, Sir."
+
         # ---------------------------------------------------------
         # 1. USER-FACING FINAL RESPONSE
+        #
+        # CognitiveCore already extracts the final task's natural
+        # response into these top-level fields.
         # ---------------------------------------------------------
+
         response = data.get("response")
+
         if isinstance(response, str) and response.strip():
             return response.strip()
+
         message = data.get("message")
+
         if isinstance(message, str) and message.strip():
             return message.strip()
+
         # ---------------------------------------------------------
         # 2. LEGACY CHAT OUTPUT
         # ---------------------------------------------------------
+
         chat = data.get("chat")
+
         if isinstance(chat, dict):
+
             response = chat.get("response")
+
             if isinstance(response, str) and response.strip():
                 return response.strip()
+
             message = chat.get("message")
+
             if isinstance(message, str) and message.strip():
                 return message.strip()
+
         # ---------------------------------------------------------
         # 3. SEARCH THROUGH TASK OUTPUTS
         # ---------------------------------------------------------
+
         task_outputs = data.get(
             "task_outputs",
             {}
         )
+
         if isinstance(task_outputs, dict):
+
             # Reverse insertion order so the final task wins.
             for output in reversed(
                 list(task_outputs.values())
             ):
+
                 if not isinstance(output, dict):
                     continue
+
                 for field in (
                     "response",
                     "content",
@@ -608,15 +538,21 @@ class PersonalityEngine:
                     "answer",
                     "summary",
                 ):
+
                     value = output.get(field)
+
                     if isinstance(value, str) and value.strip():
                         return value.strip()
+
         # ---------------------------------------------------------
         # 4. GENERIC NESTED OUTPUT FALLBACK
         # ---------------------------------------------------------
+
         for output in data.values():
+
             if not isinstance(output, dict):
                 continue
+
             for field in (
                 "response",
                 "content",
@@ -624,60 +560,88 @@ class PersonalityEngine:
                 "answer",
                 "summary",
             ):
+
                 value = output.get(field)
+
                 if isinstance(value, str) and value.strip():
                     return value.strip()
+
         # ---------------------------------------------------------
         # 5. NOTHING USER-FACING WAS RETURNED
         # ---------------------------------------------------------
-        return "Task executed successfully."
+
+        return "Execution completed successfully, Sir."
+
     def _format_action(self, data: Any) -> str:
         if not isinstance(data, dict):
-            return "Action completed successfully."
+            return "Action completed successfully, Sir."
+
         action_name = data.get("action_name")
         result = data.get("result", {})
+
         if action_name == "notification_action":
             if isinstance(result, dict):
                 message = result.get("message")
+
                 if message:
-                    return f"Notification dispatched: {message}."
-            return "Notification dispatched successfully."
+                    return f"Notification dispatched: {message}, Sir."
+
+            return "Notification dispatched successfully, Sir."
+
         # File actions
         if action_name == "file_action":
             if isinstance(result, dict):
+
                 # READ
                 if "content" in result:
                     content = str(result["content"])
+
                     if content:
                         return content
-                    return "The file is empty."
+
+                    return "The file is empty, Sir."
+
                 # WRITE
                 if result.get("status") == "written successfully":
-                    return "File written successfully."
-            return "File operation completed successfully."
+                    return "File written successfully, Sir."
+
+            return "File operation completed successfully, Sir."
+
         # Generic formatting for future actions
         if isinstance(result, dict):
             if "message" in result:
                 return str(result["message"])
+
             if "response" in result:
                 return str(result["response"])
-        return "Action completed successfully."
+
+        return "Action completed successfully, Sir."
+
     def _format_fallback(self, data: Any) -> str:
+
         if isinstance(data, dict):
+
             # Highest priority
             if "response" in data:
                 return str(data["response"])
+
             if "message" in data:
                 return str(data["message"])
+
             if "result" in data:
                 return str(data["result"])
+
             if "output" in data:
                 return f"Python Output\n\n{data['output']}"
+
             # Last resort
             return "\n".join(str(v) for v in data.values() if v)
+
         if isinstance(data, str):
             return data
+
         return "Done."
+
     async def _apply_aria_voice(
         self,
         user_text: str,
@@ -685,15 +649,20 @@ class PersonalityEngine:
     ) -> str:
         """
         Universal ARIA personality pass.
+
         Rewrites presentation only.
         Facts, code, numbers, URLs, commands, filenames,
         warnings and technical details must remain unchanged.
         """
+
         reply = str(reply or "").strip()
+
         if not reply:
             return reply
+
         if self.llm_router is None:
             return reply
+
         messages = [
             {
                 "role": "system",
@@ -704,214 +673,177 @@ class PersonalityEngine:
                 "content": (
                     f"USER MESSAGE:\n{user_text}\n\n"
                     f"DRAFT RESPONSE:\n{reply}\n\n"
-                    "Rewrite the draft appropriately for the user's request.\n\n"
-                    "FORMATTING REQUIREMENTS:\n"
-                    "- If this is a comparison/difference question, preserve or create "
-                    "a valid Markdown comparison table.\n"
-                    "- If the answer contains important conclusions, definitions, "
-                    "warnings, recommendations, or key takeaways, use 1–3 concise "
-                    "Markdown blockquotes beginning with `>`.\n"
-                    "- Preserve **bold**, Markdown tables, `>` blockquotes, and fenced "
-                    "code blocks.\n"
-                    "- Do not convert a comparison table into plain-text columns.\n"
-                    "- Do not add formatting that is not useful.\n"
-                    "- Keep the response natural and readable on Telegram."
+                    "Rewrite the draft appropriately for the user's request."
                 ),
             },
         ]
+
         try:
             styled = await self.llm_router.chat(
                 messages,
                 temperature=0.45,
                 max_tokens=1800,
             )
+
             styled = str(styled or "").strip()
+
             if styled:
                 logger.info(
                     "[Personality] Universal ARIA voice applied."
                 )
                 return styled
+
         except Exception:
             # Personality must never break an otherwise valid response.
             logger.exception(
                 "[Personality] Universal ARIA voice pass failed. "
                 "Using original response."
             )
+
         return reply
-    def _addressing_context(self, source: str) -> str:
-        """
-        Determine the appropriate addressing style from the response source.
-        """
-        if source in {
-            ResponseSource.TIME,
-            ResponseSource.DATE,
-            ResponseSource.CALCULATOR,
-        }:
-            return "technical"
-        if source in {
-            ResponseSource.SEARCH,
-            ResponseSource.WEATHER,
-        }:
-            return "normal"
-        if source in {
-            ResponseSource.MEMORY,
-            ResponseSource.PROFILE,
-            ResponseSource.MEMORY_CONVERSATION,
-        }:
-            return "conversation"
-        if source in {
-            ResponseSource.GREETING,
-            ResponseSource.PLANNER_CONVERSATIONAL,
-        }:
-            return "greeting"
-        if source in {
-            ResponseSource.PLANNER,
-            "action_manager",
-            "agent",
-            "execution_router",
-        }:
-            return "technical"
-        return "normal"
-    def _apply_addressing(
-        self,
-        reply: str,
-        context: str = "normal",
-    ) -> str:
-        """
-        Apply addressing only when it is genuinely appropriate.
-        ARIA must NOT randomly append titles such as:
-        Sir, Master, Chief, Boss, Commander.
-        Personal names are never used automatically.
-        """
-        reply = str(reply or "").strip()
-        if not reply:
-            return reply
-        # Normal responses should contain NO forced title.
-        #
-        # Addressing is intentionally disabled here.
-        # Specific future situations can explicitly request
-        # an address when it is actually useful.
-        return reply
+
     def _post_process(self, reply: str) -> str:
         """
-        Final presentation cleanup for ARIA responses.
-        Preserves useful Markdown formatting while normalizing it
-        for Telegram presentation.
+        Final presentation cleanup for all ARIA responses.
+
+        Keeps useful structure and code intact while removing
+        necessary Markdown noise commonly produced by LLMs.
         """
+
         if reply is None:
-            return "I couldn't generate a response."
+            return "I couldn't generate a response, Sir."
+
         reply = str(reply).strip()
+
         if not reply:
-            return "I couldn't generate a response."
-        # ---------------------------------------------------------
-        # PRESERVE TELEGRAM MARKDOWN STRUCTURES
-        # ---------------------------------------------------------
-        # ARIA may generate:
-        #   > important point
-        #   | Feature | TCP | UDP |
-        #
-        # These structures must survive the final cleanup stage.
-        # Normalize blockquotes without removing them.
-        reply = re.sub(
-            r"(?m)^\s*>\s?",
-            "> ",
-            reply,
-        )
-        # Preserve Markdown table separator spacing.
-        reply = re.sub(
-            r"(?m)^\s*\|(.+)\|\s*$",
-            lambda m: "|" + m.group(1).strip() + "|",
-            reply,
-        )
-        # ---------------------------------------------------------
+            return "I couldn't generate a response, Sir."
+
+        # -----------------------------------------------------
         # Protect fenced code blocks
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
+
         code_blocks = []
+
         def protect_code(match):
             code_blocks.append(match.group(0))
             return f"ARIA_CODE_BLOCK_PLACEHOLDER_{len(code_blocks) - 1}"
+
         reply = re.sub(
             r"```[\s\S]*?```",
             protect_code,
-            reply,
+            reply
         )
-        # ---------------------------------------------------------
-        # Preserve useful headings
+
+        # -----------------------------------------------------
+        # Clean Markdown headings
         #
-        # Telegram can display these naturally after the later
-        # Telegram formatting layer is applied.
-        # ---------------------------------------------------------
+        # ## Python Basics -> Python Basics
+        # ### Variables    -> Variables
+        # -----------------------------------------------------
+
         reply = re.sub(
-            r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$",
-            r"\1",
-            reply,
+            r"(?m)^\s{0,3}#{1,6}\s+",
+            "",
+            reply
         )
-        # ---------------------------------------------------------
-        # Preserve bold / important formatting
-        # ---------------------------------------------------------
-        # Keep **bold** exactly as generated.
-        # Do NOT remove it.
-        # Convert Markdown italic to plain text for now.
-        # This avoids accidental formatting conflicts.
+
+        # -----------------------------------------------------
+        # Remove Markdown bold/italic markers
+        #
+        # **Python** -> Python
+        # __Python__ -> Python
+        # -----------------------------------------------------
+
+        reply = re.sub(
+            r"\*\*(.*?)\*\*",
+            r"\1",
+            reply
+        )
+
+        reply = re.sub(
+            r"__(.*?)__",
+            r"\1",
+            reply
+        )
+
+        # Simple italic Markdown
         reply = re.sub(
             r"(?<!\*)\*([^*\n]+)\*(?!\*)",
             r"\1",
-            reply,
+            reply
         )
+
+        # -----------------------------------------------------
+        # Remove horizontal Markdown separators
+        # -----------------------------------------------------
+
         reply = re.sub(
-            r"(?<!_)_([^_\n]+)_(?!_)",
-            r"\1",
-            reply,
-        )
-        # ---------------------------------------------------------
-        # Remove unnecessary horizontal separators
-        # ---------------------------------------------------------
-        reply = re.sub(
-            r"(?m)^\s*(?:---+|___+)\s*$",
+            r"(?m)^\s*(?:---+|\*\*\*+|___+)\s*$",
             "",
-            reply,
+            reply
         )
-        # ---------------------------------------------------------
-        # Normalize ordinary bullets only
-        # ---------------------------------------------------------
+
+        # -----------------------------------------------------
+        # Normalize bullets
+        #
+        # - item
+        # * item
+        # + item
+        #
+        # becomes:
+        #
+        # • item
+        # -----------------------------------------------------
+
         reply = re.sub(
-            r"(?m)^(?!\s*[>|])\s*[-*+]\s+",
+            r"(?m)^\s*[-*+]\s+",
             "• ",
-            reply,
+            reply
         )
-        # ---------------------------------------------------------
+
+        # -----------------------------------------------------
         # Clean excessive blank lines
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
+
         reply = re.sub(
             r"\n[ \t]+\n",
             "\n\n",
-            reply,
+            reply
         )
+
         reply = re.sub(
             r"\n{3,}",
             "\n\n",
-            reply,
+            reply
         )
-        # ---------------------------------------------------------
-        # Remove trailing spaces
-        # ---------------------------------------------------------
+
+        # -----------------------------------------------------
+        # Remove trailing spaces from each line
+        # -----------------------------------------------------
+
         reply = "\n".join(
             line.rstrip()
             for line in reply.splitlines()
         )
-        # ---------------------------------------------------------
-        # Restore code blocks
-        # ---------------------------------------------------------
+
+        # -----------------------------------------------------
+        # Restore protected code blocks
+        # -----------------------------------------------------
+
         for index, block in enumerate(code_blocks):
             reply = reply.replace(
                 f"ARIA_CODE_BLOCK_PLACEHOLDER_{index}",
-                block,
+                block
             )
+
         reply = reply.strip()
-        # ---------------------------------------------------------
-        # Simple one-line punctuation
-        # ---------------------------------------------------------
+
+        # -----------------------------------------------------
+        # Add punctuation only to simple one-line responses
+        # -----------------------------------------------------
+
         if reply and "\n" not in reply:
             if reply[-1] not in ".!?":
                 reply += "."
+
         return reply
