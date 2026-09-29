@@ -182,7 +182,7 @@ class LLMRouter:
         self,
         messages: List[Dict[str, Any]],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = 4096,
         task: str = "general",
         context: dict | None = None
     ) -> Any:
@@ -204,6 +204,46 @@ class LLMRouter:
                 "[LLMRouter] LLM bypassed: brain-controlled route."
             )
             return None
+
+        # -------------------------------------------------
+        # TASK-AWARE OUTPUT BUDGET
+        # -------------------------------------------------
+        # Several callers historically relied on the old 1024-token
+        # default. That is too small for code, compound requests, and
+        # detailed final responses and can cause the provider to stop
+        # halfway through a code block or sentence.
+        #
+        # Respect explicit large budgets, but raise undersized budgets
+        # for response classes that are known to need more room.
+        task_token_floor = {
+            "coding": 4096,
+            "coding_response": 4096,
+            "compound_response": 4096,
+            "general_response": 2048,
+            "command_reasoning": 2048,
+            "planning": 3072,
+        }
+
+        try:
+            requested_tokens = int(max_tokens)
+        except (TypeError, ValueError):
+            requested_tokens = 4096
+
+        requested_tokens = max(256, requested_tokens)
+
+        floor = task_token_floor.get(
+            str(task or "general").strip().lower(),
+            0,
+        )
+
+        if floor:
+            max_tokens = max(requested_tokens, floor)
+        else:
+            max_tokens = requested_tokens
+
+        # Keep the cache key tied to the actual provider budget.
+        # This prevents a previously truncated 1024-token response from
+        # being reused after a caller requests a larger response.
 
         # -------------------------------------------------
         # CACHE CHECK
@@ -280,6 +320,30 @@ class LLMRouter:
                 "Mistral",
             ],
             "general": [
+                "Groq",
+                "Gemini",
+                "OpenRouter",
+                "Mistral",
+            ],
+            "general_response": [
+                "Groq",
+                "Gemini",
+                "OpenRouter",
+                "Mistral",
+            ],
+            "coding": [
+                "Groq",
+                "Gemini",
+                "OpenRouter",
+                "Mistral",
+            ],
+            "coding_response": [
+                "Groq",
+                "Gemini",
+                "OpenRouter",
+                "Mistral",
+            ],
+            "compound_response": [
                 "Groq",
                 "Gemini",
                 "OpenRouter",
@@ -372,8 +436,16 @@ class LLMRouter:
                         provider_name
                     )
 
-                    # Save to cache
+                    # Save to cache.
                     self._cache[cache_key] = (result, time.monotonic())
+
+                    # Keep cache bounded during long-running ARIA sessions.
+                    if len(self._cache) > 256:
+                        oldest_key = min(
+                            self._cache,
+                            key=lambda key: self._cache[key][1],
+                        )
+                        self._cache.pop(oldest_key, None)
 
                     return result
 
@@ -552,6 +624,14 @@ class LLMRouter:
                                         fallback_result,
                                         time.monotonic(),
                                     )
+
+                                    if len(self._cache) > 256:
+                                        oldest_key = min(
+                                            self._cache,
+                                            key=lambda key: self._cache[key][1],
+                                        )
+                                        self._cache.pop(oldest_key, None)
+
                                     logger.info(
                                         "[LLMRouter] %s recovered using "
                                         "fallback model %s.",
@@ -603,6 +683,43 @@ class LLMRouter:
 
         return None
 
+    @staticmethod
+    def _extract_openai_content(choice: Dict[str, Any], provider_name: str) -> str:
+        """
+        Normalize OpenAI-compatible provider message content.
+
+        Some providers return a plain string while others may return a
+        structured content list. ARIA should normalize both forms.
+        """
+        message = choice.get("message", {}) or {}
+        content = message.get("content")
+
+        if isinstance(content, str):
+            result = content.strip()
+        elif isinstance(content, list):
+            parts = []
+
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    value = item.get("text")
+                    if value:
+                        parts.append(str(value))
+
+            result = "".join(parts).strip()
+        elif content is None:
+            result = ""
+        else:
+            result = str(content).strip()
+
+        if not result:
+            raise RuntimeError(
+                f"{provider_name} returned an empty response."
+            )
+
+        return result
+
     # =========================================================
     # GROQ
     # =========================================================
@@ -649,18 +766,10 @@ class LLMRouter:
                 "Groq returned no completion choices."
             )
 
-        content = (
-            choices[0]
-            .get("message", {})
-            .get("content")
+        return self._extract_openai_content(
+            choices[0],
+            "Groq",
         )
-
-        if not content:
-            raise RuntimeError(
-                "Groq returned an empty response."
-            )
-
-        return str(content).strip()
 
     # =========================================================
     # GEMINI
@@ -788,8 +897,31 @@ class LLMRouter:
         result = "\n".join(text_parts).strip()
 
         if not result:
+            finish_reason = (
+                candidates[0].get("finishReason")
+                if isinstance(candidates[0], dict)
+                else None
+            )
+
+            if finish_reason:
+                raise RuntimeError(
+                    f"Gemini returned no text (finishReason={finish_reason})."
+                )
+
             raise RuntimeError(
                 "Gemini returned an empty response."
+            )
+
+        finish_reason = (
+            candidates[0].get("finishReason")
+            if isinstance(candidates[0], dict)
+            else None
+        )
+
+        if finish_reason == "MAX_TOKENS":
+            logger.warning(
+                "[LLMRouter] Gemini response reached max output tokens: %d.",
+                max_tokens,
             )
 
         return result
@@ -839,18 +971,10 @@ class LLMRouter:
                 "OpenRouter returned no completion choices."
             )
 
-        content = (
-            choices[0]
-            .get("message", {})
-            .get("content")
+        return self._extract_openai_content(
+            choices[0],
+            "OpenRouter",
         )
-
-        if not content:
-            raise RuntimeError(
-                "OpenRouter returned an empty response."
-            )
-
-        return str(content).strip()
 
     # =========================================================
     # MISTRAL
@@ -897,18 +1021,10 @@ class LLMRouter:
                 "Mistral returned no completion choices."
             )
 
-        content = (
-            choices[0]
-            .get("message", {})
-            .get("content")
+        return self._extract_openai_content(
+            choices[0],
+            "Mistral",
         )
-
-        if not content:
-            raise RuntimeError(
-                "Mistral returned an empty response."
-            )
-
-        return str(content).strip()
 
     # =========================================================
     # GEMINI EMBEDDINGS
