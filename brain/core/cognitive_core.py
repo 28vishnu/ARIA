@@ -4939,6 +4939,13 @@ usable evidence is present. Do not invent details absent from the evidence.
                 context=context,
             )
 
+            # The CognitiveController is the canonical decision source.
+            # Initialize the unified decision immediately so every later
+            # orchestration branch has a valid decision, even if optional
+            # intent/DecisionEngine processing fails or is skipped.
+            decision = controller_decision
+            context["decision"] = decision
+
             # Deterministic capability guardrail:
             # the LLM classifier is not authoritative for capabilities that
             # can be recognized with high confidence from the user's wording.
@@ -5192,10 +5199,18 @@ usable evidence is present. Do not invent details absent from the evidence.
                         exc,
                     )
 
-            decision = self._merge_decisions(
-                controller_decision,
-                engine_decision,
-            )
+            try:
+                decision = self._merge_decisions(
+                    controller_decision,
+                    engine_decision,
+                ) or controller_decision
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Decision merge failed; "
+                    "using controller decision: %s",
+                    exc,
+                )
+                decision = controller_decision
 
             context["decision_engine_result"] = engine_decision
 
