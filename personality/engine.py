@@ -168,6 +168,12 @@ class PersonalityEngine:
                     or data.get("message")
                     or self._format_fallback(data)
                 )
+            elif source in {"capability", "llm_unavailable"}:
+                reply = str(
+                    data.get("response")
+                    or data.get("message")
+                    or self._format_fallback(data)
+                )
             elif source == ResponseSource.PLANNER:
                 reply = self._format_planner(data)
             elif source == "action_manager":
@@ -183,6 +189,8 @@ class PersonalityEngine:
                 ResponseSource.MEMORY_CONVERSATION,
                 "memory_profile",
                 "conversation",
+                "capability",
+                "llm_unavailable",
             }:
                 reply = ConversationStyle.apply(reply)
                 reply = ConversationStyle.follow_up(reply, user_text)
@@ -216,6 +224,8 @@ class PersonalityEngine:
                 ResponseSource.MEMORY_CONVERSATION,
                 "memory_profile",
                 "conversation",
+                "capability",
+                "llm_unavailable",
                 ResponseSource.TIME,
                 ResponseSource.DATE,
                 ResponseSource.WEATHER,
