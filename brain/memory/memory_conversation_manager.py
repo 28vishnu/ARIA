@@ -30,7 +30,7 @@ class MemoryConversationManager:
     is part of a larger compound task.
     """
 
-    VERSION = "11.1"
+    VERSION = "11.2-profile-memory"
 
     def __init__(
         self,
@@ -266,10 +266,7 @@ class MemoryConversationManager:
             normalized_q
         )
 
-        if (
-            intent_name in ("memory_store", "memory_update")
-            and explicit_store_requested
-        ):
+        if explicit_store_requested:
             context["memory_operation"] = "store"
 
             memory_clause = self._extract_explicit_memory_clause(query)
@@ -641,10 +638,7 @@ class MemoryConversationManager:
         ):
             # A lone "then" or "also" is not enough unless
             # there is a recognizable memory operation.
-            if (
-                self._has_explicit_memory_operation(q)
-                or self._looks_like_memory_intent(intent_name)
-            ):
+            if self._has_explicit_memory_operation(q):
                 return True
 
         # -----------------------------------------------------
@@ -691,27 +685,55 @@ class MemoryConversationManager:
         self,
         query: str
     ) -> bool:
-        """Return True only for an explicit request to write durable memory."""
+        """
+        Return True only when the user explicitly asks ARIA to SAVE
+        something as durable personal memory.
 
+        A question such as:
+            "What is my favorite color?"
+            "Do you remember my favorite color?"
+        is ALWAYS a recall request, never a store request.
+        """
         q = self._normalize(query)
 
-        store_phrases = (
-            "remember that",
-            "remember this",
-            "remember my",
-            "memorize that",
-            "memorise that",
-            "save this",
-            "save that",
-            "store this",
-            "store that",
-            "keep this in memory",
-            "keep that in memory",
-            "dont forget that",
-            "do not forget that",
+        # Questions must never become memory writes.
+        question_prefixes = (
+            "what is ",
+            "whats ",
+            "what s ",
+            "which is ",
+            "do you remember ",
+            "can you remember ",
+            "did you remember ",
+            "have you remembered ",
+            "what do you remember ",
+            "what do you know ",
+            "tell me what you remember ",
+            "tell me what you know ",
         )
 
-        return any(phrase in q for phrase in store_phrases)
+        if q.startswith(question_prefixes):
+            return False
+
+        explicit_patterns = (
+            r"\bremember\s+that\b",
+            r"\bremember\s+this\b",
+            r"\bmemorize\s+that\b",
+            r"\bmemorise\s+that\b",
+            r"\bsave\s+this\b",
+            r"\bsave\s+that\b",
+            r"\bstore\s+this\b",
+            r"\bstore\s+that\b",
+            r"\bkeep\s+this\s+in\s+memory\b",
+            r"\bkeep\s+that\s+in\s+memory\b",
+            r"\bdont\s+forget\s+that\b",
+            r"\bdo\s+not\s+forget\s+that\b",
+        )
+
+        return any(
+            re.search(pattern, q)
+            for pattern in explicit_patterns
+        )
 
     def _has_explicit_memory_operation(
         self,
@@ -1284,15 +1306,14 @@ class MemoryConversationManager:
         memories: List[Dict[str, Any]]
     ) -> Optional[str]:
         """
-        Build a clean profile from durable personal memory only.
+        Answer "what do you know/remember about me?" like a personal
+        assistant, not like a database dump.
 
-        Broad profile questions must never dump every retrieved memory.
-        Episodic narratives, temporary thoughts, test records, and
-        implementation artifacts are excluded even when they exist in
-        the persistent collection.
+        Only durable profile facts pass through _is_broad_profile_memory().
+        The response is intentionally short and conversational.
         """
 
-        groups: Dict[str, List[Tuple[str, str]]] = {}
+        groups: Dict[str, List[str]] = {}
 
         for item in memories:
             if not isinstance(item, dict):
@@ -1308,101 +1329,130 @@ class MemoryConversationManager:
                 continue
 
             canonical = self._canonical_memory_subject(key)
-            groups.setdefault(canonical, []).append((key, value))
+
+            # Keep only the first few distinct values for one subject.
+            bucket = groups.setdefault(canonical, [])
+            normalized_value = self._normalize(value)
+
+            if normalized_value and all(
+                self._normalize(existing) != normalized_value
+                for existing in bucket
+            ):
+                bucket.append(value)
 
         if not groups:
             return (
-                "I don't have any durable personal details about "
-                "you in memory yet, Sir."
+                "I don't have many durable personal details stored yet, Sir."
             )
 
-        # Stable presentation order keeps answers deterministic.
-        preferred_order = (
-            "name",
+        def first(*keys):
+            for key in keys:
+                values = groups.get(key)
+                if values:
+                    return values[0]
+            return None
+
+        name = first("name", "preferred_name")
+        degree = first(
             "current_education_level",
             "current_degree",
-            "field_of_study",
-            "project_name",
-            "project_type",
-            "planned_postgraduate_degree",
+            "current_degree_pursuit",
+        )
+        field = first("field_of_study")
+        destination = first(
             "planned_postgraduate_location",
+            "postgraduate_location",
             "study_destination",
-            "future_education_plan",
-            "future_education_goal",
-            "education_preference",
+            "desired_study_location",
+        )
+        pg_degree = first(
+            "planned_postgraduate_degree",
+            "desired_degree",
+            "intended_degree",
+        )
+        education_priority = first(
             "education_priority",
-            "alternative_country",
-            "favorite_food",
-            "favorite_movie",
-            "favorite_color",
-            "favorite_car",
-            "favorite_language",
-            "favorite_superhero",
-            "favorite_animal",
-            "favorite_dinosaur",
-            "favorite_planet",
-            "preferred_education_region",
-            "preferred_name",
+            "education_preference",
         )
-        order_map = {key: index for index, key in enumerate(preferred_order)}
+        universities = first("preferred_universities")
+        favorite_food = first("favorite_food")
+        favorite_movie = first("favorite_movie")
+        favorite_car = first("favorite_car")
+        project = first("project_name", "project")
 
-        lines = []
-        seen_subjects = set()
+        sentences = []
 
-        ordered_groups = sorted(
-            groups.items(),
-            key=lambda pair: (
-                order_map.get(pair[0], 1000),
-                pair[0],
-            ),
-        )
-
-        for canonical, values in ordered_groups:
-            if canonical in seen_subjects:
-                continue
-
-            unique_values = []
-            seen_values = set()
-
-            for _, value in values:
-                normalized_value = self._normalize(value)
-                if not normalized_value or normalized_value in seen_values:
-                    continue
-                seen_values.add(normalized_value)
-                unique_values.append(value)
-
-            if not unique_values:
-                continue
-
-            readable_key = self._readable_memory_key(canonical)
-
-            if len(unique_values) == 1:
-                lines.append(
-                    f"• {readable_key.capitalize()}: {unique_values[0]}"
-                )
-            else:
-                # Conflicting durable values are shown transparently.
-                lines.append(
-                    f"• {readable_key.capitalize()}: "
-                    + " / ".join(unique_values[:3])
-                )
-
-            seen_subjects.add(canonical)
-
-            # Prevent an oversized profile from becoming another memory dump.
-            if len(lines) >= 25:
-                break
-
-        if not lines:
-            return (
-                "I don't have any durable personal details about "
-                "you in memory yet, Sir."
+        if name and degree:
+            sentences.append(
+                f"You're {name}, currently pursuing {degree}"
+                + (f" in {field}." if field else ".")
+            )
+        elif name:
+            sentences.append(f"You're {name}.")
+        elif degree:
+            sentences.append(
+                f"You're currently pursuing {degree}"
+                + (f" in {field}." if field else ".")
             )
 
-        return (
-            "Certainly, Sir. Here's what I remember about you:\n\n"
-            + "\n".join(lines)
-        )
+        if pg_degree and destination:
+            sentences.append(
+                f"After B.Tech, you're planning for a {pg_degree} "
+                f"in {destination}."
+            )
+        elif destination:
+            sentences.append(
+                f"Your current higher-study destination is {destination}."
+            )
+        elif pg_degree:
+            sentences.append(
+                f"You're planning for a {pg_degree} after B.Tech."
+            )
+
+        if education_priority:
+            sentences.append(
+                f"Affordability is an important part of that plan."
+            )
+
+        if universities:
+            sentences.append(
+                f"You've also mentioned universities such as {universities}."
+            )
+
+        stable_preferences = []
+        if favorite_food:
+            stable_preferences.append(f"you like {favorite_food}")
+        if favorite_movie:
+            stable_preferences.append(f"you like {favorite_movie}")
+        if favorite_car:
+            stable_preferences.append(f"you like {favorite_car}")
+
+        if stable_preferences:
+            if len(stable_preferences) == 1:
+                sentences.append(
+                    "On the personal-preference side, " +
+                    stable_preferences[0] + "."
+                )
+            else:
+                sentences.append(
+                    "On the personal-preference side, " +
+                    ", ".join(stable_preferences[:-1]) +
+                    " and " + stable_preferences[-1] + "."
+                )
+
+        if project and len(sentences) < 6:
+            sentences.append(
+                f"You're also working on {project}."
+            )
+
+        if not sentences:
+            return (
+                "I have a few durable details about you stored, Sir, "
+                "but nothing substantial enough to summarize yet."
+            )
+
+        # Keep the Jarvis-style profile concise.
+        return "Certainly, Sir. " + " ".join(sentences[:6])
 
     def _is_broad_profile_memory(
         self,
@@ -1430,6 +1480,20 @@ class MemoryConversationManager:
         blocked_key_patterns = (
             "user_likes",
             "user_like",
+            "exam",
+            "exam_preparation",
+            "mid",
+            "midterm",
+            "semester_exam",
+            "current_preparation",
+            "preparing_for",
+            "temporary_goal",
+            "one_time",
+            "casual",
+            "social",
+            "story",
+            "person_",
+            "other_person",
             "phase_",
             "test_",
             "debug_",
@@ -1497,14 +1561,6 @@ class MemoryConversationManager:
             "favorite_game",
             "favorite_superhero",
             "favorite_animal",
-            "favorite_dinosaur",
-            "favorite_planet",
-            "preferred_watch_material",
-            "watch_budget",
-            "intended_purchase",
-            "trip_destination",
-            "trip_duration",
-            "cities_to_visit",
         }
 
         if key in allowed_exact:
