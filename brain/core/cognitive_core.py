@@ -1384,9 +1384,30 @@ class CognitiveCore:
         if not isinstance(required_tools, (list, tuple, set)):
             required_tools = [required_tools]
 
+        # Compound memory requests are conversational composition tasks.
+        # They must not be routed into coding/planner/agent execution merely
+        # because the controller lists those capabilities as available.
+        compound_memory_request = bool(
+            context.get("memory_compound_request")
+            or self._is_compound_memory_request(query, context)
+        )
+
         for tool in required_tools:
             tool_name = str(tool).strip()
             if not tool_name:
+                continue
+
+            if compound_memory_request and tool_name.lower() in {
+                "coding",
+                "planner",
+                "agents",
+                "agent",
+                "study",
+            }:
+                logger.info(
+                    "[CognitiveCore] Skipping %s for compound memory response.",
+                    tool_name,
+                )
                 continue
 
             executed_by_manager = False
@@ -2243,7 +2264,11 @@ class CognitiveCore:
                 )
 
         reasoning = precomputed_reasoning
-        if not reasoning and self.reasoning_engine:
+        if (
+            not compound_memory_request
+            and not reasoning
+            and self.reasoning_engine
+        ):
             try:
                 reasoning = await self.reasoning_engine.reason(context)
             except Exception as e:
@@ -2295,7 +2320,10 @@ class CognitiveCore:
                     reasoning["execution_result"] = execution_result
                 elif reasoning is not None:
                     setattr(reasoning, "execution_result", execution_result)
-        elif decision and getattr(decision, "action", None) == "planner":
+        elif (
+            not compound_memory_request
+            and decision_action == "planner"
+        ):
 
             plan = None
 
@@ -2758,6 +2786,23 @@ usable evidence is present. Do not invent details absent from the evidence.
                         compound_request = self._looks_like_compound_request(
                             resolved_query
                         )
+                        if compound_memory_request:
+                            compound_request = True
+                            messages.insert(
+                                0,
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "This is a compound conversational request. "
+                                        "Complete every requested part in one response. "
+                                        "The memory operation has already been handled; "
+                                        "do not expose internal memory keys, tool errors, "
+                                        "agent failures, routing details, or implementation logs. "
+                                        "Give a concise profile summary, a short Python "
+                                        "learning plan, and a clear first step."
+                                    ),
+                                },
+                            )
                         llm_max_tokens = 4096 if compound_request else 2048
 
                         reply = await self.llm_router.chat(
@@ -5336,7 +5381,15 @@ usable evidence is present. Do not invent details absent from the evidence.
             )
 
             reasoning = None
-            if self.reasoning_engine and hasattr(self.reasoning_engine, "reason"):
+            # Compound memory requests are answered by the final response
+            # layer after memory storage/retrieval. Do not send them through
+            # the full autonomous reasoning/agent pipeline; doing so can turn
+            # a conversational request into an executable planner/coding job.
+            if (
+                not context.get("memory_compound_request")
+                and self.reasoning_engine
+                and hasattr(self.reasoning_engine, "reason")
+            ):
                 try:
                     reasoning = await self.reasoning_engine.reason(context)
                 except Exception:
@@ -5655,7 +5708,8 @@ usable evidence is present. Do not invent details absent from the evidence.
             )
 
             should_run_agent_pipeline = bool(
-                self.agent_coordinator
+                not context.get("memory_compound_request")
+                and self.agent_coordinator
                 and (
                     phase1_selected_agents
                     or phase1_selected_skills
