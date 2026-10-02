@@ -3420,11 +3420,6 @@ usable evidence is present. Do not invent details absent from the evidence.
         if not q:
             return False
 
-        # Ordinary preference statements are conversational. Do not retrieve
-        # stale user_likes/general_preference records for them.
-        if re.match(r"^(?:i|i'm|i am)\s+(?:like|love|prefer)\b", q):
-            return False
-
         # Explicit personal-memory questions always get the cheapest
         # deterministic lookup first, including protected identifiers.
         if self._looks_like_sensitive_memory_recall_request(q):
@@ -3478,6 +3473,17 @@ usable evidence is present. Do not invent details absent from the evidence.
             return f"Your {readable} is {best.get('value')}, Sir."
 
         return None
+
+    def _looks_like_non_durable_preference_statement(self, query: str) -> bool:
+        """Ordinary likes/favorites are conversational unless explicitly saved."""
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+        if re.search(r"\b(?:remember|memorize|save|store|keep|don't forget|do not forget)\b", q):
+            return False
+        return bool(re.match(
+            r"^\s*(?:i|i'm|i am|my)\s+(?:like|love|prefer|favorite|favourite)\b", q
+        ))
 
     def _looks_like_memory_recall_request(self, query: str) -> bool:
         q = str(query or "").strip().lower()
@@ -4881,6 +4887,47 @@ usable evidence is present. Do not invent details absent from the evidence.
             if compound_memory_request:
                 logger.info(
                     "[CognitiveCore] Compound memory request detected; bypassing terminal memory route."
+                )
+
+            # =========================================================
+            # DETERMINISTIC MEMORY RECALL / NON-DURABLE PREFERENCES
+            # =========================================================
+            # Recall is resolved before generic MemoryFirst retrieval. This
+            # prevents semantic matches from returning unrelated memories.
+            if not compound_memory_request and self._looks_like_memory_recall_request(query):
+                logger.info("[MemoryRecall] Deterministic recall path selected before MemoryFirst.")
+                try:
+                    if not self.memory_engine:
+                        raise RuntimeError("Memory engine is unavailable.")
+                    memories = await self.memory_engine.retrieve(query) or []
+                    safe_memories = self._safe_memory_items(memories)
+                    profile_answer = self._build_profile_memory_response(query, safe_memories)
+                    if profile_answer:
+                        return SystemResponse(
+                            success=True, confidence=1.0, source="memory_profile",
+                            data={"response": profile_answer, "message": profile_answer},
+                        )
+                    return SystemResponse(
+                        success=True, confidence=1.0, source="memory_profile",
+                        data={
+                            "response": "I don't have that information in memory yet, Sir.",
+                            "message": "I don't have that information in memory yet, Sir.",
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning("[MemoryRecall] Deterministic recall failed: %s", exc)
+                    return SystemResponse(
+                        success=False, confidence=0.0, source="memory",
+                        error="I couldn't retrieve your memories right now.",
+                    )
+
+            # Ordinary likes/preferences are conversational unless explicitly
+            # saved. Never let stale preference records answer these statements.
+            if not compound_memory_request and self._looks_like_non_durable_preference_statement(query):
+                logger.info("[MemoryAdmission] Conversational preference kept out of durable-memory recall.")
+                return SystemResponse(
+                    success=True, confidence=1.0, source="conversation",
+                    data={"response": "Understood, Sir.", "message": "Understood, Sir."},
                 )
 
             # =========================================================
