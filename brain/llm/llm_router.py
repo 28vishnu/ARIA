@@ -245,6 +245,14 @@ class LLMRouter:
         # This prevents a previously truncated 1024-token response from
         # being reused after a caller requests a larger response.
 
+        def _is_safety_classifier_leak(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            normalized = re.sub(r"\\s+", " ", text)
+            return normalized in {
+                "user safety: safe response safety: safe",
+                "user safety: safe\\nresponse safety: safe",
+            }
+
         # -------------------------------------------------
         # CACHE CHECK
         # -------------------------------------------------
@@ -254,8 +262,11 @@ class LLMRouter:
         if cache_key in self._cache:
             cached_response, timestamp = self._cache[cache_key]
             if (now - timestamp) < self._cache_ttl:
-                logger.info("[LLMRouter] Serving response from cache.")
-                return cached_response
+                if not _is_safety_classifier_leak(cached_response):
+                    logger.info("[LLMRouter] Serving response from cache.")
+                    return cached_response
+                logger.warning("[LLMRouter] Ignoring cached safety-classifier leak.")
+                del self._cache[cache_key]
             else:
                 del self._cache[cache_key]
 
@@ -435,6 +446,14 @@ class LLMRouter:
                         "using %s.",
                         provider_name
                     )
+
+                    if _is_safety_classifier_leak(result):
+                        logger.warning(
+                            "[LLMRouter] Provider returned safety-classifier text "
+                            "instead of a user-facing answer; skipping it."
+                        )
+                        errors.append(f"{provider_name}: safety-classifier leak")
+                        continue
 
                     # Save to cache.
                     self._cache[cache_key] = (result, time.monotonic())
