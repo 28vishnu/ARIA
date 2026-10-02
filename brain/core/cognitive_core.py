@@ -3117,6 +3117,21 @@ usable evidence is present. Do not invent details absent from the evidence.
 
     async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
         formatted_answer = answer
+
+        # Deterministic memory-profile/forget responses are already safe and
+        # user-facing. Do not send them through the personality LLM, which can
+        # expand them with unrelated memories or conversational history.
+        if source in {"memory_profile", "memory_conversation"}:
+            return SystemResponse(
+                success=True,
+                confidence=confidence,
+                source=source,
+                data={
+                    "response": formatted_answer,
+                    "message": formatted_answer,
+                },
+            )
+
         if self.personality_engine and hasattr(self.personality_engine, "format"):
             try:
                 formatted_answer = await self.personality_engine.format(answer, context)
@@ -3182,6 +3197,223 @@ usable evidence is present. Do not invent details absent from the evidence.
             and any(x in q for x in ("then", "and then", "also", "make a plan", "create a plan", "study plan", "roadmap", "explain", "what should i do", "what do i do first", "search", "write code", "generate"))
         )
 
+    def _looks_like_memory_forget_request(self, query: str) -> bool:
+        """Detect explicit requests to remove persistent memories."""
+        q = str(query or "").strip().lower()
+
+        return bool(
+            re.search(
+                r"^\s*(?:forget|delete|remove|clear|erase)\b",
+                q,
+            )
+            or any(
+                phrase in q
+                for phrase in (
+                    "forget unnecessary things about me",
+                    "forget unnecessary things",
+                    "forget irrelevant things about me",
+                    "forget irrelevant things",
+                    "remove unnecessary memories",
+                    "delete unnecessary memories",
+                    "clear unnecessary memories",
+                )
+            )
+        )
+
+    @staticmethod
+    def _profile_memory_items(memories: Any) -> List[Dict[str, Any]]:
+        """
+        Keep only durable user-profile facts for broad personal-memory
+        summaries. Retrieval candidates are not automatically profile facts.
+
+        Temporary study/exam items, purchases, generic conversational
+        buckets, and episodic/casual narrative fields are intentionally
+        excluded from the profile surface.
+        """
+        if not isinstance(memories, (list, tuple)):
+            return []
+
+        excluded_exact = {
+            "user_likes",
+            "user_dislikes",
+            "exam_preparation",
+            "exam",
+            "exam_topic",
+            "current_exam",
+            "intended_purchase",
+            "purchase",
+            "recent_purchase",
+            "temporary_goal",
+            "temporary_task",
+            "conversation",
+            "conversation_memory",
+            "episodic_memory",
+            "episode",
+            "story",
+            "casual_context",
+        }
+
+        allowed_prefixes = (
+            "favorite_",
+            "favourite_",
+            "preferred_",
+            "preference_",
+            "education",
+            "current_degree",
+            "degree",
+            "field_of_study",
+            "study_destination",
+            "planned_postgraduate",
+            "postgraduate",
+            "intended_degree",
+            "backup_country",
+            "future_education",
+            "higher_education",
+            "long_term",
+            "career_goal",
+            "career_",
+            "name",
+            "user_name",
+            "full_name",
+            "location",
+            "country",
+            "university",
+            "universities",
+            "college",
+            "affordability",
+        )
+
+        profile = []
+        seen = set()
+
+        for item in memories:
+            if not isinstance(item, dict):
+                continue
+
+            key = str(item.get("key") or "").strip()
+            value = str(item.get("value") or "").strip()
+
+            if not key or not value:
+                continue
+
+            normalized_key = key.lower().replace("-", "_").replace(" ", "_")
+
+            if normalized_key in excluded_exact:
+                continue
+
+            if not any(
+                normalized_key == prefix.rstrip("_")
+                or normalized_key.startswith(prefix)
+                for prefix in allowed_prefixes
+            ):
+                continue
+
+            dedupe_key = normalized_key
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            profile.append({
+                "key": key,
+                "value": value,
+            })
+
+        return profile
+
+    def _build_profile_memory_response(
+        self,
+        query: str,
+        memories: Any,
+    ) -> Optional[str]:
+        """
+        Produce a deterministic, user-facing memory answer.
+
+        This prevents raw MongoDB records or arbitrary retrieved
+        conversations from reaching the personality/final LLM layer.
+        """
+        profile = self._profile_memory_items(memories)
+        q = str(query or "").strip().lower()
+
+        # Specific favorite/preference recall.
+        specific_match = re.search(
+            r"\bwhat(?:'s| is)|whats|do you remember|can you remember|"
+            r"tell me|recall|remember",
+            q,
+        )
+
+        subject_match = re.search(
+            r"(?:what(?:'s| is)|whats)\s+my\s+(.+?)(?:\?|$)",
+            q,
+        )
+
+        if subject_match:
+            subject = subject_match.group(1).strip()
+            subject = re.sub(
+                r"\b(?:favorite|favourite|preferred|preference)\b",
+                "",
+                subject,
+            )
+            subject = re.sub(r"\s+", " ", subject).strip()
+
+            subject_words = {
+                w for w in re.sub(r"[^a-z0-9\s]", " ", subject).split()
+                if w not in {"the", "a", "an", "my"}
+            }
+
+            candidates = []
+            for item in profile:
+                key_words = set(
+                    re.sub(
+                        r"[^a-z0-9\s]",
+                        " ",
+                        item["key"].lower().replace("_", " "),
+                    ).split()
+                )
+                if subject_words and (
+                    subject_words <= key_words
+                    or bool(subject_words & key_words)
+                ):
+                    candidates.append(item)
+
+            if candidates:
+                item = candidates[0]
+                readable = (
+                    item["key"]
+                    .replace("favorite_", "favorite ")
+                    .replace("favourite_", "favorite ")
+                    .replace("preferred_", "preferred ")
+                    .replace("_", " ")
+                    .strip()
+                )
+                return f"Your {readable} is {item['value']}, Sir."
+
+            if subject:
+                return f"I don't remember your {subject} yet, Sir."
+
+        broad = self._looks_like_memory_recall_request(q)
+        if broad:
+            if not profile:
+                return "I don't have any durable personal details about you in memory yet, Sir."
+
+            lines = []
+            for item in profile:
+                readable_key = (
+                    item["key"]
+                    .replace("favorite_", "favorite ")
+                    .replace("favourite_", "favorite ")
+                    .replace("preferred_", "preferred ")
+                    .replace("_", " ")
+                    .strip()
+                )
+                lines.append(f"• {readable_key.capitalize()}: {item['value']}")
+
+            return (
+                "Certainly, Sir. Here's what I remember about you:\n\n"
+                + "\n".join(lines)
+            )
+
+        return None
+
     def _looks_like_memory_recall_request(self, query: str) -> bool:
         q = str(query or "").strip().lower()
 
@@ -3205,10 +3437,30 @@ usable evidence is present. Do not invent details absent from the evidence.
             "list my memories",
         )
 
-        return any(
+        if any(
             phrase in q
             for phrase in recall_phrases
-        )
+        ):
+            return True
+
+        # Specific personal-property questions such as:
+        # "What is my favorite color?"
+        # "What's my preferred language?"
+        # "Do you remember my favorite food?"
+        if re.search(
+            r"^\s*(?:what(?:'s| is)|whats)\s+my\s+"
+            r"(?:favorite|favourite|preferred|preference)\b",
+            q,
+        ):
+            return True
+
+        if re.search(
+            r"^\s*(?:do you|can you)\s+remember\s+my\s+",
+            q,
+        ):
+            return True
+
+        return False
 
     def _looks_like_sensitive_memory_recall_request(self, query: str) -> bool:
         """
@@ -4545,36 +4797,38 @@ usable evidence is present. Do not invent details absent from the evidence.
                 )
 
             if self._looks_like_memory_recall_request(query) and not compound_memory_request:
-
-                logger.info(
-                    "[MemoryRecall] Retrieving existing memories."
-                )
+                logger.info("[MemoryRecall] Retrieving existing durable profile memories.")
 
                 try:
                     if not self.memory_engine:
                         raise RuntimeError("Memory engine is unavailable.")
 
-                    memories = await self.memory_engine.retrieve(query)
-
+                    memories = await self.memory_engine.retrieve(query) or []
                     safe_memories = self._safe_memory_items(memories)
 
-                    if safe_memories:
+                    profile_answer = self._build_profile_memory_response(
+                        query,
+                        safe_memories,
+                    )
+
+                    if profile_answer:
                         return SystemResponse(
                             success=True,
-                            confidence=1.0,
-                            source="memory",
+                            confidence=0.98,
+                            source="memory_profile",
                             data={
-                                "memories": safe_memories,
+                                "response": profile_answer,
+                                "message": profile_answer,
                             },
                         )
 
                     return SystemResponse(
                         success=True,
                         confidence=1.0,
-                        source="memory",
+                        source="memory_profile",
                         data={
-                            "memories": [],
-                            "message": "I don't have any relevant memories about you yet.",
+                            "response": "I don't have that information in memory yet, Sir.",
+                            "message": "I don't have that information in memory yet, Sir.",
                         },
                     )
 
@@ -4591,6 +4845,38 @@ usable evidence is present. Do not invent details absent from the evidence.
                         error="I couldn't retrieve your memories right now.",
                     )
 
+            # Explicit forget/delete requests must never fall through to
+            # deterministic memory extraction, which would try to STORE
+            # the user's deletion request as a new memory.
+            if (
+                self._looks_like_memory_forget_request(query)
+                and not compound_memory_request
+                and self.memory_conversation_manager
+            ):
+                logger.info("[MemoryForget] Routing explicit deletion request to memory manager.")
+
+                try:
+                    reply = await self.memory_conversation_manager.handle(
+                        query=query,
+                        context=context,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "[MemoryForget] Memory manager deletion failed: %s",
+                        exc,
+                    )
+                    reply = "I couldn't update my memory just now, Sir."
+
+                return SystemResponse(
+                    success=True,
+                    confidence=0.95,
+                    source="memory_conversation",
+                    data={
+                        "response": str(reply or "").strip(),
+                        "message": str(reply or "").strip(),
+                    },
+                )
+
             route = decide(query)
 
             logger.info(
@@ -4599,7 +4885,12 @@ usable evidence is present. Do not invent details absent from the evidence.
                 route.confidence,
             )
 
-            if route.route == Route.MEMORY and not compound_memory_request:
+            if (
+                route.route == Route.MEMORY
+                and not compound_memory_request
+                and not self._looks_like_memory_forget_request(query)
+                and not self._looks_like_memory_recall_request(query)
+            ):
                 if not self.memory_engine:
                     return SystemResponse(
                         success=False,
