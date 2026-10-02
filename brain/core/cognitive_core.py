@@ -3414,6 +3414,66 @@ usable evidence is present. Do not invent details absent from the evidence.
 
         return None
 
+    def _memory_first_candidate(self, query: str) -> bool:
+        """Return True when personal memory should be checked before LLMs."""
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+
+        # Explicit personal-memory questions always get the cheapest
+        # deterministic lookup first, including protected identifiers.
+        if self._looks_like_sensitive_memory_recall_request(q):
+            return True
+        if self._looks_like_memory_recall_request(q):
+            return True
+
+        if self.memory_engine and hasattr(self.memory_engine, "should_use_memory"):
+            try:
+                return bool(self.memory_engine.should_use_memory(q))
+            except Exception:
+                pass
+
+        return bool(re.search(
+            r"\\b(?:my|mine|me|i|remember|recall|about me)\\b",
+            q,
+            re.IGNORECASE,
+        ))
+
+    def _build_memory_first_answer(self, query: str, memories: Any) -> Optional[str]:
+        """Build a deterministic answer from an already retrieved memory."""
+        safe = self._safe_memory_items(memories)
+        if not safe:
+            return None
+
+        # Existing profile formatter handles broad and favorite-style recall.
+        profile_answer = self._build_profile_memory_response(query, safe)
+        if profile_answer and not profile_answer.lower().startswith("i don't remember"):
+            return profile_answer
+
+        q_words = {
+            w for w in re.sub(r"[^a-z0-9_ ]", " ", str(query).lower()).split()
+            if w not in {"what", "whats", "what's", "is", "are", "my", "me", "i", "do", "you", "know", "remember", "tell", "about", "the", "a", "an", "please"}
+        }
+
+        best = None
+        best_score = 0
+        for item in safe:
+            key = str(item.get("key", "")).lower().replace("_", " ")
+            value = str(item.get("value", "")).strip()
+            if not key or not value:
+                continue
+            key_words = set(key.split())
+            score = len(q_words & key_words)
+            if score > best_score:
+                best_score = score
+                best = item
+
+        if best and best_score > 0:
+            readable = str(best.get("key", "")).replace("_", " ").strip()
+            return f"Your {readable} is {best.get('value')}, Sir."
+
+        return None
+
     def _looks_like_memory_recall_request(self, query: str) -> bool:
         q = str(query or "").strip().lower()
 
@@ -4818,6 +4878,74 @@ usable evidence is present. Do not invent details absent from the evidence.
                     "[CognitiveCore] Compound memory request detected; bypassing terminal memory route."
                 )
 
+            # =========================================================
+            # MEMORY-FIRST ORCHESTRATION
+            # =========================================================
+            # Personal memory is checked before reasoning, tools, or any
+            # LLM response generation. A known fact should be answered from
+            # storage directly instead of spending an LLM call to rediscover it.
+            if (
+                not compound_memory_request
+                and self.memory_engine
+                and self._memory_first_candidate(query)
+            ):
+                try:
+                    # Sensitive retrieval is always deterministic. If the
+                    # protected value is absent, never ask an LLM to guess it.
+                    if self._looks_like_sensitive_memory_recall_request(query):
+                        protected = await self.memory_engine.retrieve(query) or []
+                        if protected:
+                            item = protected[0] if isinstance(protected[0], dict) else {}
+                            value = item.get("value")
+                            if value:
+                                logger.info("[MemoryFirst] Protected memory hit; bypassing LLM.")
+                                return SystemResponse(
+                                    success=True,
+                                    confidence=1.0,
+                                    source="protected_memory",
+                                    data={
+                                        "response": f"Your requested information is {value}, Sir.",
+                                        "message": f"Your requested information is {value}, Sir.",
+                                    },
+                                )
+                        logger.info("[MemoryFirst] Protected memory miss; refusing LLM fallback.")
+                        return SystemResponse(
+                            success=True,
+                            confidence=1.0,
+                            source="protected_memory",
+                            data={
+                                "response": "I don't have that protected information stored, Sir.",
+                                "message": "I don't have that protected information stored, Sir.",
+                            },
+                        )
+
+                    memories = await self.memory_engine.retrieve(query) or []
+                    if memories:
+                        memory_answer = self._build_memory_first_answer(query, memories)
+                        if memory_answer:
+                            logger.info(
+                                "[MemoryFirst] Memory hit; answering without LLM."
+                            )
+                            return SystemResponse(
+                                success=True,
+                                confidence=0.98,
+                                source="memory_first",
+                                data={
+                                    "response": memory_answer,
+                                    "message": memory_answer,
+                                },
+                            )
+                        logger.info(
+                            "[MemoryFirst] Retrieved memory but no deterministic answer; continuing pipeline."
+                        )
+                    else:
+                        logger.info("[MemoryFirst] No relevant memory; continuing to next knowledge source.")
+                except Exception as exc:
+                    logger.warning(
+                        "[MemoryFirst] Memory lookup skipped: %s",
+                        exc,
+                    )
+
             if self._looks_like_memory_recall_request(query) and not compound_memory_request:
                 logger.info("[MemoryRecall] Retrieving existing durable profile memories.")
 
@@ -4898,6 +5026,32 @@ usable evidence is present. Do not invent details absent from the evidence.
                         "message": str(reply or "").strip(),
                     },
                 )
+
+            # Automatically observe every normal user statement. The
+            # MemoryEngine decides whether it is durable, short-term, or
+            # ignorable; deterministic extraction runs before its optional
+            # secondary LLM extractor. This keeps memory learning active
+            # without making an LLM call for every turn.
+            if (
+                self.memory_engine
+                and not compound_memory_request
+                and not self._looks_like_memory_recall_request(query)
+                and not self._looks_like_sensitive_memory_recall_request(query)
+            ):
+                try:
+                    if hasattr(self.memory_engine, "process_and_store"):
+                        memory_observation = await self.memory_engine.process_and_store(query)
+                        if isinstance(memory_observation, dict):
+                            context["memory_observation"] = memory_observation
+                            logger.info(
+                                "[MemoryFirst] Observation result: %s",
+                                memory_observation.get("action", "none"),
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "[MemoryFirst] Automatic memory observation skipped: %s",
+                        exc,
+                    )
 
             route = decide(query)
 
@@ -5944,6 +6098,7 @@ usable evidence is present. Do not invent details absent from the evidence.
 
             if (
                 self.memory_router
+                and not self.memory_engine
                 and self._should_store_natural_memory(
                     query=query,
                     intent=intent,
