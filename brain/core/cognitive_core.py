@@ -4890,6 +4890,40 @@ usable evidence is present. Do not invent details absent from the evidence.
                         exc,
                     )
 
+            # =========================================================
+            # EARLY DETERMINISTIC CAPABILITY GUARDRAIL
+            # =========================================================
+            # Capability questions are static ARIA metadata. Resolve them
+            # before FastRouter, MemoryFirst, episodic memory, knowledge
+            # search, reasoning, or any LLM provider call.
+            if self._looks_like_capability_request(query):
+                logger.info(
+                    "[Capability] Early deterministic capability response selected."
+                )
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="capability",
+                    data={
+                        "response": (
+                            "Certainly, Sir. I can help you with conversation and questions, "
+                            "remember and recall information you ask me to keep, search and "
+                            "reason over knowledge, work with documents and files, perform "
+                            "supported tools and workflows, help with coding and technical "
+                            "tasks, assist with planning and problem solving, and learn from "
+                            "our interactions when appropriate."
+                        ),
+                        "message": (
+                            "Certainly, Sir. I can help you with conversation and questions, "
+                            "remember and recall information you ask me to keep, search and "
+                            "reason over knowledge, work with documents and files, perform "
+                            "supported tools and workflows, help with coding and technical "
+                            "tasks, assist with planning and problem solving, and learn from "
+                            "our interactions when appropriate."
+                        ),
+                    },
+                )
+
             if re.fullmatch(
                 r"\s*(?:what(?:'s| is)|whats)\s+my\s+name\s*\??\s*",
                 query,
