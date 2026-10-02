@@ -30,7 +30,7 @@ class MemoryConversationManager:
     is part of a larger compound task.
     """
 
-    VERSION = "11.2-profile-memory"
+    VERSION = "11.3-profile-memory-cleanup"
 
     def __init__(
         self,
@@ -2846,8 +2846,48 @@ CONVERSATIONS:
         self,
         query: str
     ) -> str:
+        """
+        Handle explicit memory deletion requests.
+
+        Broad cleanup requests such as:
+            "forget unnecessary things about me"
+            "remove unnecessary memories"
+
+        are treated as profile cleanup, not as a literal memory-key
+        deletion. Only records that are NOT allowed to form ARIA's
+        durable personal profile are removed.
+
+        Specific deletion requests continue to use MemoryEngine's
+        existing delete_memory() behavior.
+        """
 
         try:
+            normalized = self._normalize(query)
+
+            if self._is_cleanup_request(normalized):
+                removed = await self._cleanup_non_profile_memories()
+
+                if removed > 0:
+                    logger.info(
+                        "[MemoryConversationManager] "
+                        "Broad memory cleanup removed %d non-profile memories.",
+                        removed,
+                    )
+                    return (
+                        f"Done, Sir. I've cleaned up {removed} "
+                        "unnecessary memory record"
+                        + ("s." if removed != 1 else ".")
+                    )
+
+                logger.info(
+                    "[MemoryConversationManager] "
+                    "Broad cleanup found no removable non-profile memories."
+                )
+                return (
+                    "Done, Sir. Your durable profile memories are already "
+                    "clean; there was nothing unnecessary to remove."
+                )
+
             success = await self.memory_engine.delete_memory(
                 query
             )
@@ -2870,6 +2910,161 @@ CONVERSATIONS:
             return (
                 "I couldn't update my memory just now, Sir."
             )
+
+    def _is_cleanup_request(self, normalized_query: str) -> bool:
+        """Recognize broad requests to remove casual/unnecessary memories."""
+
+        q = self._normalize(normalized_query)
+
+        cleanup_phrases = (
+            "forget unnecessary things about me",
+            "forget unnecessary things",
+            "forget irrelevant things about me",
+            "forget irrelevant things",
+            "forget useless things about me",
+            "forget useless things",
+            "remove unnecessary memories",
+            "remove unnecessary things about me",
+            "remove irrelevant memories",
+            "remove irrelevant things about me",
+            "delete unnecessary memories",
+            "delete unnecessary things about me",
+            "delete irrelevant memories",
+            "clear unnecessary memories",
+            "clear irrelevant memories",
+            "clean up my memory",
+            "clean up your memory",
+            "clean my memory",
+            "clean your memory",
+            "clean up unnecessary memories",
+            "clear unnecessary things about me",
+        )
+
+        if q in cleanup_phrases:
+            return True
+
+        # Also support natural variations such as:
+        # "please forget the unnecessary stuff you remember about me"
+        has_delete_verb = bool(
+            re.search(
+                r"\b(?:forget|delete|remove|clear|erase|clean)\b",
+                q,
+            )
+        )
+        has_broad_target = bool(
+            re.search(
+                r"\b(?:unnecessary|irrelevant|useless|casual|temporary)\b",
+                q,
+            )
+        )
+        has_memory_target = bool(
+            re.search(
+                r"\b(?:memory|memories|things|stuff|information|details)\b",
+                q,
+            )
+        )
+
+        return has_delete_verb and has_broad_target and has_memory_target
+
+    async def _cleanup_non_profile_memories(self) -> int:
+        """
+        Delete personal-memory records that are not eligible for ARIA's
+        durable profile surface.
+
+        This intentionally uses the same allow-list concept as
+        _is_broad_profile_memory(), so cleanup and profile presentation
+        agree on what counts as durable personal memory.
+        """
+
+        collection = getattr(
+            self.memory_engine,
+            "memory_col",
+            None,
+        )
+
+        if collection is None:
+            logger.warning(
+                "[MemoryConversationManager] "
+                "Broad cleanup skipped: memory collection unavailable."
+            )
+            return 0
+
+        try:
+            cursor = collection.find(
+                {},
+                {
+                    "_id": 1,
+                    "key": 1,
+                    "value": 1,
+                    "category": 1,
+                },
+            )
+
+            candidates = await cursor.to_list(
+                length=10000
+            )
+
+            removable_ids = []
+
+            for memory in candidates:
+                if not isinstance(memory, dict):
+                    continue
+
+                # Reuse the exact profile allow-list. If a record is not
+                # suitable for the broad "what do you know about me?"
+                # profile, it is a candidate for broad cleanup.
+                if not self._is_broad_profile_memory(memory):
+                    memory_id = memory.get("_id")
+                    if memory_id is not None:
+                        removable_ids.append(memory_id)
+
+            if not removable_ids:
+                return 0
+
+            result = await collection.delete_many(
+                {
+                    "_id": {
+                        "$in": removable_ids
+                    }
+                }
+            )
+
+            removed = int(
+                getattr(result, "deleted_count", 0) or 0
+            )
+
+            # Keep vector/persistent-memory cleanup in sync when the
+            # MemoryEngine exposes a cleanup hook.
+            cleanup_hook = getattr(
+                self.memory_engine,
+                "remove_deleted_memory_vectors",
+                None,
+            )
+
+            if callable(cleanup_hook):
+                try:
+                    hook_result = cleanup_hook(
+                        removable_ids
+                    )
+
+                    if hasattr(hook_result, "__await__"):
+                        await hook_result
+
+                except Exception:
+                    logger.warning(
+                        "[MemoryConversationManager] "
+                        "Vector cleanup hook failed; MongoDB cleanup succeeded.",
+                        exc_info=True,
+                    )
+
+            return removed
+
+        except Exception:
+            logger.exception(
+                "[MemoryConversationManager] "
+                "Broad non-profile memory cleanup failed."
+            )
+            return 0
 
     # =========================================================
     # FAILED RECALL SUBJECT
