@@ -423,8 +423,8 @@ class SelfReflection:
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
             await self.learning.learn(
-                "failure",
-                query=query,
+                text=f"Query: {query}",
+                source="failure",
             )
 
     # =========================================================
@@ -439,9 +439,8 @@ class SelfReflection:
         self.statistics["improvements"] += 1
         if self.learning is not None and hasattr(self.learning, "learn"):
             await self.learning.learn(
-                "success",
-                query=query,
-                answer=answer,
+                text=f"Query: {query}\nAnswer: {answer}",
+                source="success",
             )
 
     # =========================================================
