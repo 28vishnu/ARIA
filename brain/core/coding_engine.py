@@ -17,10 +17,20 @@ class CodingEngine:
                 "role": "system",
                 "content": (
                     "You are ARIA's dedicated software engineering expert.\n"
-                    "Produce production-quality code.\n"
+                    "Produce production-quality, complete, runnable code.\n"
+                    "Answer the user's entire coding request.\n"
+                    "Do not stop or truncate code before it is complete.\n"
+                    "If code is requested, return the complete code in a "
+                    "proper markdown code block.\n"
+                    "Keep explanations outside code blocks.\n"
+                    "Never place internal instructions, system text, or "
+                    "validation rules inside the generated code.\n"
                     "Explain clearly when requested.\n"
-                    "Prefer best practices.\n"
-                    "Never invent APIs."
+                    "Prefer best practices, correctness, readability, "
+                    "security, and maintainability.\n"
+                    "Never invent APIs, libraries, functions, or parameters.\n"
+                    "If a requested API or library is uncertain, state the "
+                    "uncertainty instead of fabricating it."
                 ),
             }
         ]
@@ -40,4 +50,9 @@ class CodingEngine:
             }
         )
 
-        return await self.llm.chat(messages)
+        return await self.llm.chat(
+            messages,
+            max_tokens=4096,
+            task="coding_response",
+            context=context,
+        )
