@@ -118,7 +118,7 @@ class KnowledgeDatabase:
 
         }
 
-        if self.collection:
+        if self.collection is not None:
 
             await self.collection.update_one(
                 {
@@ -132,7 +132,7 @@ class KnowledgeDatabase:
             )
 
         # 1. Automatic Embedding Storage
-        if embedding and self.vector_db:
+        if embedding and self.vector_db is not None:
             await self.store_embedding(
                 record["_id"],
                 embedding,
@@ -640,7 +640,7 @@ class KnowledgeDatabase:
         results.extend(text_results)
 
         # 2. Semantic Search
-        if embedding and self.vector_db:
+        if embedding and self.vector_db is not None:
             semantic_res = await self.semantic_search(embedding, limit=limit)
             # Extract IDs from semantic search and fetch from mongo
             ids = []
@@ -656,7 +656,7 @@ class KnowledgeDatabase:
                         ids = raw_ids[0]
                     else:
                         ids = raw_ids
-            if ids and self.collection:
+            if ids and self.collection is not None:
                 cursor = self.collection.find({"_id": {"$in": ids}, "active": True})
                 sem_docs = await cursor.to_list(limit)
                 results.extend(sem_docs)
