@@ -3420,6 +3420,11 @@ usable evidence is present. Do not invent details absent from the evidence.
         if not q:
             return False
 
+        # Ordinary preference statements are conversational. Do not retrieve
+        # stale user_likes/general_preference records for them.
+        if re.match(r"^(?:i|i'm|i am)\s+(?:like|love|prefer)\b", q):
+            return False
+
         # Explicit personal-memory questions always get the cheapest
         # deterministic lookup first, including protected identifiers.
         if self._looks_like_sensitive_memory_recall_request(q):
