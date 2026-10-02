@@ -4884,6 +4884,22 @@ usable evidence is present. Do not invent details absent from the evidence.
                 {"fast_route": getattr(fast_decision, "reason", None) if fast_decision else None},
             )
 
+            # Explicit memory commands must reach the deterministic memory
+            # admission/storage route. Never let semantic MemoryFirst
+            # retrieval answer a save/remember command using an unrelated
+            # existing memory.
+            explicit_memory_instruction = bool(
+                re.search(
+                    r"\b(?:remember|memorize|save|store|keep|don't forget|do not forget)\b",
+                    str(query or "").strip().lower(),
+                )
+            )
+
+            if explicit_memory_instruction:
+                logger.info(
+                    "[MemoryAdmission] Explicit memory instruction detected; bypassing MemoryFirst retrieval."
+                )
+
             if compound_memory_request:
                 logger.info(
                     "[CognitiveCore] Compound memory request detected; bypassing terminal memory route."
@@ -4938,6 +4954,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             # storage directly instead of spending an LLM call to rediscover it.
             if (
                 not compound_memory_request
+                and not explicit_memory_instruction
                 and self.memory_engine
                 and self._memory_first_candidate(query)
             ):
@@ -5087,6 +5104,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             if (
                 self.memory_engine
                 and not compound_memory_request
+                and not explicit_memory_instruction
                 and not self._looks_like_memory_recall_request(query)
                 and not self._looks_like_sensitive_memory_recall_request(query)
             ):
