@@ -1565,8 +1565,9 @@ class MemoryConversationManager:
             "project_type",
             "project",
             "favorite_food",
+            # Canonical key only. British-spelling aliases are normalized
+            # to favorite_color and must not survive as separate records.
             "favorite_color",
-            "favorite_colour",
         }
 
         return key in allowed_exact
@@ -2998,21 +2999,65 @@ CONVERSATIONS:
             )
 
             removable_ids = []
+            profile_by_subject = {}
 
             for memory in candidates:
                 if not isinstance(memory, dict):
                     continue
 
-                # Reuse the exact profile allow-list. If a record is not
-                # suitable for the broad "what do you know about me?"
-                # profile, it is a candidate for broad cleanup.
+                memory_id = memory.get("_id")
+                if memory_id is None:
+                    continue
+
+                # Anything outside the strict durable-profile allow-list
+                # is removable during broad cleanup.
                 if not self._is_broad_profile_memory(memory):
-                    memory_id = memory.get("_id")
-                    if memory_id is not None:
-                        removable_ids.append(memory_id)
+                    removable_ids.append(memory_id)
+                    continue
+
+                # Canonicalize aliases so "favorite_colour" cannot remain
+                # as a second profile fact alongside "favorite_color".
+                subject = self._canonical_memory_subject(
+                    str(memory.get("key") or "")
+                )
+                profile_by_subject.setdefault(subject, []).append(memory)
+
+            # Resolve duplicate aliases for the same semantic subject.
+            # Prefer the canonical stored key over an alias. For genuinely
+            # conflicting values, keep the canonical record and remove the
+            # alias/duplicate rather than exposing both as facts.
+            for subject, records in profile_by_subject.items():
+                if len(records) <= 1:
+                    continue
+
+                canonical_records = [
+                    record for record in records
+                    if str(record.get("key") or "").strip().lower() == subject
+                ]
+
+                keeper = canonical_records[0] if canonical_records else records[0]
+
+                for record in records:
+                    if record is keeper:
+                        continue
+                    duplicate_id = record.get("_id")
+                    if duplicate_id is not None:
+                        removable_ids.append(duplicate_id)
 
             if not removable_ids:
                 return 0
+
+            # De-duplicate ObjectIds before deletion.
+            unique_ids = []
+            seen_ids = set()
+            for memory_id in removable_ids:
+                marker = str(memory_id)
+                if marker in seen_ids:
+                    continue
+                seen_ids.add(marker)
+                unique_ids.append(memory_id)
+
+            removable_ids = unique_ids
 
             result = await collection.delete_many(
                 {
