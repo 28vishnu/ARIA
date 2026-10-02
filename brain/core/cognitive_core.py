@@ -2223,6 +2223,39 @@ class CognitiveCore:
         })
 
         # =========================================================
+        # DETERMINISTIC CAPABILITY RESPONSE
+        # =========================================================
+        # Capability questions should never depend on episodic memory,
+        # knowledge search, or an external LLM provider.
+        if self._looks_like_capability_request(resolved_query):
+            logger.info(
+                "[Capability] Deterministic capability response selected."
+            )
+            return SystemResponse(
+                success=True,
+                confidence=1.0,
+                source="capability",
+                data={
+                    "response": (
+                        "Certainly, Sir. I can help you with conversation and questions, "
+                        "remember and recall information you ask me to keep, search and "
+                        "reason over knowledge, work with documents and files, perform "
+                        "supported tools and workflows, help with coding and technical "
+                        "tasks, assist with planning and problem solving, and learn from "
+                        "our interactions when appropriate."
+                    ),
+                    "message": (
+                        "Certainly, Sir. I can help you with conversation and questions, "
+                        "remember and recall information you ask me to keep, search and "
+                        "reason over knowledge, work with documents and files, perform "
+                        "supported tools and workflows, help with coding and technical "
+                        "tasks, assist with planning and problem solving, and learn from "
+                        "our interactions when appropriate."
+                    ),
+                },
+            )
+
+        # =========================================================
         # PHASE 5 — RETRIEVE RELEVANT EPISODIC MEMORY
         # =========================================================
         if self.memory_conversation_manager:
@@ -2884,6 +2917,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                                 "I'm temporarily unable to reach my language models. "
                                 "Please try again in a few seconds."
                             )
+                            source = "llm_unavailable"
                             confidence = 0.1
 
         finally:
@@ -3121,7 +3155,12 @@ usable evidence is present. Do not invent details absent from the evidence.
         # Deterministic memory-profile/forget responses are already safe and
         # user-facing. Do not send them through the personality LLM, which can
         # expand them with unrelated memories or conversational history.
-        if source in {"memory_profile", "memory_conversation"}:
+        if source in {
+            "memory_profile",
+            "memory_conversation",
+            "capability",
+            "llm_unavailable",
+        }:
             return SystemResponse(
                 success=True,
                 confidence=confidence,
@@ -3473,6 +3512,31 @@ usable evidence is present. Do not invent details absent from the evidence.
             return f"Your {readable} is {best.get('value')}, Sir."
 
         return None
+
+    def _looks_like_capability_request(self, query: str) -> bool:
+        """Detect common questions asking what ARIA can do."""
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+        phrases = (
+            "what can you do",
+            "what can you do?",
+            "what are you capable of",
+            "what are you capable of?",
+            "what things can you do",
+            "what things can you do?",
+            "what are things you can do",
+            "what are things you can do?",
+            "what do you do",
+            "what do you do?",
+            "what can aria do",
+            "what can aria do?",
+            "what are your capabilities",
+            "what are your capabilities?",
+            "what features do you have",
+            "what features do you have?",
+        )
+        return q in phrases
 
     def _looks_like_non_durable_preference_statement(self, query: str) -> bool:
         """Ordinary likes/favorites are conversational unless explicitly saved."""
