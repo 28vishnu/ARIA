@@ -1,4 +1,3 @@
-import re
 import asyncio
 import json
 import logging
@@ -114,6 +113,48 @@ class LLMRouter:
             self.openrouter_model = model
         elif provider_name == "Mistral":
             self.mistral_model = model
+
+    def clear_provider_cooldowns(self) -> None:
+        """Clear transient provider circuit-breaker state.
+
+        Useful after a deployment/configuration change so stale in-memory
+        cooldowns cannot make every provider appear unavailable.
+        """
+        self._provider_cooldowns.clear()
+        logger.info("[LLMRouter] Provider cooldowns cleared.")
+
+    def provider_status(self) -> Dict[str, Any]:
+        """Return a safe diagnostic snapshot of provider health."""
+        now = time.monotonic()
+        status = {}
+
+        for provider_name, api_key in {
+            "Groq": self.groq_api_key,
+            "Gemini": self.gemini_api_key,
+            "OpenRouter": self.openrouter_api_key,
+            "Mistral": self.mistral_api_key,
+        }.items():
+            if not api_key:
+                status[provider_name] = {
+                    "configured": False,
+                    "cooldown_seconds": 0.0,
+                }
+                continue
+
+            cooldown_until = self._provider_cooldowns.get(
+                provider_name,
+                0.0,
+            )
+            status[provider_name] = {
+                "configured": True,
+                "cooldown_seconds": max(
+                    0.0,
+                    cooldown_until - now,
+                ),
+                "model": self._get_provider_model(provider_name),
+            }
+
+        return status
 
     def is_allowed_for_llm(self, context: dict | None = None) -> bool:
         """
@@ -648,12 +689,17 @@ class LLMRouter:
                                     fallback_exc,
                                 )
 
-                        # Avoid retrying a known-bad model on every internal
-                        # request. This is long enough for the other providers
-                        # to take over without making ARIA appear stuck.
+                        # The configured model and fallback both failed.
+                        # Do not trap the provider for five minutes: a model
+                        # configuration problem should not make ARIA appear
+                        # completely offline for an extended period.
                         self._provider_cooldowns[
                             provider_name
-                        ] = time.monotonic() + 300.0
+                        ] = time.monotonic() + 30.0
+
+                        errors.append(
+                            f"{provider_name}: HTTP 404/model unavailable"
+                        )
 
                     # -----------------------------------------
                     # NON-TEMPORARY FAILURE
