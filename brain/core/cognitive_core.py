@@ -2252,7 +2252,23 @@ class CognitiveCore:
         if reasoning:
             context["reasoning"] = reasoning
 
-        if decision and getattr(decision, "action", None) in {
+        # DecisionEngine/controller implementations may expose action as
+        # either a string or a structured value. Never perform set-membership
+        # directly on an arbitrary object because a dict/list is unhashable.
+        decision_action = self._decision_value(
+            decision,
+            "action",
+            "",
+        )
+        if isinstance(decision_action, (dict, list, tuple, set)):
+            decision_action = (
+                decision_action.get("name", "")
+                if isinstance(decision_action, dict)
+                else ""
+            )
+        decision_action = str(decision_action or "").strip().lower()
+
+        if decision_action in {
             "chat",
             "memory",
             "skill",
