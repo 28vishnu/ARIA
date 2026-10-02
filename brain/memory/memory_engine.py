@@ -702,6 +702,16 @@ class MemoryEngine:
 
         lower = text.lower().strip()
 
+        # Retrieval questions must never become write requests merely because
+        # they contain words such as "remember" or "recall".
+        if re.match(
+            r"^(?:do|can|could|would)\s+you\s+(?:remember|recall|tell\s+me|show\s+me|"
+            r"give\s+me|retrieve)",
+            lower,
+            re.IGNORECASE,
+        ):
+            return False
+
         greetings = {
             "hi",
             "hello",
@@ -875,10 +885,36 @@ class MemoryEngine:
         except (TypeError, ValueError):
             importance = {"low": .25, "medium": .5, "high": .75, "critical": 1.0}.get(str(importance).lower(), .0)
 
+        # Preferences/favorites/likes are NOT durable merely because the
+        # extractor or LLM assigns them medium/high importance. They become
+        # long-term memory only when the user explicitly asks ARIA to remember,
+        # save, store, keep, or memorize them.
+        preference_keys = {
+            "favorite_food",
+            "favorite_color",
+            "favorite_colour",
+            "favorite_movie",
+            "favorite_car",
+            "favorite_animal",
+            "favorite_planet",
+            "favorite_dinosaur",
+            "favorite_superhero",
+            "favorite_language",
+            "preferred_watch_material",
+            "user_likes",
+            "general_preference",
+        }
+        if key in preference_keys or category == "preference" or memory_type == "preference":
+            return self._explicit_memory_instruction(text)
+
+        # Explicitly requested memories may be stored after the normal
+        # validation/security checks above.
+        if self._explicit_memory_instruction(text):
+            return True
+
         stable_tokens = (
             "name", "education", "degree", "study", "career", "goal",
-            "project", "skill", "location", "university", "preferred",
-            "preference", "favorite", "language", "plan", "country",
+            "project", "skill", "location", "university", "plan", "country",
             "work", "job", "address_by_name",
         )
         if any(token in key for token in stable_tokens):
@@ -887,8 +923,59 @@ class MemoryEngine:
             return importance >= 0.5
         if memory_type in {"goal", "project", "fact", "decision", "skill"}:
             return importance >= 0.5
-        # Low-value generic likes should stay in short-term context unless explicitly requested.
+
+        # Low-value generic likes stay in short-term context.
         return False
+
+    def _deterministic_memory_candidate_allowed(
+        self,
+        text: str,
+        memory: Dict[str, Any],
+    ) -> bool:
+        """
+        Decide whether a deterministic extraction is eligible for durable memory.
+
+        Stable identity/education/goal/project facts may be admitted normally.
+        Preferences and favorites require an explicit memory instruction so
+        ordinary conversation does not fill the long-term profile with trivia.
+        """
+        if not isinstance(memory, dict):
+            return False
+
+        if _is_sensitive_memory(memory):
+            return False
+
+        key = _normalized_memory_key(memory.get("key"))
+        category = str(memory.get("category", "")).lower()
+        memory_type = str(memory.get("memory_type", "")).lower()
+
+        preference_keys = {
+            "favorite_food",
+            "favorite_color",
+            "favorite_colour",
+            "favorite_movie",
+            "favorite_car",
+            "favorite_animal",
+            "favorite_planet",
+            "favorite_dinosaur",
+            "favorite_superhero",
+            "favorite_language",
+            "preferred_watch_material",
+            "user_likes",
+            "general_preference",
+        }
+
+        if key in preference_keys or category == "preference" or memory_type == "preference":
+            return self._explicit_memory_instruction(text)
+
+        # Interaction preferences such as "don't call me by my name" remain
+        # durable because they directly affect how ARIA should communicate.
+        if key == "address_by_name":
+            return True
+
+        # Identity, education, goals, projects, and similar stable facts can
+        # enter durable memory through the deterministic extractor.
+        return True
 
     # =========================================================
     # CENTRAL MEMORY EXTRACTOR
@@ -1827,7 +1914,8 @@ class MemoryEngine:
 
         memory = self._extract_memory(user_text)
         if memory and not _is_sensitive_memory(memory):
-            await self._store_extracted_memory(memory)
+            if self._deterministic_memory_candidate_allowed(user_text, memory):
+                await self._store_extracted_memory(memory)
 
     async def process_and_store(
         self,
@@ -1849,6 +1937,8 @@ class MemoryEngine:
         if memory:
             if _is_sensitive_memory(memory):
                 return {"success": False, "action": "blocked_sensitive_memory"}
+            if not self._deterministic_memory_candidate_allowed(user_text, memory):
+                return {"success": False, "action": "short_term_only"}
             res = await self._store_extracted_memory(memory)
             if res.get("success") and self.learning_engine:
                 try:
@@ -1866,7 +1956,7 @@ class MemoryEngine:
             or bool(re.search(
                 r"\b(?:i am|i'm|i work|i study|i plan|i want|i intend|"
                 r"i hope|my goal|my career|my project|i live|i moved|"
-                r"i prefer|my favorite|my favourite|i use|i know)\b",
+                r"i use|i know)\b",
                 q,
                 re.IGNORECASE,
             ))
