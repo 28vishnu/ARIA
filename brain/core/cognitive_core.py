@@ -4703,6 +4703,28 @@ usable evidence is present. Do not invent details absent from the evidence.
         # the actual route handling.
         decision = None
 
+        # Initialize the unified context before ANY early-routing branch.
+        # Memory recall/forget requests can return before the main context
+        # construction block below, so those branches must never reference
+        # an uninitialized local `context` variable.
+        context: Dict[str, Any] = dict(base_context or {})
+        context.update({
+            "query": query,
+            "session_id": session_id,
+            "user_id": user_id,
+            "execution_id": execution_id,
+            "memory_engine": self.memory_engine,
+            "memory_router": self.memory_router,
+            "memory_conversation_manager": self.memory_conversation_manager,
+            "conversation_manager": self.conversation_manager,
+            "state_manager": self.state_manager,
+            "tool_manager": self.tool_manager,
+            "planner": self.planner,
+            "executor": self.executor,
+            "reasoning": self.reasoning_engine,
+            "working_memory": self.working_memory,
+        })
+
         try:
             if self.state_manager:
 
