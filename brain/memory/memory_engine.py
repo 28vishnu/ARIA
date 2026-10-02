@@ -667,6 +667,44 @@ class MemoryEngine:
 
         return True
 
+    def _has_explicit_memory_instruction(self, text: str) -> bool:
+        """
+        Return True only when the user explicitly asks ARIA to retain
+        information as long-term memory.
+
+        Ordinary statements such as ``My favorite food is biryani`` or
+        ``I like pandas`` are conversational facts, not durable memory
+        instructions.  This gate applies before both deterministic and
+        LLM-based extraction so the LLM cannot bypass the policy.
+        """
+
+        if not text:
+            return False
+
+        lower = str(text).strip().lower()
+
+        # Explicit durable-memory verbs/phrases.
+        explicit_patterns = (
+            r"\\bremember(?:\\s+that|\\s+this)?\\b",
+            r"\\bplease\\s+remember\\b",
+            r"\\bdo not forget\\b",
+            r"\\bdon't forget\\b",
+            r"\\bkeep (?:this|that) in mind\\b",
+            r"\\bkeep in mind\\b",
+            r"\\bmemorize\\b",
+            r"\\bstore (?:this|that)\\b",
+            r"\\bsave (?:this|that)\\b",
+            r"\\bnote (?:this|that)\\b",
+            r"\\bmake a note of (?:this|that)\\b",
+            r"\\bremember my\\b",
+            r"\\bremember that my\\b",
+        )
+
+        return any(
+            re.search(pattern, lower, re.IGNORECASE)
+            for pattern in explicit_patterns
+        )
+
     # =========================================================
     # SHOULD THIS MESSAGE BE STORED?
     # =========================================================
@@ -1673,6 +1711,9 @@ class MemoryEngine:
             or not self._should_extract(
                 user_text
             )
+            or not self._has_explicit_memory_instruction(
+                user_text
+            )
         ):
             return
 
@@ -1709,6 +1750,32 @@ class MemoryEngine:
         ):
             return {
                 "success": False
+            }
+
+        # -----------------------------------------------------
+        # EXPLICIT MEMORY ADMISSION GATE
+        # -----------------------------------------------------
+        # Only an explicit request to retain information may create
+        # durable memory.  This gate is intentionally before both
+        # deterministic extraction and LLM extraction.
+        #
+        # Examples:
+        #   "Remember my favorite food is biryani" -> STORE
+        #   "My favorite food is biryani"          -> DO NOT STORE
+        #   "I like pandas"                        -> DO NOT STORE
+        #   "What's my favorite color?"            -> DO NOT STORE
+        # -----------------------------------------------------
+
+        if not self._has_explicit_memory_instruction(
+            user_text
+        ):
+            logger.info(
+                "[MemoryAdmission] Casual statement ignored; "
+                "no explicit memory instruction."
+            )
+            return {
+                "success": False,
+                "action": "not_explicit_memory_request",
             }
 
         memory = self._extract_memory(
