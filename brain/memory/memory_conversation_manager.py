@@ -1527,6 +1527,15 @@ class MemoryConversationManager:
         if len(value) > 350:
             return False
 
+        # Strict durable-profile allow-list.
+        #
+        # Do NOT treat every "favorite_*" or "preferred_*" key as a
+        # permanent profile fact. Those keys are easy to create from casual
+        # conversation and were the reason broad cleanup previously left
+        # dozens of trivia-like memories behind.
+        #
+        # Only explicitly useful identity, education, career, project, and
+        # a very small set of user-profile preferences belong here.
         allowed_exact = {
             "name",
             "preferred_name",
@@ -1549,34 +1558,18 @@ class MemoryConversationManager:
             "alternative_country",
             "backup_plan_country",
             "preferred_universities",
+            "career_goal",
+            "career_plan",
+            "long_term_goal",
             "project_name",
             "project_type",
             "project",
             "favorite_food",
-            "favorite_movie",
             "favorite_color",
             "favorite_colour",
-            "favorite_car",
-            "favorite_language",
-            "favorite_game",
-            "favorite_superhero",
-            "favorite_animal",
         }
 
-        if key in allowed_exact:
-            return True
-
-        # Stable keys that clearly describe durable user preferences/goals.
-        allowed_prefixes = (
-            "favorite_",
-            "preferred_",
-            "planned_",
-            "desired_",
-            "future_",
-        )
-
-        if key.startswith(allowed_prefixes):
-            return True
+        return key in allowed_exact
 
         # Do not broaden based on category alone. A category such as
         # 'preference' can contain accidental narrative records.
