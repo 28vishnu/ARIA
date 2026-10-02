@@ -262,7 +262,14 @@ class MemoryConversationManager:
         # 2. EXPLICIT MEMORY STORE / UPDATE
         # -----------------------------------------------------
 
-        if intent_name in ("memory_store", "memory_update"):
+        explicit_store_requested = self._has_explicit_store_operation(
+            normalized_q
+        )
+
+        if (
+            intent_name in ("memory_store", "memory_update")
+            and explicit_store_requested
+        ):
             context["memory_operation"] = "store"
 
             memory_clause = self._extract_explicit_memory_clause(query)
@@ -679,6 +686,32 @@ class MemoryConversationManager:
                 return True
 
         return False
+
+    def _has_explicit_store_operation(
+        self,
+        query: str
+    ) -> bool:
+        """Return True only for an explicit request to write durable memory."""
+
+        q = self._normalize(query)
+
+        store_phrases = (
+            "remember that",
+            "remember this",
+            "remember my",
+            "memorize that",
+            "memorise that",
+            "save this",
+            "save that",
+            "store this",
+            "store that",
+            "keep this in memory",
+            "keep that in memory",
+            "dont forget that",
+            "do not forget that",
+        )
+
+        return any(phrase in q for phrase in store_phrases)
 
     def _has_explicit_memory_operation(
         self,
@@ -1251,91 +1284,118 @@ class MemoryConversationManager:
         memories: List[Dict[str, Any]]
     ) -> Optional[str]:
         """
-        Build a deterministic personal-memory summary.
+        Build a clean profile from durable personal memory only.
 
-        Duplicate semantic subjects are collapsed so keys such as
-        favorite_color and favorite_colour do not appear as separate
-        entries.
-
-        If multiple records contain conflicting values, both values
-        are retained rather than silently inventing which one is
-        correct.
+        Broad profile questions must never dump every retrieved memory.
+        Episodic narratives, temporary thoughts, test records, and
+        implementation artifacts are excluded even when they exist in
+        the persistent collection.
         """
 
         groups: Dict[str, List[Tuple[str, str]]] = {}
 
         for item in memories:
-            key = str(
-                item.get("key") or ""
-            ).strip().lower()
-
-            value = str(
-                item.get("value") or ""
-            ).strip()
-
-            if (
-                not key
-                or not value
-                or self._is_sensitive_memory(item)
-            ):
+            if not isinstance(item, dict):
                 continue
 
-            canonical = self._canonical_memory_subject(
-                key
-            )
+            key = str(item.get("key") or "").strip().lower()
+            value = str(item.get("value") or "").strip()
 
-            groups.setdefault(
-                canonical,
-                []
-            ).append(
-                (key, value)
-            )
+            if not key or not value:
+                continue
+
+            if not self._is_broad_profile_memory(item):
+                continue
+
+            canonical = self._canonical_memory_subject(key)
+            groups.setdefault(canonical, []).append((key, value))
 
         if not groups:
             return (
-                "I don't have any personal details about "
+                "I don't have any durable personal details about "
                 "you in memory yet, Sir."
             )
 
-        lines = []
+        # Stable presentation order keeps answers deterministic.
+        preferred_order = (
+            "name",
+            "current_education_level",
+            "current_degree",
+            "field_of_study",
+            "project_name",
+            "project_type",
+            "planned_postgraduate_degree",
+            "planned_postgraduate_location",
+            "study_destination",
+            "future_education_plan",
+            "future_education_goal",
+            "education_preference",
+            "education_priority",
+            "alternative_country",
+            "favorite_food",
+            "favorite_movie",
+            "favorite_color",
+            "favorite_car",
+            "favorite_language",
+            "favorite_superhero",
+            "favorite_animal",
+            "favorite_dinosaur",
+            "favorite_planet",
+            "preferred_education_region",
+            "preferred_name",
+        )
+        order_map = {key: index for index, key in enumerate(preferred_order)}
 
-        for canonical, values in groups.items():
+        lines = []
+        seen_subjects = set()
+
+        ordered_groups = sorted(
+            groups.items(),
+            key=lambda pair: (
+                order_map.get(pair[0], 1000),
+                pair[0],
+            ),
+        )
+
+        for canonical, values in ordered_groups:
+            if canonical in seen_subjects:
+                continue
+
             unique_values = []
             seen_values = set()
 
             for _, value in values:
-                normalized_value = self._normalize(
-                    value
-                )
-
-                if normalized_value in seen_values:
+                normalized_value = self._normalize(value)
+                if not normalized_value or normalized_value in seen_values:
                     continue
+                seen_values.add(normalized_value)
+                unique_values.append(value)
 
-                seen_values.add(
-                    normalized_value
-                )
-                unique_values.append(
-                    value
-                )
+            if not unique_values:
+                continue
 
-            readable_key = self._readable_memory_key(
-                canonical
-            )
+            readable_key = self._readable_memory_key(canonical)
 
             if len(unique_values) == 1:
                 lines.append(
-                    f"• {readable_key.capitalize()}: "
-                    f"{unique_values[0]}"
+                    f"• {readable_key.capitalize()}: {unique_values[0]}"
                 )
             else:
+                # Conflicting durable values are shown transparently.
                 lines.append(
                     f"• {readable_key.capitalize()}: "
-                    + " / ".join(unique_values)
+                    + " / ".join(unique_values[:3])
                 )
+
+            seen_subjects.add(canonical)
+
+            # Prevent an oversized profile from becoming another memory dump.
+            if len(lines) >= 25:
+                break
 
         if not lines:
             return (
-                "I don't have any personal details about "
+                "I don't have any durable personal details about "
                 "you in memory yet, Sir."
             )
 
@@ -1343,6 +1403,131 @@ class MemoryConversationManager:
             "Certainly, Sir. Here's what I remember about you:\n\n"
             + "\n".join(lines)
         )
+
+    def _is_broad_profile_memory(
+        self,
+        memory: Dict[str, Any]
+    ) -> bool:
+        """
+        Decide whether a stored record belongs in a broad personal profile.
+
+        This is deliberately allow-list based. A memory being present in
+        MongoDB does not automatically make it appropriate to expose as
+        something ARIA 'knows about' the user.
+        """
+
+        key = str(memory.get("key") or "").strip().lower()
+        value = str(memory.get("value") or "").strip()
+        category = str(memory.get("category") or "").strip().lower()
+
+        if not key or not value:
+            return False
+
+        if self._is_sensitive_memory(memory):
+            return False
+
+        # Never surface known accidental/test/episodic-style records.
+        blocked_key_patterns = (
+            "user_likes",
+            "user_like",
+            "phase_",
+            "test_",
+            "debug_",
+            "temp_",
+            "temporary_",
+            "episode",
+            "conversation",
+            "chat_history",
+            "raw_",
+            "internal_",
+            "retrieval_",
+        )
+
+        if any(
+            key == pattern or key.startswith(pattern)
+            for pattern in blocked_key_patterns
+        ):
+            return False
+
+        # Object-shaped values are internal data, not profile facts.
+        if value.startswith(("{", "[")) and value.endswith(("}", "]")):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, (dict, list)):
+                    return False
+            except Exception:
+                pass
+
+        # Very long narrative values are almost certainly conversational
+        # material rather than a concise durable preference/fact.
+        if len(value) > 350:
+            return False
+
+        allowed_exact = {
+            "name",
+            "preferred_name",
+            "current_degree",
+            "current_degree_pursuit",
+            "current_education_level",
+            "field_of_study",
+            "planned_postgraduate_degree",
+            "planned_postgraduate_location",
+            "postgraduate_location",
+            "study_destination",
+            "desired_study_location",
+            "desired_degree",
+            "intended_degree",
+            "future_education_plan",
+            "future_education_goal",
+            "education_preference",
+            "education_priority",
+            "preferred_education_region",
+            "alternative_country",
+            "backup_plan_country",
+            "preferred_universities",
+            "project_name",
+            "project_type",
+            "project",
+            "favorite_food",
+            "favorite_movie",
+            "favorite_color",
+            "favorite_colour",
+            "favorite_car",
+            "favorite_language",
+            "favorite_game",
+            "favorite_superhero",
+            "favorite_animal",
+            "favorite_dinosaur",
+            "favorite_planet",
+            "preferred_watch_material",
+            "watch_budget",
+            "intended_purchase",
+            "trip_destination",
+            "trip_duration",
+            "cities_to_visit",
+        }
+
+        if key in allowed_exact:
+            return True
+
+        # Stable keys that clearly describe durable user preferences/goals.
+        allowed_prefixes = (
+            "favorite_",
+            "preferred_",
+            "planned_",
+            "desired_",
+            "future_",
+        )
+
+        if key.startswith(allowed_prefixes):
+            return True
+
+        # Do not broaden based on category alone. A category such as
+        # 'preference' can contain accidental narrative records.
+        if category in {"identity", "education", "projects"}:
+            return key in allowed_exact
+
+        return False
 
     def _canonical_memory_subject(
         self,
