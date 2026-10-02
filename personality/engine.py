@@ -155,8 +155,19 @@ class PersonalityEngine:
                 reply = f"The answer is {data['result']}, Sir."
             elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
                 reply = self._format_greeting(user_text)
-            elif source in [ResponseSource.MEMORY, ResponseSource.PROFILE, ResponseSource.MEMORY_CONVERSATION]:
+            elif source in [
+                ResponseSource.MEMORY,
+                ResponseSource.PROFILE,
+                ResponseSource.MEMORY_CONVERSATION,
+                "memory_profile",
+            ]:
                 reply = self._format_memory(data)
+            elif source == "conversation":
+                reply = str(
+                    data.get("response")
+                    or data.get("message")
+                    or self._format_fallback(data)
+                )
             elif source == ResponseSource.PLANNER:
                 reply = self._format_planner(data)
             elif source == "action_manager":
@@ -170,6 +181,8 @@ class PersonalityEngine:
                 ResponseSource.MEMORY,
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
+                "memory_profile",
+                "conversation",
             }:
                 reply = ConversationStyle.apply(reply)
                 reply = ConversationStyle.follow_up(reply, user_text)
@@ -201,6 +214,8 @@ class PersonalityEngine:
                 ResponseSource.MEMORY,
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
+                "memory_profile",
+                "conversation",
                 ResponseSource.TIME,
                 ResponseSource.DATE,
                 ResponseSource.WEATHER,
