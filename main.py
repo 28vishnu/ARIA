@@ -22,9 +22,9 @@ from personality.response import SystemResponse
 from api.upload import router as upload_router
 
 
-# ---------------------------------------------------------
+# =========================================================
 # LOG SECURITY
-# ---------------------------------------------------------
+# =========================================================
 
 _TELEGRAM_URL_RE = re.compile(
     r"(https?://api\.telegram\.org/(?:file/)?bot)[^/\s?]+",
@@ -114,21 +114,19 @@ logger = logging.getLogger("aria")
 # TELEGRAM REQUEST SAFETY
 # =========================================================
 
-# A Telegram request must NEVER remain in "Working on it..."
-# indefinitely.
+# Maximum amount of time ARIA is allowed to process one Telegram
+# request before the operation is stopped.
 #
-# This protects against:
+# This prevents:
 #
 #   - embedding stalls
 #   - knowledge retrieval stalls
 #   - external API hangs
 #   - accidental infinite loops
 #   - broken tool calls
-#   - provider timeouts
 #
-# 120 seconds is intentionally generous for the current ARIA
-# architecture. We can reduce this once local knowledge becomes
-# fast and reliable.
+# Once local knowledge is fast and reliable, this can be reduced.
+
 TELEGRAM_PROCESS_TIMEOUT_SECONDS = max(
     30.0,
     float(
@@ -186,6 +184,132 @@ background_manager = BackgroundTaskManager()
 
 
 # =========================================================
+# TELEGRAM UPDATE DEDUPLICATION
+# =========================================================
+
+# Telegram supplies a unique update_id with every webhook update.
+#
+# Telegram can retry an update if the webhook endpoint does not
+# acknowledge quickly enough.
+#
+# Previously, ARIA could receive:
+#
+#     update 100
+#     update 100
+#     update 100
+#
+# and start three independent cognitive requests.
+#
+# This cache prevents that.
+#
+# This is currently in-memory because ARIA is running as a single
+# Render instance. If ARIA later becomes multi-instance, move this
+# mechanism to MongoDB/Redis.
+
+TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS = max(
+    300.0,
+    float(
+        os.getenv(
+            "ARIA_TELEGRAM_UPDATE_DEDUPE_TTL",
+            "600",
+        )
+    ),
+)
+
+_telegram_update_cache = {}
+
+_telegram_update_lock = asyncio.Lock()
+
+
+async def claim_telegram_update(
+    update_id,
+) -> bool:
+    """
+    Atomically claim a Telegram update.
+
+    Returns:
+        True  -> first delivery of this update.
+        False -> duplicate delivery.
+
+    Telegram normally provides update_id. If an unusual/custom
+    request has no update_id, processing is allowed.
+    """
+
+    if update_id is None:
+
+        return True
+
+    try:
+
+        update_key = int(
+            update_id
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        update_key = str(
+            update_id
+        )
+
+    now = asyncio.get_running_loop().time()
+
+    async with _telegram_update_lock:
+
+        # -----------------------------------------------------
+        # Remove expired entries.
+        # -----------------------------------------------------
+
+        expired = [
+            key
+            for key, timestamp
+            in _telegram_update_cache.items()
+            if (
+                now - timestamp
+                > TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS
+            )
+        ]
+
+        for key in expired:
+
+            _telegram_update_cache.pop(
+                key,
+                None,
+            )
+
+        # -----------------------------------------------------
+        # Duplicate update.
+        # -----------------------------------------------------
+
+        if update_key in _telegram_update_cache:
+
+            logger.warning(
+                "[Telegram] Duplicate update ignored | "
+                "update_id=%s",
+                update_key,
+            )
+
+            return False
+
+        # -----------------------------------------------------
+        # First delivery.
+        # -----------------------------------------------------
+
+        _telegram_update_cache[
+            update_key
+        ] = now
+
+        logger.info(
+            "[Telegram] Update claimed | update_id=%s",
+            update_key,
+        )
+
+        return True
+
+
+# =========================================================
 # PENDING DOCUMENT CONFIRMATIONS
 # =========================================================
 
@@ -197,11 +321,14 @@ pending_document_actions = {}
 # =========================================================
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(
+    app: FastAPI,
+):
 
     registry = await bootstrap_application()
 
     app.state.registry = registry
+
     app.state.bg_manager = background_manager
 
     logger.info(
@@ -216,7 +343,9 @@ async def lifespan(app: FastAPI):
 
     await background_manager.shutdown()
 
-    if registry.has("scheduler"):
+    if registry.has(
+        "scheduler"
+    ):
 
         try:
 
@@ -242,13 +371,17 @@ async def lifespan(app: FastAPI):
                 "[Lifespan] Scheduler shutdown failed."
             )
 
-    if registry.has("http_client"):
+    if registry.has(
+        "http_client"
+    ):
 
         await registry.get(
             "http_client"
         ).aclose()
 
-    if registry.has("mongo_client"):
+    if registry.has(
+        "mongo_client"
+    ):
 
         registry.get(
             "mongo_client"
@@ -415,8 +548,10 @@ async def process_task(
     # SESSION
     # -----------------------------------------------------
 
-    session = ctx.session_manager.get_or_create_session(
-        session_id
+    session = (
+        ctx.session_manager.get_or_create_session(
+            session_id
+        )
     )
 
     conversation_manager = registry.get(
@@ -431,9 +566,11 @@ async def process_task(
 
     if conversation_manager:
 
-        resolved_text = conversation_manager.resolve_reference(
-            session_id=session_id,
-            query=user_text,
+        resolved_text = (
+            conversation_manager.resolve_reference(
+                session_id=session_id,
+                query=user_text,
+            )
         )
 
     # -----------------------------------------------------
@@ -444,13 +581,21 @@ async def process_task(
         "app_state": app_state,
         "session": session,
         "memory_engine": (
-            registry.get("memory_engine")
-            if registry.has("memory_engine")
+            registry.get(
+                "memory_engine"
+            )
+            if registry.has(
+                "memory_engine"
+            )
             else None
         ),
         "document_intelligence": (
-            registry.get("document_intelligence")
-            if registry.has("document_intelligence")
+            registry.get(
+                "document_intelligence"
+            )
+            if registry.has(
+                "document_intelligence"
+            )
             else None
         ),
     }
@@ -1110,15 +1255,10 @@ async def safe_delete_status(
     status: TelegramStatus | None,
 ) -> None:
     """
-    Delete/cancel the temporary Telegram status.
+    Delete the temporary Telegram status.
 
-    This function is intentionally defensive.
-
-    If TelegramStatus has an internal heartbeat/update task,
-    its delete() implementation should stop it.
-
-    Even if deletion fails, the exception must never prevent
-    the request from returning.
+    Failure to delete the status must never break the actual
+    ARIA request.
     """
 
     if status is None:
@@ -1142,61 +1282,104 @@ async def safe_delete_status(
 
 
 # =========================================================
-# TELEGRAM WEBHOOK
+# TELEGRAM WEBHOOK ENTRYPOINT
 # =========================================================
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(
     req: Request,
 ):
+    """
+    Fast Telegram webhook acknowledgement.
+
+    The webhook MUST acknowledge Telegram quickly.
+
+    Actual ARIA processing is scheduled in the background.
+
+    This prevents Telegram from retrying the same update while
+    ARIA is still processing the request.
+    """
 
     request_id = req.headers.get(
         "X-Request-ID",
         str(uuid.uuid4()),
     )
 
-    config = req.app.state.registry.get(
-        "config"
-    )
+    # ---------------------------------------------------------
+    # PARSE UPDATE
+    # ---------------------------------------------------------
 
-    token = config.telegram_token
+    try:
 
-    if not token:
+        data = await req.json()
+
+    except Exception:
+
+        logger.exception(
+            "[Telegram] Failed to decode webhook payload."
+        )
 
         return {
-            "status": "telegram token unconfigured"
+            "status": "invalid_payload"
         }
 
-    data = await req.json()
+    update_id = data.get(
+        "update_id"
+    )
+
+    # ---------------------------------------------------------
+    # DUPLICATE PROTECTION
+    # ---------------------------------------------------------
+
+    claimed = await claim_telegram_update(
+        update_id
+    )
+
+    if not claimed:
+
+        return {
+            "status": "duplicate_ignored",
+            "update_id": update_id,
+        }
+
+    # ---------------------------------------------------------
+    # BASIC MESSAGE VALIDATION
+    # ---------------------------------------------------------
 
     msg = data.get(
         "message",
         {}
     )
 
-    chat_id = msg.get(
-        "chat",
-        {}
-    ).get(
-        "id"
+    chat_id = (
+        msg.get(
+            "chat",
+            {}
+        ).get(
+            "id"
+        )
     )
 
-    user_id = msg.get(
-        "from",
-        {}
-    ).get(
-        "id"
+    user_id = (
+        msg.get(
+            "from",
+            {}
+        ).get(
+            "id"
+        )
     )
-
-    text = msg.get(
-        "text",
-        ""
-    ).strip()
 
     if chat_id is None or user_id is None:
 
+        logger.info(
+            "[Telegram] Ignoring update without "
+            "chat/user information | update_id=%s",
+            update_id,
+        )
+
         return {
-            "status": "ok"
+            "status": "ignored",
+            "update_id": update_id,
         }
 
     # ---------------------------------------------------------
@@ -1222,7 +1405,10 @@ async def telegram_webhook(
     if str(user_id) != allowed_user_id:
 
         logger.warning(
-            "[Security] Unauthorized Telegram access attempt."
+            "[Security] Unauthorized Telegram access attempt | "
+            "user_id=%s | update_id=%s",
+            user_id,
+            update_id,
         )
 
         return {
@@ -1230,33 +1416,133 @@ async def telegram_webhook(
         }
 
     logger.info(
-        "[Security] Authorized Telegram user."
+        "[Security] Authorized Telegram user | "
+        "update_id=%s",
+        update_id,
     )
 
-    http_client = req.app.state.registry.get(
-        "http_client"
+    # ---------------------------------------------------------
+    # SCHEDULE ACTUAL PROCESSING
+    # ---------------------------------------------------------
+
+    logger.info(
+        "[Telegram] Scheduling background processing | "
+        "update_id=%s | request_id=%s",
+        update_id,
+        request_id,
     )
 
-    status = TelegramStatus(
-        http_client=http_client,
-        token=token,
-        chat_id=chat_id,
+    background_manager.schedule(
+        process_telegram_update(
+            req,
+            data,
+            request_id,
+        )
     )
+
+    # ---------------------------------------------------------
+    # IMMEDIATE TELEGRAM ACKNOWLEDGEMENT
+    # ---------------------------------------------------------
+
+    return {
+        "status": "accepted",
+        "update_id": update_id,
+    }
+
+
+# =========================================================
+# ACTUAL TELEGRAM PROCESSING
+# =========================================================
+
+async def process_telegram_update(
+    req: Request,
+    data: dict,
+    request_id: str,
+):
+    """
+    Process one already-validated Telegram update.
+
+    This function runs in the background.
+
+    It is deliberately separate from /telegram-webhook so
+    Telegram receives an immediate acknowledgement.
+    """
+
+    status = None
 
     status_started = False
 
-    # ---------------------------------------------------------
-    # IMPORTANT:
-    #
-    # Everything after status.start() is now protected by
-    # try/finally.
-    #
-    # Therefore even if the cognitive pipeline crashes,
-    # times out, or is cancelled, ARIA will clean up the
-    # "Working on it..." status.
-    # ---------------------------------------------------------
+    chat_id = None
+
+    user_id = None
+
+    token = None
+
+    http_client = None
 
     try:
+
+        registry = req.app.state.registry
+
+        config = registry.get(
+            "config"
+        )
+
+        token = config.telegram_token
+
+        if not token:
+
+            logger.error(
+                "[Telegram] Telegram token is not configured."
+            )
+
+            return
+
+        msg = data.get(
+            "message",
+            {}
+        )
+
+        chat_id = (
+            msg.get(
+                "chat",
+                {}
+            ).get(
+                "id"
+            )
+        )
+
+        user_id = (
+            msg.get(
+                "from",
+                {}
+            ).get(
+                "id"
+            )
+        )
+
+        text = msg.get(
+            "text",
+            ""
+        ).strip()
+
+        if chat_id is None or user_id is None:
+
+            return
+
+        http_client = registry.get(
+            "http_client"
+        )
+
+        # -----------------------------------------------------
+        # TELEGRAM STATUS MESSAGE
+        # -----------------------------------------------------
+
+        status = TelegramStatus(
+            http_client=http_client,
+            token=token,
+            chat_id=chat_id,
+        )
 
         await status.start(
             get_telegram_status_message(
@@ -1282,9 +1568,9 @@ async def telegram_webhook(
 
             answer = text.lower().strip()
 
-            # -------------------------------------------------
-            # USER IS SELECTING A DOCUMENT
-            # -------------------------------------------------
+            # =================================================
+            # USER SELECTING A DOCUMENT
+            # =================================================
 
             if pending.get(
                 "action"
@@ -1327,7 +1613,9 @@ async def telegram_webhook(
                     )
 
                     return {
-                        "status": "document_selection_cancelled"
+                        "status": (
+                            "document_selection_cancelled"
+                        )
                     }
 
                 documents = pending.get(
@@ -1370,6 +1658,7 @@ async def telegram_webhook(
                 }
 
                 best_document = None
+
                 best_score = 0
 
                 for document in documents:
@@ -1412,6 +1701,7 @@ async def telegram_webhook(
                     if score > best_score:
 
                         best_score = score
+
                         best_document = document
 
                 if (
@@ -1489,12 +1779,14 @@ async def telegram_webhook(
                 )
 
                 return {
-                    "status": "document_selection_required"
+                    "status": (
+                        "document_selection_required"
+                    )
                 }
 
-            # -------------------------------------------------
+            # =================================================
             # CANCEL PENDING OPERATION
-            # -------------------------------------------------
+            # =================================================
 
             if answer in (
                 "no",
@@ -1523,12 +1815,14 @@ async def telegram_webhook(
                 )
 
                 return {
-                    "status": "document_action_cancelled"
+                    "status": (
+                        "document_action_cancelled"
+                    )
                 }
 
-            # -------------------------------------------------
+            # =================================================
             # CONFIRM PENDING OPERATION
-            # -------------------------------------------------
+            # =================================================
 
             if answer in (
                 "yes",
@@ -1540,7 +1834,7 @@ async def telegram_webhook(
             ):
 
                 document_repository = (
-                    req.app.state.registry.get(
+                    registry.get(
                         "document_repository"
                     )
                 )
@@ -1604,7 +1898,8 @@ async def telegram_webhook(
                 if action == "delete_all_documents":
 
                     deleted_count = (
-                        await document_repository.delete_all_user_documents(
+                        await document_repository
+                        .delete_all_user_documents(
                             user_id=str(user_id)
                         )
                     )
@@ -1630,7 +1925,9 @@ async def telegram_webhook(
                     )
 
                     return {
-                        "status": "all_documents_deleted"
+                        "status": (
+                            "all_documents_deleted"
+                        )
                     }
 
         # =====================================================
@@ -1668,8 +1965,13 @@ async def telegram_webhook(
 
             file_path = (
                 file_info_json
-                .get("result", {})
-                .get("file_path")
+                .get(
+                    "result",
+                    {}
+                )
+                .get(
+                    "file_path"
+                )
             )
 
             if not file_path:
@@ -1685,7 +1987,7 @@ async def telegram_webhook(
 
             os.makedirs(
                 "uploads",
-                exist_ok=True
+                exist_ok=True,
             )
 
             original_filename = document.get(
@@ -1725,7 +2027,7 @@ async def telegram_webhook(
                 )
 
             document_ai = (
-                req.app.state.registry.get(
+                registry.get(
                     "document_intelligence"
                 )
             )
@@ -1748,7 +2050,7 @@ async def telegram_webhook(
             )
 
             # -------------------------------------------------
-            # DOCUMENT PROCESSING HAS THE SAME HARD TIMEOUT.
+            # DOCUMENT PROCESSING TIMEOUT
             # -------------------------------------------------
 
             result = await asyncio.wait_for(
@@ -1764,12 +2066,12 @@ async def telegram_webhook(
             # PERSIST DOCUMENT METADATA
             # -------------------------------------------------
 
-            if req.app.state.registry.has(
+            if registry.has(
                 "document_repository"
             ):
 
                 document_repository = (
-                    req.app.state.registry.get(
+                    registry.get(
                         "document_repository"
                     )
                 )
@@ -1825,7 +2127,7 @@ async def telegram_webhook(
                     )
 
             state_manager = (
-                req.app.state.registry.get(
+                registry.get(
                     "state_manager"
                 )
             )
@@ -2031,10 +2333,13 @@ async def telegram_webhook(
                     )
 
                     return {
-                        "status": "document_not_found"
+                        "status": (
+                            "document_not_found"
+                        )
                     }
 
                 best_document = None
+
                 best_score = -1
 
                 ignored_words = {
@@ -2100,6 +2405,7 @@ async def telegram_webhook(
                     if score > best_score:
 
                         best_score = score
+
                         best_document = document
 
                 # -------------------------------------------------
@@ -2169,7 +2475,9 @@ async def telegram_webhook(
                     )
 
                     return {
-                        "status": "document_not_found"
+                        "status": (
+                            "document_not_found"
+                        )
                     }
 
                 telegram_file_id = (
@@ -2260,7 +2568,9 @@ async def telegram_webhook(
                 )
 
                 return {
-                    "status": "document_send_failed"
+                    "status": (
+                        "document_send_failed"
+                    )
                 }
 
         # =====================================================
@@ -2304,7 +2614,7 @@ async def telegram_webhook(
         if telegram_response.is_success:
 
             state_manager = (
-                req.app.state.registry.get(
+                registry.get(
                     "state_manager"
                 )
             )
@@ -2334,12 +2644,68 @@ async def telegram_webhook(
         }
 
     # =========================================================
-    # FINAL STATUS CLEANUP
+    # UNEXPECTED BACKGROUND FAILURE
     # =========================================================
+
+    except asyncio.CancelledError:
+
+        logger.warning(
+            "[Telegram] Background update cancelled | "
+            "request_id=%s",
+            request_id,
+        )
+
+        raise
+
+    except Exception as exc:
+
+        logger.exception(
+            "[Telegram] Unhandled background update failure | "
+            "request_id=%s | error=%s",
+            request_id,
+            exc,
+        )
+
+        try:
+
+            if status is not None:
+
+                await safe_delete_status(
+                    status
+                )
+
+            if (
+                http_client is not None
+                and token
+                and chat_id is not None
+            ):
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I ran into an internal problem while "
+                            "processing that request. The operation "
+                            "has been stopped."
+                        ),
+                    },
+                )
+
+        except Exception:
+
+            logger.exception(
+                "[Telegram] Failed to send background "
+                "failure response | request_id=%s",
+                request_id,
+            )
 
     finally:
 
-        if status_started:
+        if (
+            status_started
+            and status is not None
+        ):
 
             await safe_delete_status(
                 status
