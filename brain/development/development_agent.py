@@ -405,9 +405,25 @@ class DevelopmentAgent:
         self,
         workspace: WorkspaceInfo,
     ) -> list[str]:
+        """
+        Return files contained by the isolated workspace.
+
+        IMPORTANT:
+        Context-directory filtering is performed against paths
+        relative to workspace.source_root.
+
+        The workspace itself normally lives under:
+
+            .aria_workspaces/<workspace_id>/repo
+
+        Therefore checking the absolute path against
+        SKIP_CONTEXT_DIRS would incorrectly reject every file
+        because the absolute path contains '.aria_workspaces'.
+        """
+
         root = workspace.source_root.resolve()
 
-        if not root.exists():
+        if not root.exists() or not root.is_dir():
             return []
 
         paths: list[str] = []
@@ -416,15 +432,19 @@ class DevelopmentAgent:
             if not path.is_file():
                 continue
 
-            if self._is_context_directory(path):
-                continue
-
             try:
                 relative = path.relative_to(root)
             except ValueError:
                 continue
 
+            # IMPORTANT:
+            # Filter using the workspace-relative path only.
+            if self._is_context_directory(relative):
+                continue
+
             paths.append(relative.as_posix())
+
+        paths.sort()
 
         return paths
 
@@ -443,31 +463,44 @@ class DevelopmentAgent:
             if not root.exists():
                 return (
                     False,
-                    {},
-                    "Workspace repository does not exist.",
+                    {
+                        "source_root": str(root),
+                        "file_count": 0,
+                        "expected_file_count": getattr(
+                            workspace,
+                            "source_file_count",
+                            0,
+                        )
+                        or 0,
+                        "sample_files": [],
+                    },
+                    (
+                        "Workspace repository does not exist: "
+                        f"{root}"
+                    ),
                 )
 
             if not root.is_dir():
                 return (
                     False,
-                    {},
-                    "Workspace repository is not a directory.",
-                )
-
-            paths = self._workspace_paths(workspace)
-
-            if not paths:
-                return (
-                    False,
                     {
+                        "source_root": str(root),
                         "file_count": 0,
+                        "expected_file_count": getattr(
+                            workspace,
+                            "source_file_count",
+                            0,
+                        )
+                        or 0,
                         "sample_files": [],
                     },
                     (
-                        "Workspace repository is empty. "
-                        "Code generation is blocked."
+                        "Workspace repository is not a "
+                        f"directory: {root}"
                     ),
                 )
+
+            paths = self._workspace_paths(workspace)
 
             expected_files = (
                 getattr(
@@ -485,11 +518,40 @@ class DevelopmentAgent:
             )
 
             info = {
+                "source_root": str(root),
                 "file_count": len(paths),
                 "expected_file_count": expected_files,
                 "sample_files": paths[:25],
                 "snapshot_hash": snapshot_hash,
             }
+
+            if not paths:
+                return (
+                    False,
+                    info,
+                    (
+                        "Workspace repository is empty. "
+                        "Code generation is blocked."
+                    ),
+                )
+
+            # The workspace.py copy operation records the expected
+            # source file count. If that count is available, verify
+            # that the actual isolated repository matches it.
+            if (
+                expected_files > 0
+                and len(paths) != expected_files
+            ):
+                return (
+                    False,
+                    info,
+                    (
+                        "Workspace repository file count "
+                        "mismatch. "
+                        f"expected={expected_files} "
+                        f"actual={len(paths)}"
+                    ),
+                )
 
             return True, info, None
 
@@ -517,6 +579,10 @@ class DevelopmentAgent:
         isolated workspace.
 
         Never builds LLM context from the production repository.
+
+        IMPORTANT:
+        All skip-directory checks operate on workspace-relative
+        paths, never absolute paths.
         """
 
         root = workspace.source_root.resolve()
@@ -539,7 +605,18 @@ class DevelopmentAgent:
             if not path.is_file():
                 continue
 
-            if self._is_context_directory(path):
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                continue
+
+            # IMPORTANT:
+            # Use the workspace-relative path here.
+            #
+            # Do NOT pass the absolute path to
+            # _is_context_directory(), because the workspace itself
+            # is located below '.aria_workspaces'.
+            if self._is_context_directory(relative):
                 continue
 
             all_paths.append(path)
