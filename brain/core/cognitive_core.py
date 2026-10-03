@@ -2214,6 +2214,15 @@ class CognitiveCore:
         )
         context["memory_compound_request"] = compound_memory_request
 
+        local_knowledge_query = bool(
+            context.get("local_knowledge_query")
+            or (
+                self._looks_like_ordinary_knowledge_query(query)
+                and not compound_memory_request
+            )
+        )
+        context["local_knowledge_query"] = local_knowledge_query
+
         if self.conversation_manager:
             try:
                 conversation_context = self.conversation_manager.get_context(
@@ -2231,6 +2240,11 @@ class CognitiveCore:
                 context.get("resolved_query")
                 or context.get("query")
                 or query
+            )
+        elif local_knowledge_query:
+            resolved_query = query
+            logger.info(
+                "[LocalKnowledge] Reference resolution skipped for ordinary knowledge query."
             )
         elif self.reasoning_engine:
             try:
@@ -2264,6 +2278,10 @@ class CognitiveCore:
                     user_id=context.get("user_id", session_id),
                     base_context=context,
                 )
+
+                # ContextBuilder may rebuild the dictionary, so explicitly
+                # preserve the routing decision made before the rebuild.
+                context["local_knowledge_query"] = local_knowledge_query
 
                 # ContextBuilder may rebuild the dictionary, so explicitly
                 # restore vision information for the downstream cognitive pipeline.
@@ -2370,7 +2388,20 @@ class CognitiveCore:
         # =========================================================
         # PHASE 5 — RETRIEVE RELEVANT EPISODIC MEMORY
         # =========================================================
-        if self.memory_conversation_manager:
+        # Ordinary factual knowledge questions must not inspect personal
+        # episodic history. Doing so adds latency and can invoke the legacy
+        # memory-relevance LLM path. Personal memory is opt-in through the
+        # deterministic memory routes or an explicit cognitive decision.
+        local_knowledge_query = bool(
+            context.get("local_knowledge_query")
+            or (
+                self._looks_like_ordinary_knowledge_query(resolved_query)
+                and not compound_memory_request
+            )
+        )
+        context["local_knowledge_query"] = local_knowledge_query
+
+        if self.memory_conversation_manager and not local_knowledge_query:
             try:
                 episodic_memories = (
                     await self.memory_conversation_manager.retrieve_episodes(
@@ -2393,6 +2424,11 @@ class CognitiveCore:
                     e,
                 )
                 context["episodic_memory"] = []
+        elif local_knowledge_query:
+            context["episodic_memory"] = []
+            logger.info(
+                "[LocalKnowledge] Episodic memory retrieval skipped for ordinary knowledge query."
+            )
 
         if self._looks_like_name_recall_request(query):
             user_name = conversation_context.get("user_name")
@@ -2411,6 +2447,7 @@ class CognitiveCore:
         reasoning = precomputed_reasoning
         if (
             not compound_memory_request
+            and not local_knowledge_query
             and not reasoning
             and self.reasoning_engine
         ):
@@ -2418,6 +2455,10 @@ class CognitiveCore:
                 reasoning = await self.reasoning_engine.reason(context)
             except Exception as e:
                 logger.warning("ReasoningEngine invocation skipped: %s", e)
+        elif local_knowledge_query:
+            logger.info(
+                "[LocalKnowledge] ReasoningEngine skipped; KnowledgeManager owns this query."
+            )
 
         if reasoning:
             context["reasoning"] = reasoning
@@ -5762,7 +5803,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                 # Never store the context dictionary inside itself.
                 "cognitive_context_id": execution_id,
             })
-
+            
             controller_decision = self.cognitive_controller.analyze(
                 query=query,
                 context=context,
