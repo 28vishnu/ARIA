@@ -2,6 +2,12 @@ import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from uuid import uuid4
+import asyncio
+
+try:
+    from brain.embeddings import get_embedding
+except Exception:
+    get_embedding = None
 
 logger = logging.getLogger("aria")
 
@@ -131,7 +137,22 @@ class KnowledgeDatabase:
                 upsert=True,
             )
 
-        # 1. Automatic Embedding Storage
+        # 1. Automatic local embedding storage
+        # Generate an embedding automatically when the caller did not provide
+        # one. This keeps knowledge ingestion local-first and removes the need
+        # for an external embedding API.
+        if embedding is None and get_embedding is not None:
+            try:
+                embedding = await asyncio.to_thread(
+                    get_embedding,
+                    f"{title}\n{content}",
+                )
+            except Exception:
+                logger.exception(
+                    "[KnowledgeDB] Local embedding generation failed."
+                )
+                embedding = None
+
         if embedding and self.vector_db is not None:
             await self.store_embedding(
                 record["_id"],
@@ -640,6 +661,20 @@ class KnowledgeDatabase:
         results.extend(text_results)
 
         # 2. Semantic Search
+        # Generate the query embedding locally when the caller did not supply
+        # one. This keeps retrieval independent of external embedding APIs.
+        if embedding is None and get_embedding is not None:
+            try:
+                embedding = await asyncio.to_thread(
+                    get_embedding,
+                    query,
+                )
+            except Exception:
+                logger.exception(
+                    "[KnowledgeDB] Local query embedding generation failed."
+                )
+                embedding = None
+
         if embedding and self.vector_db is not None:
             semantic_res = await self.semantic_search(embedding, limit=limit)
             # Extract IDs from semantic search and fetch from mongo
