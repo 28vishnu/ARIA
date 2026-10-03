@@ -1,103 +1,391 @@
 """
 ARIA Local Embedding Engine
 
-This module provides local text embeddings for ARIA's knowledge system.
+Purpose
+-------
+Provides local semantic embeddings without requiring an external
+embedding API.
 
-Design goals:
-- No external embedding API required.
-- Model is configurable through ARIA_EMBEDDING_MODEL.
-- Model is loaded once and reused.
-- Supports single and batch embeddings.
-- Safe fallback when the local model is unavailable.
+Render / low-memory design
+--------------------------
+The default model is intentionally lightweight:
+
+    sentence-transformers/all-MiniLM-L6-v2
+
+This is substantially smaller than BAAI/bge-m3 and is much more
+appropriate for low-memory CPU deployments.
+
+The model is loaded lazily. Importing this module does NOT load
+Torch or the embedding model into memory.
+
+Configuration
+-------------
+ARIA_EMBEDDING_MODEL
+    Override the model name.
+
+ARIA_EMBEDDING_DEVICE
+    cpu / cuda / auto
+
+ARIA_EMBEDDING_BATCH_SIZE
+    Batch size used during embedding generation.
+
+ARIA_EMBEDDING_MAX_LENGTH
+    Maximum tokenizer sequence length.
+
+Examples
+--------
+Local development:
+
+    ARIA_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+Higher-memory server:
+
+    ARIA_EMBEDDING_MODEL=BAAI/bge-m3
+
+Important
+---------
+The selected model's embedding dimension must match the Chroma
+collection created for that model.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from functools import lru_cache
-from typing import Iterable, List, Optional
+import threading
+from typing import Iterable, List, Optional, Sequence
 
 logger = logging.getLogger("aria")
 
 
-# ---------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------
+# =========================================================
+# DEFAULT CONFIGURATION
+# =========================================================
+#
+# BGE-M3 is excellent but too memory-heavy for a small Render
+# instance when combined with:
+#
+#   - FastAPI
+#   - Torch
+#   - ChromaDB
+#   - MongoDB driver
+#   - ARIA subsystems
+#
+# MiniLM is intentionally the default for deployment safety.
+# =========================================================
 
-DEFAULT_MODEL = os.getenv(
-    "ARIA_EMBEDDING_MODEL",
-    "BAAI/bge-m3",
+DEFAULT_EMBEDDING_MODEL = (
+    "sentence-transformers/all-MiniLM-L6-v2"
 )
 
-EMBEDDING_DEVICE = os.getenv(
-    "ARIA_EMBEDDING_DEVICE",
-    "cpu",
-)
+DEFAULT_DEVICE = "cpu"
 
-NORMALIZE_EMBEDDINGS = os.getenv(
-    "ARIA_NORMALIZE_EMBEDDINGS",
-    "true",
-).lower() not in {
-    "0",
-    "false",
-    "no",
-}
+DEFAULT_BATCH_SIZE = 8
+
+DEFAULT_MAX_LENGTH = 256
 
 
-# ---------------------------------------------------------------------
-# Model loading
-# ---------------------------------------------------------------------
+# =========================================================
+# GLOBAL MODEL STATE
+# =========================================================
 
-@lru_cache(maxsize=1)
-def _load_model():
+_embedding_model = None
+
+_embedding_model_name: Optional[str] = None
+
+_embedding_dimension: Optional[int] = None
+
+_embedding_device: Optional[str] = None
+
+_embedding_failed = False
+
+_embedding_lock = threading.Lock()
+
+
+# =========================================================
+# CONFIGURATION HELPERS
+# =========================================================
+
+def embedding_model_name() -> str:
     """
-    Load the local embedding model exactly once.
+    Return the configured local embedding model name.
 
-    The model is intentionally lazy-loaded so ARIA startup does not
-    download/load a multi-GB model unless embeddings are actually used.
+    The environment variable is evaluated dynamically so deployment
+    configuration can override the default without changing code.
     """
+
+    return str(
+        os.getenv(
+            "ARIA_EMBEDDING_MODEL",
+            DEFAULT_EMBEDDING_MODEL,
+        )
+    ).strip() or DEFAULT_EMBEDDING_MODEL
+
+
+def embedding_device() -> str:
+    """
+    Return the configured embedding device.
+
+    Supported values:
+
+        cpu
+        cuda
+        auto
+
+    For Render deployments, CPU is the safe default.
+    """
+
+    configured = str(
+        os.getenv(
+            "ARIA_EMBEDDING_DEVICE",
+            DEFAULT_DEVICE,
+        )
+    ).strip().lower()
+
+    if configured not in {
+        "cpu",
+        "cuda",
+        "auto",
+    }:
+        logger.warning(
+            "[Embeddings] Invalid ARIA_EMBEDDING_DEVICE=%s; "
+            "falling back to cpu.",
+            configured,
+        )
+
+        return DEFAULT_DEVICE
+
+    return configured
+
+
+def embedding_batch_size() -> int:
+    """
+    Return the embedding batch size.
+
+    A small batch is intentionally used to reduce peak RAM usage.
+    """
+
+    raw = os.getenv(
+        "ARIA_EMBEDDING_BATCH_SIZE",
+        str(DEFAULT_BATCH_SIZE),
+    )
 
     try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        logger.error(
-            "[Embeddings] sentence-transformers is not installed: %s",
-            exc,
-        )
-        return None
+        value = int(raw)
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        value = DEFAULT_BATCH_SIZE
+
+    return max(
+        1,
+        min(
+            value,
+            32,
+        ),
+    )
+
+
+def embedding_max_length() -> int:
+    """
+    Return the maximum tokenizer sequence length.
+
+    Lowering this reduces memory usage for large documents.
+    """
+
+    raw = os.getenv(
+        "ARIA_EMBEDDING_MAX_LENGTH",
+        str(DEFAULT_MAX_LENGTH),
+    )
 
     try:
-        logger.info(
-            "[Embeddings] Loading local model: %s | device=%s",
-            DEFAULT_MODEL,
-            EMBEDDING_DEVICE,
-        )
+        value = int(raw)
 
-        model = SentenceTransformer(
-            DEFAULT_MODEL,
-            device=EMBEDDING_DEVICE,
-        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        value = DEFAULT_MAX_LENGTH
 
-        logger.info(
-            "[Embeddings] Local embedding model loaded: %s",
-            DEFAULT_MODEL,
-        )
+    return max(
+        32,
+        min(
+            value,
+            512,
+        ),
+    )
 
-        return model
 
-    except Exception as exc:
+# =========================================================
+# DEVICE RESOLUTION
+# =========================================================
+
+def _resolve_device() -> str:
+    """
+    Resolve the actual device used by SentenceTransformer.
+    """
+
+    configured = embedding_device()
+
+    if configured == "cpu":
+        return "cpu"
+
+    if configured == "cuda":
+
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return "cuda"
+
+            logger.warning(
+                "[Embeddings] CUDA requested but unavailable; "
+                "falling back to CPU."
+            )
+
+        except Exception:
+            logger.exception(
+                "[Embeddings] Failed to inspect CUDA availability."
+            )
+
+        return "cpu"
+
+    # auto
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+
+    except Exception:
         logger.exception(
-            "[Embeddings] Failed to load local model '%s': %s",
-            DEFAULT_MODEL,
-            exc,
+            "[Embeddings] Failed to detect CUDA."
         )
+
+    return "cpu"
+
+
+# =========================================================
+# MODEL LOADING
+# =========================================================
+
+def _load_embedding_model():
+    """
+    Lazily load the SentenceTransformer model.
+
+    The model is NOT loaded during module import.
+
+    This is important for Render because ARIA should boot even when
+    local embedding resources are unavailable or insufficient.
+    """
+
+    global _embedding_model
+    global _embedding_model_name
+    global _embedding_dimension
+    global _embedding_device
+    global _embedding_failed
+
+    if _embedding_model is not None:
+        return _embedding_model
+
+    if _embedding_failed:
         return None
 
+    with _embedding_lock:
 
-# ---------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------
+        if _embedding_model is not None:
+            return _embedding_model
+
+        if _embedding_failed:
+            return None
+
+        model_name = embedding_model_name()
+        device = _resolve_device()
+
+        try:
+
+            logger.info(
+                "[Embeddings] Loading local embedding model: %s | device=%s",
+                model_name,
+                device,
+            )
+
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer(
+                model_name,
+                device=device,
+            )
+
+            # Keep tokenizer sequence length bounded.
+            #
+            # This reduces memory consumption for large documents
+            # without affecting normal short factual questions.
+            try:
+                model.max_seq_length = embedding_max_length()
+
+            except Exception:
+                logger.debug(
+                    "[Embeddings] Could not set max_seq_length.",
+                    exc_info=True,
+                )
+
+            dimension = int(
+                model.get_sentence_embedding_dimension()
+            )
+
+            _embedding_model = model
+            _embedding_model_name = model_name
+            _embedding_dimension = dimension
+            _embedding_device = device
+
+            logger.info(
+                "[Embeddings] Local embedding model ready | "
+                "model=%s | dimension=%d | device=%s | "
+                "batch_size=%d | max_length=%d",
+                model_name,
+                dimension,
+                device,
+                embedding_batch_size(),
+                embedding_max_length(),
+            )
+
+            return _embedding_model
+
+        except Exception as exc:
+
+            _embedding_failed = True
+
+            logger.exception(
+                "[Embeddings] Failed to load local embedding model "
+                "%s: %s",
+                model_name,
+                exc,
+            )
+
+            return None
+
+
+# =========================================================
+# PUBLIC MODEL ACCESS
+# =========================================================
+
+def get_embedding_model():
+    """
+    Return the lazily-loaded local SentenceTransformer model.
+
+    Returns:
+        SentenceTransformer instance or None.
+    """
+
+    return _load_embedding_model()
+
+
+# =========================================================
+# SINGLE EMBEDDING
+# =========================================================
 
 def get_embedding(
     text: str,
@@ -105,127 +393,340 @@ def get_embedding(
     """
     Generate one local embedding.
 
-    Returns an empty list when the local model is unavailable.
+    Never raises an embedding-model exception to the caller.
+
+    Returns:
+        List[float] containing the embedding, or [] when the
+        local embedding engine is unavailable.
     """
 
-    if not text:
+    if text is None:
         return []
 
-    text = str(text).strip()
+    cleaned = str(
+        text
+    ).strip()
 
-    if not text:
+    if not cleaned:
         return []
 
-    model = _load_model()
+    model = _load_embedding_model()
 
     if model is None:
-        logger.warning(
-            "[Embeddings] Local model unavailable; returning empty embedding."
-        )
         return []
 
     try:
-        vector = model.encode(
-            text,
-            normalize_embeddings=NORMALIZE_EMBEDDINGS,
+
+        embedding = model.encode(
+            cleaned,
+            normalize_embeddings=True,
             convert_to_numpy=True,
             show_progress_bar=False,
         )
 
-        return vector.tolist()
+        return embedding.astype(
+            "float32"
+        ).tolist()
 
-    except Exception as exc:
+    except Exception:
+
         logger.exception(
-            "[Embeddings] Embedding generation failed: %s",
-            exc,
+            "[Embeddings] Single embedding generation failed."
         )
+
         return []
 
+
+# =========================================================
+# BATCH EMBEDDINGS
+# =========================================================
 
 def get_embeddings(
-    texts: Iterable[str],
-    batch_size: int = 16,
+    texts: Sequence[str],
 ) -> List[List[float]]:
     """
-    Generate embeddings for multiple texts.
+    Generate local embeddings for multiple texts.
 
-    Batch processing is important when ARIA ingests thousands or millions
-    of knowledge chunks.
+    Uses a deliberately small batch size to reduce peak RAM.
+
+    Empty input returns [].
+
+    Invalid/empty individual texts are represented by [] so callers
+    can preserve positional alignment when necessary.
     """
 
-    clean_texts = [
-        str(text).strip()
+    if not texts:
+        return []
+
+    normalized_texts = [
+        str(text or "").strip()
         for text in texts
-        if text is not None and str(text).strip()
     ]
 
-    if not clean_texts:
-        return []
+    if not any(
+        normalized_texts
+    ):
+        return [
+            []
+            for _ in normalized_texts
+        ]
 
-    model = _load_model()
+    model = _load_embedding_model()
 
     if model is None:
-        logger.warning(
-            "[Embeddings] Local model unavailable; returning no embeddings."
-        )
-        return []
+
+        return [
+            []
+            for _ in normalized_texts
+        ]
 
     try:
-        vectors = model.encode(
-            clean_texts,
+
+        batch_size = embedding_batch_size()
+
+        embeddings = model.encode(
+            normalized_texts,
             batch_size=batch_size,
-            normalize_embeddings=NORMALIZE_EMBEDDINGS,
+            normalize_embeddings=True,
             convert_to_numpy=True,
             show_progress_bar=False,
         )
 
-        return vectors.tolist()
+        return [
+            vector.astype(
+                "float32"
+            ).tolist()
+            for vector in embeddings
+        ]
 
-    except Exception as exc:
+    except Exception:
+
         logger.exception(
-            "[Embeddings] Batch embedding generation failed: %s",
-            exc,
+            "[Embeddings] Batch embedding generation failed."
         )
-        return []
+
+        return [
+            []
+            for _ in normalized_texts
+        ]
 
 
-def embedding_dimension() -> Optional[int]:
+# =========================================================
+# ITERABLE EMBEDDINGS
+# =========================================================
+
+def get_embeddings_iterable(
+    texts: Iterable[str],
+) -> List[List[float]]:
     """
-    Return the dimensionality of the currently configured model.
+    Convenience wrapper for generators/iterables.
+
+    The iterable is materialized once and passed through the same
+    safe batch path.
     """
-
-    model = _load_model()
-
-    if model is None:
-        return None
 
     try:
-        return int(model.get_sentence_embedding_dimension())
+
+        values = list(
+            texts
+        )
+
     except Exception:
-        return None
+
+        logger.exception(
+            "[Embeddings] Failed to materialize embedding iterable."
+        )
+
+        return []
+
+    return get_embeddings(
+        values
+    )
 
 
-def embedding_model_name() -> str:
-    """Return the configured embedding model name."""
+# =========================================================
+# EMBEDDING DIMENSION
+# =========================================================
 
-    return DEFAULT_MODEL
+def embedding_dimension() -> int:
+    """
+    Return the embedding dimension.
 
+    This loads the model lazily if necessary.
+
+    Returns:
+        Dimension > 0 when available, otherwise 0.
+    """
+
+    global _embedding_dimension
+
+    if _embedding_dimension is not None:
+        return int(
+            _embedding_dimension
+        )
+
+    model = _load_embedding_model()
+
+    if model is None:
+        return 0
+
+    try:
+
+        dimension = int(
+            model.get_sentence_embedding_dimension()
+        )
+
+        _embedding_dimension = dimension
+
+        return dimension
+
+    except Exception:
+
+        logger.exception(
+            "[Embeddings] Failed to determine embedding dimension."
+        )
+
+        return 0
+
+
+# =========================================================
+# AVAILABILITY
+# =========================================================
 
 def embedding_available() -> bool:
-    """Return whether the local embedding model can currently be loaded."""
+    """
+    Check whether the local embedding engine can currently
+    generate embeddings.
 
-    return _load_model() is not None
+    This intentionally loads the model lazily.
+    """
 
+    model = _load_embedding_model()
+
+    return model is not None
+
+
+# =========================================================
+# STATUS
+# =========================================================
+
+def embedding_status() -> dict:
+    """
+    Return diagnostic information without exposing the model object.
+    """
+
+    return {
+        "available": _embedding_model is not None,
+        "failed": _embedding_failed,
+        "model": (
+            _embedding_model_name
+            or embedding_model_name()
+        ),
+        "dimension": (
+            int(_embedding_dimension)
+            if _embedding_dimension is not None
+            else 0
+        ),
+        "device": (
+            _embedding_device
+            or embedding_device()
+        ),
+        "batch_size": embedding_batch_size(),
+        "max_length": embedding_max_length(),
+    }
+
+
+# =========================================================
+# CACHE CLEAR
+# =========================================================
 
 def clear_embedding_model_cache() -> None:
     """
-    Clear the cached model.
+    Release the local embedding model from memory.
 
-    Useful for development/testing or switching models without restarting.
+    Useful for:
+        - tests
+        - maintenance
+        - memory-constrained workers
+        - controlled model switching
+
+    This does not delete downloaded model files from disk.
     """
 
-    _load_model.cache_clear()
+    global _embedding_model
+    global _embedding_model_name
+    global _embedding_dimension
+    global _embedding_device
+    global _embedding_failed
+
+    with _embedding_lock:
+
+        model = _embedding_model
+
+        _embedding_model = None
+        _embedding_model_name = None
+        _embedding_dimension = None
+        _embedding_device = None
+        _embedding_failed = False
+
+        if model is not None:
+
+            try:
+                del model
+
+            except Exception:
+                pass
+
+        # Best-effort garbage collection.
+        try:
+            import gc
+
+            gc.collect()
+
+        except Exception:
+            pass
+
+        # Best-effort Torch cache cleanup.
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        except Exception:
+            pass
 
     logger.info(
         "[Embeddings] Local embedding model cache cleared."
+    )
+
+
+# =========================================================
+# COMPATIBILITY ALIASES
+# =========================================================
+#
+# Keep common names available so existing ARIA modules do not
+# require unnecessary changes.
+# =========================================================
+
+get_local_embedding = get_embedding
+
+get_local_embeddings = get_embeddings
+
+get_embedding_dimension = embedding_dimension
+
+
+# =========================================================
+# MODULE DIAGNOSTICS
+# =========================================================
+
+if __name__ == "__main__":
+
+    logging.basicConfig(
+        level=logging.INFO
+    )
+
+    logger.info(
+        "[Embeddings] Configuration: %s",
+        embedding_status()
     )
