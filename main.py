@@ -20,6 +20,8 @@ from core.dependency_injection import RequestContext
 from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
+from brain.development.telegram_development import TelegramDevelopmentInterface
+from audio_engine import AudioEngine
 
 
 # =========================================================
@@ -1451,6 +1453,148 @@ async def telegram_webhook(
 
 
 # =========================================================
+# PHASE 1 — MASTER DEVELOPMENT / VOICE INPUT
+# =========================================================
+
+async def _transcribe_telegram_voice(
+    *,
+    http_client,
+    token: str,
+    message: dict,
+) -> str | None:
+    """
+    Download a Telegram voice/audio message and transcribe it.
+
+    Telegram voice notes are normally OGG/Opus. AudioEngine performs
+    transcription without changing the development safety boundary.
+    """
+    voice = message.get("voice") or message.get("audio")
+
+    if not isinstance(voice, dict):
+        return None
+
+    file_id = voice.get("file_id")
+    if not file_id:
+        return None
+
+    try:
+        file_response = await http_client.get(
+            f"https://api.telegram.org/bot{token}/getFile",
+            params={"file_id": file_id},
+        )
+
+        if not file_response.is_success:
+            logger.error(
+                "[Telegram][Voice] getFile failed | status=%s",
+                file_response.status_code,
+            )
+            return None
+
+        file_payload = file_response.json()
+
+        if not file_payload.get("ok"):
+            logger.error(
+                "[Telegram][Voice] Telegram getFile returned failure."
+            )
+            return None
+
+        file_path = (
+            file_payload.get("result", {})
+            .get("file_path")
+        )
+
+        if not file_path:
+            return None
+
+        audio_response = await http_client.get(
+            f"https://api.telegram.org/file/bot{token}/{file_path}"
+        )
+
+        if not audio_response.is_success:
+            logger.error(
+                "[Telegram][Voice] Audio download failed | status=%s",
+                audio_response.status_code,
+            )
+            return None
+
+        audio_bytes = audio_response.content
+
+        mime_type = "audio/ogg"
+        if message.get("audio"):
+            mime_type = (
+                message.get("audio", {}).get("mime_type")
+                or "audio/mpeg"
+            )
+
+        engine = AudioEngine()
+
+        result = await asyncio.to_thread(
+            engine.transcribe_audio,
+            audio_bytes,
+            mime_type,
+        )
+
+        if not isinstance(result, dict) or not result.get("success"):
+            logger.warning(
+                "[Telegram][Voice] Transcription unavailable: %s",
+                (
+                    result.get("summary")
+                    if isinstance(result, dict)
+                    else "unknown error"
+                ),
+            )
+            return None
+
+        transcript = str(
+            result.get("transcript") or ""
+        ).strip()
+
+        if transcript:
+            logger.info(
+                "[Telegram][Voice] Voice transcribed successfully | chars=%d",
+                len(transcript),
+            )
+            return transcript
+
+    except Exception:
+        logger.exception(
+            "[Telegram][Voice] Voice transcription failed."
+        )
+
+    return None
+
+
+async def _handle_master_development_command(
+    *,
+    registry,
+    user_id,
+    text: str,
+) -> dict[str, Any] | None:
+    controller = registry.get(
+        "development_controller"
+    )
+
+    if controller is None:
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Self-development is not available because "
+                "DevelopmentController is not registered."
+            ),
+        }
+
+    interface = TelegramDevelopmentInterface(
+        controller
+    )
+
+    return await interface.handle(
+        user_id=user_id,
+        text=text,
+    )
+
+
+# =========================================================
 # ACTUAL TELEGRAM PROCESSING
 # =========================================================
 
@@ -1521,18 +1665,56 @@ async def process_telegram_update(
             )
         )
 
-        text = msg.get(
-            "text",
-            ""
-        ).strip()
-
         if chat_id is None or user_id is None:
-
             return
 
         http_client = registry.get(
             "http_client"
         )
+
+        # -----------------------------------------------------
+        # VOICE / AUDIO → TEXT
+        # -----------------------------------------------------
+        #
+        # Voice is normalized into the same text pipeline used by
+        # typed commands. This means "Master, develop ..." spoken
+        # through Telegram can invoke the same Master-only
+        # development interface as the typed command.
+        #
+        text = msg.get(
+            "text",
+            ""
+        ).strip()
+
+        if not text and (
+            msg.get("voice")
+            or msg.get("audio")
+        ):
+            transcribed = await _transcribe_telegram_voice(
+                http_client=http_client,
+                token=token,
+                message=msg,
+            )
+
+            if transcribed:
+                text = transcribed
+                logger.info(
+                    "[Telegram] Voice normalized to text: %r",
+                    text,
+                )
+            else:
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I couldn't transcribe that voice message. "
+                            "Please try again."
+                        ),
+                    },
+                )
+                return
+
 
         # -----------------------------------------------------
         # TELEGRAM STATUS MESSAGE
@@ -1551,6 +1733,36 @@ async def process_telegram_update(
         )
 
         status_started = True
+
+        # -----------------------------------------------------
+        # MASTER DEVELOPMENT COMMAND
+        # -----------------------------------------------------
+        #
+        # This is checked before the normal cognitive pipeline so
+        # development requests cannot accidentally become ordinary
+        # chat requests. Voice and text both arrive here as text.
+        #
+        development_result = await _handle_master_development_command(
+            registry=registry,
+            user_id=user_id,
+            text=text,
+        )
+
+        if development_result is not None:
+            await safe_delete_status(status)
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": development_result.get(
+                        "text",
+                        "Development request processed.",
+                    ),
+                },
+            )
+
+            return development_result
 
         # -----------------------------------------------------
         # HANDLE PENDING DOCUMENT CONFIRMATION
