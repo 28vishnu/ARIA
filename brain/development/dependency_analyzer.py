@@ -1,99 +1,52 @@
-"""
-ARIA Dependency Analyzer
-========================
-
-Phase 1 / Step 1
-
-Builds a static dependency graph for a Python repository.
-
-The analyzer does not execute application code.
-
-It uses Python's AST and filesystem information to determine:
-
-    module -> modules it imports
-
-and the reverse relationship:
-
-    module -> modules that import it
-
-This information will later allow ARIA's development planner to
-understand the blast radius of a proposed code change.
-"""
-
 from __future__ import annotations
 
 import ast
-import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
-
-
-logger = logging.getLogger(
-    "aria.development.dependencies"
-)
-
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
+from typing import Optional
 
 
 @dataclass
 class DependencyInfo:
-    """
-    One dependency relationship.
-    """
-
     source_module: str
     target_module: str
-
     import_type: str
 
-    imported_names: List[str] = field(
+    imported_names: list[str] = field(
         default_factory=list
     )
 
     line: int = 0
-
     resolved_local: bool = False
 
 
 @dataclass
 class ModuleInfo:
-    """
-    Static information about one Python module.
-    """
-
     module_name: str
     path: str
 
     is_package: bool = False
 
-    imports: List[str] = field(
+    imports: list[str] = field(
         default_factory=list
     )
 
-    imported_by: List[str] = field(
+    imported_by: list[str] = field(
         default_factory=list
     )
 
 
 @dataclass
 class DependencyGraph:
-    """
-    Repository-wide dependency graph.
-    """
-
-    modules: Dict[str, ModuleInfo] = field(
+    modules: dict[str, ModuleInfo] = field(
         default_factory=dict
     )
 
-    dependencies: List[DependencyInfo] = field(
+    dependencies: list[DependencyInfo] = field(
         default_factory=list
     )
 
-    unresolved_imports: Dict[str, List[str]] = field(
+    unresolved_imports: dict[str, list[str]] = field(
         default_factory=dict
     )
 
@@ -101,86 +54,69 @@ class DependencyGraph:
 
         return {
             "modules": {
-                name: asdict(info)
-                for name, info in self.modules.items()
+                key: asdict(value)
+                for key, value in self.modules.items()
             },
             "dependencies": [
                 asdict(item)
                 for item in self.dependencies
             ],
-            "unresolved_imports": {
-                key: list(value)
-                for key, value in self.unresolved_imports.items()
-            },
+            "unresolved_imports": self.unresolved_imports,
         }
 
     def dependencies_of(
         self,
         module_name: str,
-    ) -> List[str]:
+    ) -> list[str]:
 
-        info = self.modules.get(
+        module = self.modules.get(
             module_name
         )
 
-        if info is None:
+        if module is None:
             return []
 
         return list(
-            info.imports
+            module.imports
         )
 
     def dependents_of(
         self,
         module_name: str,
-    ) -> List[str]:
+    ) -> list[str]:
 
-        info = self.modules.get(
+        module = self.modules.get(
             module_name
         )
 
-        if info is None:
+        if module is None:
             return []
 
         return list(
-            info.imported_by
+            module.imported_by
         )
-
-
-# ---------------------------------------------------------------------------
-# Analyzer
-# ---------------------------------------------------------------------------
 
 
 class DependencyAnalyzer:
     """
-    Static Python dependency graph builder.
+    Build a static Python dependency graph.
+
+    No project code is imported or executed.
     """
 
     def build(
         self,
         repository_root: str | Path,
         python_files: Optional[
-            Iterable[str | Path]
+            list[str | Path]
         ] = None,
     ) -> DependencyGraph:
-        """
-        Build a dependency graph for a repository.
 
-        Args:
-            repository_root:
-                Root directory of the repository.
-
-            python_files:
-                Optional list of files to analyze.
-
-                When omitted, every Python file under the repository
-                is discovered automatically.
-        """
-
-        root = Path(
-            repository_root
-        ).expanduser().resolve()
+        root = (
+            Path(repository_root)
+            .expanduser()
+            .resolve()
+        )
 
         if not root.is_dir():
             raise ValueError(
@@ -194,32 +130,26 @@ class DependencyAnalyzer:
 
         graph = DependencyGraph()
 
-        for module_name, module_data in module_index.items():
+        for module_name, data in module_index.items():
 
-            graph.modules[module_name] = ModuleInfo(
-                module_name=module_name,
-                path=module_data["path"],
-                is_package=module_data["is_package"],
+            graph.modules[module_name] = (
+                ModuleInfo(
+                    module_name=module_name,
+                    path=data["relative"],
+                    is_package=data["package"],
+                )
             )
 
-        for module_name, module_data in module_index.items():
+        for module_name, data in module_index.items():
 
             path = Path(
-                module_data["absolute_path"]
+                data["absolute"]
             )
 
-            try:
-
-                source = path.read_text(
-                    encoding="utf-8"
-                )
-
-            except UnicodeDecodeError:
-
-                source = path.read_text(
-                    encoding="utf-8",
-                    errors="replace",
-                )
+            source = path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
 
             try:
 
@@ -228,15 +158,7 @@ class DependencyAnalyzer:
                     filename=str(path),
                 )
 
-            except SyntaxError as exc:
-
-                logger.warning(
-                    "[DependencyAnalyzer] "
-                    "Skipping invalid Python file %s: %s",
-                    path,
-                    exc,
-                )
-
+            except SyntaxError:
                 continue
 
             for node in ast.walk(tree):
@@ -246,61 +168,63 @@ class DependencyAnalyzer:
                     ast.Import,
                 ):
 
-                    self._process_import(
-                        graph=graph,
-                        module_name=module_name,
-                        imported_module=None,
-                        imported_names=[
-                            alias.name
-                            for alias in node.names
-                        ],
-                        import_type="absolute",
-                        line=node.lineno,
-                        module_index=module_index,
-                    )
+                    for alias in node.names:
+
+                        self._add_dependency(
+                            graph=graph,
+                            source_module=module_name,
+                            target=alias.name,
+                            imported_names=[
+                                alias.name
+                            ],
+                            import_type="absolute",
+                            line=node.lineno,
+                            module_index=module_index,
+                        )
 
                 elif isinstance(
                     node,
                     ast.ImportFrom,
                 ):
 
-                    self._process_from_import(
+                    target = (
+                        self._resolve_relative_target(
+                            source_module=module_name,
+                            module=node.module or "",
+                            level=node.level,
+                        )
+                    )
+
+                    self._add_dependency(
                         graph=graph,
-                        module_name=module_name,
-                        node=node,
+                        source_module=module_name,
+                        target=target,
+                        imported_names=[
+                            alias.name
+                            for alias in node.names
+                        ],
+                        import_type=(
+                            "relative"
+                            if node.level
+                            else "absolute"
+                        ),
+                        line=node.lineno,
                         module_index=module_index,
                     )
 
-        self._finalize_graph(
+        self._finalize(
             graph
         )
 
-        logger.info(
-            "[DependencyAnalyzer] Graph built | "
-            "modules=%d dependencies=%d unresolved=%d",
-            len(graph.modules),
-            len(graph.dependencies),
-            sum(
-                len(items)
-                for items in graph.unresolved_imports.values()
-            ),
-        )
-
         return graph
-
-    # ------------------------------------------------------------------
-    # Module index
-    # ------------------------------------------------------------------
 
     def _build_module_index(
         self,
         root: Path,
         python_files: Optional[
-            Iterable[str | Path]
+            list[str | Path]
         ],
-    ) -> Dict[str, dict]:
-
-        index: Dict[str, dict] = {}
+    ) -> dict:
 
         if python_files is None:
 
@@ -311,216 +235,145 @@ class DependencyAnalyzer:
         else:
 
             paths = [
-                self._resolve_file(
+                self._resolve_path(
                     root,
-                    path,
+                    item,
                 )
-                for path in python_files
+                for item in python_files
             ]
+
+        ignored = {
+            ".git",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "node_modules",
+            "dist",
+            "build",
+        }
+
+        index = {}
 
         for path in paths:
 
             path = Path(path)
 
-            if not path.exists():
-                continue
-
             if not path.is_file():
                 continue
 
-            if self._should_skip(
-                path,
-                root,
+            try:
+                relative = path.relative_to(
+                    root
+                )
+            except ValueError:
+                continue
+
+            if any(
+                part in ignored
+                for part in relative.parts
             ):
                 continue
 
-            module_name, is_package = (
-                self._path_to_module(
-                    root,
-                    path,
-                )
+            parts = list(
+                relative.parts
             )
 
-            if not module_name:
+            is_package = (
+                parts[-1]
+                == "__init__.py"
+            )
+
+            if is_package:
+                parts = parts[:-1]
+
+            else:
+                parts[-1] = (
+                    parts[-1][:-3]
+                )
+
+            if not parts:
                 continue
 
+            module_name = ".".join(
+                parts
+            )
+
             index[module_name] = {
-                "path": self._relative_path(
-                    root,
-                    path,
+                "relative": str(
+                    relative
+                ).replace(
+                    "\\",
+                    "/",
                 ),
-                "absolute_path": str(
-                    path
-                ),
-                "is_package": is_package,
+                "absolute": str(path),
+                "package": is_package,
             }
 
         return index
 
-    # ------------------------------------------------------------------
-    # Import processing
-    # ------------------------------------------------------------------
-
-    def _process_import(
+    def _add_dependency(
         self,
         graph: DependencyGraph,
-        module_name: str,
-        imported_module: Optional[str],
-        imported_names: List[str],
+        source_module: str,
+        target: str,
+        imported_names: list[str],
         import_type: str,
         line: int,
-        module_index: Dict[str, dict],
+        module_index: dict,
     ) -> None:
 
-        names = imported_names
-
-        for imported_name in names:
-
-            target = (
-                imported_module
-                if imported_module
-                else imported_name
-            )
-
-            resolved = self._resolve_target(
-                target,
-                module_index,
-            )
-
-            dependency = DependencyInfo(
-                source_module=module_name,
-                target_module=(
-                    resolved
-                    if resolved
-                    else target
-                ),
-                import_type=import_type,
-                imported_names=[
-                    imported_name
-                ],
-                line=line,
-                resolved_local=(
-                    resolved is not None
-                ),
-            )
-
-            graph.dependencies.append(
-                dependency
-            )
-
-            if resolved:
-
-                graph.modules[
-                    module_name
-                ].imports.append(
-                    resolved
-                )
-
-            else:
-
-                graph.unresolved_imports.setdefault(
-                    module_name,
-                    [],
-                ).append(
-                    target
-                )
-
-    def _process_from_import(
-        self,
-        graph: DependencyGraph,
-        module_name: str,
-        node: ast.ImportFrom,
-        module_index: Dict[str, dict],
-    ) -> None:
-
-        base_module = node.module or ""
-
-        target = self._resolve_relative_import(
-            source_module=module_name,
-            module=node.module,
-            level=node.level,
-        )
-
-        if target is None:
-            target = base_module
+        if not target:
+            return
 
         resolved = self._resolve_target(
             target,
             module_index,
         )
 
-        imported_names = [
-            alias.name
-            for alias in node.names
-        ]
-
-        dependency = DependencyInfo(
-            source_module=module_name,
-            target_module=(
-                resolved
-                if resolved
-                else target
-            ),
-            import_type=(
-                "relative"
-                if node.level
-                else "absolute"
-            ),
-            imported_names=imported_names,
-            line=node.lineno,
-            resolved_local=(
-                resolved is not None
-            ),
+        final_target = (
+            resolved
+            if resolved
+            else target
         )
 
         graph.dependencies.append(
-            dependency
+            DependencyInfo(
+                source_module=source_module,
+                target_module=final_target,
+                import_type=import_type,
+                imported_names=imported_names,
+                line=line,
+                resolved_local=(
+                    resolved is not None
+                ),
+            )
         )
 
         if resolved:
 
             graph.modules[
-                module_name
+                source_module
             ].imports.append(
                 resolved
             )
 
-        elif target:
+        else:
 
             graph.unresolved_imports.setdefault(
-                module_name,
+                source_module,
                 [],
             ).append(
                 target
             )
 
-    # ------------------------------------------------------------------
-    # Resolution
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _resolve_target(
         target: str,
-        module_index: Dict[str, dict],
+        module_index: dict,
     ) -> Optional[str]:
-        """
-        Resolve an imported name against repository modules.
-
-        Example:
-
-            brain.core.cognitive_core
-
-        may resolve directly.
-
-        For:
-
-            brain.memory
-
-        we also check whether:
-            brain.memory.__init__
-
-        exists as a package.
-        """
 
         if not target:
             return None
@@ -528,85 +381,63 @@ class DependencyAnalyzer:
         if target in module_index:
             return target
 
-        package_target = (
-            f"{target}.__init__"
-        )
-
-        if package_target in module_index:
+        if (
+            target + ".__init__"
+            in module_index
+        ):
             return target
 
         parts = target.split(".")
 
         while parts:
 
-            candidate = ".".join(parts)
+            candidate = ".".join(
+                parts
+            )
 
             if candidate in module_index:
                 return candidate
 
-            package_candidate = (
-                f"{candidate}.__init__"
-            )
-
-            if package_candidate in module_index:
+            if (
+                candidate + ".__init__"
+                in module_index
+            ):
                 return candidate
 
             parts.pop()
 
         return None
 
-    def _resolve_relative_import(
-        self,
+    @staticmethod
+    def _resolve_relative_target(
         source_module: str,
-        module: Optional[str],
+        module: str,
         level: int,
-    ) -> Optional[str]:
+    ) -> str:
 
-        if level <= 0:
-            return module
+        parts = source_module.split(".")
 
-        source_parts = source_module.split(
-            "."
-        )
+        if parts:
+            parts = parts[:-1]
 
-        # A module itself is not a package.
-        # Therefore the first level moves to its parent.
-        if source_parts:
-            source_parts = source_parts[:-1]
+        for _ in range(
+            max(level - 1, 0)
+        ):
 
-        # level=1 means current package.
-        # level=2 means parent package, etc.
-        moves = max(
-            level - 1,
-            0,
-        )
-
-        if moves:
-
-            if moves > len(source_parts):
-                return module
-
-            source_parts = source_parts[
-                : len(source_parts) - moves
-            ]
+            if parts:
+                parts.pop()
 
         if module:
-            source_parts.append(
-                module
+            parts.extend(
+                module.split(".")
             )
 
         return ".".join(
-            part
-            for part in source_parts
-            if part
+            parts
         )
 
-    # ------------------------------------------------------------------
-    # Graph finalization
-    # ------------------------------------------------------------------
-
-    def _finalize_graph(
-        self,
+    @staticmethod
+    def _finalize(
         graph: DependencyGraph,
     ) -> None:
 
@@ -614,10 +445,6 @@ class DependencyAnalyzer:
 
             module.imports = sorted(
                 set(module.imports)
-            )
-
-            module.imported_by = sorted(
-                set(module.imported_by)
             )
 
         for dependency in graph.dependencies:
@@ -636,134 +463,38 @@ class DependencyAnalyzer:
             if source is None or target is None:
                 continue
 
-            if (
-                dependency.target_module
-                not in source.imports
-            ):
-                source.imports.append(
-                    dependency.target_module
-                )
-
-            if (
+            target.imported_by.append(
                 dependency.source_module
-                not in target.imported_by
-            ):
-                target.imported_by.append(
-                    dependency.source_module
-                )
+            )
 
         for module in graph.modules.values():
 
-            module.imports.sort()
-            module.imported_by.sort()
+            module.imported_by = sorted(
+                set(module.imported_by)
+            )
 
-        for key in list(
-            graph.unresolved_imports
+        for key, values in (
+            graph.unresolved_imports.items()
         ):
 
             graph.unresolved_imports[key] = sorted(
-                set(
-                    graph.unresolved_imports[key]
-                )
+                set(values)
             )
 
-    # ------------------------------------------------------------------
-    # Path helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
-    def _path_to_module(
-        root: Path,
-        path: Path,
-    ) -> tuple[str, bool]:
-
-        relative = path.relative_to(
-            root
-        )
-
-        parts = list(
-            relative.parts
-        )
-
-        if not parts:
-            return "", False
-
-        if parts[-1] == "__init__.py":
-
-            parts = parts[:-1]
-
-            if not parts:
-                return "", True
-
-            return ".".join(parts), True
-
-        if parts[-1].endswith(
-            ".py"
-        ):
-
-            parts[-1] = parts[-1][
-                :-3
-            ]
-
-        return ".".join(parts), False
-
-    @staticmethod
-    def _relative_path(
-        root: Path,
-        path: Path,
-    ) -> str:
-
-        return str(
-            path.relative_to(root)
-        ).replace(
-            "\\",
-            "/",
-        )
-
-    @staticmethod
-    def _resolve_file(
+    def _resolve_path(
         root: Path,
         path: str | Path,
     ) -> Path:
 
         candidate = Path(path)
 
-        if not candidate.is_absolute():
-            candidate = root / candidate
+        if candidate.is_absolute():
+            return candidate.resolve()
 
-        return candidate.resolve()
-
-    @staticmethod
-    def _should_skip(
-        path: Path,
-        root: Path,
-    ) -> bool:
-
-        ignored = {
-            ".git",
-            ".venv",
-            "venv",
-            "__pycache__",
-            ".pytest_cache",
-            ".mypy_cache",
-            ".ruff_cache",
-            "node_modules",
-            "dist",
-            "build",
-        }
-
-        try:
-            parts = path.relative_to(
-                root
-            ).parts
-
-        except ValueError:
-            return True
-
-        return any(
-            part in ignored
-            for part in parts
-        )
+        return (
+            root / candidate
+        ).resolve()
 
 
 __all__ = [
