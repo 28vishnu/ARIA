@@ -30,13 +30,7 @@ class ResponseSource:
     # ---------------------------------------------------------
     # LOCAL KNOWLEDGE
     # ---------------------------------------------------------
-    #
-    # These responses have already been resolved by ARIA's
-    # KnowledgeManager / local knowledge subsystem.
-    #
-    # They MUST NOT be sent to the external LLM personality
-    # layer merely for rewriting.
-    #
+
     KNOWLEDGE = "knowledge"
     LOCAL_KNOWLEDGE = "local_knowledge"
     KNOWLEDGE_MANAGER = "knowledge_manager"
@@ -150,88 +144,332 @@ class PersonalityEngine:
     # =========================================================
 
     @staticmethod
-    def _is_local_knowledge_response(
-        source: str,
-        data: Any,
-    ) -> bool:
-        """
-        Determine whether a response was produced by ARIA's
-        local knowledge subsystem.
-
-        Local knowledge answers are already authoritative outputs
-        of the KnowledgeManager and must not be passed through
-        an external LLM simply for personality rewriting.
-
-        This intentionally recognizes multiple source names so
-        the personality layer remains compatible with different
-        KnowledgeManager routing paths.
-        """
-
-        normalized_source = str(
-            source or ""
+    def _normalize_value(value: Any) -> str:
+        return str(
+            value or ""
         ).strip().lower()
+
+    @classmethod
+    def _value_is_local_source(
+        cls,
+        value: Any,
+    ) -> bool:
+
+        normalized = cls._normalize_value(
+            value
+        )
 
         local_sources = {
             ResponseSource.KNOWLEDGE,
             ResponseSource.LOCAL_KNOWLEDGE,
             ResponseSource.KNOWLEDGE_MANAGER,
+
             "knowledge",
             "local_knowledge",
             "knowledge_manager",
             "knowledge_database",
+
             "local_answer",
             "local_knowledge_answer",
             "knowledge_result",
+
+            "local_foundational_knowledge",
+            "foundational_knowledge",
+
+            "knowledge_engine",
+            "local_knowledge_engine",
+
+            "knowledge_manager_answer",
+            "knowledge_database_answer",
         }
 
-        if normalized_source in local_sources:
-            return True
+        return normalized in local_sources
 
-        if not isinstance(data, dict):
+    @classmethod
+    def _object_contains_local_metadata(
+        cls,
+        obj: Any,
+        depth: int = 0,
+    ) -> bool:
+        """
+        Recursively inspect a response object for explicit local
+        knowledge routing metadata.
+
+        This is intentionally conservative.
+
+        A normal chat response should NOT become a local response
+        merely because it contains a key named "answer".
+
+        We only accept explicit knowledge ownership/source markers.
+        """
+
+        if obj is None:
+            return False
+
+        if depth > 3:
             return False
 
         # -----------------------------------------------------
-        # Explicit routing metadata
+        # Direct string source
         # -----------------------------------------------------
 
-        for key in (
+        if isinstance(obj, str):
+            return cls._value_is_local_source(
+                obj
+            )
+
+        # -----------------------------------------------------
+        # Dictionaries
+        # -----------------------------------------------------
+
+        if isinstance(obj, dict):
+
+            explicit_source_keys = (
+                "source",
+                "response_source",
+                "answer_source",
+                "knowledge_source",
+                "owner",
+                "answer_owner",
+                "execution_owner",
+                "knowledge_owner",
+                "route_owner",
+            )
+
+            for key in explicit_source_keys:
+
+                if key in obj:
+
+                    if cls._value_is_local_source(
+                        obj.get(key)
+                    ):
+                        return True
+
+            # Explicit boolean metadata.
+            if obj.get(
+                "local_knowledge"
+            ) is True:
+                return True
+
+            if obj.get(
+                "knowledge_manager"
+            ) is True:
+                return True
+
+            if obj.get(
+                "knowledge_database"
+            ) is True:
+                return True
+
+            if obj.get(
+                "is_local_knowledge"
+            ) is True:
+                return True
+
+            if obj.get(
+                "local_answer"
+            ) is True:
+                return True
+
+            # Explicitly says that external synthesis is not
+            # required, combined with knowledge metadata.
+            if (
+                obj.get(
+                    "external_llm_synthesis"
+                ) is False
+                and (
+                    obj.get("knowledge")
+                    is not None
+                    or obj.get("knowledge_result")
+                    is not None
+                    or obj.get("knowledge_source")
+                    is not None
+                    or obj.get("local_knowledge")
+                    is not None
+                )
+            ):
+                return True
+
+            # Inspect known nested metadata containers.
+            for key in (
+                "metadata",
+                "meta",
+                "routing",
+                "routing_metadata",
+                "knowledge",
+                "knowledge_result",
+                "result",
+                "answer_metadata",
+            ):
+
+                if key in obj:
+
+                    if cls._object_contains_local_metadata(
+                        obj.get(key),
+                        depth + 1,
+                    ):
+                        return True
+
+            return False
+
+        # -----------------------------------------------------
+        # Lists / tuples
+        # -----------------------------------------------------
+
+        if isinstance(
+            obj,
+            (list, tuple),
+        ):
+
+            for item in obj:
+
+                if cls._object_contains_local_metadata(
+                    item,
+                    depth + 1,
+                ):
+                    return True
+
+            return False
+
+        # -----------------------------------------------------
+        # Arbitrary objects such as SystemResponse
+        # -----------------------------------------------------
+
+        for attribute in (
             "source",
             "response_source",
             "answer_source",
             "knowledge_source",
             "owner",
             "answer_owner",
+            "execution_owner",
+            "knowledge_owner",
+            "route_owner",
+            "local_knowledge",
+            "knowledge_manager",
+            "knowledge_database",
+            "is_local_knowledge",
+            "local_answer",
+            "external_llm_synthesis",
+            "metadata",
+            "meta",
+            "routing",
+            "routing_metadata",
+            "knowledge",
+            "knowledge_result",
+            "answer_metadata",
         ):
 
-            value = str(
-                data.get(key, "")
-            ).strip().lower()
+            try:
+                if not hasattr(
+                    obj,
+                    attribute,
+                ):
+                    continue
 
-            if value in local_sources:
+                value = getattr(
+                    obj,
+                    attribute,
+                )
+
+            except Exception:
+                continue
+
+            if attribute in {
+                "local_knowledge",
+                "knowledge_manager",
+                "knowledge_database",
+                "is_local_knowledge",
+                "local_answer",
+            }:
+
+                if value is True:
+                    return True
+
+            elif attribute == "external_llm_synthesis":
+
+                if value is False:
+                    return True
+
+            elif attribute in {
+                "source",
+                "response_source",
+                "answer_source",
+                "knowledge_source",
+                "owner",
+                "answer_owner",
+                "execution_owner",
+                "knowledge_owner",
+                "route_owner",
+            }:
+
+                if cls._value_is_local_source(
+                    value
+                ):
+                    return True
+
+            else:
+
+                if cls._object_contains_local_metadata(
+                    value,
+                    depth + 1,
+                ):
+                    return True
+
+        return False
+
+    @classmethod
+    def _is_local_knowledge_response(
+        cls,
+        source: str,
+        data: Any,
+        response: Any = None,
+    ) -> bool:
+        """
+        Determine whether the response belongs to the local
+        knowledge subsystem.
+
+        IMPORTANT:
+
+        This method checks THREE levels:
+
+            1. response.source
+            2. response.data
+            3. the SystemResponse object itself
+
+        The third check is important because CognitiveCore may
+        wrap KnowledgeManager's answer into a generic response
+        before it reaches PersonalityEngine.
+        """
+
+        # -----------------------------------------------------
+        # Level 1: explicit source
+        # -----------------------------------------------------
+
+        if cls._value_is_local_source(
+            source
+        ):
+            return True
+
+        # -----------------------------------------------------
+        # Level 2: data
+        # -----------------------------------------------------
+
+        if cls._object_contains_local_metadata(
+            data
+        ):
+            return True
+
+        # -----------------------------------------------------
+        # Level 3: complete SystemResponse
+        # -----------------------------------------------------
+
+        if response is not None:
+
+            if cls._object_contains_local_metadata(
+                response
+            ):
                 return True
-
-        # -----------------------------------------------------
-        # KnowledgeManager metadata
-        # -----------------------------------------------------
-
-        if data.get(
-            "local_knowledge"
-        ) is True:
-            return True
-
-        if data.get(
-            "knowledge_manager"
-        ) is True:
-            return True
-
-        if data.get(
-            "external_llm_synthesis"
-        ) is False and (
-            data.get("knowledge")
-            or data.get("answer")
-            or data.get("response")
-        ):
-            return True
 
         return False
 
@@ -245,15 +483,6 @@ class PersonalityEngine:
         user_text: str,
         response: SystemResponse,
     ) -> str:
-        """
-        Transforms structured SystemResponse payloads into
-        natural, contextual language.
-
-        IMPORTANT:
-        Local knowledge, memory, deterministic, tool, document,
-        and other authoritative responses bypass the external
-        personality LLM.
-        """
 
         try:
 
@@ -267,67 +496,67 @@ class PersonalityEngine:
 
             source = response.source
 
-            intent = data.get(
-                "intent"
+            intent = (
+                data.get("intent")
+                if isinstance(
+                    data,
+                    dict,
+                )
+                else None
             )
 
             # -------------------------------------------------
             # LOCAL KNOWLEDGE HARD GATE
             # -------------------------------------------------
             #
-            # This MUST happen before any universal personality
-            # LLM call.
+            # This is deliberately the FIRST response-processing
+            # decision after success validation.
             #
-            # KnowledgeManager already owns the answer.
+            # If KnowledgeManager owns the answer, this function
+            # returns immediately.
             #
-            # Example:
-            #
-            #   User:
-            #       What does TCP provide?
-            #
-            #   KnowledgeManager:
-            #       local answer
-            #
-            #   PersonalityEngine:
-            #       return local answer directly
-            #
-            # NOT:
-            #
-            #   local answer
-            #       ↓
-            #   Groq
-            #       ↓
-            #   Gemini
-            #       ↓
-            #   OpenRouter
-            #       ↓
-            #   Mistral
-            #
+            # Therefore _apply_aria_voice() cannot run.
+            # Therefore LLMRouter cannot run.
             # -------------------------------------------------
 
             is_local_knowledge = (
                 self._is_local_knowledge_response(
-                    source,
-                    data,
+                    source=source,
+                    data=data,
+                    response=response,
                 )
             )
 
             if is_local_knowledge:
 
                 logger.info(
-                    "[Personality] Local knowledge response "
-                    "detected; external LLM personality pass skipped."
+                    "[Personality] LOCAL KNOWLEDGE HARD GATE "
+                    "ACTIVE | source=%r | external LLM skipped",
+                    source,
                 )
 
                 reply = self._extract_response(
                     data
                 )
 
+                # In case the answer is stored directly on
+                # SystemResponse rather than response.data.
+                if not reply:
+
+                    reply = self._extract_response(
+                        response
+                    )
+
                 if not reply:
 
                     reply = self._format_fallback(
                         data
                     )
+
+                logger.info(
+                    "[Personality] Returning local knowledge "
+                    "answer directly."
+                )
 
                 return self._post_process(
                     reply
@@ -339,6 +568,7 @@ class PersonalityEngine:
 
             if (
                 source == ResponseSource.TIME
+                and isinstance(data, dict)
                 and "time" in data
             ):
 
@@ -349,6 +579,7 @@ class PersonalityEngine:
 
             elif (
                 source == ResponseSource.DATE
+                and isinstance(data, dict)
                 and "date" in data
             ):
 
@@ -362,6 +593,7 @@ class PersonalityEngine:
                     ResponseSource.WEATHER,
                     ResponseSource.SEARCH,
                 ]
+                and isinstance(data, dict)
                 and "message" in data
             ):
 
@@ -371,6 +603,7 @@ class PersonalityEngine:
 
             elif (
                 source == ResponseSource.CHAT
+                and isinstance(data, dict)
                 and "response" in data
             ):
 
@@ -380,13 +613,13 @@ class PersonalityEngine:
 
             elif source == "agent":
 
-                if "response" in data:
+                if isinstance(data, dict) and "response" in data:
 
                     reply = str(
                         data["response"]
                     )
 
-                elif "message" in data:
+                elif isinstance(data, dict) and "message" in data:
 
                     reply = str(
                         data["message"]
@@ -400,6 +633,7 @@ class PersonalityEngine:
 
             elif (
                 source == ResponseSource.CALCULATOR
+                and isinstance(data, dict)
                 and "result" in data
             ):
 
@@ -483,6 +717,7 @@ class PersonalityEngine:
                 "conversation",
                 "capability",
                 "llm_unavailable",
+
                 ResponseSource.KNOWLEDGE,
                 ResponseSource.LOCAL_KNOWLEDGE,
                 ResponseSource.KNOWLEDGE_MANAGER,
@@ -526,6 +761,9 @@ class PersonalityEngine:
                 ResponseSource.LOCAL_KNOWLEDGE,
                 ResponseSource.KNOWLEDGE_MANAGER,
 
+                "knowledge_database",
+                "local_foundational_knowledge",
+
                 "fast_router",
                 "execution_router",
                 "coding_engine",
@@ -543,8 +781,8 @@ class PersonalityEngine:
             # UNIVERSAL ARIA PERSONALITY PASS
             # -------------------------------------------------
             #
-            # Only genuinely conversational responses reach
-            # the external personality model.
+            # Only responses that are NOT explicitly owned by
+            # local knowledge and NOT protected reach here.
             # -------------------------------------------------
 
             reply = await self._apply_aria_voice(
@@ -583,25 +821,52 @@ class PersonalityEngine:
         data: Any,
     ) -> str:
         """
-        Extract the already-generated user-facing answer from
-        a structured local knowledge response.
+        Extract an already-generated user-facing answer.
 
-        Priority:
-            response
-            answer
-            message
-            content
-            text
-            result
+        Supports dictionaries as well as SystemResponse-like
+        objects.
         """
 
-        if isinstance(data, str):
+        if isinstance(
+            data,
+            str,
+        ):
 
             return data.strip()
 
-        if not isinstance(data, dict):
+        if isinstance(
+            data,
+            dict,
+        ):
+
+            for key in (
+                "response",
+                "answer",
+                "message",
+                "content",
+                "text",
+                "result",
+            ):
+
+                value = data.get(
+                    key
+                )
+
+                if (
+                    isinstance(
+                        value,
+                        str,
+                    )
+                    and value.strip()
+                ):
+
+                    return value.strip()
 
             return ""
+
+        # -----------------------------------------------------
+        # Arbitrary response object
+        # -----------------------------------------------------
 
         for key in (
             "response",
@@ -612,16 +877,49 @@ class PersonalityEngine:
             "result",
         ):
 
-            value = data.get(
-                key
-            )
+            try:
 
-            if isinstance(
-                value,
-                str,
-            ) and value.strip():
+                value = getattr(
+                    data,
+                    key,
+                    None,
+                )
+
+            except Exception:
+
+                continue
+
+            if (
+                isinstance(
+                    value,
+                    str,
+                )
+                and value.strip()
+            ):
 
                 return value.strip()
+
+        # -----------------------------------------------------
+        # SystemResponse.data fallback
+        # -----------------------------------------------------
+
+        try:
+
+            nested_data = getattr(
+                data,
+                "data",
+                None,
+            )
+
+        except Exception:
+
+            nested_data = None
+
+        if nested_data is not None:
+
+            return PersonalityEngine._extract_response(
+                nested_data
+            )
 
         return ""
 
@@ -733,18 +1031,13 @@ class PersonalityEngine:
         self,
         data: Any,
     ) -> str:
-        """
-        Convert memory records into a natural user-facing response.
-
-        MemoryEngine handles retrieval.
-        PersonalityEngine handles presentation.
-
-        Never expose raw internal memory dictionaries.
-        """
 
         data_dict = (
             data
-            if isinstance(data, dict)
+            if isinstance(
+                data,
+                dict,
+            )
             else {}
         )
 
@@ -753,7 +1046,10 @@ class PersonalityEngine:
         )
 
         if (
-            isinstance(message, str)
+            isinstance(
+                message,
+                str,
+            )
             and message.strip()
         ):
 
@@ -1010,7 +1306,10 @@ class PersonalityEngine:
         )
 
         if (
-            isinstance(response, str)
+            isinstance(
+                response,
+                str,
+            )
             and response.strip()
         ):
 
@@ -1021,7 +1320,10 @@ class PersonalityEngine:
         )
 
         if (
-            isinstance(message, str)
+            isinstance(
+                message,
+                str,
+            )
             and message.strip()
         ):
 
@@ -1041,7 +1343,10 @@ class PersonalityEngine:
             )
 
             if (
-                isinstance(response, str)
+                isinstance(
+                    response,
+                    str,
+                )
                 and response.strip()
             ):
 
@@ -1052,7 +1357,10 @@ class PersonalityEngine:
             )
 
             if (
-                isinstance(message, str)
+                isinstance(
+                    message,
+                    str,
+                )
                 and message.strip()
             ):
 
@@ -1094,7 +1402,10 @@ class PersonalityEngine:
                     )
 
                     if (
-                        isinstance(value, str)
+                        isinstance(
+                            value,
+                            str,
+                        )
                         and value.strip()
                     ):
 
@@ -1122,7 +1433,10 @@ class PersonalityEngine:
                 )
 
                 if (
-                    isinstance(value, str)
+                    isinstance(
+                        value,
+                        str,
+                    )
                     and value.strip()
                 ):
 
@@ -1299,12 +1613,6 @@ class PersonalityEngine:
         user_text: str,
         reply: str,
     ) -> str:
-        """
-        Universal ARIA personality pass.
-
-        This function is deliberately NOT used for local
-        knowledge responses.
-        """
 
         reply = str(
             reply or ""
@@ -1370,12 +1678,6 @@ class PersonalityEngine:
         self,
         reply: str,
     ) -> str:
-        """
-        Final presentation cleanup for all ARIA responses.
-
-        Keeps useful structure and code intact while removing
-        unnecessary Markdown noise.
-        """
 
         if reply is None:
 
