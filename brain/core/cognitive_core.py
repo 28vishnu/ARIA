@@ -2796,8 +2796,24 @@ class CognitiveCore:
                         doc_res = None
 
                     if doc_res:
-                        answer = doc_res
-                        source = "document"
+                        answer = str(doc_res).strip()
+
+                        # KnowledgeManager is the authoritative answer owner for
+                        # ordinary/local knowledge queries. Do not relabel its
+                        # answer as a generic document response: doing so allows
+                        # later personality/LLM fallback paths to rewrite it.
+                        if local_knowledge_query:
+                            source = "local_knowledge"
+                            context["local_knowledge"] = True
+                            context["knowledge_source"] = "local_foundational_knowledge"
+                            context["answer_owner"] = "knowledge_manager"
+                            context["external_llm_synthesis"] = False
+                            logger.info(
+                                "[LocalKnowledge] KnowledgeManager answer accepted "
+                                "as local answer owner; external LLM synthesis disabled."
+                            )
+                        else:
+                            source = "document"
                         confidence = 0.89
                     elif reasoning and getattr(reasoning, "graph_results", None):
                         answer = str(reasoning.graph_results)
@@ -2832,7 +2848,17 @@ class CognitiveCore:
                         source = "world_model"
                         confidence = 0.91
 
-                if not answer and self.llm_router and hasattr(self.llm_router, "chat"):
+                # Ordinary/local knowledge queries must never fall through to
+                # the general-purpose LLM generation path. KnowledgeManager,
+                # deterministic knowledge, database retrieval, or web fallback
+                # must own the answer. This is an upstream safety gate in
+                # addition to PersonalityEngine's final gate.
+                if (
+                    not answer
+                    and not local_knowledge_query
+                    and self.llm_router
+                    and hasattr(self.llm_router, "chat")
+                ):
                     try:
                         system_context = (
                             "You are ARIA.\n\n"
@@ -3349,19 +3375,52 @@ usable evidence is present. Do not invent details absent from the evidence.
         # Deterministic memory-profile/forget responses are already safe and
         # user-facing. Do not send them through the personality LLM, which can
         # expand them with unrelated memories or conversational history.
+        local_sources = {
+            "local_knowledge",
+            "local_foundational_knowledge",
+            "knowledge_database",
+            "knowledge_manager",
+            "knowledge",
+        }
+
         if source in {
             "memory_profile",
             "memory_conversation",
             "capability",
             "llm_unavailable",
+            *local_sources,
         }:
+            is_local = source in local_sources or bool(
+                context.get("local_knowledge")
+            )
+
             return SystemResponse(
                 success=True,
                 confidence=confidence,
-                source=source,
+                source=(
+                    "local_knowledge"
+                    if is_local
+                    else source
+                ),
                 data={
                     "response": formatted_answer,
                     "message": formatted_answer,
+                    "local_knowledge": is_local,
+                    "knowledge_source": (
+                        context.get("knowledge_source", source)
+                        if is_local
+                        else source
+                    ),
+                    "answer_owner": (
+                        "knowledge_manager"
+                        if is_local
+                        else None
+                    ),
+                    "external_llm_synthesis": (
+                        False
+                        if is_local
+                        else None
+                    ),
                 },
             )
 
