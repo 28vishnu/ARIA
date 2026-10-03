@@ -72,8 +72,8 @@ from brain.development.requirement_parser import RequirementParser
 from brain.development.change_planner import ChangePlanner
 from brain.development.code_writer import CodeWriter
 
-from brain.development.validator import Validator
-from brain.development.test_runner import TestRunner
+from brain.development.validator import DevelopmentValidator
+from brain.development.test_runner import DevelopmentTestRunner
 from brain.development.failure_analyzer import FailureAnalyzer
 from brain.development.repair_engine import RepairEngine
 
@@ -691,7 +691,6 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     source_analyzer = SourceAnalyzer()
-
     dependency_analyzer = DependencyAnalyzer()
 
     registry.register(
@@ -718,6 +717,10 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Phase 1 — Development Workspace
     # ---------------------------------------------------------
+    #
+    # DevelopmentWorkspace is the only component that creates
+    # per-job workspaces. Each workspace is a copy of the
+    # repository and is never the production checkout.
 
     workspace_root = os.getenv(
         "ARIA_DEVELOPMENT_WORKSPACE_ROOT",
@@ -728,7 +731,14 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     development_workspace = DevelopmentWorkspace(
-        workspace_root=workspace_root,
+        repository_root=os.getcwd(),
+        workspace_base=workspace_root,
+        max_workspaces=int(
+            os.getenv(
+                "ARIA_MAX_DEVELOPMENT_WORKSPACES",
+                "3",
+            )
+        ),
     )
 
     registry.register(
@@ -742,12 +752,51 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Phase 1 — Development Services
+    # Phase 1 — Workspace-scoped factories
+    # ---------------------------------------------------------
+    #
+    # These services require a specific development workspace,
+    # so they must NOT be created against the production
+    # repository during application bootstrap. DevelopmentAgent
+    # creates the correct guard/sandbox/validator/test runner
+    # for each isolated workspace.
+
+    registry.register(
+        "filesystem_guard_factory",
+        FilesystemGuard,
+    )
+
+    registry.register(
+        "development_sandbox_factory",
+        DevelopmentSandbox,
+    )
+
+    registry.register(
+        "code_writer_factory",
+        CodeWriter,
+    )
+
+    registry.register(
+        "validator_factory",
+        DevelopmentValidator,
+    )
+
+    registry.register(
+        "test_runner_factory",
+        DevelopmentTestRunner,
+    )
+
+    registry.register(
+        "build_manager_factory",
+        BuildManager,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Requirement / Planning Services
     # ---------------------------------------------------------
 
     requirement_parser = RequirementParser()
     change_planner = ChangePlanner()
-    code_writer = CodeWriter()
 
     registry.register(
         "requirement_parser",
@@ -759,18 +808,9 @@ async def bootstrap_application() -> ServiceRegistry:
         change_planner,
     )
 
-    registry.register(
-        "code_writer",
-        code_writer,
-    )
-
     # ---------------------------------------------------------
-    # Phase 1 — Validation / Testing / Repair
+    # Phase 1 — Failure / Repair Services
     # ---------------------------------------------------------
-
-    validator = Validator()
-
-    test_runner = TestRunner()
 
     failure_analyzer = FailureAnalyzer()
 
@@ -781,16 +821,6 @@ async def bootstrap_application() -> ServiceRegistry:
                 "3",
             )
         ),
-    )
-
-    registry.register(
-        "validator",
-        validator,
-    )
-
-    registry.register(
-        "test_runner",
-        test_runner,
     )
 
     registry.register(
@@ -830,10 +860,17 @@ async def bootstrap_application() -> ServiceRegistry:
     # Phase 1 — Build / Deployment / Health / Rollback
     # ---------------------------------------------------------
 
-    build_manager = BuildManager()
-
+    # BuildManager is workspace-scoped because it requires a
+    # DevelopmentSandbox. It is therefore exposed as a factory.
     deployment_manager = DeploymentManager(
         git_manager=git_manager,
+        allow_staging=(
+            os.getenv(
+                "ARIA_ALLOW_STAGING_DEPLOYMENT",
+                "true",
+            ).lower()
+            in {"1", "true", "yes", "on"}
+        ),
         allow_production=False,
     )
 
@@ -841,11 +878,6 @@ async def bootstrap_application() -> ServiceRegistry:
 
     rollback_manager = RollbackManager(
         git_manager=git_manager,
-    )
-
-    registry.register(
-        "build_manager",
-        build_manager,
     )
 
     registry.register(
@@ -869,28 +901,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     approval_manager = ApprovalManager()
 
-    deployment_policy = DeploymentPolicy(
-        autonomous_staging=(
-            os.getenv(
-                "ARIA_AUTONOMOUS_STAGING",
-                "true",
-            ).lower()
-            in {"1", "true", "yes", "on"}
-        ),
-        autonomous_production=(
-            os.getenv(
-                "ARIA_AUTONOMOUS_PRODUCTION",
-                "false",
-            ).lower()
-            in {"1", "true", "yes", "on"}
-        ),
-        minimum_confidence=float(
-            os.getenv(
-                "ARIA_DEPLOYMENT_MIN_CONFIDENCE",
-                "0.80",
-            )
-        ),
-    )
+    deployment_policy = DeploymentPolicy()
 
     registry.register(
         "approval_manager",
@@ -903,41 +914,23 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Phase 1 — Filesystem Guard / Sandbox
-    # ---------------------------------------------------------
-
-    # These are created per development workspace by the
-    # DevelopmentAgent. The registry exposes the classes/services
-    # needed by the development subsystem without granting them
-    # production filesystem access.
-
-    registry.register(
-        "filesystem_guard_factory",
-        FilesystemGuard,
-    )
-
-    registry.register(
-        "development_sandbox_factory",
-        DevelopmentSandbox,
-    )
-
-    # ---------------------------------------------------------
     # Phase 1 — Development Agent
     # ---------------------------------------------------------
+    #
+    # The current DevelopmentAgent intentionally owns the
+    # workspace-scoped writer/validator/sandbox/test runner.
+    # It must therefore receive only the APIs it actually
+    # accepts: RepositoryManager + DevelopmentWorkspace.
 
     development_agent = DevelopmentAgent(
         repository_manager=repository_manager,
-        source_analyzer=source_analyzer,
-        dependency_analyzer=dependency_analyzer,
         workspace_manager=development_workspace,
-        requirement_parser=requirement_parser,
-        change_planner=change_planner,
-        code_writer=code_writer,
-        validator=validator,
-        test_runner=test_runner,
-        failure_analyzer=failure_analyzer,
-        repair_engine=repair_engine,
-        git_manager=git_manager,
+        max_repair_attempts=int(
+            os.getenv(
+                "ARIA_REPAIR_MAX_ATTEMPTS",
+                "3",
+            )
+        ),
     )
 
     registry.register(
@@ -950,12 +943,45 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     development_controller = DevelopmentController(
-        development_agent=development_agent,
+        agent=development_agent,
     )
 
     registry.register(
         "development_controller",
         development_controller,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Capability Registry
+    # ---------------------------------------------------------
+
+    registry.register(
+        "phase1_capability_registry",
+        {
+            "repository_manager": repository_manager,
+            "source_analyzer": source_analyzer,
+            "dependency_analyzer": dependency_analyzer,
+            "development_workspace": development_workspace,
+            "requirement_parser": requirement_parser,
+            "change_planner": change_planner,
+            "filesystem_guard_factory": FilesystemGuard,
+            "development_sandbox_factory": DevelopmentSandbox,
+            "code_writer_factory": CodeWriter,
+            "validator_factory": DevelopmentValidator,
+            "test_runner_factory": DevelopmentTestRunner,
+            "failure_analyzer": failure_analyzer,
+            "repair_engine": repair_engine,
+            "development_agent": development_agent,
+            "development_controller": development_controller,
+            "git_manager": git_manager,
+            "github_manager": github_manager,
+            "build_manager_factory": BuildManager,
+            "deployment_manager": deployment_manager,
+            "health_monitor": health_monitor,
+            "rollback_manager": rollback_manager,
+            "approval_manager": approval_manager,
+            "deployment_policy": deployment_policy,
+        },
     )
 
     logger.info(
