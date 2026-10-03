@@ -1,25 +1,36 @@
-"""
-ARIA Self-Development System.
+from .repository_manager import (
+    RepositoryManager,
+    RepositorySnapshot,
+    FileMetadata,
+)
 
-This package contains the isolated development infrastructure used by
-ARIA to inspect, understand, modify, validate, test, and eventually
-deploy its own source code.
+from .source_analyzer import (
+    SourceAnalyzer,
+    SourceAnalysis,
+    ImportInfo,
+    SymbolInfo,
+    CallInfo,
+)
 
-Phase 1 begins with repository intelligence.
+from .dependency_analyzer import (
+    DependencyAnalyzer,
+    DependencyGraph,
+    DependencyInfo,
+    ModuleInfo,
+)
 
-Important architectural rule:
-    The development subsystem must remain isolated from ARIA's main
-    cognitive pipeline wherever possible.
-
-This allows ARIA to evolve without repeatedly modifying the core brain.
-"""
-
-from .repository_manager import RepositoryManager
-from .source_analyzer import SourceAnalyzer
-from .dependency_analyzer import DependencyAnalyzer
 
 __all__ = [
     "RepositoryManager",
+    "RepositorySnapshot",
+    "FileMetadata",
     "SourceAnalyzer",
+    "SourceAnalysis",
+    "ImportInfo",
+    "SymbolInfo",
+    "CallInfo",
     "DependencyAnalyzer",
+    "DependencyGraph",
+    "DependencyInfo",
+    "ModuleInfo",
 ]
