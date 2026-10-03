@@ -423,6 +423,118 @@ class CognitiveCore:
 
         return safe
 
+    @staticmethod
+    def _looks_like_ordinary_knowledge_query(query: str) -> bool:
+        """
+        Detect ordinary factual/educational knowledge questions that should
+        go directly to the local knowledge system.
+
+        These queries must not spend an external LLM call on intent
+        classification, personal-memory relevance, or autonomous reasoning.
+        Current/live requests, personal-memory requests, coding requests,
+        planning, tools, and other specialized requests are excluded.
+        """
+        text = re.sub(r"\s+", " ", str(query or "").strip().lower())
+
+        if not text or len(text) < 3:
+            return False
+
+        # Explicitly dynamic/current requests must keep their normal routing.
+        dynamic_markers = (
+            "latest",
+            "current",
+            "currently",
+            "today",
+            "tonight",
+            "tomorrow",
+            "right now",
+            "this week",
+            "this month",
+            "this year",
+            "news",
+            "online",
+            "on the internet",
+            "search the web",
+            "look up",
+            "recent",
+        )
+        if any(marker in text for marker in dynamic_markers):
+            return False
+
+        # Personal-memory statements/recall must keep the memory path.
+        memory_markers = (
+            "my name",
+            "my favorite",
+            "my favourite",
+            "what do you know about me",
+            "remember",
+            "memorize",
+            "save this",
+            "store this",
+            "don't forget",
+            "do not forget",
+            "forget this",
+            "forget that",
+            "what did i tell you",
+            "what did i say",
+        )
+        if any(marker in text for marker in memory_markers):
+            return False
+
+        # Specialized requests should keep their dedicated pipelines.
+        specialized_markers = (
+            "write code",
+            "code for",
+            "debug",
+            "fix this code",
+            "python code",
+            "javascript code",
+            "java code",
+            "sql query",
+            "roadmap",
+            "plan for",
+            "make a plan",
+            "remind me",
+            "schedule",
+            "weather",
+            "temperature",
+            "calculate",
+            "convert ",
+            "open ",
+            "send ",
+            "download ",
+            "upload ",
+        )
+        if any(marker in text for marker in specialized_markers):
+            return False
+
+        # Common ordinary-knowledge question forms.
+        knowledge_prefixes = (
+            "what is ",
+            "what are ",
+            "what does ",
+            "what do ",
+            "what was ",
+            "what were ",
+            "why is ",
+            "why are ",
+            "why does ",
+            "why do ",
+            "how does ",
+            "how do ",
+            "how is ",
+            "how are ",
+            "how does ",
+            "explain ",
+            "define ",
+            "tell me about ",
+            "can you explain ",
+            "describe ",
+            "meaning of ",
+        )
+
+        return text.startswith(knowledge_prefixes)
+
     def _should_store_natural_memory(
         self,
         query: str,
@@ -2586,8 +2698,14 @@ class CognitiveCore:
                     reasoning, "retrieved_memory", None
                 ):
                     mem_res = reasoning.retrieved_memory
-                elif self.memory_router and hasattr(
-                    self.memory_router, "answer"
+                # IMPORTANT:
+                # Never perform a personal-memory relevance LLM call for a
+                # normal knowledge question. Memory retrieval is opt-in via
+                # the decision/reasoning path or deterministic memory routes.
+                elif (
+                    not context.get("local_knowledge_query")
+                    and self.memory_router
+                    and hasattr(self.memory_router, "answer")
                 ):
                     try:
                         mem_res = await self.memory_router.answer(
@@ -5003,6 +5121,19 @@ usable evidence is present. Do not invent details absent from the evidence.
                     "[CognitiveCore] Compound memory request detected; bypassing terminal memory route."
                 )
 
+            local_knowledge_query = (
+                self._looks_like_ordinary_knowledge_query(query)
+                and not compound_memory_request
+                and not explicit_memory_instruction
+            )
+            context["local_knowledge_query"] = local_knowledge_query
+
+            if local_knowledge_query:
+                logger.info(
+                    "[LocalKnowledge] Ordinary knowledge query detected; "
+                    "bypassing external intent/memory/reasoning prepasses."
+                )
+
             # =========================================================
             # DETERMINISTIC MEMORY RECALL / NON-DURABLE PREFERENCES
             # =========================================================
@@ -5053,6 +5184,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             if (
                 not compound_memory_request
                 and not explicit_memory_instruction
+                and not local_knowledge_query
                 and self.memory_engine
                 and self._memory_first_candidate(query)
             ):
@@ -5203,6 +5335,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                 self.memory_engine
                 and not compound_memory_request
                 and not explicit_memory_instruction
+                and not local_knowledge_query
                 and not self._looks_like_memory_recall_request(query)
                 and not self._looks_like_sensitive_memory_recall_request(query)
             ):
@@ -5629,7 +5762,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                 # Never store the context dictionary inside itself.
                 "cognitive_context_id": execution_id,
             })
-            
+
             controller_decision = self.cognitive_controller.analyze(
                 query=query,
                 context=context,
@@ -5856,7 +5989,7 @@ usable evidence is present. Do not invent details absent from the evidence.
 
             intent = None
 
-            if self.intent_analyzer:
+            if self.intent_analyzer and not local_knowledge_query:
 
                 try:
                     intent = (
@@ -5867,6 +6000,11 @@ usable evidence is present. Do not invent details absent from the evidence.
                     logger.exception(
                         "[CognitiveCore] Intent analysis failed."
                     )
+            elif local_knowledge_query:
+                logger.info(
+                    "[LocalKnowledge] Intent analysis skipped; "
+                    "KnowledgeManager is the answer owner."
+                )
 
             pre_ctx = dict(context)
             pre_ctx["query"] = query
@@ -5879,9 +6017,10 @@ usable evidence is present. Do not invent details absent from the evidence.
             decision = controller_decision
             engine_decision = None
 
-            if self.decision_engine and hasattr(
-                self.decision_engine,
-                "decide",
+            if (
+                self.decision_engine
+                and hasattr(self.decision_engine, "decide")
+                and not local_knowledge_query
             ):
                 try:
                     engine_decision = await self.decision_engine.decide(
@@ -6022,6 +6161,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             # a conversational request into an executable planner/coding job.
             if (
                 not context.get("memory_compound_request")
+                and not context.get("local_knowledge_query")
                 and self.reasoning_engine
                 and hasattr(self.reasoning_engine, "reason")
             ):
@@ -6142,6 +6282,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             context["memory"] = self._safe_memory_items(
                 context.get("memory", memories)
             )
+            context["local_knowledge_query"] = local_knowledge_query
             context["_context_built"] = True
 
             if intent:
