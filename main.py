@@ -8,6 +8,7 @@ import re
 from typing import Any
 from pathlib import Path
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -20,13 +21,10 @@ from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
 
+
 # ---------------------------------------------------------
 # LOG SECURITY
 # ---------------------------------------------------------
-# Telegram Bot API tokens are embedded in Telegram API URLs.
-# HTTP clients such as httpx/httpcore may log those URLs at INFO
-# level, which would expose the bot token in Render logs.
-# Sanitize Telegram URLs globally before they reach log handlers.
 
 _TELEGRAM_URL_RE = re.compile(
     r"(https?://api\.telegram\.org/(?:file/)?bot)[^/\s?]+",
@@ -36,6 +34,7 @@ _TELEGRAM_URL_RE = re.compile(
 
 def _sanitize_log_text(value: Any) -> str:
     """Remove Telegram bot tokens from log messages and trace text."""
+
     if value is None:
         return ""
 
@@ -51,18 +50,28 @@ class SensitiveLogFilter(logging.Filter):
     """Prevent secrets embedded in log records from being emitted."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+
         try:
+
             rendered = record.getMessage()
-            sanitized = _sanitize_log_text(rendered)
+
+            sanitized = _sanitize_log_text(
+                rendered
+            )
 
             if sanitized != rendered:
+
                 record.msg = sanitized
                 record.args = ()
 
             if getattr(record, "exc_text", None):
-                record.exc_text = _sanitize_log_text(record.exc_text)
+
+                record.exc_text = _sanitize_log_text(
+                    record.exc_text
+                )
 
         except Exception:
+
             # Logging must never break application execution.
             pass
 
@@ -72,80 +81,194 @@ class SensitiveLogFilter(logging.Filter):
 setup_logging("INFO")
 
 # httpx/httpcore request logs can contain the full Telegram Bot API URL.
-# Keep normal application logs at INFO while preventing those libraries
-# from emitting request URLs containing the bot token.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 _log_security_filter = SensitiveLogFilter()
 
-# Attach the sanitizer to every currently configured handler so it also
-# protects logs emitted by third-party libraries such as httpx/httpcore.
 for _handler in logging.getLogger().handlers:
-    _handler.addFilter(_log_security_filter)
 
-for _logger_name in ("aria", "httpx", "httpcore"):
-    _named_logger = logging.getLogger(_logger_name)
-    _named_logger.addFilter(_log_security_filter)
+    _handler.addFilter(
+        _log_security_filter
+    )
+
+for _logger_name in (
+    "aria",
+    "httpx",
+    "httpcore",
+):
+
+    _named_logger = logging.getLogger(
+        _logger_name
+    )
+
+    _named_logger.addFilter(
+        _log_security_filter
+    )
+
 
 logger = logging.getLogger("aria")
 
+
+# =========================================================
+# TELEGRAM REQUEST SAFETY
+# =========================================================
+
+# A Telegram request must NEVER remain in "Working on it..."
+# indefinitely.
+#
+# This protects against:
+#
+#   - embedding stalls
+#   - knowledge retrieval stalls
+#   - external API hangs
+#   - accidental infinite loops
+#   - broken tool calls
+#   - provider timeouts
+#
+# 120 seconds is intentionally generous for the current ARIA
+# architecture. We can reduce this once local knowledge becomes
+# fast and reliable.
+TELEGRAM_PROCESS_TIMEOUT_SECONDS = max(
+    30.0,
+    float(
+        os.getenv(
+            "ARIA_TELEGRAM_PROCESS_TIMEOUT",
+            "120",
+        )
+    ),
+)
+
+
+# =========================================================
+# BACKGROUND TASK MANAGER
+# =========================================================
+
 class BackgroundTaskManager:
+
     def __init__(self):
+
         self.tasks = set()
 
     def schedule(self, coro):
-        task = asyncio.create_task(coro)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
+
+        task = asyncio.create_task(
+            coro
+        )
+
+        self.tasks.add(
+            task
+        )
+
+        task.add_done_callback(
+            self.tasks.discard
+        )
+
         return task
 
     async def shutdown(self):
+
         if self.tasks:
-            logger.info("[BackgroundTaskManager] Awaiting completion of %d background tasks...", len(self.tasks))
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+
+            logger.info(
+                "[BackgroundTaskManager] Awaiting completion "
+                "of %d background tasks...",
+                len(self.tasks),
+            )
+
+            await asyncio.gather(
+                *self.tasks,
+                return_exceptions=True,
+            )
+
 
 background_manager = BackgroundTaskManager()
 
-# ---------------------------------------------------------
+
+# =========================================================
 # PENDING DOCUMENT CONFIRMATIONS
-# ---------------------------------------------------------
+# =========================================================
 
 pending_document_actions = {}
 
+
+# =========================================================
+# FASTAPI LIFESPAN
+# =========================================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+
     registry = await bootstrap_application()
+
     app.state.registry = registry
     app.state.bg_manager = background_manager
-    logger.info("[Lifespan] ARIA Platform successfully started.")
+
+    logger.info(
+        "[Lifespan] ARIA Platform successfully started."
+    )
+
     yield
-    logger.info("[Lifespan] Shutting down resources...")
+
+    logger.info(
+        "[Lifespan] Shutting down resources..."
+    )
+
     await background_manager.shutdown()
 
     if registry.has("scheduler"):
+
         try:
-            scheduler = registry.get("scheduler")
+
+            scheduler = registry.get(
+                "scheduler"
+            )
+
             shutdown_result = scheduler.shutdown()
 
-            # Scheduler.shutdown() is asynchronous in ARIA's current
-            # scheduler implementation.  Keep this compatible with either
-            # async or legacy synchronous scheduler implementations.
-            if inspect.isawaitable(shutdown_result):
+            if inspect.isawaitable(
+                shutdown_result
+            ):
+
                 await shutdown_result
 
-            logger.info("[Lifespan] Scheduler shutdown completed.")
+            logger.info(
+                "[Lifespan] Scheduler shutdown completed."
+            )
+
         except Exception:
+
             logger.exception(
                 "[Lifespan] Scheduler shutdown failed."
             )
-    if registry.has("http_client"):
-        await registry.get("http_client").aclose()
-    if registry.has("mongo_client"):
-        registry.get("mongo_client").close()
-    logger.info("[Lifespan] All resources successfully released.")
 
-app = FastAPI(title="ARIA AI Operating Platform", version="12.0.0", lifespan=lifespan)
+    if registry.has("http_client"):
+
+        await registry.get(
+            "http_client"
+        ).aclose()
+
+    if registry.has("mongo_client"):
+
+        registry.get(
+            "mongo_client"
+        ).close()
+
+    logger.info(
+        "[Lifespan] All resources successfully released."
+    )
+
+
+# =========================================================
+# FASTAPI APP
+# =========================================================
+
+app = FastAPI(
+    title="ARIA AI Operating Platform",
+    version="12.0.0",
+    lifespan=lifespan,
+)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -160,56 +283,171 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(upload_router)
+
+app.include_router(
+    upload_router
+)
+
+
+# =========================================================
+# REQUEST METADATA
+# =========================================================
 
 @app.middleware("http")
-async def add_request_metadata(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    response: Response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
+async def add_request_metadata(
+    request: Request,
+    call_next,
+):
+
+    request_id = request.headers.get(
+        "X-Request-ID",
+        str(uuid.uuid4()),
+    )
+
+    response: Response = await call_next(
+        request
+    )
+
+    response.headers[
+        "X-Request-ID"
+    ] = request_id
+
     return response
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("[GlobalExceptionHandler] Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"success": False, "error": "An internal system error occurred.", "detail": str(exc)})
 
-def build_request_context(session_id: str, request_id: str, registry) -> RequestContext:
+# =========================================================
+# GLOBAL EXCEPTION HANDLER
+# =========================================================
+
+@app.exception_handler(Exception)
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+
+    logger.exception(
+        "[GlobalExceptionHandler] Unhandled exception: %s",
+        exc,
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "An internal system error occurred.",
+            "detail": str(exc),
+        },
+    )
+
+
+# =========================================================
+# REQUEST CONTEXT
+# =========================================================
+
+def build_request_context(
+    session_id: str,
+    request_id: str,
+    registry,
+) -> RequestContext:
+
     return RequestContext(
         session_id=session_id,
         request_id=request_id,
-        session_manager=registry.get("session_manager"),
-        memory_engine=registry.get("memory_engine"),
-        skill_manager=registry.get("skill_manager"),
-        action_manager=registry.get("action_manager"),
-        planner=registry.get("planner"),
-        cognitive_core=registry.get("cognitive_core"),
-        executor=registry.get("executor"),
-        personality_engine=registry.get("personality_engine")
+        session_manager=registry.get(
+            "session_manager"
+        ),
+        memory_engine=registry.get(
+            "memory_engine"
+        ),
+        skill_manager=registry.get(
+            "skill_manager"
+        ),
+        action_manager=registry.get(
+            "action_manager"
+        ),
+        planner=registry.get(
+            "planner"
+        ),
+        cognitive_core=registry.get(
+            "cognitive_core"
+        ),
+        executor=registry.get(
+            "executor"
+        ),
+        personality_engine=registry.get(
+            "personality_engine"
+        ),
     )
 
-async def process_task(user_text: str, session_id: str, request_id: str, app_state) -> Any:
+
+# =========================================================
+# MAIN COGNITIVE PIPELINE
+# =========================================================
+
+async def process_task(
+    user_text: str,
+    session_id: str,
+    request_id: str,
+    app_state,
+) -> Any:
+
     registry = app_state.registry
-    ctx = build_request_context(session_id, request_id, registry)
+
+    ctx = build_request_context(
+        session_id,
+        request_id,
+        registry,
+    )
+
+    # -----------------------------------------------------
+    # NON-BLOCKING MEMORY EXTRACTION
+    # -----------------------------------------------------
 
     if ctx.memory_engine is not None:
-        app_state.bg_manager.schedule(ctx.memory_engine.deterministic_extract_and_store(user_text))
 
-    session = ctx.session_manager.get_or_create_session(session_id)
-    conversation_manager = registry.get("conversation_manager")
+        app_state.bg_manager.schedule(
+            ctx.memory_engine.deterministic_extract_and_store(
+                user_text
+            )
+        )
+
+    # -----------------------------------------------------
+    # SESSION
+    # -----------------------------------------------------
+
+    session = ctx.session_manager.get_or_create_session(
+        session_id
+    )
+
+    conversation_manager = registry.get(
+        "conversation_manager"
+    )
 
     resolved_text = user_text
 
+    # -----------------------------------------------------
+    # REFERENCE RESOLUTION
+    # -----------------------------------------------------
+
     if conversation_manager:
+
         resolved_text = conversation_manager.resolve_reference(
             session_id=session_id,
             query=user_text,
         )
 
+    # -----------------------------------------------------
+    # BASE CONTEXT
+    # -----------------------------------------------------
+
     base_context = {
         "app_state": app_state,
         "session": session,
-        "memory_engine": registry.get("memory_engine") if registry.has("memory_engine") else None,
+        "memory_engine": (
+            registry.get("memory_engine")
+            if registry.has("memory_engine")
+            else None
+        ),
         "document_intelligence": (
             registry.get("document_intelligence")
             if registry.has("document_intelligence")
@@ -217,9 +455,9 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         ),
     }
 
-    # ---------------------------------------------------------
-    # 5. COGNITIVE CORE
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # COGNITIVE CORE
+    # -----------------------------------------------------
 
     sys_res = await ctx.cognitive_core.process(
         query=resolved_text,
@@ -228,16 +466,15 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         base_context=base_context,
     )
 
-    # ---------------------------------------------------------
-    # 6. UPDATE CONVERSATIONAL STATE
-    #
-    # This must happen after the answer exists so the next
-    # turn can use the completed turn as context.
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # UPDATE CONVERSATIONAL STATE
+    # -----------------------------------------------------
 
     if conversation_manager:
 
-        assistant_text = str(sys_res)
+        assistant_text = str(
+            sys_res
+        )
 
         conversation_manager.update_turn(
             session_id=session_id,
@@ -246,20 +483,26 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
             intent=None,
         )
 
-    # ---------------------------------------------------------
-    # 7. STRUCTURED DOCUMENT ACTIONS
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # STRUCTURED DOCUMENT ACTIONS
+    # -----------------------------------------------------
 
     if (
         sys_res
-        and isinstance(sys_res.data, dict)
-        and sys_res.data.get("document_action")
+        and isinstance(
+            sys_res.data,
+            dict,
+        )
+        and sys_res.data.get(
+            "document_action"
+        )
     ):
+
         return sys_res
 
-    # ---------------------------------------------------------
-    # 8. PERSONALITY LAYER
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # PERSONALITY LAYER
+    # -----------------------------------------------------
 
     return await ctx.personality_engine.apply_personality(
         session_id,
@@ -267,38 +510,48 @@ async def process_task(user_text: str, session_id: str, request_id: str, app_sta
         sys_res,
     )
 
-# =============================================================
+
+# =========================================================
 # TELEGRAM RESPONSE FORMATTER
-# =============================================================
+# =========================================================
 
-def markdown_to_telegram_html(text: str) -> str:
-    """
-    Convert ARIA Markdown into clean Telegram HTML.
-
-    Goals:
-    - Real Telegram bold/italic
-    - No visible Markdown markers
-    - Proper blockquotes
-    - Proper code blocks
-    - Clean mobile-friendly lists
-    - Preserve comparison structure
-    """
+def markdown_to_telegram_html(
+    text: str,
+) -> str:
 
     if not text:
+
         return ""
 
-    text = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    text = str(text)
 
-    # ---------------------------------------------------------
-    # 1. PROTECT CODE BLOCKS
-    # ---------------------------------------------------------
+    text = text.replace(
+        "\r\n",
+        "\n",
+    ).replace(
+        "\r",
+        "\n",
+    )
+
+    # -----------------------------------------------------
+    # PROTECT CODE BLOCKS
+    # -----------------------------------------------------
 
     protected = []
 
     def protect(match):
-        index = len(protected)
-        protected.append(match.group(0))
-        return f"__ARIA_PROTECTED_{index}__"
+
+        index = len(
+            protected
+        )
+
+        protected.append(
+            match.group(0)
+        )
+
+        return (
+            f"__ARIA_PROTECTED_{index}__"
+        )
 
     text = re.sub(
         r"```(?:[\w+#.-]+)?\n?.*?```",
@@ -307,9 +560,9 @@ def markdown_to_telegram_html(text: str) -> str:
         flags=re.DOTALL,
     )
 
-    # ---------------------------------------------------------
-    # 2. PROTECT INLINE CODE
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # PROTECT INLINE CODE
+    # -----------------------------------------------------
 
     text = re.sub(
         r"`([^`\n]+)`",
@@ -317,21 +570,18 @@ def markdown_to_telegram_html(text: str) -> str:
         text,
     )
 
-    # ---------------------------------------------------------
-    # 3. ESCAPE HTML
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # ESCAPE HTML
+    # -----------------------------------------------------
 
-    text = html.escape(text, quote=False)
+    text = html.escape(
+        text,
+        quote=False,
+    )
 
-    # ---------------------------------------------------------
-    # 4. MARKDOWN BOLD
-    #
-    # **TCP**
-    # -> <b>TCP</b>
-    #
-    # Do this AFTER escaping and before restoring protected
-    # content.
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # BOLD
+    # -----------------------------------------------------
 
     text = re.sub(
         r"\*\*(.+?)\*\*",
@@ -340,9 +590,9 @@ def markdown_to_telegram_html(text: str) -> str:
         flags=re.DOTALL,
     )
 
-    # ---------------------------------------------------------
-    # 5. MARKDOWN ITALIC
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # ITALIC
+    # -----------------------------------------------------
 
     text = re.sub(
         r"(?<!\*)\*([^*\n]+?)\*(?!\*)",
@@ -350,9 +600,9 @@ def markdown_to_telegram_html(text: str) -> str:
         text,
     )
 
-    # ---------------------------------------------------------
-    # 6. HEADINGS
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # HEADINGS
+    # -----------------------------------------------------
 
     text = re.sub(
         r"(?m)^\s*#{1,6}\s+(.+?)\s*$",
@@ -360,41 +610,51 @@ def markdown_to_telegram_html(text: str) -> str:
         text,
     )
 
-    # ---------------------------------------------------------
-    # 7. BLOCKQUOTES
-    #
-    # > Important point
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # BLOCKQUOTES
+    # -----------------------------------------------------
 
-    lines = text.split("\n")
+    lines = text.split(
+        "\n"
+    )
+
     formatted_lines = []
 
     for line in lines:
 
         stripped = line.strip()
 
-        if stripped.startswith("&gt;"):
+        if stripped.startswith(
+            "&gt;"
+        ):
+
             quote = stripped[4:].strip()
 
             if quote:
+
                 formatted_lines.append(
                     f"<blockquote>{quote}</blockquote>"
                 )
+
             else:
+
                 formatted_lines.append(
                     "<blockquote> </blockquote>"
                 )
 
         else:
-            formatted_lines.append(line)
 
-    text = "\n".join(formatted_lines)
+            formatted_lines.append(
+                line
+            )
 
-    # ---------------------------------------------------------
-    # 8. CLEAN MARKDOWN BULLETS
-    #
-    # Keep bullets readable on Telegram.
-    # ---------------------------------------------------------
+    text = "\n".join(
+        formatted_lines
+    )
+
+    # -----------------------------------------------------
+    # BULLETS
+    # -----------------------------------------------------
 
     text = re.sub(
         r"(?m)^\s*[-*]\s+",
@@ -402,9 +662,9 @@ def markdown_to_telegram_html(text: str) -> str:
         text,
     )
 
-    # ---------------------------------------------------------
-    # 9. CLEAN NUMBERED LISTS
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # NUMBERED LISTS
+    # -----------------------------------------------------
 
     text = re.sub(
         r"(?m)^\s*(\d+)\.\s+",
@@ -412,20 +672,18 @@ def markdown_to_telegram_html(text: str) -> str:
         text,
     )
 
-    # ---------------------------------------------------------
-    # 10. CLEAN COMPARISON TABLES
-    #
-    # Telegram has no native Markdown table support.
-    #
-    # If a Markdown table somehow reaches this function,
-    # convert it into a readable mobile comparison instead
-    # of showing broken pipes.
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # TABLES
+    # -----------------------------------------------------
 
-    lines = text.split("\n")
+    lines = text.split(
+        "\n"
+    )
+
     output = []
 
     table_rows = []
+
     in_table = False
 
     def flush_table():
@@ -433,6 +691,7 @@ def markdown_to_telegram_html(text: str) -> str:
         nonlocal table_rows
 
         if not table_rows:
+
             return
 
         rows = []
@@ -441,28 +700,34 @@ def markdown_to_telegram_html(text: str) -> str:
 
             cells = [
                 cell.strip()
-                for cell in row.strip().strip("|").split("|")
+                for cell in (
+                    row.strip()
+                    .strip("|")
+                    .split("|")
+                )
             ]
 
-            # Ignore Markdown separator rows.
             if cells and all(
-                re.fullmatch(r":?-{3,}:?", cell or "")
+                re.fullmatch(
+                    r":?-{3,}:?",
+                    cell or "",
+                )
                 for cell in cells
             ):
+
                 continue
 
-            rows.append(cells)
+            rows.append(
+                cells
+            )
 
         table_rows = []
 
         if not rows:
+
             return
 
         headers = rows[0]
-
-        # -----------------------------------------------------
-        # 2-COLUMN TABLE
-        # -----------------------------------------------------
 
         if len(headers) == 2:
 
@@ -471,12 +736,14 @@ def markdown_to_telegram_html(text: str) -> str:
             for row in rows[1:]:
 
                 if len(row) < 2:
+
                     continue
 
                 feature = row[0].strip()
                 value = row[1].strip()
 
                 if not feature:
+
                     continue
 
                 comparison.append(
@@ -485,17 +752,14 @@ def markdown_to_telegram_html(text: str) -> str:
                 )
 
             if comparison:
+
                 output.append(
-                    "\n\n".join(comparison)
+                    "\n\n".join(
+                        comparison
+                    )
                 )
 
             return
-
-        # -----------------------------------------------------
-        # 3+ COLUMN COMPARISON
-        #
-        # Mobile-friendly Telegram layout.
-        # -----------------------------------------------------
 
         if len(headers) >= 3:
 
@@ -508,6 +772,7 @@ def markdown_to_telegram_html(text: str) -> str:
             ]
 
             if names:
+
                 comparison.append(
                     "⚖️ <b>"
                     + " vs ".join(names)
@@ -517,22 +782,30 @@ def markdown_to_telegram_html(text: str) -> str:
             for row in rows[1:]:
 
                 if not row:
+
                     continue
 
                 feature = row[0].strip()
 
                 if not feature:
+
                     continue
 
                 comparison.append(
                     f"<b>▸ {feature}</b>"
                 )
 
-                for index in range(1, len(headers)):
+                for index in range(
+                    1,
+                    len(headers),
+                ):
 
-                    header = headers[index].strip()
+                    header = headers[
+                        index
+                    ].strip()
 
                     if not header:
+
                         continue
 
                     value = (
@@ -542,6 +815,7 @@ def markdown_to_telegram_html(text: str) -> str:
                     )
 
                     if not value:
+
                         value = "—"
 
                     comparison.append(
@@ -551,13 +825,12 @@ def markdown_to_telegram_html(text: str) -> str:
                 comparison.append("")
 
             if comparison:
-                output.append(
-                    "\n".join(comparison).strip()
-                )
 
-    # ---------------------------------------------------------
-    # 11. DETECT / CONVERT TABLES
-    # ---------------------------------------------------------
+                output.append(
+                    "\n".join(
+                        comparison
+                    ).strip()
+                )
 
     for line in lines:
 
@@ -568,30 +841,48 @@ def markdown_to_telegram_html(text: str) -> str:
             and stripped.endswith("|")
             and "|" in stripped[1:-1]
         ):
-            table_rows.append(line)
+
+            table_rows.append(
+                line
+            )
+
             in_table = True
+
             continue
 
         if in_table:
+
             flush_table()
+
             in_table = False
 
-        output.append(line)
+        output.append(
+            line
+        )
 
     if in_table:
+
         flush_table()
 
-    text = "\n".join(output)
+    text = "\n".join(
+        output
+    )
 
-    # ---------------------------------------------------------
-    # 12. RESTORE PROTECTED CODE
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # RESTORE PROTECTED CODE
+    # -----------------------------------------------------
 
-    for index, original in enumerate(protected):
+    for index, original in enumerate(
+        protected
+    ):
 
-        placeholder = f"__ARIA_PROTECTED_{index}__"
+        placeholder = (
+            f"__ARIA_PROTECTED_{index}__"
+        )
 
-        if original.startswith("```"):
+        if original.startswith(
+            "```"
+        ):
 
             match = re.match(
                 r"```(?:([\w+#.-]+))?\n?(.*?)```$",
@@ -601,7 +892,6 @@ def markdown_to_telegram_html(text: str) -> str:
 
             if match:
 
-                language = match.group(1) or ""
                 code = match.group(2)
 
                 code_html = html.escape(
@@ -610,14 +900,17 @@ def markdown_to_telegram_html(text: str) -> str:
                 )
 
                 replacement = (
-                    f"<pre><code>{code_html}</code></pre>"
+                    "<pre><code>"
+                    f"{code_html}"
+                    "</code></pre>"
                 )
 
             else:
+
                 replacement = (
-                    f"<pre><code>"
+                    "<pre><code>"
                     f"{html.escape(original)}"
-                    f"</code></pre>"
+                    "</code></pre>"
                 )
 
         else:
@@ -625,9 +918,9 @@ def markdown_to_telegram_html(text: str) -> str:
             code = original[1:-1]
 
             replacement = (
-                f"<code>"
+                "<code>"
                 f"{html.escape(code, quote=False)}"
-                f"</code>"
+                "</code>"
             )
 
         text = text.replace(
@@ -635,11 +928,10 @@ def markdown_to_telegram_html(text: str) -> str:
             replacement,
         )
 
-    # ---------------------------------------------------------
-    # 13. FINAL CLEANUP
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # FINAL CLEANUP
+    # -----------------------------------------------------
 
-    # Remove accidental remaining Markdown emphasis markers.
     text = re.sub(
         r"\*\*(.*?)\*\*",
         r"<b>\1</b>",
@@ -653,7 +945,6 @@ def markdown_to_telegram_html(text: str) -> str:
         text,
     )
 
-    # Collapse excessive blank lines.
     text = re.sub(
         r"\n{3,}",
         "\n\n",
@@ -662,105 +953,289 @@ def markdown_to_telegram_html(text: str) -> str:
 
     return text.strip()
 
-def format_telegram_response(text: str) -> str:
-    """
-    Wrapper alias pointing to markdown_to_telegram_html.
-    """
-    return markdown_to_telegram_html(text)
 
-def get_telegram_status_message(text: str) -> str:
-    """
-    Select a concise temporary status based on the user's request.
-    These messages are temporary and disappear before the final answer.
-    """
+def format_telegram_response(
+    text: str,
+) -> str:
 
-    query = (text or "").lower().strip()
+    return markdown_to_telegram_html(
+        text
+    )
 
-    if any(word in query for word in (
-        "search", "find", "latest", "news", "current",
-        "today", "recent", "look up", "online"
-    )):
-        return "Searching for the relevant information..."
 
-    if any(word in query for word in (
-        "buy", "purchase", "price", "cost", "product",
-        "shop", "shopping", "amazon", "flipkart"
-    )):
-        return "Looking for the relevant options..."
+# =========================================================
+# TELEGRAM STATUS
+# =========================================================
 
-    if any(word in query for word in (
-        "pdf", "document", "file", "paper", "notes"
-    )):
-        return "Checking the relevant documents..."
+def get_telegram_status_message(
+    text: str,
+) -> str:
 
-    if any(word in query for word in (
-        "calculate", "how much", "percentage", "convert",
-        "multiply", "divide", "sum"
-    )):
-        return "Working that out..."
+    query = (
+        text or ""
+    ).lower().strip()
 
-    if any(word in query for word in (
-        "remember", "forgot", "what do you know about me",
-        "my name", "what's my"
-    )):
-        return "Checking what I remember..."
+    if any(
+        word in query
+        for word in (
+            "search",
+            "find",
+            "latest",
+            "news",
+            "current",
+            "today",
+            "recent",
+            "look up",
+            "online",
+        )
+    ):
 
-    if any(word in query for word in (
-        "code", "python", "javascript", "program", "error",
-        "bug", "function", "api"
-    )):
-        return "Working through the code..."
+        return (
+            "Searching for the relevant information..."
+        )
 
-    if any(word in query for word in (
-        "compare", "difference", "versus", "vs", "which one"
-    )):
-        return "Comparing the relevant points..."
+    if any(
+        word in query
+        for word in (
+            "buy",
+            "purchase",
+            "price",
+            "cost",
+            "product",
+            "shop",
+            "shopping",
+            "amazon",
+            "flipkart",
+        )
+    ):
+
+        return (
+            "Looking for the relevant options..."
+        )
+
+    if any(
+        word in query
+        for word in (
+            "pdf",
+            "document",
+            "file",
+            "paper",
+            "notes",
+        )
+    ):
+
+        return (
+            "Checking the relevant documents..."
+        )
+
+    if any(
+        word in query
+        for word in (
+            "calculate",
+            "how much",
+            "percentage",
+            "convert",
+            "multiply",
+            "divide",
+            "sum",
+        )
+    ):
+
+        return (
+            "Working that out..."
+        )
+
+    if any(
+        word in query
+        for word in (
+            "remember",
+            "forgot",
+            "what do you know about me",
+            "my name",
+            "what's my",
+        )
+    ):
+
+        return (
+            "Checking what I remember..."
+        )
+
+    if any(
+        word in query
+        for word in (
+            "code",
+            "python",
+            "javascript",
+            "program",
+            "error",
+            "bug",
+            "function",
+            "api",
+        )
+    ):
+
+        return (
+            "Working through the code..."
+        )
+
+    if any(
+        word in query
+        for word in (
+            "compare",
+            "difference",
+            "versus",
+            "vs",
+            "which one",
+        )
+    ):
+
+        return (
+            "Comparing the relevant points..."
+        )
 
     if len(query) > 120:
-        return "Working through your request..."
+
+        return (
+            "Working through your request..."
+        )
 
     return "Thinking..."
 
+
+# =========================================================
+# SAFE STATUS CLEANUP
+# =========================================================
+
+async def safe_delete_status(
+    status: TelegramStatus | None,
+) -> None:
+    """
+    Delete/cancel the temporary Telegram status.
+
+    This function is intentionally defensive.
+
+    If TelegramStatus has an internal heartbeat/update task,
+    its delete() implementation should stop it.
+
+    Even if deletion fails, the exception must never prevent
+    the request from returning.
+    """
+
+    if status is None:
+
+        return
+
+    try:
+
+        await status.delete()
+
+    except asyncio.CancelledError:
+
+        raise
+
+    except Exception:
+
+        logger.exception(
+            "[TelegramStatus] Failed to delete "
+            "temporary status message."
+        )
+
+
+# =========================================================
+# TELEGRAM WEBHOOK
+# =========================================================
+
 @app.post("/telegram-webhook")
-async def telegram_webhook(req: Request):
-    request_id = req.headers.get("X-Request-ID", str(uuid.uuid4()))
-    config = req.app.state.registry.get("config")
+async def telegram_webhook(
+    req: Request,
+):
+
+    request_id = req.headers.get(
+        "X-Request-ID",
+        str(uuid.uuid4()),
+    )
+
+    config = req.app.state.registry.get(
+        "config"
+    )
+
     token = config.telegram_token
 
     if not token:
-        return {"status": "telegram token unconfigured"}
+
+        return {
+            "status": "telegram token unconfigured"
+        }
 
     data = await req.json()
-    msg = data.get("message", {})
 
-    chat_id = msg.get("chat", {}).get("id")
-    user_id = msg.get("from", {}).get("id")
-    text = msg.get("text", "").strip()
+    msg = data.get(
+        "message",
+        {}
+    )
+
+    chat_id = msg.get(
+        "chat",
+        {}
+    ).get(
+        "id"
+    )
+
+    user_id = msg.get(
+        "from",
+        {}
+    ).get(
+        "id"
+    )
+
+    text = msg.get(
+        "text",
+        ""
+    ).strip()
 
     if chat_id is None or user_id is None:
-        return {"status": "ok"}
+
+        return {
+            "status": "ok"
+        }
 
     # ---------------------------------------------------------
     # PRIVATE OWNER-ONLY ACCESS
     # ---------------------------------------------------------
 
-    allowed_user_id = os.getenv("ALLOWED_TELEGRAM_USER_ID", "").strip()
+    allowed_user_id = os.getenv(
+        "ALLOWED_TELEGRAM_USER_ID",
+        "",
+    ).strip()
 
     if not allowed_user_id:
+
         logger.error(
-            "[Security] ALLOWED_TELEGRAM_USER_ID is not configured."
+            "[Security] ALLOWED_TELEGRAM_USER_ID "
+            "is not configured."
         )
-        return {"status": "unauthorized"}
+
+        return {
+            "status": "unauthorized"
+        }
 
     if str(user_id) != allowed_user_id:
+
         logger.warning(
             "[Security] Unauthorized Telegram access attempt."
         )
-        return {"status": "unauthorized"}
 
-    logger.info("[Security] Authorized Telegram user.")
+        return {
+            "status": "unauthorized"
+        }
 
-    http_client = req.app.state.registry.get("http_client")
+    logger.info(
+        "[Security] Authorized Telegram user."
+    )
+
+    http_client = req.app.state.registry.get(
+        "http_client"
+    )
 
     status = TelegramStatus(
         http_client=http_client,
@@ -768,651 +1243,713 @@ async def telegram_webhook(req: Request):
         chat_id=chat_id,
     )
 
-    await status.start(get_telegram_status_message(text))
+    status_started = False
 
     # ---------------------------------------------------------
-    # HANDLE PENDING DOCUMENT CONFIRMATION
+    # IMPORTANT:
+    #
+    # Everything after status.start() is now protected by
+    # try/finally.
+    #
+    # Therefore even if the cognitive pipeline crashes,
+    # times out, or is cancelled, ARIA will clean up the
+    # "Working on it..." status.
     # ---------------------------------------------------------
 
-    confirmation_key = str(user_id)
+    try:
 
-    if confirmation_key in pending_document_actions:
+        await status.start(
+            get_telegram_status_message(
+                text
+            )
+        )
 
-        pending = pending_document_actions[confirmation_key]
-        answer = text.lower().strip()
+        status_started = True
 
         # -----------------------------------------------------
-        # USER IS SELECTING A DOCUMENT
+        # HANDLE PENDING DOCUMENT CONFIRMATION
         # -----------------------------------------------------
 
-        if pending.get("action") == "select_document":
+        confirmation_key = str(
+            user_id
+        )
 
-            # Allow the user to cancel/leave document selection.
-            cancel_phrases = {
-                "cancel",
-                "cancel it",
-                "leave it",
-                "leave",
-                "never mind",
-                "nevermind",
-                "forget it",
-                "stop",
-                "no",
-                "no thanks",
-                "no thank you",
-            }
+        if confirmation_key in pending_document_actions:
 
-            if answer in cancel_phrases:
+            pending = pending_document_actions[
+                confirmation_key
+            ]
 
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
+            answer = text.lower().strip()
 
-                await status.delete()
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "Alright. Document selection cancelled."
-                    }
-                )
+            # -------------------------------------------------
+            # USER IS SELECTING A DOCUMENT
+            # -------------------------------------------------
 
-                return {
-                    "status": "document_selection_cancelled"
+            if pending.get(
+                "action"
+            ) == "select_document":
+
+                cancel_phrases = {
+                    "cancel",
+                    "cancel it",
+                    "leave it",
+                    "leave",
+                    "never mind",
+                    "nevermind",
+                    "forget it",
+                    "stop",
+                    "no",
+                    "no thanks",
+                    "no thank you",
                 }
 
-            documents = pending.get("documents", [])
+                if answer in cancel_phrases:
 
-            ignored_words = {
-                "pdf",
-                "document",
-                "file",
-                "the",
-                "my",
-                "one",
-                "give",
-                "send",
-                "me",
-                "please",
-            }
+                    pending_document_actions.pop(
+                        confirmation_key,
+                        None,
+                    )
 
-            query_words = {
-                word
-                for word in (
-                    answer
-                    .replace(".pdf", "")
-                    .replace("_", " ")
-                    .replace("-", " ")
-                    .split()
-                )
-                if word not in ignored_words
-            }
+                    await safe_delete_status(
+                        status
+                    )
 
-            best_document = None
-            best_score = 0
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                "Alright. Document selection "
+                                "cancelled."
+                            ),
+                        },
+                    )
 
-            for document in documents:
+                    return {
+                        "status": "document_selection_cancelled"
+                    }
 
-                filename = str(
-                    document.get("filename", "")
+                documents = pending.get(
+                    "documents",
+                    []
                 )
 
-                filename_words = {
+                ignored_words = {
+                    "pdf",
+                    "document",
+                    "file",
+                    "the",
+                    "my",
+                    "one",
+                    "give",
+                    "send",
+                    "me",
+                    "please",
+                }
+
+                query_words = {
                     word
                     for word in (
-                        filename
-                        .lower()
-                        .replace(".pdf", "")
-                        .replace("_", " ")
-                        .replace("-", " ")
+                        answer
+                        .replace(
+                            ".pdf",
+                            ""
+                        )
+                        .replace(
+                            "_",
+                            " "
+                        )
+                        .replace(
+                            "-",
+                            " "
+                        )
                         .split()
                     )
                     if word not in ignored_words
                 }
 
-                score = len(
-                    query_words.intersection(filename_words)
-                )
+                best_document = None
+                best_score = 0
 
-                if score > best_score:
-                    best_score = score
-                    best_document = document
+                for document in documents:
 
-            if best_document and best_score > 0:
-
-                telegram_file_id = best_document.get(
-                    "telegram_file_id"
-                )
-
-                filename = best_document.get(
-                    "filename",
-                    "document.pdf"
-                )
-
-                if telegram_file_id:
-
-                    await status.delete()
-                    telegram_response = await http_client.post(
-                        f"https://api.telegram.org/bot{token}/sendDocument",
-                        json={
-                            "chat_id": chat_id,
-                            "document": telegram_file_id,
-                            "caption": filename,
-                        }
-                    )
-
-                    if telegram_response.is_success:
-
-                        pending_document_actions.pop(
-                            confirmation_key,
-                            None
-                        )
-
-                        return {
-                            "status": "document_sent"
-                        }
-
-            # No document matched the user's selection.
-            filenames = [
-                document.get(
-                    "filename",
-                    "Unnamed document"
-                )
-                for document in documents
-            ]
-
-            await status.delete()
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": (
-                        "I couldn't identify which document you meant. "
-                        "Please choose one of these:\n\n"
-                        + "\n".join(
-                            f"• {name}"
-                            for name in filenames
+                    filename = str(
+                        document.get(
+                            "filename",
+                            ""
                         )
                     )
-                }
-            )
 
-            return {
-                "status": "document_selection_required"
-            }
-
-        # User cancelled the operation.
-        if answer in (
-            "no",
-            "n",
-            "cancel",
-            "stop",
-            "don't",
-            "dont",
-        ):
-            pending_document_actions.pop(
-                confirmation_key,
-                None
-            )
-
-            await status.delete()
-            await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": "Cancelled."
-                }
-            )
-
-            return {
-                "status": "document_action_cancelled"
-            }
-
-        # User confirmed the operation.
-        if answer in (
-            "yes",
-            "y",
-            "confirm",
-            "yes delete",
-            "delete it",
-            "do it",
-        ):
-            document_repository = req.app.state.registry.get(
-                "document_repository"
-            )
-
-            action = pending.get("action")
-
-            if action == "delete_document":
-
-                document_id = pending.get(
-                    "document_id"
-                )
-
-                filename = pending.get(
-                    "filename",
-                    "document"
-                )
-
-                deleted = await document_repository.delete_document(
-                    document_id=document_id,
-                    user_id=str(user_id)
-                )
-
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
-
-                message = (
-                    f"Deleted {filename}."
-                    if deleted
-                    else "I couldn't delete that document."
-                )
-
-                await status.delete()
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": message
-                    }
-                )
-
-                return {
-                    "status": (
-                        "document_deleted"
-                        if deleted
-                        else "document_delete_failed"
-                    )
-                }
-
-            if action == "delete_all_documents":
-
-                deleted_count = (
-                    await document_repository.delete_all_user_documents(
-                        user_id=str(user_id)
-                    )
-                )
-
-                pending_document_actions.pop(
-                    confirmation_key,
-                    None
-                )
-
-                await status.delete()
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            f"Deleted {deleted_count} stored "
-                            f"document(s)."
+                    filename_words = {
+                        word
+                        for word in (
+                            filename
+                            .lower()
+                            .replace(
+                                ".pdf",
+                                ""
+                            )
+                            .replace(
+                                "_",
+                                " "
+                            )
+                            .replace(
+                                "-",
+                                " "
+                            )
+                            .split()
                         )
+                        if word not in ignored_words
                     }
-                )
 
-                return {
-                    "status": "all_documents_deleted"
-                }
+                    score = len(
+                        query_words.intersection(
+                            filename_words
+                        )
+                    )
 
-    # Handle document upload
-    if "document" in msg:
-        await status.update("Working on it...")
-        document = msg["document"]
-        file_id = document["file_id"]
+                    if score > best_score:
 
-        # Get Telegram file information
-        file_info = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
-            params={"file_id": file_id}
-        )
+                        best_score = score
+                        best_document = document
 
-        file_path = file_info.json()["result"]["file_path"]
+                if (
+                    best_document
+                    and best_score > 0
+                ):
 
-        download_url = (
-            f"https://api.telegram.org/file/bot{token}/{file_path}"
-        )
+                    telegram_file_id = (
+                        best_document.get(
+                            "telegram_file_id"
+                        )
+                    )
 
-        os.makedirs("uploads", exist_ok=True)
+                    filename = (
+                        best_document.get(
+                            "filename",
+                            "document.pdf",
+                        )
+                    )
 
-        # Preserve the original Telegram filename/extension.
-        original_filename = document.get("file_name")
+                    if telegram_file_id:
 
-        if original_filename:
-            safe_filename = os.path.basename(original_filename)
-        else:
-            safe_filename = os.path.basename(file_path)
+                        await safe_delete_status(
+                            status
+                        )
 
-        local_path = os.path.join(
-            "uploads",
-            safe_filename
-        )
+                        telegram_response = (
+                            await http_client.post(
+                                f"https://api.telegram.org/bot{token}/sendDocument",
+                                json={
+                                    "chat_id": chat_id,
+                                    "document": telegram_file_id,
+                                    "caption": filename,
+                                },
+                            )
+                        )
 
-        response = await http_client.get(download_url)
+                        if telegram_response.is_success:
 
-        with open(local_path, "wb") as f:
-            f.write(response.content)
+                            pending_document_actions.pop(
+                                confirmation_key,
+                                None,
+                            )
 
-        document_ai = req.app.state.registry.get("document_intelligence")
-
-        session_id = str(chat_id)
-
-        original_filename = (
-            document.get("file_name")
-            or Path(local_path).name
-        )
-
-        await status.update("Working on it...")
-        result = await document_ai.process_document(
-            file_path=local_path,
-            session_id=session_id,
-            document_name=original_filename
-        )
-
-        # -----------------------------------------------------
-        # Persist document metadata in MongoDB
-        # -----------------------------------------------------
-
-        if req.app.state.registry.has("document_repository"):
-
-            document_repository = req.app.state.registry.get(
-                "document_repository"
-            )
-
-            try:
-                saved_document = await document_repository.save_document(
-                    user_id=str(user_id),
-                    filename=safe_filename,
-                    telegram_file_id=document.get("file_id"),
-                    telegram_file_unique_id=document.get(
-                        "file_unique_id"
-                    ),
-                    mime_type=document.get("mime_type"),
-                    size=document.get("file_size"),
-                    summary=result.get("summary"),
-                    text_preview=result.get("text_preview"),
-                    vector_ids=result.get("vector_ids", []),
-                    metadata={
-                        "source": "telegram",
-                        "chat_id": str(chat_id),
-                        "session_id": session_id,
-                    },
-                )
-
-                logger.info(
-                    "[Telegram] Document catalogue entry saved: %s",
-                    saved_document.get("document_id")
-                )
-
-            except Exception:
-                logger.exception(
-                    "[Telegram] Failed to persist document metadata."
-                )
-
-        state_manager = req.app.state.registry.get("state_manager")
-
-        if state_manager:
-            doc_name = document.get("file_name") or Path(local_path).name
-
-            state_manager.update_state(
-                session_id,
-                active_document=True,
-                document_uploaded=True,
-                current_document=doc_name,
-                current_document_summary=result["summary"],
-                last_document_question=None,
-                last_document_answer=None
-            )
-
-        logger.info(
-            "[Telegram] Document processed and stored for session %s. "
-            "Waiting for user instruction.",
-            session_id,
-        )
-
-        await status.delete()
-        return {
-            "status": "processed",
-            "document_ready": True,
-        }
-
-    await status.update("Working on it...")
-    result = await process_task(
-        text,
-        str(chat_id),
-        request_id,
-        req.app.state,
-    )
-
-    # ---------------------------------------------------------
-    # STRUCTURED DOCUMENT ACTION
-    # ---------------------------------------------------------
-
-    if isinstance(result, SystemResponse):
-
-        response_data = (
-            result.data
-            if isinstance(result.data, dict)
-            else {}
-        )
-
-        document_action = response_data.get(
-            "document_action"
-        )
-
-        # -----------------------------------------------------
-        # SEND STORED DOCUMENT
-        # -----------------------------------------------------
-
-        if document_action == "send_document":
-
-            documents = response_data.get(
-                "documents",
-                []
-            )
-
-            query = str(
-                response_data.get("query", text)
-            ).lower()
-
-            if not documents:
-
-                await status.delete()
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "I couldn't find that document."
-                    }
-                )
-
-                return {
-                    "status": "document_not_found"
-                }
-
-            # -------------------------------------------------
-            # Choose the best matching document.
-            #
-            # Prefer filenames whose meaningful words occur
-            # in the user's request.
-            # -------------------------------------------------
-
-            best_document = None
-            best_score = -1
-
-            ignored_words = {
-                "pdf",
-                "document",
-                "file",
-                "give",
-                "send",
-                "get",
-                "return",
-                "download",
-                "share",
-                "show",
-                "me",
-                "my",
-                "the",
-                "a",
-                "an",
-                "please",
-                "now",
-            }
-
-            for document in documents:
-
-                filename = str(
-                    document.get("filename", "")
-                )
-
-                normalized_filename = (
-                    filename
-                    .lower()
-                    .replace(".pdf", "")
-                    .replace("_", " ")
-                    .replace("-", " ")
-                )
-
-                filename_words = {
-                    word
-                    for word in normalized_filename.split()
-                    if word not in ignored_words
-                }
-
-                score = sum(
-                    1
-                    for word in filename_words
-                    if word in query
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_document = document
-
-            # If there are several documents and nothing matched,
-            # do not silently send an arbitrary file.
-            if (
-                len(documents) > 1
-                and best_score <= 0
-            ):
+                            return {
+                                "status": "document_sent"
+                            }
 
                 filenames = [
                     document.get(
                         "filename",
-                        "Unnamed document"
+                        "Unnamed document",
                     )
                     for document in documents
                 ]
 
-                # Remember that ARIA is waiting for the user
-                # to choose one of these documents.
-                pending_document_actions[str(user_id)] = {
-                    "action": "select_document",
-                    "documents": documents,
-                }
+                await safe_delete_status(
+                    status
+                )
 
-                await status.delete()
                 await http_client.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": (
-                            "I found multiple documents. "
-                            "Which one would you like?\n\n"
+                            "I couldn't identify which "
+                            "document you meant. "
+                            "Please choose one of these:\n\n"
                             + "\n".join(
                                 f"• {name}"
                                 for name in filenames
                             )
-                        )
-                    }
+                        ),
+                    },
                 )
 
                 return {
                     "status": "document_selection_required"
                 }
 
-            if not best_document:
+            # -------------------------------------------------
+            # CANCEL PENDING OPERATION
+            # -------------------------------------------------
 
-                await status.delete()
+            if answer in (
+                "no",
+                "n",
+                "cancel",
+                "stop",
+                "don't",
+                "dont",
+            ):
+
+                pending_document_actions.pop(
+                    confirmation_key,
+                    None,
+                )
+
+                await safe_delete_status(
+                    status
+                )
+
                 await http_client.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
                     json={
                         "chat_id": chat_id,
-                        "text": "I couldn't identify the requested document."
-                    }
+                        "text": "Cancelled.",
+                    },
                 )
 
                 return {
-                    "status": "document_not_found"
+                    "status": "document_action_cancelled"
                 }
 
-            telegram_file_id = best_document.get(
-                "telegram_file_id"
-            )
+            # -------------------------------------------------
+            # CONFIRM PENDING OPERATION
+            # -------------------------------------------------
 
-            filename = best_document.get(
-                "filename",
-                "document.pdf"
-            )
+            if answer in (
+                "yes",
+                "y",
+                "confirm",
+                "yes delete",
+                "delete it",
+                "do it",
+            ):
 
-            if not telegram_file_id:
-
-                logger.warning(
-                    "[Telegram] Stored document '%s' has no "
-                    "telegram_file_id.",
-                    filename
+                document_repository = (
+                    req.app.state.registry.get(
+                        "document_repository"
+                    )
                 )
 
-                await status.delete()
-                await http_client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": (
-                            "I found the document record, "
-                            "but its original Telegram file reference "
-                            "is unavailable."
+                action = pending.get(
+                    "action"
+                )
+
+                if action == "delete_document":
+
+                    document_id = pending.get(
+                        "document_id"
+                    )
+
+                    filename = pending.get(
+                        "filename",
+                        "document",
+                    )
+
+                    deleted = (
+                        await document_repository.delete_document(
+                            document_id=document_id,
+                            user_id=str(user_id),
+                        )
+                    )
+
+                    pending_document_actions.pop(
+                        confirmation_key,
+                        None,
+                    )
+
+                    message = (
+                        f"Deleted {filename}."
+                        if deleted
+                        else (
+                            "I couldn't delete "
+                            "that document."
+                        )
+                    )
+
+                    await safe_delete_status(
+                        status
+                    )
+
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": message,
+                        },
+                    )
+
+                    return {
+                        "status": (
+                            "document_deleted"
+                            if deleted
+                            else "document_delete_failed"
                         )
                     }
-                )
 
-                return {
-                    "status": "document_file_unavailable"
-                }
+                if action == "delete_all_documents":
 
-            # -------------------------------------------------
-            # Telegram can resend an existing uploaded file
-            # directly using its stored file_id.
-            # -------------------------------------------------
+                    deleted_count = (
+                        await document_repository.delete_all_user_documents(
+                            user_id=str(user_id)
+                        )
+                    )
 
-            await status.delete()
-            telegram_response = await http_client.post(
-                f"https://api.telegram.org/bot{token}/sendDocument",
-                json={
-                    "chat_id": chat_id,
-                    "document": telegram_file_id,
-                    "caption": filename
-                }
+                    pending_document_actions.pop(
+                        confirmation_key,
+                        None,
+                    )
+
+                    await safe_delete_status(
+                        status
+                    )
+
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                f"Deleted {deleted_count} "
+                                f"stored document(s)."
+                            ),
+                        },
+                    )
+
+                    return {
+                        "status": "all_documents_deleted"
+                    }
+
+        # =====================================================
+        # DOCUMENT UPLOAD
+        # =====================================================
+
+        if "document" in msg:
+
+            await status.update(
+                "Checking the uploaded document..."
             )
 
-            if telegram_response.is_success:
+            document = msg[
+                "document"
+            ]
 
-                logger.info(
-                    "[Telegram] Sent stored document '%s'.",
-                    filename
+            file_id = document[
+                "file_id"
+            ]
+
+            # -------------------------------------------------
+            # GET TELEGRAM FILE INFORMATION
+            # -------------------------------------------------
+
+            file_info = await http_client.get(
+                f"https://api.telegram.org/bot{token}/getFile",
+                params={
+                    "file_id": file_id
+                },
+            )
+
+            file_info.raise_for_status()
+
+            file_info_json = file_info.json()
+
+            file_path = (
+                file_info_json
+                .get("result", {})
+                .get("file_path")
+            )
+
+            if not file_path:
+
+                raise RuntimeError(
+                    "Telegram did not return a file path."
                 )
 
-                return {
-                    "status": "document_sent"
-                }
+            download_url = (
+                "https://api.telegram.org/"
+                f"file/bot{token}/{file_path}"
+            )
+
+            os.makedirs(
+                "uploads",
+                exist_ok=True
+            )
+
+            original_filename = document.get(
+                "file_name"
+            )
+
+            if original_filename:
+
+                safe_filename = os.path.basename(
+                    original_filename
+                )
+
+            else:
+
+                safe_filename = os.path.basename(
+                    file_path
+                )
+
+            local_path = os.path.join(
+                "uploads",
+                safe_filename,
+            )
+
+            response = await http_client.get(
+                download_url
+            )
+
+            response.raise_for_status()
+
+            with open(
+                local_path,
+                "wb",
+            ) as f:
+
+                f.write(
+                    response.content
+                )
+
+            document_ai = (
+                req.app.state.registry.get(
+                    "document_intelligence"
+                )
+            )
+
+            session_id = str(
+                chat_id
+            )
+
+            original_filename = (
+                document.get(
+                    "file_name"
+                )
+                or Path(
+                    local_path
+                ).name
+            )
+
+            await status.update(
+                "Processing the document..."
+            )
+
+            # -------------------------------------------------
+            # DOCUMENT PROCESSING HAS THE SAME HARD TIMEOUT.
+            # -------------------------------------------------
+
+            result = await asyncio.wait_for(
+                document_ai.process_document(
+                    file_path=local_path,
+                    session_id=session_id,
+                    document_name=original_filename,
+                ),
+                timeout=TELEGRAM_PROCESS_TIMEOUT_SECONDS,
+            )
+
+            # -------------------------------------------------
+            # PERSIST DOCUMENT METADATA
+            # -------------------------------------------------
+
+            if req.app.state.registry.has(
+                "document_repository"
+            ):
+
+                document_repository = (
+                    req.app.state.registry.get(
+                        "document_repository"
+                    )
+                )
+
+                try:
+
+                    saved_document = (
+                        await document_repository.save_document(
+                            user_id=str(user_id),
+                            filename=safe_filename,
+                            telegram_file_id=document.get(
+                                "file_id"
+                            ),
+                            telegram_file_unique_id=document.get(
+                                "file_unique_id"
+                            ),
+                            mime_type=document.get(
+                                "mime_type"
+                            ),
+                            size=document.get(
+                                "file_size"
+                            ),
+                            summary=result.get(
+                                "summary"
+                            ),
+                            text_preview=result.get(
+                                "text_preview"
+                            ),
+                            vector_ids=result.get(
+                                "vector_ids",
+                                [],
+                            ),
+                            metadata={
+                                "source": "telegram",
+                                "chat_id": str(chat_id),
+                                "session_id": session_id,
+                            },
+                        )
+                    )
+
+                    logger.info(
+                        "[Telegram] Document catalogue entry saved: %s",
+                        saved_document.get(
+                            "document_id"
+                        ),
+                    )
+
+                except Exception:
+
+                    logger.exception(
+                        "[Telegram] Failed to persist "
+                        "document metadata."
+                    )
+
+            state_manager = (
+                req.app.state.registry.get(
+                    "state_manager"
+                )
+            )
+
+            if state_manager:
+
+                doc_name = (
+                    document.get(
+                        "file_name"
+                    )
+                    or Path(
+                        local_path
+                    ).name
+                )
+
+                state_manager.update_state(
+                    session_id,
+                    active_document=True,
+                    document_uploaded=True,
+                    current_document=doc_name,
+                    current_document_summary=result[
+                        "summary"
+                    ],
+                    last_document_question=None,
+                    last_document_answer=None,
+                )
+
+            logger.info(
+                "[Telegram] Document processed and stored "
+                "for session %s. Waiting for user instruction.",
+                session_id,
+            )
+
+            await safe_delete_status(
+                status
+            )
+
+            return {
+                "status": "processed",
+                "document_ready": True,
+            }
+
+        # =====================================================
+        # NORMAL TEXT REQUEST
+        # =====================================================
+
+        await status.update(
+            "Working on your request..."
+        )
+
+        logger.info(
+            "[Telegram] Starting cognitive request | "
+            "request_id=%s | chat_id=%s | timeout=%ss",
+            request_id,
+            chat_id,
+            TELEGRAM_PROCESS_TIMEOUT_SECONDS,
+        )
+
+        try:
+
+            result = await asyncio.wait_for(
+                process_task(
+                    text,
+                    str(chat_id),
+                    request_id,
+                    req.app.state,
+                ),
+                timeout=TELEGRAM_PROCESS_TIMEOUT_SECONDS,
+            )
+
+        except asyncio.TimeoutError:
 
             logger.error(
-                "[Telegram] Failed to send stored document '%s': %s",
-                filename,
-                telegram_response.text
+                "[Telegram] Request timed out after %.1f seconds | "
+                "request_id=%s | query=%r",
+                TELEGRAM_PROCESS_TIMEOUT_SECONDS,
+                request_id,
+                text,
+            )
+
+            await safe_delete_status(
+                status
+            )
+
+            timeout_message = (
+                "I couldn't complete that request within the "
+                "allowed processing time. The operation was stopped "
+                "instead of continuing indefinitely."
+            )
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": timeout_message,
+                },
+            )
+
+            return {
+                "status": "processing_timeout",
+                "request_id": request_id,
+            }
+
+        except asyncio.CancelledError:
+
+            logger.warning(
+                "[Telegram] Request cancelled | "
+                "request_id=%s",
+                request_id,
+            )
+
+            raise
+
+        except Exception as exc:
+
+            logger.exception(
+                "[Telegram] Cognitive request failed | "
+                "request_id=%s | error=%s",
+                request_id,
+                exc,
+            )
+
+            await safe_delete_status(
+                status
             )
 
             await http_client.post(
@@ -1420,105 +1957,455 @@ async def telegram_webhook(req: Request):
                 json={
                     "chat_id": chat_id,
                     "text": (
-                        "I found the document, but Telegram "
-                        "couldn't send it."
-                    )
-                }
+                        "I ran into an internal problem while "
+                        "processing that request. The stuck operation "
+                        "has been stopped."
+                    ),
+                },
             )
 
             return {
-                "status": "document_send_failed"
+                "status": "processing_failed",
+                "request_id": request_id,
             }
 
-    # ---------------------------------------------------------
-    # NORMAL TEXT RESPONSE
-    # ---------------------------------------------------------
+        # =====================================================
+        # STRUCTURED DOCUMENT ACTION
+        # =====================================================
 
-    await status.update("Finishing the response...")
-    reply_text = str(result)
+        if isinstance(
+            result,
+            SystemResponse,
+        ):
 
-    telegram_text = format_telegram_response(
-        reply_text
-    )
+            response_data = (
+                result.data
+                if isinstance(
+                    result.data,
+                    dict,
+                )
+                else {}
+            )
 
-    logger.info(
-        "[Telegram] Final reply text: %r",
-        telegram_text
-    )
+            document_action = (
+                response_data.get(
+                    "document_action"
+                )
+            )
 
-    await status.delete()
-    telegram_response = await http_client.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": telegram_text,
-            "parse_mode": "HTML",
-        },
-    )
+            # -------------------------------------------------
+            # SEND STORED DOCUMENT
+            # -------------------------------------------------
 
-    # ---------------------------------------------------------
-    # SAVE COMPLETED CONVERSATION TURN
-    # ---------------------------------------------------------
+            if document_action == "send_document":
 
-    if telegram_response.is_success:
+                documents = (
+                    response_data.get(
+                        "documents",
+                        [],
+                    )
+                )
 
-        state_manager = req.app.state.registry.get(
-            "state_manager"
+                query = str(
+                    response_data.get(
+                        "query",
+                        text,
+                    )
+                ).lower()
+
+                if not documents:
+
+                    await safe_delete_status(
+                        status
+                    )
+
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                "I couldn't find "
+                                "that document."
+                            ),
+                        },
+                    )
+
+                    return {
+                        "status": "document_not_found"
+                    }
+
+                best_document = None
+                best_score = -1
+
+                ignored_words = {
+                    "pdf",
+                    "document",
+                    "file",
+                    "give",
+                    "send",
+                    "get",
+                    "return",
+                    "download",
+                    "share",
+                    "show",
+                    "me",
+                    "my",
+                    "the",
+                    "a",
+                    "an",
+                    "please",
+                    "now",
+                }
+
+                for document in documents:
+
+                    filename = str(
+                        document.get(
+                            "filename",
+                            "",
+                        )
+                    )
+
+                    normalized_filename = (
+                        filename
+                        .lower()
+                        .replace(
+                            ".pdf",
+                            "",
+                        )
+                        .replace(
+                            "_",
+                            " ",
+                        )
+                        .replace(
+                            "-",
+                            " ",
+                        )
+                    )
+
+                    filename_words = {
+                        word
+                        for word in (
+                            normalized_filename.split()
+                        )
+                        if word not in ignored_words
+                    }
+
+                    score = sum(
+                        1
+                        for word in filename_words
+                        if word in query
+                    )
+
+                    if score > best_score:
+
+                        best_score = score
+                        best_document = document
+
+                # -------------------------------------------------
+                # MULTIPLE DOCUMENTS WITH NO CLEAR MATCH
+                # -------------------------------------------------
+
+                if (
+                    len(documents) > 1
+                    and best_score <= 0
+                ):
+
+                    filenames = [
+                        document.get(
+                            "filename",
+                            "Unnamed document",
+                        )
+                        for document in documents
+                    ]
+
+                    pending_document_actions[
+                        str(user_id)
+                    ] = {
+                        "action": "select_document",
+                        "documents": documents,
+                    }
+
+                    await safe_delete_status(
+                        status
+                    )
+
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                "I found multiple documents. "
+                                "Which one would you like?\n\n"
+                                + "\n".join(
+                                    f"• {name}"
+                                    for name in filenames
+                                )
+                            ),
+                        },
+                    )
+
+                    return {
+                        "status": (
+                            "document_selection_required"
+                        )
+                    }
+
+                if not best_document:
+
+                    await safe_delete_status(
+                        status
+                    )
+
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                "I couldn't identify "
+                                "the requested document."
+                            ),
+                        },
+                    )
+
+                    return {
+                        "status": "document_not_found"
+                    }
+
+                telegram_file_id = (
+                    best_document.get(
+                        "telegram_file_id"
+                    )
+                )
+
+                filename = (
+                    best_document.get(
+                        "filename",
+                        "document.pdf",
+                    )
+                )
+
+                if not telegram_file_id:
+
+                    logger.warning(
+                        "[Telegram] Stored document '%s' "
+                        "has no telegram_file_id.",
+                        filename,
+                    )
+
+                    await safe_delete_status(
+                        status
+                    )
+
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                "I found the document record, "
+                                "but its original Telegram file "
+                                "reference is unavailable."
+                            ),
+                        },
+                    )
+
+                    return {
+                        "status": (
+                            "document_file_unavailable"
+                        )
+                    }
+
+                await safe_delete_status(
+                    status
+                )
+
+                telegram_response = (
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{token}/sendDocument",
+                        json={
+                            "chat_id": chat_id,
+                            "document": telegram_file_id,
+                            "caption": filename,
+                        },
+                    )
+                )
+
+                if telegram_response.is_success:
+
+                    logger.info(
+                        "[Telegram] Sent stored document '%s'.",
+                        filename,
+                    )
+
+                    return {
+                        "status": "document_sent"
+                    }
+
+                logger.error(
+                    "[Telegram] Failed to send stored document "
+                    "'%s': %s",
+                    filename,
+                    telegram_response.text,
+                )
+
+                await http_client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            "I found the document, but Telegram "
+                            "couldn't send it."
+                        ),
+                    },
+                )
+
+                return {
+                    "status": "document_send_failed"
+                }
+
+        # =====================================================
+        # NORMAL TEXT RESPONSE
+        # =====================================================
+
+        await status.update(
+            "Finishing the response..."
         )
 
-        if state_manager:
+        reply_text = str(
+            result
+        )
 
-            state_manager.update_state(
-                str(chat_id),
-                last_query=text,
-                last_assistant_response=reply_text,
+        telegram_text = format_telegram_response(
+            reply_text
+        )
+
+        logger.info(
+            "[Telegram] Final reply text: %r",
+            telegram_text,
+        )
+
+        await safe_delete_status(
+            status
+        )
+
+        telegram_response = await http_client.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": telegram_text,
+                "parse_mode": "HTML",
+            },
+        )
+
+        # -----------------------------------------------------
+        # SAVE COMPLETED CONVERSATION TURN
+        # -----------------------------------------------------
+
+        if telegram_response.is_success:
+
+            state_manager = (
+                req.app.state.registry.get(
+                    "state_manager"
+                )
             )
 
-            state_manager.add_conversation_turn(
-                session_id=str(chat_id),
-                user_message=text,
-                assistant_message=reply_text
+            if state_manager:
+
+                state_manager.update_state(
+                    str(chat_id),
+                    last_query=text,
+                    last_assistant_response=reply_text,
+                )
+
+                state_manager.add_conversation_turn(
+                    session_id=str(chat_id),
+                    user_message=text,
+                    assistant_message=reply_text,
+                )
+
+                logger.info(
+                    "[Conversation] Stored completed turn "
+                    "for session %s.",
+                    chat_id,
+                )
+
+        return {
+            "status": "ok"
+        }
+
+    # =========================================================
+    # FINAL STATUS CLEANUP
+    # =========================================================
+
+    finally:
+
+        if status_started:
+
+            await safe_delete_status(
+                status
             )
 
-            logger.info(
-                "[Conversation] Stored completed turn "
-                "for session %s.",
-                chat_id
-            )
 
-    return {
-        "status": "ok"
-    }
+# =========================================================
+# HEALTH
+# =========================================================
 
 @app.get("/health")
-async def health(req: Request):
+async def health(
+    req: Request,
+):
+
     registry = req.app.state.registry
 
-    if not registry.has("health_checker"):
+    if not registry.has(
+        "health_checker"
+    ):
 
         return {
             "status": "healthy",
             "version": "12.0.0",
-            "message": "Health checker not registered."
+            "message": (
+                "Health checker not registered."
+            ),
         }
 
-    checker = registry.get("health_checker")
+    checker = registry.get(
+        "health_checker"
+    )
 
     base_health = await checker.check_readiness()
 
     extended_status = {
         **base_health,
         "subsystems": {
-            "memory_engine": registry.has("memory_engine"),
-            "skill_manager": registry.has("skill_manager"),
-            "action_manager": registry.has("action_manager"),
-            "plugin_manager": registry.has("plugin_manager"),
-            "scheduler": registry.has("scheduler"),
-            "http_client": registry.has("http_client"),
+            "memory_engine": registry.has(
+                "memory_engine"
+            ),
+            "skill_manager": registry.has(
+                "skill_manager"
+            ),
+            "action_manager": registry.has(
+                "action_manager"
+            ),
+            "plugin_manager": registry.has(
+                "plugin_manager"
+            ),
+            "scheduler": registry.has(
+                "scheduler"
+            ),
+            "http_client": registry.has(
+                "http_client"
+            ),
         },
         "plugins_loaded": (
-            list(registry.get("plugin_manager").plugins.keys())
-            if registry.has("plugin_manager")
+            list(
+                registry.get(
+                    "plugin_manager"
+                ).plugins.keys()
+            )
+            if registry.has(
+                "plugin_manager"
+            )
             else []
         ),
         "version": "12.0.0",
@@ -1526,31 +2413,51 @@ async def health(req: Request):
 
     return extended_status
 
+
+# =========================================================
+# ROOT
+# =========================================================
+
 @app.get("/")
 async def root():
-    return {"system": "ARIA AI Operating Platform", "status": "operational", "version": "12.0.0"}
+
+    return {
+        "system": "ARIA AI Operating Platform",
+        "status": "operational",
+        "version": "12.0.0",
+    }
+
+
+# =========================================================
+# WEB CHAT
+# =========================================================
 
 class ChatRequest(BaseModel):
+
     message: str
+
     session_id: str = "web"
 
+
 class ChatResponse(BaseModel):
+
     success: bool
+
     reply: str
 
-@app.post("/chat", response_model=ChatResponse)
+
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+)
 async def web_chat(
     request: ChatRequest,
     req: Request,
 ):
-    """
-    Web frontend endpoint.
 
-    Uses the exact same cognitive pipeline
-    as Telegram.
-    """
-
-    request_id = str(uuid.uuid4())
+    request_id = str(
+        uuid.uuid4()
+    )
 
     try:
 
@@ -1566,13 +2473,29 @@ async def web_chat(
             reply=str(result),
         )
 
-    except Exception as e:
+    except asyncio.TimeoutError:
 
-        logger.exception(
-            "[WEB CHAT]"
+        logger.error(
+            "[WEB CHAT] Request timed out | request_id=%s",
+            request_id,
         )
 
         return ChatResponse(
             success=False,
-            reply=f"System Error: {e}"
+            reply=(
+                "The request took too long to complete "
+                "and was stopped."
+            ),
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "[WEB CHAT] Request failed | request_id=%s",
+            request_id,
+        )
+
+        return ChatResponse(
+            success=False,
+            reply=f"System Error: {e}",
         )
