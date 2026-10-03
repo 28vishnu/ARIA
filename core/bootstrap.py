@@ -1695,49 +1695,6 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Phase 1 Capability Registry
-    # ---------------------------------------------------------
-
-    registry.register(
-        "phase1_capability_registry",
-        {
-            "repository_manager": repository_manager,
-            "source_analyzer": source_analyzer,
-            "dependency_analyzer": dependency_analyzer,
-            "development_workspace": development_workspace,
-            "requirement_parser": requirement_parser,
-            "change_planner": change_planner,
-
-            # Workspace-scoped services are exposed as factories.
-            # They are instantiated only inside an isolated
-            # development workspace, never against production.
-            "filesystem_guard_factory": FilesystemGuard,
-            "development_sandbox_factory": DevelopmentSandbox,
-            "code_writer_factory": CodeWriter,
-            "validator_factory": DevelopmentValidator,
-            "test_runner_factory": DevelopmentTestRunner,
-            "build_manager_factory": BuildManager,
-
-            "failure_analyzer": failure_analyzer,
-            "repair_engine": repair_engine,
-            "development_agent": development_agent,
-            "development_controller": development_controller,
-            "git_manager": git_manager,
-            "github_manager": github_manager,
-            "deployment_manager": deployment_manager,
-            "health_monitor": health_monitor,
-            "rollback_manager": rollback_manager,
-            "approval_manager": approval_manager,
-            "deployment_policy": deployment_policy,
-        },
-    )
-
-    logger.info(
-        "[Phase1] Capability registry prepared | "
-        "self_engineering=True",
-    )
-
-    # ---------------------------------------------------------
     # Cross Wiring
     # ---------------------------------------------------------
 
