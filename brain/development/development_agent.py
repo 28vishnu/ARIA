@@ -575,7 +575,7 @@ class DevelopmentAgent:
             "10. Do not include comments outside the JSON object.\n"
             "\n"
             "MASTER REQUIREMENT:\n"
-            f"{requirement.text}\n"
+            f"{requirement.raw_text}\n"
             "\n"
             "PARSED REQUIREMENT:\n"
             f"{json.dumps(requirement.to_dict(), ensure_ascii=False, indent=2)}\n"
