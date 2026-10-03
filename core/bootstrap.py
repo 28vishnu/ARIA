@@ -56,6 +56,12 @@ from brain.documents.repository.code_parser import CodeParser
 from brain.documents.repository.dependency_graph import DependencyGraph
 from brain.documents.repository.repository_memory import RepositoryMemory
 
+# =========================================================
+# Phase 1 — Self-Engineering
+# =========================================================
+
+from brain.development.repository_manager import RepositoryManager
+
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
 from skills.document import DocumentSkill
@@ -686,6 +692,39 @@ async def bootstrap_application() -> ServiceRegistry:
     dependency_graph = DependencyGraph()
 
     repository_memory = RepositoryMemory()
+
+    # ---------------------------------------------------------
+    # Phase 1 — Self-Engineering Repository Intelligence
+    # ---------------------------------------------------------
+    #
+    # RepositoryManager is intentionally read-only.
+    #
+    # It is registered during bootstrap but does not scan,
+    # modify, execute, commit, push, or deploy anything.
+    #
+    # The actual repository inspection will be performed by
+    # the Phase 1 development subsystem when requested.
+    # ---------------------------------------------------------
+
+    repository_manager = RepositoryManager(
+        max_file_size_bytes=int(
+            os.getenv(
+                "ARIA_REPOSITORY_MAX_FILE_SIZE",
+                str(10 * 1024 * 1024),
+            )
+        ),
+    )
+
+    registry.register(
+        "repository_manager",
+        repository_manager,
+    )
+
+    logger.info(
+        "[Phase1] RepositoryManager registered | "
+        "read_only=True | root=%s",
+        os.getcwd(),
+    )
 
     pipeline = DocumentPipeline(
         document_manager=document_manager,
