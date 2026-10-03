@@ -61,6 +61,35 @@ from brain.documents.repository.repository_memory import RepositoryMemory
 # =========================================================
 
 from brain.development.repository_manager import RepositoryManager
+from brain.development.source_analyzer import SourceAnalyzer
+from brain.development.dependency_analyzer import DependencyAnalyzer
+
+from brain.development.workspace import DevelopmentWorkspace
+from brain.development.filesystem_guard import FilesystemGuard
+from brain.development.sandbox import DevelopmentSandbox
+
+from brain.development.requirement_parser import RequirementParser
+from brain.development.change_planner import ChangePlanner
+from brain.development.code_writer import CodeWriter
+
+from brain.development.validator import Validator
+from brain.development.test_runner import TestRunner
+from brain.development.failure_analyzer import FailureAnalyzer
+from brain.development.repair_engine import RepairEngine
+
+from brain.development.development_agent import DevelopmentAgent
+from brain.development.development_controller import DevelopmentController
+
+from brain.development.git_manager import GitManager
+from brain.development.github_manager import GitHubManager
+
+from brain.development.build_manager import BuildManager
+from brain.development.deployment_manager import DeploymentManager
+from brain.development.health_monitor import HealthMonitor
+from brain.development.rollback_manager import RollbackManager
+
+from brain.development.approval_manager import ApprovalManager
+from brain.development.deployment_policy import DeploymentPolicy
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -106,18 +135,7 @@ logger = logging.getLogger("aria")
 # Local Knowledge Configuration
 # =========================================================
 
-# IMPORTANT:
-# sentence-transformers/all-MiniLM-L6-v2 produces 384-dimensional
-# embeddings.
-#
-# Do NOT reuse the previous BGE-M3 collection because BGE-M3
-# produced 1024-dimensional vectors.
-#
-# A new collection prevents Chroma dimension conflicts.
 KNOWLEDGE_VECTOR_COLLECTION = "aria_knowledge_minilm_v1"
-
-# The legacy collection is intentionally preserved.
-# Other existing ARIA components may still use it.
 LEGACY_VECTOR_COLLECTION = "aria_memory"
 
 
@@ -230,32 +248,9 @@ async def bootstrap_application() -> ServiceRegistry:
         path=config.vector_persist_path
     )
 
-    # ---------------------------------------------------------
-    # Legacy memory/document collection
-    # ---------------------------------------------------------
-
     vector_store = chroma_client.get_or_create_collection(
         name=LEGACY_VECTOR_COLLECTION
     )
-
-    # ---------------------------------------------------------
-    # Local Knowledge Collection
-    # ---------------------------------------------------------
-    #
-    # The local embedding model is now:
-    #
-    # sentence-transformers/all-MiniLM-L6-v2
-    #
-    # Dimension = 384
-    #
-    # This MUST NOT share a collection with:
-    #
-    # BGE-M3 -> 1024 dimensions
-    #
-    # Gemini embeddings -> previously ~768 dimensions
-    #
-    # Therefore we create a completely new versioned collection.
-    # ---------------------------------------------------------
 
     knowledge_vector_store = chroma_client.get_or_create_collection(
         name=KNOWLEDGE_VECTOR_COLLECTION
@@ -355,11 +350,6 @@ async def bootstrap_application() -> ServiceRegistry:
 
     # ---------------------------------------------------------
     # Knowledge Database
-    # ---------------------------------------------------------
-    #
-    # IMPORTANT:
-    # KnowledgeDatabase now uses the 384-dimensional local
-    # MiniLM collection.
     # ---------------------------------------------------------
 
     knowledge_database = KnowledgeDatabase(
@@ -657,11 +647,8 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     document_manager = DocumentManager()
-
     chunker = Chunker()
-
     concept_extractor = ConceptExtractor()
-
     document_memory = DocumentMemory()
 
     semantic_search = SemanticSearch(
@@ -686,24 +673,12 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     repo_analyzer = RepositoryAnalyzer()
-
     code_parser = CodeParser()
-
     dependency_graph = DependencyGraph()
-
     repository_memory = RepositoryMemory()
 
     # ---------------------------------------------------------
-    # Phase 1 — Self-Engineering Repository Intelligence
-    # ---------------------------------------------------------
-    #
-    # RepositoryManager is intentionally read-only.
-    #
-    # It is registered during bootstrap but does not scan,
-    # modify, execute, commit, push, or deploy anything.
-    #
-    # The actual repository inspection will be performed by
-    # the Phase 1 development subsystem when requested.
+    # Phase 1 — Repository Intelligence
     # ---------------------------------------------------------
 
     repository_manager = RepositoryManager(
@@ -715,16 +690,289 @@ async def bootstrap_application() -> ServiceRegistry:
         ),
     )
 
+    source_analyzer = SourceAnalyzer()
+
+    dependency_analyzer = DependencyAnalyzer()
+
     registry.register(
         "repository_manager",
         repository_manager,
     )
 
+    registry.register(
+        "source_analyzer",
+        source_analyzer,
+    )
+
+    registry.register(
+        "dependency_analyzer",
+        dependency_analyzer,
+    )
+
     logger.info(
-        "[Phase1] RepositoryManager registered | "
+        "[Phase1] Repository intelligence registered | "
         "read_only=True | root=%s",
         os.getcwd(),
     )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Development Workspace
+    # ---------------------------------------------------------
+
+    workspace_root = os.getenv(
+        "ARIA_DEVELOPMENT_WORKSPACE_ROOT",
+        os.path.join(
+            os.getcwd(),
+            ".aria_workspaces",
+        ),
+    )
+
+    development_workspace = DevelopmentWorkspace(
+        workspace_root=workspace_root,
+    )
+
+    registry.register(
+        "development_workspace",
+        development_workspace,
+    )
+
+    logger.info(
+        "[Phase1] DevelopmentWorkspace registered | root=%s",
+        workspace_root,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Development Services
+    # ---------------------------------------------------------
+
+    requirement_parser = RequirementParser()
+    change_planner = ChangePlanner()
+    code_writer = CodeWriter()
+
+    registry.register(
+        "requirement_parser",
+        requirement_parser,
+    )
+
+    registry.register(
+        "change_planner",
+        change_planner,
+    )
+
+    registry.register(
+        "code_writer",
+        code_writer,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Validation / Testing / Repair
+    # ---------------------------------------------------------
+
+    validator = Validator()
+
+    test_runner = TestRunner()
+
+    failure_analyzer = FailureAnalyzer()
+
+    repair_engine = RepairEngine(
+        max_attempts=int(
+            os.getenv(
+                "ARIA_REPAIR_MAX_ATTEMPTS",
+                "3",
+            )
+        ),
+    )
+
+    registry.register(
+        "validator",
+        validator,
+    )
+
+    registry.register(
+        "test_runner",
+        test_runner,
+    )
+
+    registry.register(
+        "failure_analyzer",
+        failure_analyzer,
+    )
+
+    registry.register(
+        "repair_engine",
+        repair_engine,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Git / GitHub
+    # ---------------------------------------------------------
+
+    git_manager = GitManager(
+        repository_root=os.getcwd(),
+    )
+
+    github_manager = GitHubManager(
+        git_manager=git_manager,
+        allow_push=False,
+    )
+
+    registry.register(
+        "git_manager",
+        git_manager,
+    )
+
+    registry.register(
+        "github_manager",
+        github_manager,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Build / Deployment / Health / Rollback
+    # ---------------------------------------------------------
+
+    build_manager = BuildManager()
+
+    deployment_manager = DeploymentManager(
+        git_manager=git_manager,
+        allow_production=False,
+    )
+
+    health_monitor = HealthMonitor()
+
+    rollback_manager = RollbackManager(
+        git_manager=git_manager,
+    )
+
+    registry.register(
+        "build_manager",
+        build_manager,
+    )
+
+    registry.register(
+        "deployment_manager",
+        deployment_manager,
+    )
+
+    registry.register(
+        "health_monitor",
+        health_monitor,
+    )
+
+    registry.register(
+        "rollback_manager",
+        rollback_manager,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Approval / Deployment Policy
+    # ---------------------------------------------------------
+
+    approval_manager = ApprovalManager()
+
+    deployment_policy = DeploymentPolicy(
+        autonomous_staging=(
+            os.getenv(
+                "ARIA_AUTONOMOUS_STAGING",
+                "true",
+            ).lower()
+            in {"1", "true", "yes", "on"}
+        ),
+        autonomous_production=(
+            os.getenv(
+                "ARIA_AUTONOMOUS_PRODUCTION",
+                "false",
+            ).lower()
+            in {"1", "true", "yes", "on"}
+        ),
+        minimum_confidence=float(
+            os.getenv(
+                "ARIA_DEPLOYMENT_MIN_CONFIDENCE",
+                "0.80",
+            )
+        ),
+    )
+
+    registry.register(
+        "approval_manager",
+        approval_manager,
+    )
+
+    registry.register(
+        "deployment_policy",
+        deployment_policy,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Filesystem Guard / Sandbox
+    # ---------------------------------------------------------
+
+    # These are created per development workspace by the
+    # DevelopmentAgent. The registry exposes the classes/services
+    # needed by the development subsystem without granting them
+    # production filesystem access.
+
+    registry.register(
+        "filesystem_guard_factory",
+        FilesystemGuard,
+    )
+
+    registry.register(
+        "development_sandbox_factory",
+        DevelopmentSandbox,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Development Agent
+    # ---------------------------------------------------------
+
+    development_agent = DevelopmentAgent(
+        repository_manager=repository_manager,
+        source_analyzer=source_analyzer,
+        dependency_analyzer=dependency_analyzer,
+        workspace_manager=development_workspace,
+        requirement_parser=requirement_parser,
+        change_planner=change_planner,
+        code_writer=code_writer,
+        validator=validator,
+        test_runner=test_runner,
+        failure_analyzer=failure_analyzer,
+        repair_engine=repair_engine,
+        git_manager=git_manager,
+    )
+
+    registry.register(
+        "development_agent",
+        development_agent,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Development Controller
+    # ---------------------------------------------------------
+
+    development_controller = DevelopmentController(
+        development_agent=development_agent,
+    )
+
+    registry.register(
+        "development_controller",
+        development_controller,
+    )
+
+    logger.info(
+        "[Phase1] Self-engineering subsystem registered | "
+        "repository intelligence=%s | workspace=%s | "
+        "validation=%s | git=%s | deployment=%s | approval=%s",
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    )
+
+    # ---------------------------------------------------------
+    # Document Pipeline
+    # ---------------------------------------------------------
 
     pipeline = DocumentPipeline(
         document_manager=document_manager,
@@ -843,7 +1091,6 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     agent_manager = AgentManager()
-
     agent_coordinator = AgentCoordinator(
         agent_manager
     )
@@ -1387,6 +1634,42 @@ async def bootstrap_application() -> ServiceRegistry:
     logger.info(
         "[Phase11] Capability graph prepared | tools=%s",
         tool_manager.list_tools(),
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 Capability Registry
+    # ---------------------------------------------------------
+
+    registry.register(
+        "phase1_capability_registry",
+        {
+            "repository_manager": repository_manager,
+            "source_analyzer": source_analyzer,
+            "dependency_analyzer": dependency_analyzer,
+            "development_workspace": development_workspace,
+            "requirement_parser": requirement_parser,
+            "change_planner": change_planner,
+            "code_writer": code_writer,
+            "validator": validator,
+            "test_runner": test_runner,
+            "failure_analyzer": failure_analyzer,
+            "repair_engine": repair_engine,
+            "development_agent": development_agent,
+            "development_controller": development_controller,
+            "git_manager": git_manager,
+            "github_manager": github_manager,
+            "build_manager": build_manager,
+            "deployment_manager": deployment_manager,
+            "health_monitor": health_monitor,
+            "rollback_manager": rollback_manager,
+            "approval_manager": approval_manager,
+            "deployment_policy": deployment_policy,
+        },
+    )
+
+    logger.info(
+        "[Phase1] Capability registry prepared | "
+        "self_engineering=True",
     )
 
     # ---------------------------------------------------------
