@@ -950,22 +950,24 @@ class AutonomousLearning:
         if not user_text:
             return
 
-        await self.memory.store_chat(
-            {
-                "user": user_text,
-                "assistant": assistant_text,
-            }
-        )
-
+        # Conversation storage is owned by the main conversation pipeline.
+        # Do not call MemoryEngine.store_chat() here: it expects a text string,
+        # while this learning event previously passed a dict and could trigger
+        # the recurring "Learning event failed: chat" error or duplicate data.
         if hasattr(
             self.learning,
             "learn_chat",
         ):
-
-            await self.learning.learn_chat(
-                user_text,
-                assistant_text,
-            )
+            try:
+                await self.learning.learn_chat(
+                    user_text,
+                    assistant_text,
+                )
+            except Exception:
+                logger.exception(
+                    "[AutonomousLearning] Knowledge learning for chat failed; "
+                    "continuing with bounded learning."
+                )
 
         content = (
             f"User:\n"
