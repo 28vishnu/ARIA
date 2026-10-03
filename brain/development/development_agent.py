@@ -24,29 +24,14 @@ from .workspace import DevelopmentWorkspace, WorkspaceInfo
 logger = logging.getLogger("aria")
 
 
-# ============================================================
-# Types
-# ============================================================
-
 CodeGenerator = Callable[
     [str, dict[str, Any]],
     str | dict[str, Any] | Awaitable[str | dict[str, Any]],
 ]
 
 
-# ============================================================
-# Generated change
-# ============================================================
-
 @dataclass(frozen=True)
 class GeneratedChange:
-    """
-    One AI-proposed repository operation.
-
-    The AI only describes the operation.
-    Filesystem mutation is always performed by CodeWriter.
-    """
-
     path: str
     operation: str
     content: str = ""
@@ -61,10 +46,6 @@ class GeneratedChange:
             "content": self.content,
         }
 
-
-# ============================================================
-# Code-generation result
-# ============================================================
 
 @dataclass(frozen=True)
 class CodeGenerationResult:
@@ -92,10 +73,6 @@ class CodeGenerationResult:
             "metadata": dict(self.metadata),
         }
 
-
-# ============================================================
-# Development report
-# ============================================================
 
 @dataclass(frozen=True)
 class DevelopmentReport:
@@ -165,13 +142,11 @@ class DevelopmentReport:
         }
 
 
-# ============================================================
-# Development Agent
-# ============================================================
-
 class DevelopmentAgent:
     """
-    Phase 1 self-development agent.
+    Phase 1 self-development engine.
+
+    The production repository is never modified directly.
 
     Pipeline:
 
@@ -179,15 +154,17 @@ class DevelopmentAgent:
               ↓
         repository inspection
               ↓
-        requirement parsing
-              ↓
         deterministic planning
               ↓
         isolated workspace
               ↓
-        repository context
+        workspace verification
               ↓
-        AI code generation
+        workspace repository inspection
+              ↓
+        bounded repository context
+              ↓
+        AI generation
               ↓
         deterministic safety validation
               ↓
@@ -197,17 +174,13 @@ class DevelopmentAgent:
               ↓
         static validation
               ↓
-        tests
+        targeted tests
               ↓
         bounded repair
               ↓
-        final report
+        final verification
 
-    This class deliberately does NOT deploy or push to GitHub.
-
-    Git, staging, approval, production deployment, health monitoring,
-    and rollback will be connected by the higher-level Phase 1
-    orchestration layer after this development pipeline is stable.
+    This class does not deploy or push to GitHub.
     """
 
     DEFAULT_MAX_CONTEXT_CHARS = 120_000
@@ -215,7 +188,6 @@ class DevelopmentAgent:
     DEFAULT_MAX_GENERATED_FILES = 30
     DEFAULT_MAX_FILE_CHARS = 2_000_000
 
-    # Never expose these paths to an external code-generation model.
     SENSITIVE_PARTS = {
         ".env",
         ".env.local",
@@ -291,7 +263,6 @@ class DevelopmentAgent:
         max_generated_files: int = DEFAULT_MAX_GENERATED_FILES,
         max_generated_file_chars: int = DEFAULT_MAX_FILE_CHARS,
     ) -> None:
-
         self.repository_manager = repository_manager
         self.workspace_manager = workspace_manager
 
@@ -325,7 +296,7 @@ class DevelopmentAgent:
         )
 
     # ========================================================
-    # Path helpers
+    # Path safety
     # ========================================================
 
     @staticmethod
@@ -338,7 +309,10 @@ class DevelopmentAgent:
         return value
 
     @classmethod
-    def _is_sensitive_path(cls, path: Path | str) -> bool:
+    def _is_sensitive_path(
+        cls,
+        path: Path | str,
+    ) -> bool:
         candidate = Path(path)
 
         if any(
@@ -358,7 +332,10 @@ class DevelopmentAgent:
         )
 
     @classmethod
-    def _is_context_directory(cls, path: Path) -> bool:
+    def _is_context_directory(
+        cls,
+        path: Path,
+    ) -> bool:
         return any(
             part in cls.SKIP_CONTEXT_DIRS
             for part in path.parts
@@ -368,7 +345,6 @@ class DevelopmentAgent:
     def _safe_relative_path(
         path: str,
     ) -> tuple[str | None, str | None]:
-
         normalized = (
             str(path)
             .strip()
@@ -393,10 +369,7 @@ class DevelopmentAgent:
                 f"Path traversal rejected: {normalized}"
             )
 
-        return (
-            candidate.as_posix(),
-            None,
-        )
+        return candidate.as_posix(), None
 
     # ========================================================
     # Repository inspection
@@ -406,13 +379,12 @@ class DevelopmentAgent:
         self,
         repository_path: str | Path | None = None,
     ) -> list[str]:
-
         root = (
-            Path(repository_path)
+            Path(repository_path).expanduser().resolve()
             if repository_path is not None
             else Path(
                 self.workspace_manager.repository_root
-            )
+            ).resolve()
         )
 
         snapshot = self.repository_manager.inspect(root)
@@ -433,11 +405,14 @@ class DevelopmentAgent:
         self,
         workspace: WorkspaceInfo,
     ) -> list[str]:
+        root = workspace.source_root.resolve()
+
+        if not root.exists():
+            return []
 
         paths: list[str] = []
 
-        for path in workspace.source_root.rglob("*"):
-
+        for path in root.rglob("*"):
             if not path.is_file():
                 continue
 
@@ -445,15 +420,89 @@ class DevelopmentAgent:
                 continue
 
             try:
-                relative = path.relative_to(
-                    workspace.source_root
-                )
+                relative = path.relative_to(root)
             except ValueError:
                 continue
 
             paths.append(relative.as_posix())
 
         return paths
+
+    def _verify_workspace_repository(
+        self,
+        workspace: WorkspaceInfo,
+    ) -> tuple[bool, dict[str, Any], str | None]:
+        """
+        Verify that the isolated workspace really contains a
+        repository before allowing the LLM to inspect it.
+        """
+
+        try:
+            root = workspace.source_root.resolve()
+
+            if not root.exists():
+                return (
+                    False,
+                    {},
+                    "Workspace repository does not exist.",
+                )
+
+            if not root.is_dir():
+                return (
+                    False,
+                    {},
+                    "Workspace repository is not a directory.",
+                )
+
+            paths = self._workspace_paths(workspace)
+
+            if not paths:
+                return (
+                    False,
+                    {
+                        "file_count": 0,
+                        "sample_files": [],
+                    },
+                    (
+                        "Workspace repository is empty. "
+                        "Code generation is blocked."
+                    ),
+                )
+
+            expected_files = (
+                getattr(
+                    workspace,
+                    "source_file_count",
+                    0,
+                )
+                or 0
+            )
+
+            snapshot_hash = getattr(
+                workspace,
+                "source_snapshot_hash",
+                "",
+            )
+
+            info = {
+                "file_count": len(paths),
+                "expected_file_count": expected_files,
+                "sample_files": paths[:25],
+                "snapshot_hash": snapshot_hash,
+            }
+
+            return True, info, None
+
+        except Exception as exc:
+            logger.exception(
+                "[DevelopmentAgent] Workspace verification failed."
+            )
+
+            return (
+                False,
+                {},
+                f"Workspace verification failed: {exc}",
+            )
 
     # ========================================================
     # Repository context
@@ -464,27 +513,53 @@ class DevelopmentAgent:
         workspace: WorkspaceInfo,
     ) -> dict[str, Any]:
         """
-        Build bounded repository context for the code generator.
+        Build bounded repository context from the VERIFIED
+        isolated workspace.
 
-        Sensitive files are intentionally excluded.
+        Never builds LLM context from the production repository.
         """
 
-        files: list[dict[str, Any]] = []
-        total_chars = 0
-        skipped_sensitive = 0
-        skipped_binary = 0
-        skipped_large = 0
+        root = workspace.source_root.resolve()
 
-        root = workspace.source_root
+        if not root.exists():
+            raise RuntimeError(
+                "Cannot build repository context because "
+                "workspace repository does not exist."
+            )
 
-        for path in sorted(root.rglob("*")):
+        if not root.is_dir():
+            raise RuntimeError(
+                "Cannot build repository context because "
+                "workspace repository is not a directory."
+            )
 
+        all_paths: list[Path] = []
+
+        for path in root.rglob("*"):
             if not path.is_file():
                 continue
 
             if self._is_context_directory(path):
                 continue
 
+            all_paths.append(path)
+
+        if not all_paths:
+            raise RuntimeError(
+                "Verified workspace contains no files. "
+                "Refusing to send an empty repository context "
+                "to the code-generation engine."
+            )
+
+        files: list[dict[str, Any]] = []
+
+        total_chars = 0
+        skipped_sensitive = 0
+        skipped_binary = 0
+        skipped_large = 0
+        skipped_unreadable = 0
+
+        for path in sorted(all_paths):
             try:
                 relative = path.relative_to(root)
             except ValueError:
@@ -499,16 +574,17 @@ class DevelopmentAgent:
             try:
                 size = path.stat().st_size
             except OSError:
+                skipped_unreadable += 1
                 continue
 
-            if size > 2_000_000:
+            if size > self.DEFAULT_MAX_FILE_CHARS:
                 skipped_large += 1
                 continue
 
-            # Do not waste LLM context on obvious binary files.
             try:
                 raw = path.read_bytes()
             except OSError:
+                skipped_unreadable += 1
                 continue
 
             if b"\x00" in raw[:8192]:
@@ -543,15 +619,23 @@ class DevelopmentAgent:
 
             total_chars += len(content)
 
+        if not files:
+            raise RuntimeError(
+                "Workspace contains files, but no safe textual "
+                "files could be included in the LLM context."
+            )
+
         return {
             "repository_root": ".",
             "file_count": len(files),
+            "workspace_file_count": len(all_paths),
             "context_chars": total_chars,
             "files": files,
             "safety": {
                 "sensitive_files_excluded": skipped_sensitive,
                 "binary_files_excluded": skipped_binary,
                 "large_files_excluded": skipped_large,
+                "unreadable_files_excluded": skipped_unreadable,
             },
         }
 
@@ -568,7 +652,6 @@ class DevelopmentAgent:
         failure: FailureAnalysis | None = None,
         previous_changes: list[GeneratedChange] | None = None,
     ) -> str:
-
         failure_text = ""
 
         if failure is not None:
@@ -603,15 +686,15 @@ class DevelopmentAgent:
             "changes satisfying the Master's requirement.\n"
             "\n"
             "IMPORTANT SAFETY RULES:\n"
-            "- You only return structured data.\n"
-            "- You do not execute commands.\n"
-            "- You do not deploy.\n"
-            "- You do not push to GitHub.\n"
-            "- You do not modify production directly.\n"
-            "- You never invent secrets, credentials, tokens, "
-            "API keys, private keys, or environment values.\n"
-            "- You never request that ARIA execute arbitrary "
-            "shell commands.\n"
+            "- Return structured data only.\n"
+            "- Never execute commands.\n"
+            "- Never deploy.\n"
+            "- Never push to GitHub.\n"
+            "- Never modify production directly.\n"
+            "- Never invent secrets, credentials, tokens, API keys, "
+            "private keys, or environment values.\n"
+            "- Never request arbitrary shell execution.\n"
+            "- Never modify unrelated files.\n"
             "\n"
             "Return ONE valid JSON object and nothing else.\n"
             "\n"
@@ -626,23 +709,23 @@ class DevelopmentAgent:
             '      "content": "complete file content"\n'
             "    }\n"
             "  ],\n"
-            '  "tests": ["existing test path or test description"]\n'
+            '  "tests": ["existing test path"]\n'
             "}\n"
             "\n"
             "Rules:\n"
             "1. Paths must be repository-relative.\n"
             "2. Never use absolute paths.\n"
-            "3. Never use '..' path traversal.\n"
+            "3. Never use '..' traversal.\n"
             "4. For create/modify, provide complete file content.\n"
             "5. For delete, content must be empty.\n"
             "6. Make the smallest safe change.\n"
-            "7. Preserve existing behavior unless explicitly changed "
-            "by the requirement.\n"
+            "7. Preserve existing behavior unless the requirement "
+            "explicitly changes it.\n"
             "8. Do not modify unrelated files.\n"
             "9. Do not modify protected/security/deployment files "
             "unless explicitly required.\n"
             "10. Do not include Markdown fences.\n"
-            "11. Do not include prose outside the JSON object.\n"
+            "11. Do not include prose outside JSON.\n"
             "\n"
             "MASTER REQUIREMENT:\n"
             f"{requirement.raw_text}\n"
@@ -653,7 +736,7 @@ class DevelopmentAgent:
             "CHANGE PLAN:\n"
             f"{json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)}\n"
             "\n"
-            "CURRENT REPOSITORY CONTEXT:\n"
+            "CURRENT VERIFIED REPOSITORY CONTEXT:\n"
             f"{json.dumps(repository_context, ensure_ascii=False, indent=2)}"
             f"{failure_text}"
             f"{previous_text}"
@@ -665,7 +748,6 @@ class DevelopmentAgent:
 
     @staticmethod
     def _strip_code_fences(text: str) -> str:
-
         value = str(text).strip()
 
         if value.startswith("```"):
@@ -688,7 +770,6 @@ class DevelopmentAgent:
         self,
         response: str | dict[str, Any],
     ) -> CodeGenerationResult:
-
         if isinstance(response, dict):
             payload = response
 
@@ -763,7 +844,6 @@ class DevelopmentAgent:
         errors: list[str] = []
 
         for index, item in enumerate(changes_payload):
-
             if not isinstance(item, dict):
                 errors.append(
                     f"Change {index} is not an object."
@@ -808,14 +888,23 @@ class DevelopmentAgent:
 
             if len(content) > self.max_generated_file_chars:
                 errors.append(
-                    f"Change {index} exceeds the maximum "
-                    "file size."
+                    f"Change {index} exceeds maximum file size."
+                )
+                continue
+
+            normalized, path_error = (
+                self._safe_relative_path(path)
+            )
+
+            if path_error or normalized is None:
+                errors.append(
+                    path_error or f"Invalid path: {path}"
                 )
                 continue
 
             generated.append(
                 GeneratedChange(
-                    path=self._normalize_path(path),
+                    path=normalized,
                     operation=operation,
                     content=content,
                 )
@@ -844,9 +933,10 @@ class DevelopmentAgent:
             )
 
         tests = tuple(
-            str(item)
+            str(item).strip()
             for item in tests_payload
             if isinstance(item, str)
+            and str(item).strip()
         )
 
         if errors:
@@ -881,7 +971,7 @@ class DevelopmentAgent:
         )
 
     # ========================================================
-    # Generator invocation
+    # Generator
     # ========================================================
 
     async def _generate_code(
@@ -889,7 +979,6 @@ class DevelopmentAgent:
         prompt: str,
         context: dict[str, Any],
     ) -> CodeGenerationResult:
-
         if self.code_generator is None:
             return CodeGenerationResult(
                 success=False,
@@ -930,7 +1019,6 @@ class DevelopmentAgent:
     def _forbids_existing_modification(
         requirement: Requirement,
     ) -> bool:
-
         text = re.sub(
             r"\s+",
             " ",
@@ -957,7 +1045,6 @@ class DevelopmentAgent:
     def _is_create_only_requirement(
         requirement: Requirement,
     ) -> bool:
-
         text = re.sub(
             r"\s+",
             " ",
@@ -984,33 +1071,6 @@ class DevelopmentAgent:
             for phrase in phrases
         )
 
-    @staticmethod
-    def _forbids_deployment_or_push(
-        requirement: Requirement,
-    ) -> bool:
-
-        text = re.sub(
-            r"\s+",
-            " ",
-            str(requirement.raw_text or "").lower(),
-        )
-
-        negative_phrases = (
-            "do not deploy",
-            "don't deploy",
-            "must not deploy",
-            "do not push",
-            "don't push",
-            "must not push",
-            "do not push to github",
-            "don't push to github",
-        )
-
-        return any(
-            phrase in text
-            for phrase in negative_phrases
-        )
-
     # ========================================================
     # Planner/path enforcement
     # ========================================================
@@ -1019,7 +1079,6 @@ class DevelopmentAgent:
     def _planned_actions(
         plan: ChangePlan,
     ) -> dict[str, str]:
-
         result: dict[str, str] = {}
 
         for item in plan.changes:
@@ -1057,14 +1116,11 @@ class DevelopmentAgent:
         path: str,
         plan: ChangePlan | None,
     ) -> bool:
-
         if plan is None:
             return True
 
         planned = cls._planned_actions(plan)
 
-        # An empty planned set means the planner did not constrain
-        # individual paths.
         if not planned:
             return True
 
@@ -1081,7 +1137,6 @@ class DevelopmentAgent:
         list[GeneratedChange],
         list[str],
     ]:
-
         valid: list[GeneratedChange] = []
         errors: list[str] = []
         seen: set[str] = set()
@@ -1101,7 +1156,6 @@ class DevelopmentAgent:
         )
 
         for change in changes:
-
             path, path_error = self._safe_relative_path(
                 change.path
             )
@@ -1172,14 +1226,12 @@ class DevelopmentAgent:
                 )
                 continue
 
-            # Never allow generated operations against sensitive files.
             if self._is_sensitive_path(path):
                 errors.append(
                     f"Sensitive path rejected: {path}"
                 )
                 continue
 
-            # Never allow protected paths.
             try:
                 if guard.is_protected(resolved):
                     errors.append(
@@ -1195,22 +1247,29 @@ class DevelopmentAgent:
 
             exists = resolved.exists()
 
-            # ------------------------------------------------
-            # Create-only enforcement
-            # ------------------------------------------------
+            # ----------------------------------------------
+            # Create-only requirements
+            # ----------------------------------------------
 
             if (
                 requirement is not None
                 and self._is_create_only_requirement(
                     requirement
                 )
-                and operation != "create"
             ):
-                errors.append(
-                    "Create-only requirement rejected "
-                    f"non-create operation: {path}"
-                )
-                continue
+                if operation != "create":
+                    errors.append(
+                        "Create-only requirement rejected "
+                        f"non-create operation: {path}"
+                    )
+                    continue
+
+                if exists:
+                    errors.append(
+                        "Create-only requirement targets an "
+                        f"existing path: {path}"
+                    )
+                    continue
 
             if operation == "create" and exists:
                 errors.append(
@@ -1233,9 +1292,9 @@ class DevelopmentAgent:
                 )
                 continue
 
-            # ------------------------------------------------
+            # ----------------------------------------------
             # Existing-file modification prohibition
-            # ------------------------------------------------
+            # ----------------------------------------------
 
             if (
                 exists
@@ -1254,9 +1313,9 @@ class DevelopmentAgent:
                 )
                 continue
 
-            # ------------------------------------------------
+            # ----------------------------------------------
             # Planner agreement
-            # ------------------------------------------------
+            # ----------------------------------------------
 
             if plan is not None:
                 if not self._path_is_planned(
@@ -1301,7 +1360,6 @@ class DevelopmentAgent:
     def _extract_exact_content_requirement(
         requirement: Requirement,
     ) -> tuple[str, str] | None:
-
         text = str(
             requirement.raw_text or ""
         )
@@ -1318,17 +1376,16 @@ class DevelopmentAgent:
         if not match:
             return None
 
-        path = match.group(1).strip()
-        content = match.group(2).strip()
-
-        return path, content
+        return (
+            match.group(1).strip(),
+            match.group(2).strip(),
+        )
 
     def _check_exact_content_requirement(
         self,
         requirement: Requirement,
         workspace: WorkspaceInfo,
     ) -> str | None:
-
         extracted = (
             self._extract_exact_content_requirement(
                 requirement
@@ -1390,7 +1447,6 @@ class DevelopmentAgent:
         explicit_test_paths: list[str] | None,
         generated_changes: list[GeneratedChange],
     ) -> list[str]:
-
         candidates = (
             explicit_test_paths
             if explicit_test_paths is not None
@@ -1404,7 +1460,6 @@ class DevelopmentAgent:
         selected: list[str] = []
 
         for raw in candidates:
-
             value = self._normalize_path(
                 str(raw)
             )
@@ -1412,7 +1467,6 @@ class DevelopmentAgent:
             if not value:
                 continue
 
-            # Reject shell-like input.
             if any(
                 token in value
                 for token in (
@@ -1435,8 +1489,7 @@ class DevelopmentAgent:
                 continue
 
             candidate = (
-                workspace.source_root
-                / safe_path
+                workspace.source_root / safe_path
             )
 
             try:
@@ -1455,7 +1508,6 @@ class DevelopmentAgent:
             ):
                 continue
 
-            # Only use paths that are plausibly test targets.
             if candidate.is_file():
                 if candidate.suffix.lower() not in {
                     ".py",
@@ -1469,8 +1521,6 @@ class DevelopmentAgent:
         if selected:
             return selected
 
-        # A simple artifact such as aria_test.txt should not cause
-        # an unrelated repository-wide pytest run.
         code_changed = any(
             Path(change.path).suffix.lower()
             in self.CODE_SUFFIXES
@@ -1485,7 +1535,7 @@ class DevelopmentAgent:
         return []
 
     # ========================================================
-    # Apply generated changes
+    # Apply changes
     # ========================================================
 
     def _apply_generated_changes(
@@ -1493,13 +1543,10 @@ class DevelopmentAgent:
         writer: CodeWriter,
         changes: list[GeneratedChange],
     ) -> list[WriteResult]:
-
         results: list[WriteResult] = []
 
         for change in changes:
-
             if change.operation == "create":
-
                 results.append(
                     writer.write(
                         change.path,
@@ -1510,7 +1557,6 @@ class DevelopmentAgent:
                 )
 
             elif change.operation == "modify":
-
                 results.append(
                     writer.write(
                         change.path,
@@ -1521,7 +1567,6 @@ class DevelopmentAgent:
                 )
 
             elif change.operation == "delete":
-
                 results.append(
                     writer.delete(
                         change.path
@@ -1537,7 +1582,7 @@ class DevelopmentAgent:
         return results
 
     # ========================================================
-    # Report helpers
+    # Report metadata
     # ========================================================
 
     @staticmethod
@@ -1546,7 +1591,6 @@ class DevelopmentAgent:
         *,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-
         metadata: dict[str, Any] = {
             "generated_change_count": len(
                 generated_changes
@@ -1563,7 +1607,7 @@ class DevelopmentAgent:
         return metadata
 
     # ========================================================
-    # Main development workflow
+    # Main workflow
     # ========================================================
 
     async def develop(
@@ -1576,7 +1620,7 @@ class DevelopmentAgent:
     ) -> DevelopmentReport:
 
         # ----------------------------------------------------
-        # Requirement parsing
+        # Requirement
         # ----------------------------------------------------
 
         try:
@@ -1590,9 +1634,6 @@ class DevelopmentAgent:
                 "[DevelopmentAgent] Requirement parsing failed."
             )
 
-            # RequirementParser should normally never fail, but
-            # there is no safe Requirement object to put into a
-            # DevelopmentReport if it does.
             raise RuntimeError(
                 f"Requirement parsing failed: {exc}"
             ) from exc
@@ -1604,18 +1645,21 @@ class DevelopmentAgent:
         )
 
         # ----------------------------------------------------
-        # Repository inspection
+        # Production repository inspection
         # ----------------------------------------------------
 
         try:
+            repository_root = (
+                self.workspace_manager.repository_root
+            )
+
             repository_paths = (
                 self._repository_paths(
-                    self.workspace_manager.repository_root
+                    repository_root
                 )
             )
 
         except Exception as exc:
-
             logger.exception(
                 "[DevelopmentAgent] Repository inspection failed."
             )
@@ -1631,9 +1675,23 @@ class DevelopmentAgent:
 
         logger.info(
             "[DevelopmentAgent] Repository inspection complete | "
-            "files=%s",
+            "root=%s | files=%s",
+            repository_root,
             len(repository_paths),
         )
+
+        if not repository_paths:
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=None,
+                workspace=None,
+                status="repository_empty",
+                errors=(
+                    "Production repository inspection returned "
+                    "zero files. Development is blocked.",
+                ),
+            )
 
         # ----------------------------------------------------
         # Deterministic planning
@@ -1644,8 +1702,8 @@ class DevelopmentAgent:
                 requirement,
                 existing_paths=repository_paths,
             )
-        except Exception as exc:
 
+        except Exception as exc:
             logger.exception(
                 "[DevelopmentAgent] Change planning failed."
             )
@@ -1660,7 +1718,6 @@ class DevelopmentAgent:
             )
 
         if plan.blocked:
-
             return DevelopmentReport(
                 success=False,
                 requirement=requirement,
@@ -1683,8 +1740,8 @@ class DevelopmentAgent:
                     workspace_id=workspace_id
                 )
             )
-        except Exception as exc:
 
+        except Exception as exc:
             logger.exception(
                 "[DevelopmentAgent] Workspace creation failed."
             )
@@ -1703,6 +1760,100 @@ class DevelopmentAgent:
             "workspace=%s",
             workspace.source_root,
         )
+
+        # ----------------------------------------------------
+        # CRITICAL: verify workspace before LLM access
+        # ----------------------------------------------------
+
+        (
+            workspace_valid,
+            workspace_info,
+            workspace_error,
+        ) = self._verify_workspace_repository(
+            workspace
+        )
+
+        logger.info(
+            "[DevelopmentAgent] Workspace verification | "
+            "valid=%s | files=%s | expected=%s | sample=%s",
+            workspace_valid,
+            workspace_info.get(
+                "file_count",
+                0,
+            ),
+            workspace_info.get(
+                "expected_file_count",
+                0,
+            ),
+            workspace_info.get(
+                "sample_files",
+                [],
+            )[:5],
+        )
+
+        if not workspace_valid:
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=plan,
+                workspace=workspace,
+                status="workspace_verification_failed",
+                errors=(
+                    workspace_error
+                    or "Workspace verification failed.",
+                ),
+                metadata={
+                    "workspace_verification": workspace_info,
+                },
+            )
+
+        # ----------------------------------------------------
+        # Inspect the isolated repository itself
+        # ----------------------------------------------------
+
+        try:
+            workspace_repository_paths = (
+                self._repository_paths(
+                    workspace.source_root
+                )
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "[DevelopmentAgent] Workspace repository "
+                "inspection failed."
+            )
+
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=plan,
+                workspace=workspace,
+                status="workspace_repository_inspection_failed",
+                errors=(str(exc),),
+            )
+
+        logger.info(
+            "[DevelopmentAgent] Workspace repository inspection "
+            "complete | files=%s",
+            len(workspace_repository_paths),
+        )
+
+        if not workspace_repository_paths:
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=plan,
+                workspace=workspace,
+                status="workspace_repository_empty",
+                errors=(
+                    "The isolated workspace contains zero "
+                    "repository files. Code generation blocked.",
+                ),
+                metadata={
+                    "workspace_file_count": 0,
+                },
+            )
 
         # ----------------------------------------------------
         # Development services
@@ -1740,7 +1891,7 @@ class DevelopmentAgent:
         generation: CodeGenerationResult | None = None
 
         # ----------------------------------------------------
-        # Repository context
+        # Verified repository context
         # ----------------------------------------------------
 
         try:
@@ -1749,8 +1900,8 @@ class DevelopmentAgent:
                     workspace
                 )
             )
-        except Exception as exc:
 
+        except Exception as exc:
             logger.exception(
                 "[DevelopmentAgent] Context construction failed."
             )
@@ -1762,16 +1913,45 @@ class DevelopmentAgent:
                 workspace=workspace,
                 status="context_build_failed",
                 errors=(str(exc),),
+                metadata={
+                    "workspace_file_count": len(
+                        workspace_repository_paths
+                    ),
+                },
             )
 
+        logger.info(
+            "[DevelopmentAgent] Repository context prepared | "
+            "workspace_files=%s | context_files=%s | "
+            "context_chars=%s | sensitive_excluded=%s",
+            repository_context.get(
+                "workspace_file_count",
+                0,
+            ),
+            repository_context.get(
+                "file_count",
+                0,
+            ),
+            repository_context.get(
+                "context_chars",
+                0,
+            ),
+            repository_context.get(
+                "safety",
+                {},
+            ).get(
+                "sensitive_files_excluded",
+                0,
+            ),
+        )
+
         # ----------------------------------------------------
-        # Generate or normalize requested changes
+        # Generate changes
         # ----------------------------------------------------
 
         generated_changes: list[GeneratedChange] = []
 
         if changes is None:
-
             generation_prompt = (
                 self._build_generation_prompt(
                     requirement,
@@ -1786,14 +1966,19 @@ class DevelopmentAgent:
                     "requirement": requirement.to_dict(),
                     "plan": plan.to_dict(),
                     "repository": repository_context,
-                    "workspace": str(
-                        workspace.source_root
-                    ),
+                    "workspace": {
+                        "id": workspace.workspace_id,
+                        "root": str(
+                            workspace.source_root
+                        ),
+                        "file_count": len(
+                            workspace_repository_paths
+                        ),
+                    },
                 },
             )
 
             if not generation.success:
-
                 logger.error(
                     "[DevelopmentAgent] Code generation failed | "
                     "error=%s",
@@ -1811,6 +1996,15 @@ class DevelopmentAgent:
                         generation.error
                         or "Code generation failed.",
                     ),
+                    metadata={
+                        "workspace_file_count": len(
+                            workspace_repository_paths
+                        ),
+                        "context_file_count": repository_context.get(
+                            "file_count",
+                            0,
+                        ),
+                    },
                 )
 
             (
@@ -1824,7 +2018,6 @@ class DevelopmentAgent:
             )
 
             if generation_errors:
-
                 generation = CodeGenerationResult(
                     success=False,
                     summary=generation.summary,
@@ -1838,9 +2031,7 @@ class DevelopmentAgent:
                         generation_errors
                     ),
                     metadata={
-                        "validation_errors": (
-                            generation_errors
-                        )
+                        "validation_errors": generation_errors,
                     },
                 )
 
@@ -1857,18 +2048,8 @@ class DevelopmentAgent:
                 )
 
         else:
-
-            # Backwards-compatible caller-provided changes.
-            #
-            # Historically these were always treated as "modify".
-            # That breaks create-only requests such as:
-            #
-            #   create aria_test.txt
-            #
-            # Therefore the actual workspace state determines whether
-            # a two-tuple change is create or modify.
+            # Backwards-compatible caller supplied changes.
             for path, content in changes:
-
                 normalized, path_error = (
                     self._safe_relative_path(path)
                 )
@@ -1916,7 +2097,6 @@ class DevelopmentAgent:
             )
 
             if generation_errors:
-
                 return DevelopmentReport(
                     success=False,
                     requirement=requirement,
@@ -1929,7 +2109,6 @@ class DevelopmentAgent:
                 )
 
         if not generated_changes:
-
             return DevelopmentReport(
                 success=False,
                 requirement=requirement,
@@ -1954,11 +2133,10 @@ class DevelopmentAgent:
         )
 
         # ----------------------------------------------------
-        # Apply changes inside isolated workspace
+        # Apply inside workspace
         # ----------------------------------------------------
 
         try:
-
             write_results.extend(
                 self._apply_generated_changes(
                     writer,
@@ -1967,7 +2145,6 @@ class DevelopmentAgent:
             )
 
         except Exception as exc:
-
             logger.exception(
                 "[DevelopmentAgent] Workspace write failed."
             )
@@ -1986,7 +2163,7 @@ class DevelopmentAgent:
             )
 
         # ----------------------------------------------------
-        # Deterministic acceptance checks
+        # Exact deterministic acceptance
         # ----------------------------------------------------
 
         acceptance_error = (
@@ -1997,7 +2174,6 @@ class DevelopmentAgent:
         )
 
         if acceptance_error:
-
             failure = FailureAnalysis(
                 failed=True,
                 summary=acceptance_error,
@@ -2024,10 +2200,11 @@ class DevelopmentAgent:
             validation = (
                 validator.validate_repository()
             )
-        except Exception as exc:
 
+        except Exception as exc:
             logger.exception(
-                "[DevelopmentAgent] Static validation execution failed."
+                "[DevelopmentAgent] Static validation failed "
+                "to execute."
             )
 
             return DevelopmentReport(
@@ -2042,7 +2219,6 @@ class DevelopmentAgent:
             )
 
         if not validation.valid:
-
             failure = FailureAnalysis(
                 failed=True,
                 summary="Static validation failed.",
@@ -2060,12 +2236,21 @@ class DevelopmentAgent:
                 failure=failure,
                 status="validation_failed",
                 metadata=self._report_metadata(
-                    generated_changes
+                    generated_changes,
+                    extra={
+                        "workspace_file_count": len(
+                            workspace_repository_paths
+                        ),
+                        "context_file_count": repository_context.get(
+                            "file_count",
+                            0,
+                        ),
+                    },
                 ),
             )
 
         # ----------------------------------------------------
-        # Select tests
+        # Tests
         # ----------------------------------------------------
 
         selected_tests = (
@@ -2082,10 +2267,7 @@ class DevelopmentAgent:
             selected_tests,
         )
 
-        # Non-code artifacts can succeed after deterministic acceptance
-        # and static validation without unrelated pytest execution.
         if not selected_tests:
-
             return DevelopmentReport(
                 success=True,
                 requirement=requirement,
@@ -2101,6 +2283,13 @@ class DevelopmentAgent:
                         "tests_selected": [],
                         "final_acceptance_passed": True,
                         "final_validation_passed": True,
+                        "workspace_file_count": len(
+                            workspace_repository_paths
+                        ),
+                        "context_file_count": repository_context.get(
+                            "file_count",
+                            0,
+                        ),
                     },
                 ),
             )
@@ -2110,7 +2299,6 @@ class DevelopmentAgent:
         # ----------------------------------------------------
 
         try:
-
             test_result = (
                 await test_runner.run_targeted_tests(
                     selected_tests
@@ -2118,7 +2306,6 @@ class DevelopmentAgent:
             )
 
         except Exception as exc:
-
             logger.exception(
                 "[DevelopmentAgent] Test execution failed."
             )
@@ -2136,7 +2323,6 @@ class DevelopmentAgent:
             )
 
         if not test_result.results:
-
             return DevelopmentReport(
                 success=False,
                 requirement=requirement,
@@ -2151,12 +2337,9 @@ class DevelopmentAgent:
                 ),
             )
 
-        initial_test = (
-            test_result.results[-1]
-        )
+        initial_test = test_result.results[-1]
 
         if test_result.passed:
-
             final_acceptance_error = (
                 self._check_exact_content_requirement(
                     requirement,
@@ -2165,7 +2348,6 @@ class DevelopmentAgent:
             )
 
             if final_acceptance_error:
-
                 return DevelopmentReport(
                     success=False,
                     requirement=requirement,
@@ -2202,19 +2384,25 @@ class DevelopmentAgent:
                         "tests_selected": selected_tests,
                         "final_acceptance_passed": True,
                         "final_validation_passed": True,
+                        "workspace_file_count": len(
+                            workspace_repository_paths
+                        ),
+                        "context_file_count": repository_context.get(
+                            "file_count",
+                            0,
+                        ),
                     },
                 ),
             )
 
         # ----------------------------------------------------
-        # Failure analysis + bounded repair
+        # Bounded repair
         # ----------------------------------------------------
 
         async def apply_repair(
             analysis: FailureAnalysis,
             attempt: int,
         ) -> bool:
-
             if self.code_generator is None:
                 return False
 
@@ -2250,14 +2438,12 @@ class DevelopmentAgent:
             )
 
             if not repair_generation.success:
-
                 logger.warning(
                     "[DevelopmentAgent] Repair generation "
-                    "failed on attempt %s: %s",
+                    "failed | attempt=%s | error=%s",
                     attempt,
                     repair_generation.error,
                 )
-
                 return False
 
             (
@@ -2271,26 +2457,18 @@ class DevelopmentAgent:
             )
 
             if repair_errors:
-
                 logger.warning(
                     "[DevelopmentAgent] Repair changes rejected | "
                     "attempt=%s | errors=%s",
                     attempt,
                     repair_errors,
                 )
-
                 return False
 
             if not repaired_changes:
-                logger.warning(
-                    "[DevelopmentAgent] Repair generated "
-                    "no changes | attempt=%s",
-                    attempt,
-                )
                 return False
 
             try:
-
                 repair_writes = (
                     self._apply_generated_changes(
                         writer,
@@ -2307,13 +2485,6 @@ class DevelopmentAgent:
                 )
 
                 if not validation_after_repair.valid:
-
-                    logger.warning(
-                        "[DevelopmentAgent] Repair attempt %s "
-                        "produced invalid source.",
-                        attempt,
-                    )
-
                     return False
 
                 acceptance_after_repair = (
@@ -2324,14 +2495,6 @@ class DevelopmentAgent:
                 )
 
                 if acceptance_after_repair:
-
-                    logger.warning(
-                        "[DevelopmentAgent] Repair attempt %s "
-                        "failed deterministic acceptance: %s",
-                        attempt,
-                        acceptance_after_repair,
-                    )
-
                     return False
 
                 generated_changes.extend(
@@ -2347,18 +2510,15 @@ class DevelopmentAgent:
                 return True
 
             except Exception as exc:
-
                 logger.warning(
                     "[DevelopmentAgent] Repair attempt %s "
                     "failed: %s",
                     attempt,
                     exc,
                 )
-
                 return False
 
         async def rerun() -> TestResult:
-
             rerun_result = (
                 await test_runner.run_targeted_tests(
                     selected_tests
@@ -2374,7 +2534,6 @@ class DevelopmentAgent:
             return rerun_result.results[-1]
 
         try:
-
             repair_result = (
                 await repair_engine.repair(
                     initial_test,
@@ -2385,7 +2544,6 @@ class DevelopmentAgent:
             )
 
         except Exception as exc:
-
             logger.exception(
                 "[DevelopmentAgent] Repair execution failed."
             )
@@ -2418,8 +2576,8 @@ class DevelopmentAgent:
             final_validation = (
                 validator.validate_repository()
             )
-        except Exception as exc:
 
+        except Exception as exc:
             final_validation = validation
             errors.append(
                 f"Final validation execution failed: {exc}"
@@ -2489,6 +2647,13 @@ class DevelopmentAgent:
                         "attempts",
                         None,
                     ),
+                    "workspace_file_count": len(
+                        workspace_repository_paths
+                    ),
+                    "context_file_count": repository_context.get(
+                        "file_count",
+                        0,
+                    ),
                 },
             ),
         )
@@ -2501,7 +2666,6 @@ class DevelopmentAgent:
     def _default_test_paths(
         workspace: WorkspaceInfo,
     ) -> list[str]:
-
         tests_dir = (
             workspace.source_root
             / "tests"
@@ -2510,8 +2674,6 @@ class DevelopmentAgent:
         if not tests_dir.is_dir():
             return []
 
-        # Prefer actual pytest files rather than blindly passing
-        # an arbitrary directory to the test runner.
         test_files: list[str] = []
 
         for path in sorted(
@@ -2527,9 +2689,10 @@ class DevelopmentAgent:
             except ValueError:
                 continue
 
-            test_files.append(
-                relative.as_posix()
-            )
+            value = relative.as_posix()
+
+            if value not in test_files:
+                test_files.append(value)
 
         for path in sorted(
             tests_dir.rglob("*_test.py")
