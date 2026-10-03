@@ -14,6 +14,17 @@ logger = logging.getLogger("aria")
 
 class KnowledgeDatabase:
 
+    # MongoDB's BSON document limit is 16 MiB. Keep knowledge records
+    # comfortably below that limit because updates, indexes, and metadata
+    # can add overhead. Large source documents belong in the document/vector
+    # ingestion pipeline, not in one Mongo knowledge record.
+    MAX_CONTENT_CHARS = 1_000_000
+    MAX_TITLE_CHARS = 500
+    MAX_METADATA_CHARS = 64_000
+    MAX_HISTORY_ITEMS = 20
+    MAX_HISTORY_CONTENT_CHARS = 2_000
+    MAX_EMBEDDING_TEXT_CHARS = 20_000
+
     def __init__(
         self,
         mongo_collection=None,
@@ -22,6 +33,78 @@ class KnowledgeDatabase:
 
         self.collection = mongo_collection
         self.vector_db = vector_db
+
+    @classmethod
+    def _safe_text(cls, value, limit):
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        logger.warning(
+            "[KnowledgeDB] Truncating oversized text from %d to %d characters.",
+            len(text),
+            limit,
+        )
+        return text[:limit] + "\n[TRUNCATED BY KNOWLEDGE DATABASE SAFETY LIMIT]"
+
+    @classmethod
+    def _compact_value(cls, value, depth=0):
+        if depth > 3:
+            return cls._safe_text(value, 4000)
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return cls._safe_text(value, 4000)
+        if isinstance(value, dict):
+            out = {}
+            for i, (key, item) in enumerate(value.items()):
+                if i >= 40:
+                    out["_truncated_items"] = len(value) - 40
+                    break
+                out[cls._safe_text(key, 200)] = cls._compact_value(item, depth + 1)
+            return out
+        if isinstance(value, (list, tuple, set)):
+            items = list(value)
+            out = [cls._compact_value(item, depth + 1) for item in items[:40]]
+            if len(items) > 40:
+                out.append(f"[TRUNCATED {len(items) - 40} ITEMS]")
+            return out
+        return cls._safe_text(value, 4000)
+
+    @classmethod
+    def _safe_metadata(cls, metadata):
+        if not isinstance(metadata, dict):
+            return {}
+        compact = cls._compact_value(metadata)
+        # Metadata itself is bounded independently from content.
+        text = str(compact)
+        if len(text) <= cls.MAX_METADATA_CHARS:
+            return compact
+        return {
+            "summary": cls._safe_text(
+                text,
+                cls.MAX_METADATA_CHARS,
+            )
+        }
+
+    @classmethod
+    def _safe_update_data(cls, data):
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for key, value in data.items():
+            if key in {"_id", "history"}:
+                continue
+            if key == "content":
+                out[key] = cls._safe_text(value, cls.MAX_CONTENT_CHARS)
+            elif key == "title":
+                out[key] = cls._safe_text(value, cls.MAX_TITLE_CHARS)
+            elif key == "summary":
+                out[key] = cls._safe_text(value, 1000)
+            elif key == "metadata":
+                out[key] = cls._safe_metadata(value)
+            else:
+                out[key] = cls._compact_value(value)
+        return out
 
     ############################################################
     # Store Knowledge
@@ -70,6 +153,11 @@ class KnowledgeDatabase:
         metadata=None,
         embedding=None,
     ):
+        title = self._safe_text(title, self.MAX_TITLE_CHARS)
+        content = self._safe_text(content, self.MAX_CONTENT_CHARS)
+        source = self._safe_text(source, 200)
+        metadata = self._safe_metadata(metadata)
+
         # 2. Duplicate Detection
         existing = await self.detect_duplicate(title, content)
         if existing:
@@ -88,7 +176,7 @@ class KnowledgeDatabase:
 
             "source": source,
 
-            "metadata": metadata or {},
+            "metadata": metadata,
 
             "importance": 50,
 
@@ -145,7 +233,7 @@ class KnowledgeDatabase:
             try:
                 embedding = await asyncio.to_thread(
                     get_embedding,
-                    f"{title}\n{content}",
+                    f"{title}\n{content}"[: self.MAX_EMBEDDING_TEXT_CHARS],
                 )
             except Exception:
                 logger.exception(
@@ -259,27 +347,48 @@ class KnowledgeDatabase:
         if self.collection is None:
             return
 
+        safe_data = self._safe_update_data(data)
+        if not safe_data:
+            return
+
         doc = await self.collection.find_one({"_id": knowledge_id})
-        if doc:
-            history_entry = {
-                "previous": doc,
-                "updated_at": datetime.utcnow(),
-                "updated_by": "learning_engine",
-            }
-            await self.collection.update_one(
-                {
-                    "_id": knowledge_id
-                },
-                {
-                    "$set": {
-                        **data,
-                        "updated_at": datetime.utcnow(),
-                    },
-                    "$push": {
-                        "history": history_entry
-                    }
-                }
-            )
+        if not doc:
+            return
+
+        # NEVER append the complete previous Mongo document to history.
+        # That pattern caused documents to grow past MongoDB's 16 MiB BSON
+        # limit when large knowledge records were merged repeatedly.
+        history = doc.get("history", [])
+        if not isinstance(history, list):
+            history = []
+
+        history_entry = {
+            "content": self._safe_text(
+                doc.get("content", ""),
+                self.MAX_HISTORY_CONTENT_CHARS,
+            ),
+            "title": self._safe_text(
+                doc.get("title", ""),
+                self.MAX_TITLE_CHARS,
+            ),
+            "source": self._safe_text(
+                doc.get("source", ""),
+                200,
+            ),
+            "confidence": doc.get("confidence", 0.60),
+            "updated_at": datetime.utcnow(),
+            "updated_by": "learning_engine",
+        }
+
+        history = (history + [history_entry])[-self.MAX_HISTORY_ITEMS:]
+
+        safe_data["updated_at"] = datetime.utcnow()
+        safe_data["history"] = history
+
+        await self.collection.update_one(
+            {"_id": knowledge_id},
+            {"$set": safe_data},
+        )
 
     ############################################################
     # Confidence Learning
