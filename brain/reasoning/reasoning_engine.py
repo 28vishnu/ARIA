@@ -30,7 +30,6 @@ class ReasoningResult:
     world_state: dict
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # Core Orchestration Decision Flags
     answer: Optional[str] = None
     requires_memory: bool = True
     requires_documents: bool = False
@@ -39,7 +38,6 @@ class ReasoningResult:
     requires_planning: bool = False
     requires_clarification: bool = False
 
-    # Required tracking fields
     resolved_query: str = ""
     topic: str = ""
     working_memory: Dict[str, Any] = field(default_factory=dict)
@@ -52,7 +50,6 @@ class ReasoningResult:
     critique: dict = field(default_factory=dict)
     action_predictions: list = field(default_factory=list)
 
-    # Legacy compatibility fields for orchestrators
     primary_action: str = "chat"
     secondary_actions: List[str] = field(default_factory=list)
     reasoning: str = ""
@@ -66,10 +63,29 @@ class ReasoningEngine:
     """
     ARIA's core advanced decision-making and routing layer.
 
-    Instead of answering questions directly, it analyzes context and determines
-    precisely what sub-pipelines (clarification, memory, documents, planner,
-    tools, web, or direct LLM) are required via a structured ReasoningResult.
-    Purely observational, analytical, and non-mutating.
+    The ReasoningEngine performs request analysis and orchestration planning.
+
+    IMPORTANT ARCHITECTURE RULE:
+        Knowledge retrieval is owned by KnowledgeManager.
+
+    ReasoningEngine must NOT independently perform the expensive semantic
+    knowledge-database retrieval because CognitiveCore already invokes
+    KnowledgeManager as the canonical knowledge path.
+
+    This prevents:
+        ReasoningEngine
+            -> KnowledgeDatabase
+            -> BGE-M3 retrieval
+
+        followed by:
+
+        CognitiveCore
+            -> KnowledgeManager
+            -> KnowledgeDatabase
+            -> BGE-M3 retrieval
+
+    The duplicate retrieval caused unnecessary latency and the previous
+    8-second knowledge retrieval timeout.
     """
 
     def __init__(
@@ -94,7 +110,12 @@ class ReasoningEngine:
         self.agent_manager = agent_manager
         self.planner = planner
         self.memory_router = memory_router
+
+        # Kept for backwards compatibility and future direct knowledge
+        # orchestration, but retrieval ownership currently belongs to
+        # KnowledgeManager/CognitiveCore.
         self.knowledge_database = knowledge_database
+
         self.knowledge_graph = knowledge_graph
         self.world_model = world_model
         self.learning_engine = learning_engine
@@ -107,9 +128,11 @@ class ReasoningEngine:
         self.lead_agent = lead_agent
         self.memory_engine = memory_engine
         self.tool_manager = tool_manager
-        self.intent_analyzer = IntentAnalyzer(llm_router=llm_router)
 
-        # Multi-topic conversation state
+        self.intent_analyzer = IntentAnalyzer(
+            llm_router=llm_router
+        )
+
         self.conversation_threads = {}
         self.active_thread_id = None
 
@@ -136,7 +159,6 @@ class ReasoningEngine:
         )
 
     def _build_semantic_context(self):
-
         if not hasattr(self, "working_memory") or not self.working_memory:
             return None
 
@@ -152,10 +174,6 @@ class ReasoningEngine:
         query: str,
         context: dict,
     ) -> str:
-        """
-        Choose the best reasoning strategy.
-        """
-
         q = query.lower()
 
         if context.get("document"):
@@ -213,10 +231,6 @@ class ReasoningEngine:
         answer: str,
         context: dict,
     ):
-        """
-        Perform a lightweight quality check on the generated answer.
-        """
-
         score = 1.0
         issues = []
 
@@ -238,10 +252,6 @@ class ReasoningEngine:
         }
 
     def _analyze_execution_feedback(self, execution_result):
-        """
-        Analyze the previous execution to improve future reasoning.
-        """
-
         if not execution_result:
             return {
                 "success_rate": 1.0,
@@ -269,10 +279,6 @@ class ReasoningEngine:
         execution_feedback,
         critique,
     ):
-        """
-        Combine multiple confidence sources into one score.
-        """
-
         confidence = reasoning_confidence
 
         confidence *= execution_feedback.get(
@@ -295,13 +301,6 @@ class ReasoningEngine:
         query: str,
         intent_name: Optional[str] = None,
     ) -> List[str]:
-        """
-        Select the specialist capabilities required for the request.
-
-        Intent is the primary signal.
-        Keyword matching is used only as a secondary fallback so that
-        multi-purpose requests can still select more than one capability.
-        """
 
         query = str(query or "").strip().lower()
         intent_name = str(intent_name or "").strip().lower()
@@ -433,9 +432,6 @@ class ReasoningEngine:
         intent_name: Optional[str] = None,
         goal: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Convert selected capabilities into a deterministic execution plan.
-        """
 
         plan = []
 
@@ -463,8 +459,12 @@ class ReasoningEngine:
         return plan
 
     def _normalize_topic(self, value: Any) -> str:
-        """Normalize a topic/subject for safe thread matching."""
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        text = re.sub(
+            r"\s+",
+            " ",
+            str(value or ""),
+        ).strip()
+
         return text.strip(" .,!?:;")
 
     _CONTEXT_ARTIFACT_WORDS = {
@@ -475,11 +475,15 @@ class ReasoningEngine:
     }
 
     def _is_context_artifact(self, value: Any) -> bool:
-        """Return True when a value is internal context metadata, not a real entity/topic."""
         if value is None:
             return True
 
-        text = re.sub(r"\s+", " ", str(value)).strip().strip(".,:;!?")
+        text = re.sub(
+            r"\s+",
+            " ",
+            str(value),
+        ).strip().strip(".,:;!?")
+
         if not text:
             return True
 
@@ -494,7 +498,6 @@ class ReasoningEngine:
         return False
 
     def _clean_context_text(self, value: Any) -> str:
-        """Remove internal Context: annotations from generated/resolved text."""
         text = str(value or "").strip()
 
         if not text:
@@ -507,12 +510,19 @@ class ReasoningEngine:
             flags=re.IGNORECASE,
         )
 
-        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(
+            r"\s+",
+            " ",
+            text,
+        ).strip()
 
         return text
 
-    def _clean_entities(self, values: Optional[List[Any]]) -> List[str]:
-        """Normalize entities while rejecting internal context artifacts."""
+    def _clean_entities(
+        self,
+        values: Optional[List[Any]],
+    ) -> List[str]:
+
         cleaned = []
 
         for value in values or []:
@@ -534,12 +544,6 @@ class ReasoningEngine:
         query: str,
         existing_entities: Optional[List[str]] = None,
     ) -> List[str]:
-        """
-        Detect entities explicitly being compared in the current request.
-
-        This is intentionally lightweight. It preserves explicit comparison
-        state without allowing long-term memory to hijack the conversation.
-        """
 
         entities = list(existing_entities or [])
         text = str(query or "").strip()
@@ -629,7 +633,12 @@ class ReasoningEngine:
         "which would you choose",
     )
 
-    def _derive_active_topic_from_history(self, history: List[Any], current_query: str = "") -> str:
+    def _derive_active_topic_from_history(
+        self,
+        history: List[Any],
+        current_query: str = "",
+    ) -> str:
+
         if not isinstance(history, list):
             return ""
 
@@ -638,12 +647,19 @@ class ReasoningEngine:
                 continue
 
             user_text = self._normalize_topic(
-                item.get("user") or item.get("query") or item.get("content") or ""
+                item.get("user")
+                or item.get("query")
+                or item.get("content")
+                or ""
             )
+
             if not user_text:
                 continue
 
-            explicit = self._extract_explicit_topic(user_text)
+            explicit = self._extract_explicit_topic(
+                user_text
+            )
+
             if explicit:
                 return explicit
 
@@ -657,6 +673,7 @@ class ReasoningEngine:
 
     def _sanitize_response_text(self, value: Any) -> str:
         text = str(value or "").strip()
+
         if not text:
             return ""
 
@@ -666,6 +683,7 @@ class ReasoningEngine:
             text,
             flags=re.IGNORECASE,
         )
+
         text = re.sub(
             r"\b(?:CODE_BLOCK|CODEBLOCK|RESPONSE_PLACEHOLDER)_PLACEHOLDER\d*\b",
             "",
@@ -680,11 +698,25 @@ class ReasoningEngine:
             flags=re.IGNORECASE,
         )
 
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(
+            r"[ \t]+",
+            " ",
+            text,
+        )
+
+        text = re.sub(
+            r"\n{3,}",
+            "\n\n",
+            text,
+        )
+
         return text.strip()
 
-    def _extract_explicit_topic(self, query: str) -> Optional[str]:
+    def _extract_explicit_topic(
+        self,
+        query: str,
+    ) -> Optional[str]:
+
         text = self._normalize_topic(query)
 
         for pattern in self._EXPLICIT_TOPIC_PATTERNS:
@@ -693,8 +725,12 @@ class ReasoningEngine:
                 text,
                 flags=re.IGNORECASE,
             )
+
             if match:
-                topic = self._normalize_topic(match.group(1))
+                topic = self._normalize_topic(
+                    match.group(1)
+                )
+
                 if topic:
                     return topic
 
@@ -704,19 +740,7 @@ class ReasoningEngine:
         self,
         query: str,
     ) -> Optional[str]:
-        """
-        Detect an explicitly named subject in common question forms.
 
-        Examples:
-            Why is DNA important? -> DNA
-            Why does DNA matter? -> DNA
-            How does DNA replicate? -> DNA
-            How does photosynthesis work? -> photosynthesis
-
-        Pronoun-only questions remain contextual:
-            Why is it important? -> None
-            How does it work? -> None
-        """
         text = self._normalize_topic(query)
 
         patterns = (
@@ -737,7 +761,9 @@ class ReasoningEngine:
             if not match:
                 continue
 
-            subject = self._normalize_topic(match.group(1))
+            subject = self._normalize_topic(
+                match.group(1)
+            )
 
             if not subject:
                 continue
@@ -759,19 +785,35 @@ class ReasoningEngine:
 
         return None
 
-    def _extract_thread_return_target(self, query: str) -> Optional[str]:
+    def _extract_thread_return_target(
+        self,
+        query: str,
+    ) -> Optional[str]:
+
         text = self._normalize_topic(query)
 
         for pattern in self._THREAD_RETURN_PATTERNS:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
             if match:
-                target = self._normalize_topic(match.group(1))
+                target = self._normalize_topic(
+                    match.group(1)
+                )
+
                 if target:
                     return target
 
         return None
 
-    def _is_contextual_followup(self, query: str) -> bool:
+    def _is_contextual_followup(
+        self,
+        query: str,
+    ) -> bool:
+
         text = self._normalize_topic(query).lower()
 
         if not text:
@@ -787,10 +829,13 @@ class ReasoningEngine:
         ):
             return True
 
-        if len(text.split()) <= 6 and re.match(
-            r"^(why|how|what|which|when|where|who)\b",
-            text,
-            flags=re.IGNORECASE,
+        if (
+            len(text.split()) <= 6
+            and re.match(
+                r"^(why|how|what|which|when|where|who)\b",
+                text,
+                flags=re.IGNORECASE,
+            )
         ):
             return True
 
@@ -800,12 +845,16 @@ class ReasoningEngine:
         self,
         target: str,
     ) -> Optional[Dict[str, Any]]:
-        target_norm = self._normalize_topic(target).lower()
+
+        target_norm = self._normalize_topic(
+            target
+        ).lower()
 
         if not target_norm:
             return None
 
         for thread in self.conversation_threads.values():
+
             topic = self._normalize_topic(
                 thread.get("topic")
             ).lower()
@@ -818,6 +867,7 @@ class ReasoningEngine:
                 return thread
 
         for thread in self.conversation_threads.values():
+
             topic = self._normalize_topic(
                 thread.get("topic")
             ).lower()
@@ -843,10 +893,15 @@ class ReasoningEngine:
         entities: Optional[List[str]] = None,
         force_new: bool = False,
     ) -> Dict[str, Any]:
-        topic = self._normalize_topic(topic)
-        subject = self._normalize_topic(subject or topic)
 
-        entities = self._clean_entities(entities)
+        topic = self._normalize_topic(topic)
+        subject = self._normalize_topic(
+            subject or topic
+        )
+
+        entities = self._clean_entities(
+            entities
+        )
 
         base_key = (
             topic.lower()
@@ -868,30 +923,28 @@ class ReasoningEngine:
                 "thread_id": thread_key,
                 "topic": topic or subject or "general",
                 "subject": subject or topic or "general",
-
                 "previous_topic": None,
-
                 "entities": list(dict.fromkeys(entities)),
-
                 "compared_entities": [],
                 "active_comparison": False,
-
                 "history": [],
                 "last_user": None,
                 "last_assistant": None,
                 "last_result": None,
-
                 "turn_count": 0,
                 "last_query": None,
                 "last_resolved_query": None,
             }
 
-        thread = self.conversation_threads[thread_key]
+        thread = self.conversation_threads[
+            thread_key
+        ]
 
         if entities:
             thread["entities"] = list(
                 dict.fromkeys(
-                    thread.get("entities", []) + entities
+                    thread.get("entities", [])
+                    + entities
                 )
             )
 
@@ -903,7 +956,11 @@ class ReasoningEngine:
         self,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        conv = context.get("conversation", {})
+
+        conv = context.get(
+            "conversation",
+            {},
+        )
 
         if not isinstance(conv, dict):
             conv = {}
@@ -920,8 +977,11 @@ class ReasoningEngine:
             context.get("query", "")
         )
 
-        history_active_topic = self._derive_active_topic_from_history(
-            history, current_query
+        history_active_topic = (
+            self._derive_active_topic_from_history(
+                history,
+                current_query,
+            )
         )
 
         external_active_topic = self._normalize_topic(
@@ -942,24 +1002,33 @@ class ReasoningEngine:
             conv.get("entities", []),
         )
 
-        if not isinstance(external_entities, list):
+        if not isinstance(
+            external_entities,
+            list,
+        ):
             external_entities = []
 
-        external_entities = self._clean_entities(external_entities)
+        external_entities = self._clean_entities(
+            external_entities
+        )
 
         explicit_topic = self._extract_explicit_topic(
             current_query
         )
 
-        explicit_subject = self._extract_explicit_subject_from_question(
-            current_query
+        explicit_subject = (
+            self._extract_explicit_subject_from_question(
+                current_query
+            )
         )
 
         if explicit_subject and not explicit_topic:
             explicit_topic = explicit_subject
 
-        return_target = self._extract_thread_return_target(
-            current_query
+        return_target = (
+            self._extract_thread_return_target(
+                current_query
+            )
         )
 
         current_comparison_entities = (
@@ -982,12 +1051,17 @@ class ReasoningEngine:
                 )
 
         if explicit_topic:
-            old_active_topic = self._normalize_topic(
-                self.conversation_threads.get(
-                    self.active_thread_id,
-                    {}
-                ).get("topic")
-            ) if self.active_thread_id else ""
+
+            old_active_topic = (
+                self._normalize_topic(
+                    self.conversation_threads.get(
+                        self.active_thread_id,
+                        {},
+                    ).get("topic")
+                )
+                if self.active_thread_id
+                else ""
+            )
 
             if not thread:
                 thread = self._get_or_create_thread(
@@ -1021,9 +1095,12 @@ class ReasoningEngine:
 
             if (
                 old_active_topic
-                and old_active_topic.lower() != explicit_topic.lower()
+                and old_active_topic.lower()
+                != explicit_topic.lower()
             ):
-                thread["previous_topic"] = old_active_topic
+                thread["previous_topic"] = (
+                    old_active_topic
+                )
 
                 logger.info(
                     "[Reasoning] Topic shift: %s -> %s",
@@ -1032,6 +1109,7 @@ class ReasoningEngine:
                 )
 
         elif len(current_comparison_entities) >= 2:
+
             comparison_topic = " vs ".join(
                 current_comparison_entities
             )
@@ -1047,7 +1125,10 @@ class ReasoningEngine:
             )
             thread["active_comparison"] = True
 
-        elif self._is_contextual_followup(current_query):
+        elif self._is_contextual_followup(
+            current_query
+        ):
+
             if self.active_thread_id:
                 thread = self.conversation_threads.get(
                     self.active_thread_id
@@ -1056,11 +1137,15 @@ class ReasoningEngine:
             if not thread and external_active_topic:
                 thread = self._get_or_create_thread(
                     topic=external_active_topic,
-                    subject=external_subject or external_active_topic,
+                    subject=(
+                        external_subject
+                        or external_active_topic
+                    ),
                     entities=external_entities,
                 )
 
         else:
+
             topic = (
                 external_active_topic
                 or external_subject
@@ -1075,8 +1160,15 @@ class ReasoningEngine:
 
         if not thread:
             thread = self._get_or_create_thread(
-                topic=external_active_topic or "general",
-                subject=external_subject or external_active_topic or "general",
+                topic=(
+                    external_active_topic
+                    or "general"
+                ),
+                subject=(
+                    external_subject
+                    or external_active_topic
+                    or "general"
+                ),
                 entities=external_entities,
             )
 
@@ -1097,11 +1189,9 @@ class ReasoningEngine:
         return {
             "history": history,
             "recent_history": history[-10:],
-
             "thread_id": thread.get("thread_id"),
             "thread": thread,
             "threads": self.conversation_threads,
-
             "active_topic": thread.get("topic"),
             "previous_topic": (
                 thread.get("previous_topic")
@@ -1117,33 +1207,28 @@ class ReasoningEngine:
                     )
                 )
             ),
-
             "active_subject": thread.get("subject"),
-
             "active_entities": self._clean_entities(
                 thread.get("entities", [])
             ),
-
             "compared_entities": self._clean_entities(
                 thread.get("compared_entities", [])
             ),
-
             "active_comparison": bool(
-                thread.get("active_comparison", False)
+                thread.get(
+                    "active_comparison",
+                    False,
+                )
             ),
-
             "last_user": thread.get(
                 "last_user"
             ) or conv.get("last_user"),
-
             "last_assistant": thread.get(
                 "last_assistant"
             ) or conv.get("last_assistant"),
-
             "last_result": thread.get(
                 "last_result"
             ) or conv.get("last_result"),
-
             "dialogue_stage": (
                 "greeting"
                 if len(history) <= 1
@@ -1156,44 +1241,51 @@ class ReasoningEngine:
         query: str,
         context: Dict[str, Any],
     ) -> str:
-        """
-        Resolve contextual references such as:
-            "Why is it important?" -> "Why is photosynthesis important?"
-            "How does it replicate?" -> "How does DNA replicate?"
 
-        Explicit topics always take priority over previous conversation topics.
-        """
-
-        clean_query = self._normalize_topic(query)
+        clean_query = self._normalize_topic(
+            query
+        )
 
         if not clean_query:
             return clean_query
 
-        conversation_state = context.get("conversation_state")
+        conversation_state = context.get(
+            "conversation_state"
+        )
 
         if not conversation_state:
-            conversation_state = await self.track_conversation(context)
+            conversation_state = (
+                await self.track_conversation(
+                    context
+                )
+            )
 
-        active_thread = conversation_state.get("thread") or {}
+        active_thread = (
+            conversation_state.get("thread")
+            or {}
+        )
 
         active_topic = self._normalize_topic(
             active_thread.get("topic")
-            or conversation_state.get("active_topic")
+            or conversation_state.get(
+                "active_topic"
+            )
             or context.get("active_topic")
             or context.get("topic")
         )
 
         active_subject = self._normalize_topic(
             active_thread.get("subject")
-            or conversation_state.get("active_subject")
+            or conversation_state.get(
+                "active_subject"
+            )
             or context.get("active_subject")
             or active_topic
         )
 
-        # ---------------------------------------------------------
-        # 1. Explicit topic = NEVER replace it with old context
-        # ---------------------------------------------------------
-        explicit_topic = self._extract_explicit_topic(clean_query)
+        explicit_topic = self._extract_explicit_topic(
+            clean_query
+        )
 
         if explicit_topic:
             logger.info(
@@ -1202,13 +1294,18 @@ class ReasoningEngine:
             )
             return clean_query
 
-        # ---------------------------------------------------------
-        # 2. Explicitly returning to another thread
-        # ---------------------------------------------------------
-        return_target = self._extract_thread_return_target(clean_query)
+        return_target = (
+            self._extract_thread_return_target(
+                clean_query
+            )
+        )
 
         if return_target:
-            target_thread = self._find_thread_by_topic(return_target)
+            target_thread = (
+                self._find_thread_by_topic(
+                    return_target
+                )
+            )
 
             if target_thread:
                 logger.info(
@@ -1218,23 +1315,18 @@ class ReasoningEngine:
 
             return clean_query
 
-        # ---------------------------------------------------------
-        # 3. No topic available -> leave query unchanged
-        # ---------------------------------------------------------
         if not active_topic:
             logger.info(
                 "[Reasoning] No active topic available for reference resolution."
             )
             return clean_query
 
-        # ---------------------------------------------------------
-        # 4. Contextual follow-up resolution
-        # ---------------------------------------------------------
-        if self._is_contextual_followup(clean_query):
+        if self._is_contextual_followup(
+            clean_query
+        ):
 
             resolved = clean_query
 
-            # Pronoun references
             resolved = re.sub(
                 r"\bit\b",
                 active_topic,
@@ -1256,61 +1348,84 @@ class ReasoningEngine:
                 flags=re.IGNORECASE,
             )
 
-            # Common implicit follow-ups that contain no explicit subject.
-            normalized = clean_query.lower().strip(" ?.!")
+            normalized = clean_query.lower().strip(
+                " ?.! "
+            )
 
-            if normalized == "why is it important":
-                resolved = f"Why is {active_topic} important?"
+            if normalized in {
+                "why is it important",
+                "why is this important",
+                "why is that important",
+            }:
+                resolved = (
+                    f"Why is {active_topic} important?"
+                )
 
-            elif normalized == "why is this important":
-                resolved = f"Why is {active_topic} important?"
+            elif normalized in {
+                "why does it matter",
+                "why does this matter",
+            }:
+                resolved = (
+                    f"Why does {active_topic} matter?"
+                )
 
-            elif normalized == "why is that important":
-                resolved = f"Why is {active_topic} important?"
+            elif normalized in {
+                "how does it work",
+                "how does this work",
+            }:
+                resolved = (
+                    f"How does {active_topic} work?"
+                )
 
-            elif normalized == "why does it matter":
-                resolved = f"Why does {active_topic} matter?"
-
-            elif normalized == "why does this matter":
-                resolved = f"Why does {active_topic} matter?"
-
-            elif normalized == "how does it work":
-                resolved = f"How does {active_topic} work?"
-
-            elif normalized == "how does this work":
-                resolved = f"How does {active_topic} work?"
-
-            elif normalized == "how does it replicate":
-                resolved = f"How does {active_topic} replicate?"
-
-            elif normalized == "how does this replicate":
-                resolved = f"How does {active_topic} replicate?"
+            elif normalized in {
+                "how does it replicate",
+                "how does this replicate",
+            }:
+                resolved = (
+                    f"How does {active_topic} replicate?"
+                )
 
             elif normalized == "tell me more":
-                resolved = f"Tell me more about {active_topic}."
+                resolved = (
+                    f"Tell me more about {active_topic}."
+                )
 
             elif normalized == "explain more":
-                resolved = f"Explain more about {active_topic}."
+                resolved = (
+                    f"Explain more about {active_topic}."
+                )
 
             elif normalized == "more about it":
-                resolved = f"Tell me more about {active_topic}."
+                resolved = (
+                    f"Tell me more about {active_topic}."
+                )
 
-            elif normalized == "what about it":
-                resolved = f"What about {active_topic}?"
-
-            elif normalized == "what about this":
-                resolved = f"What about {active_topic}?"
+            elif normalized in {
+                "what about it",
+                "what about this",
+            }:
+                resolved = (
+                    f"What about {active_topic}?"
+                )
 
             elif normalized == "continue":
-                resolved = f"Continue explaining {active_topic}."
+                resolved = (
+                    f"Continue explaining {active_topic}."
+                )
 
             elif normalized == "and then":
-                resolved = f"What happens next with {active_topic}?"
+                resolved = (
+                    f"What happens next with {active_topic}?"
+                )
 
             elif normalized == "what happens next":
-                resolved = f"What happens next with {active_topic}?"
+                resolved = (
+                    f"What happens next with {active_topic}?"
+                )
 
-            resolved = self._clean_context_text(resolved)
+            resolved = self._clean_context_text(
+                resolved
+            )
 
             logger.info(
                 "[Reasoning] Reference resolved: %r -> %r",
@@ -1320,165 +1435,380 @@ class ReasoningEngine:
 
             return resolved
 
-        # ---------------------------------------------------------
-        # 5. Non-contextual query
-        # ---------------------------------------------------------
         return clean_query
 
-    async def track_goal(self, context: Dict[str, Any]) -> str:
-        query = str(context.get("query", "")).strip().lower()
-        intent = context.get("intent")
-        intent_name = intent.name if intent and hasattr(intent, "name") else str(intent) if intent else None
-        active_doc = context.get("active", {}).get("document") or context.get("active_document")
-        current_goal = context.get("current_goal")
+    async def track_goal(
+        self,
+        context: Dict[str, Any],
+    ) -> str:
 
-        if intent_name in ("memory_store", "memory_update", "memory_delete") or any(w in query for w in ["remember", "store", "save", "forget", "delete memory"]):
-            return "remember" if "forget" not in query and "delete" not in query else "delete"
-        if intent_name in ("delete_document", "delete_all_documents") or any(w in query for w in ["delete", "remove", "clear"]):
+        query = str(
+            context.get("query", "")
+        ).strip().lower()
+
+        intent = context.get("intent")
+
+        intent_name = (
+            intent.name
+            if intent and hasattr(intent, "name")
+            else str(intent)
+            if intent
+            else None
+        )
+
+        active_doc = (
+            context.get("active", {}).get("document")
+            or context.get("active_document")
+        )
+
+        current_goal = context.get(
+            "current_goal"
+        )
+
+        if (
+            intent_name in (
+                "memory_store",
+                "memory_update",
+                "memory_delete",
+            )
+            or any(
+                w in query
+                for w in [
+                    "remember",
+                    "store",
+                    "save",
+                    "forget",
+                    "delete memory",
+                ]
+            )
+        ):
+            return (
+                "remember"
+                if "forget" not in query
+                and "delete" not in query
+                else "delete"
+            )
+
+        if (
+            intent_name in (
+                "delete_document",
+                "delete_all_documents",
+            )
+            or any(
+                w in query
+                for w in [
+                    "delete",
+                    "remove",
+                    "clear",
+                ]
+            )
+        ):
             return "delete"
-        if intent_name == "planner" or any(w in query for w in ["plan", "roadmap", "how to", "steps", "build", "create"]):
+
+        if (
+            intent_name == "planner"
+            or any(
+                w in query
+                for w in [
+                    "plan",
+                    "roadmap",
+                    "how to",
+                    "steps",
+                    "build",
+                    "create",
+                ]
+            )
+        ):
             return "plan"
-        if any(w in query for w in ["search", "find", "look up", "what is", "who is", "when", "latest"]):
+
+        if any(
+            w in query
+            for w in [
+                "search",
+                "find",
+                "look up",
+                "what is",
+                "who is",
+                "when",
+                "latest",
+            ]
+        ):
             return "search"
-        if any(w in query for w in ["run", "execute", "calculate"]):
+
+        if any(
+            w in query
+            for w in [
+                "run",
+                "execute",
+                "calculate",
+            ]
+        ):
             return "execute"
+
         if active_doc or current_goal:
             return "contextual_chat"
 
         return "answer"
 
-    async def detect_topic_shift(self, context: Dict[str, Any]) -> bool:
-        conv = context.get("conversation", {})
+    async def detect_topic_shift(
+        self,
+        context: Dict[str, Any],
+    ) -> bool:
+
+        conv = context.get(
+            "conversation",
+            {}
+        )
+
         curr = conv.get("topic")
         prev = conv.get("previous_topic")
-        if curr and prev and str(curr).lower() != str(prev).lower():
+
+        if (
+            curr
+            and prev
+            and str(curr).lower()
+            != str(prev).lower()
+        ):
             return True
+
         return False
 
     async def build_working_memory(
         self,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        conversation_state = await self.track_conversation(context)
-        active_thread = conversation_state.get(
-            "thread",
-            {}
+
+        conversation_state = (
+            await self.track_conversation(
+                context
+            )
+        )
+
+        active_thread = (
+            conversation_state.get(
+                "thread",
+                {}
+            )
         )
 
         return {
-            "current_query": context.get("query", ""),
-
+            "current_query": context.get(
+                "query",
+                ""
+            ),
             "retrieved_memories": context.get(
                 "memory",
                 [],
             ),
-
             "recent_conversation": (
-                active_thread.get("history", [])
+                active_thread.get(
+                    "history",
+                    []
+                )
             ),
-
             "active_document": (
                 context.get("document")
                 or context.get("active_document")
                 or {}
             ),
-
             "active_thread_id": (
-                conversation_state.get("thread_id")
+                conversation_state.get(
+                    "thread_id"
+                )
             ),
-
             "active_topic": (
                 active_thread.get("topic")
             ),
-
             "previous_topic": (
-                conversation_state.get("previous_topic")
+                conversation_state.get(
+                    "previous_topic"
+                )
             ),
-
             "active_subject": (
                 active_thread.get("subject")
             ),
-
             "active_entities": (
-                active_thread.get("entities", [])
+                active_thread.get(
+                    "entities",
+                    []
+                )
             ),
-
             "compared_entities": (
                 active_thread.get(
                     "compared_entities",
                     []
                 )
             ),
-
             "active_comparison": bool(
                 active_thread.get(
                     "active_comparison",
                     False
                 )
             ),
-
             "available_threads": list(
                 conversation_state.get(
                     "threads",
                     {}
                 ).keys()
             ),
-
             "current_goal": context.get(
                 "current_goal"
             ),
-
             "resolved_query": context.get(
                 "resolved_query",
                 context.get("query", ""),
             ),
         }
 
-    async def generate_hypotheses(self, query: str, evidence: List[Dict[str, Any]]) -> List[str]:
+    async def generate_hypotheses(
+        self,
+        query: str,
+        evidence: List[Dict[str, Any]],
+    ) -> List[str]:
+
         if not query:
             return []
+
         return [
-            f"Hypothesis A: Direct factual fulfillment of '{query}' using retrieved context.",
-            f"Hypothesis B: Comprehensive multi-step exploration or workflow expansion for '{query}'."
+            (
+                f"Hypothesis A: Direct factual fulfillment "
+                f"of '{query}' using retrieved context."
+            ),
+            (
+                f"Hypothesis B: Comprehensive multi-step "
+                f"exploration or workflow expansion for '{query}'."
+            ),
         ]
 
-    async def simulate_future(self, plan: List[Any], action: str) -> List[Dict[str, Any]]:
+    async def simulate_future(
+        self,
+        plan: List[Any],
+        action: str,
+    ) -> List[Dict[str, Any]]:
+
         return [
-            {"path": action, "projected_success": 0.91, "risk": "low"},
-            {"path": "fallback_llm", "projected_success": 0.75, "risk": "medium"}
+            {
+                "path": action,
+                "projected_success": 0.91,
+                "risk": "low",
+            },
+            {
+                "path": "fallback_llm",
+                "projected_success": 0.75,
+                "risk": "medium",
+            },
         ]
 
-    async def self_critique(self, hypotheses: List[str], evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def self_critique(
+        self,
+        hypotheses: List[str],
+        evidence: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+
         return {
             "valid": True,
             "flaws": [],
-            "recommendation": "Proceed with primary path with high confidence."
+            "recommendation": (
+                "Proceed with primary path with high confidence."
+            ),
         }
 
-    async def confidence_score(self, evidence: List[Dict[str, Any]], critique: Dict[str, Any]) -> float:
-        base = 0.75 if not evidence else sum(item.get("confidence", 0.5) for item in evidence) / len(evidence)
-        return min(1.0, base + (0.15 if critique.get("valid") else 0.0))
+    async def confidence_score(
+        self,
+        evidence: List[Dict[str, Any]],
+        critique: Dict[str, Any],
+    ) -> float:
 
-    async def action_prediction(self, goal: str, context: Dict[str, Any]) -> List[str]:
+        base = (
+            0.75
+            if not evidence
+            else sum(
+                item.get("confidence", 0.5)
+                for item in evidence
+            ) / len(evidence)
+        )
+
+        return min(
+            1.0,
+            base + (
+                0.15
+                if critique.get("valid")
+                else 0.0
+            ),
+        )
+
+    async def action_prediction(
+        self,
+        goal: str,
+        context: Dict[str, Any],
+    ) -> List[str]:
+
         predictions = []
+
         if goal == "answer":
-            predictions.append("Offer related explanation")
+            predictions.append(
+                "Offer related explanation"
+            )
+
         if goal == "plan":
-            predictions.append("Offer execution")
+            predictions.append(
+                "Offer execution"
+            )
+
         if goal == "search":
-            predictions.append("Offer comparison")
+            predictions.append(
+                "Offer comparison"
+            )
+
         if goal == "remember":
-            predictions.append("Confirm memory")
+            predictions.append(
+                "Confirm memory"
+            )
+
         return predictions
 
-    async def choose_best_reasoning(self, hypotheses: List[str], simulations: List[Dict[str, Any]]) -> str:
-        if simulations:
-            best = max(simulations, key=lambda s: s.get("projected_success", 0.0))
-            return best.get("path", "primary")
-        return hypotheses[0] if hypotheses else "default"
+    async def choose_best_reasoning(
+        self,
+        hypotheses: List[str],
+        simulations: List[Dict[str, Any]],
+    ) -> str:
 
-    async def decide_response_strategy(self, goal: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        depth = context.get("response", {}).get("depth", "normal")
+        if simulations:
+            best = max(
+                simulations,
+                key=lambda s: s.get(
+                    "projected_success",
+                    0.0,
+                ),
+            )
+
+            return best.get(
+                "path",
+                "primary",
+            )
+
+        return (
+            hypotheses[0]
+            if hypotheses
+            else "default"
+        )
+
+    async def decide_response_strategy(
+        self,
+        goal: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+
+        depth = (
+            context.get(
+                "response",
+                {}
+            ).get(
+                "depth",
+                "normal",
+            )
+        )
+
         return {
             "depth": depth,
             "be_proactive": True,
@@ -1496,51 +1826,85 @@ class ReasoningEngine:
         query: str,
         context: Dict[str, Any],
     ) -> bool:
-        clean = self._normalize_topic(query)
+
+        clean = self._normalize_topic(
+            query
+        )
 
         if not clean:
             return True
 
-        if self._is_contextual_followup(clean):
-            conversation_state = context.get("conversation_state") or {}
+        if self._is_contextual_followup(
+            clean
+        ):
 
-            active_thread = conversation_state.get("thread") or {}
+            conversation_state = (
+                context.get(
+                    "conversation_state"
+                )
+                or {}
+            )
+
+            active_thread = (
+                conversation_state.get(
+                    "thread"
+                )
+                or {}
+            )
+
             active_topic = (
                 active_thread.get("topic")
-                or conversation_state.get("active_topic")
+                or conversation_state.get(
+                    "active_topic"
+                )
                 or context.get("topic")
             )
 
             if active_topic:
                 return False
 
-            conv = context.get("conversation", {})
+            conv = context.get(
+                "conversation",
+                {}
+            )
 
             if isinstance(conv, dict):
                 if (
                     conv.get("active_topic")
                     or conv.get("topic")
                     or conv.get("history")
-                    or conv.get("conversation_history")
+                    or conv.get(
+                        "conversation_history"
+                    )
                 ):
                     return False
 
             return True
 
-        if len(clean.split()) <= 1 and clean.lower() not in {
-            "hi",
-            "hello",
-            "help",
-            "status",
-        }:
-            conv = context.get("conversation", {})
+        if (
+            len(clean.split()) <= 1
+            and clean.lower()
+            not in {
+                "hi",
+                "hello",
+                "help",
+                "status",
+            }
+        ):
+
+            conv = context.get(
+                "conversation",
+                {}
+            )
 
             if isinstance(conv, dict):
                 if (
                     conv.get("topic")
                     or conv.get("active_topic")
                     or conv.get("history")
-                    or conv.get("conversation_history")
+                    or conv.get(
+                        "conversation_history"
+                    )
                 ):
                     return False
 
@@ -1548,19 +1912,41 @@ class ReasoningEngine:
 
         return False
 
-    async def build_reasoning_trace(self, steps: List[str]) -> str:
+    async def build_reasoning_trace(
+        self,
+        steps: List[str],
+    ) -> str:
+
         return " -> ".join(steps)
+
+    # ================================================================
+    # CONTEXT RETRIEVAL
+    # ================================================================
 
     async def retrieve_context(
         self,
         query: str,
         requires_memory: bool = True,
-        conversation_state: Optional[Dict[str, Any]] = None,
+        conversation_state: Optional[
+            Dict[str, Any]
+        ] = None,
     ) -> Dict[str, Any]:
-        memory_query = query
+        """
+        Retrieve lightweight reasoning context.
 
-        # Conversation state is already supplied to the memory layer by the
-        # caller when supported. Do not keep request state on this singleton.
+        IMPORTANT:
+        KnowledgeDatabase semantic retrieval is intentionally NOT performed
+        here.
+
+        Knowledge retrieval is owned by KnowledgeManager, which is called
+        by CognitiveCore after reasoning.
+
+        This prevents duplicate BGE-M3 retrieval and prevents the reasoning
+        pre-pass from consuming the entire retrieval timeout before the
+        canonical knowledge pipeline runs.
+        """
+
+        memory_query = query
 
         async def safe_call(
             operation,
@@ -1592,6 +1978,10 @@ class ReasoningEngine:
                 )
                 return default
 
+        # ---------------------------------------------------------
+        # MEMORY
+        # ---------------------------------------------------------
+
         memory_operation = None
 
         if (
@@ -1602,43 +1992,36 @@ class ReasoningEngine:
                 "recall",
             )
         ):
-            memory_operation = self.memory_router.recall(
-                memory_query
+            memory_operation = (
+                self.memory_router.recall(
+                    memory_query
+                )
             )
 
-        knowledge_operation = None
+        # ---------------------------------------------------------
+        # KNOWLEDGE
+        # ---------------------------------------------------------
+        #
+        # DO NOT call:
+        #
+        # self.knowledge_database.retrieve()
+        #
+        # here.
+        #
+        # CognitiveCore -> KnowledgeManager is the canonical path.
+        #
+        # This is the key Step 5 architecture correction.
+        #
 
-        if self.knowledge_database:
+        raw_knowledge = []
 
-            if hasattr(
-                self.knowledge_database,
-                "retrieve",
-            ):
-                knowledge_operation = (
-                    self.knowledge_database.retrieve(
-                        query
-                    )
-                )
+        logger.info(
+            "[ReasoningEngine] Knowledge retrieval deferred to KnowledgeManager."
+        )
 
-            elif hasattr(
-                self.knowledge_database,
-                "search",
-            ):
-                knowledge_operation = (
-                    self.knowledge_database.search(
-                        query
-                    )
-                )
-
-            elif hasattr(
-                self.knowledge_database,
-                "answer",
-            ):
-                knowledge_operation = (
-                    self.knowledge_database.answer(
-                        question=query
-                    )
-                )
+        # ---------------------------------------------------------
+        # KNOWLEDGE GRAPH
+        # ---------------------------------------------------------
 
         graph_operation = None
 
@@ -1655,6 +2038,10 @@ class ReasoningEngine:
                 )
             )
 
+        # ---------------------------------------------------------
+        # WORLD MODEL
+        # ---------------------------------------------------------
+
         world_operation = None
 
         if (
@@ -1669,27 +2056,22 @@ class ReasoningEngine:
                 query,
             )
 
-        raw_memories, raw_knowledge, raw_graph, raw_world = (
-            await asyncio.gather(
+        # ---------------------------------------------------------
+        # PARALLEL LIGHTWEIGHT RETRIEVAL
+        # ---------------------------------------------------------
 
+        raw_memories, raw_graph, raw_world = (
+            await asyncio.gather(
                 safe_call(
                     memory_operation,
                     [],
                     name="memory retrieval",
                 ),
-
-                safe_call(
-                    knowledge_operation,
-                    [],
-                    name="knowledge retrieval",
-                ),
-
                 safe_call(
                     graph_operation,
                     [],
                     name="graph retrieval",
                 ),
-
                 safe_call(
                     world_operation,
                     {},
@@ -1698,11 +2080,18 @@ class ReasoningEngine:
             )
         )
 
+        # ---------------------------------------------------------
+        # NORMALIZE MEMORY
+        # ---------------------------------------------------------
+
         memories = []
 
         memory_items = (
             raw_memories
-            if isinstance(raw_memories, list)
+            if isinstance(
+                raw_memories,
+                list,
+            )
             else (
                 [raw_memories]
                 if raw_memories
@@ -1745,58 +2134,30 @@ class ReasoningEngine:
                 "content": content,
             })
 
+        # ---------------------------------------------------------
+        # KNOWLEDGE
+        # ---------------------------------------------------------
+        #
+        # Empty here intentionally.
+        #
+        # KnowledgeManager/CognitiveCore owns canonical knowledge
+        # retrieval.
+        #
+
         knowledge = []
 
-        knowledge_items = (
-            raw_knowledge
-            if isinstance(raw_knowledge, list)
-            else (
-                [raw_knowledge]
-                if raw_knowledge
-                else []
-            )
-        )
-
-        for item in knowledge_items:
-
-            content = (
-                item.get(
-                    "content",
-                    str(item),
-                )
-                if isinstance(item, dict)
-                else str(item)
-            )
-
-            if not content:
-                continue
-
-            knowledge.append({
-                "source": "knowledge_database",
-                "confidence": (
-                    item.get(
-                        "confidence",
-                        0.91,
-                    )
-                    if isinstance(item, dict)
-                    else 0.91
-                ),
-                "importance": (
-                    item.get(
-                        "importance",
-                        50,
-                    )
-                    if isinstance(item, dict)
-                    else 50
-                ),
-                "content": content,
-            })
+        # ---------------------------------------------------------
+        # NORMALIZE GRAPH
+        # ---------------------------------------------------------
 
         graph = []
 
         graph_items = (
             raw_graph
-            if isinstance(raw_graph, list)
+            if isinstance(
+                raw_graph,
+                list,
+            )
             else (
                 [raw_graph]
                 if raw_graph
@@ -1839,6 +2200,10 @@ class ReasoningEngine:
                 "content": content,
             })
 
+        # ---------------------------------------------------------
+        # NORMALIZE WORLD MODEL
+        # ---------------------------------------------------------
+
         world = {}
 
         if isinstance(
@@ -1857,33 +2222,95 @@ class ReasoningEngine:
             "world": world,
         }
 
-    async def multi_hop_reasoning(self, query: str, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def multi_hop_reasoning(
+        self,
+        query: str,
+        evidence: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+
         return list(evidence)
 
-    async def merge_evidence(self, memories: List[Dict[str, Any]], knowledge: List[Dict[str, Any]], graph: List[Dict[str, Any]], world: Dict[str, Any]) -> List[Dict[str, Any]]:
-        all_items = memories + knowledge + graph
+    async def merge_evidence(
+        self,
+        memories: List[Dict[str, Any]],
+        knowledge: List[Dict[str, Any]],
+        graph: List[Dict[str, Any]],
+        world: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+
+        all_items = (
+            memories
+            + knowledge
+            + graph
+        )
+
         for cat, items in world.items():
             if isinstance(items, dict):
                 for k, v in items.items():
-                    all_items.append({"source": "world_model", "confidence": 0.85, "importance": 50, "content": f"{cat} - {k}: {v}"})
+                    all_items.append({
+                        "source": "world_model",
+                        "confidence": 0.85,
+                        "importance": 50,
+                        "content": (
+                            f"{cat} - {k}: {v}"
+                        ),
+                    })
 
         seen = set()
         unique_evidence = []
+
         for item in all_items:
-            content = item.get("content", "")
+
+            content = item.get(
+                "content",
+                "",
+            )
+
             if content not in seen:
                 seen.add(content)
                 unique_evidence.append(item)
+
         return unique_evidence
 
-    async def rank_evidence(self, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        source_priority = {"memory": 4, "knowledge_database": 3, "knowledge_graph": 2, "world_model": 1}
-        return sorted(evidence, key=lambda item: (source_priority.get(item.get("source", "unknown"), 0), item.get("confidence", 0.5), item.get("importance", 50)), reverse=True)
+    async def rank_evidence(
+        self,
+        evidence: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+
+        source_priority = {
+            "memory": 4,
+            "knowledge_database": 3,
+            "knowledge_graph": 2,
+            "world_model": 1,
+        }
+
+        return sorted(
+            evidence,
+            key=lambda item: (
+                source_priority.get(
+                    item.get(
+                        "source",
+                        "unknown",
+                    ),
+                    0,
+                ),
+                item.get(
+                    "confidence",
+                    0.5,
+                ),
+                item.get(
+                    "importance",
+                    50,
+                ),
+            ),
+            reverse=True,
+        )
 
     async def detect_conflicts(
         self,
-        evidence: List[Dict[str, Any]]
+        evidence: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+
         if not evidence:
             return {
                 "conflict": False,
@@ -1894,18 +2321,24 @@ class ReasoningEngine:
 
         sources = list(
             dict.fromkeys(
-                item.get("source", "unknown")
+                item.get(
+                    "source",
+                    "unknown",
+                )
                 for item in evidence
             )
         )
 
         conflicts = []
-
         grouped = {}
 
         for item in evidence:
+
             content = str(
-                item.get("content", "")
+                item.get(
+                    "content",
+                    "",
+                )
             ).strip()
 
             if not content:
@@ -1926,7 +2359,7 @@ class ReasoningEngine:
 
             grouped.setdefault(
                 subject,
-                []
+                [],
             ).append(item)
 
         contradiction_pairs = [
@@ -1952,20 +2385,35 @@ class ReasoningEngine:
                 re.sub(
                     r"\s+",
                     " ",
-                    str(item.get("content", "")).lower(),
+                    str(
+                        item.get(
+                            "content",
+                            "",
+                        )
+                    ).lower(),
                 )
                 for item in items
             ]
 
-            for left_index in range(len(normalized)):
+            for left_index in range(
+                len(normalized)
+            ):
                 for right_index in range(
                     left_index + 1,
                     len(normalized),
                 ):
-                    left = normalized[left_index]
-                    right = normalized[right_index]
 
-                    for positive, negative in contradiction_pairs:
+                    left = normalized[
+                        left_index
+                    ]
+
+                    right = normalized[
+                        right_index
+                    ]
+
+                    for positive, negative in (
+                        contradiction_pairs
+                    ):
 
                         if (
                             positive in left
@@ -1976,20 +2424,28 @@ class ReasoningEngine:
                         ):
                             conflicts.append({
                                 "subject": subject,
-                                "source_a": items[left_index].get(
+                                "source_a": items[
+                                    left_index
+                                ].get(
                                     "source",
                                     "unknown",
                                 ),
-                                "source_b": items[right_index].get(
+                                "source_b": items[
+                                    right_index
+                                ].get(
                                     "source",
                                     "unknown",
                                 ),
-                                "type": "explicit_contradiction",
+                                "type": (
+                                    "explicit_contradiction"
+                                ),
                             })
 
                             break
 
-        conflict_detected = bool(conflicts)
+        conflict_detected = bool(
+            conflicts
+        )
 
         if conflict_detected:
             confidence = 0.45
@@ -2005,38 +2461,84 @@ class ReasoningEngine:
             "confidence": confidence,
         }
 
-    async def choose_agents(self, query: str, context: Dict[str, Any]) -> List[Any]:
-        if not self.agent_manager or not hasattr(self.agent_manager, "agents"):
+    async def choose_agents(
+        self,
+        query: str,
+        context: Dict[str, Any],
+    ) -> List[Any]:
+
+        if (
+            not self.agent_manager
+            or not hasattr(
+                self.agent_manager,
+                "agents",
+            )
+        ):
             return []
+
         selected = []
-        for agent in self.agent_manager.agents.values():
+
+        for agent in (
+            self.agent_manager.agents.values()
+        ):
             try:
-                if hasattr(agent, "can_handle"):
-                    if await agent.can_handle(query, context):
+
+                if hasattr(
+                    agent,
+                    "can_handle",
+                ):
+
+                    if await agent.can_handle(
+                        query,
+                        context,
+                    ):
                         selected.append(agent)
+
                 else:
                     selected.append(agent)
+
             except Exception:
-                logger.exception("[ReasoningEngine] Agent scoring failed.")
+                logger.exception(
+                    "[ReasoningEngine] Agent scoring failed."
+                )
+
         return selected
 
-    async def execute_agents(self, agents, query, context):
+    async def execute_agents(
+        self,
+        agents,
+        query,
+        context,
+    ):
+
         outputs = {}
         completed = []
         failed = []
 
         async def run(agent):
-            agent_name = agent.__class__.__name__
+
+            agent_name = (
+                agent.__class__.__name__
+            )
 
             try:
-                if not hasattr(agent, "execute"):
+
+                if not hasattr(
+                    agent,
+                    "execute",
+                ):
                     failed.append({
                         "agent": agent_name,
-                        "error": "Agent has no execute() method",
+                        "error": (
+                            "Agent has no execute() method"
+                        ),
                     })
                     return
 
-                result = await agent.execute(query, context)
+                result = await agent.execute(
+                    query,
+                    context,
+                )
 
                 outputs[agent_name] = result
 
@@ -2046,6 +2548,7 @@ class ReasoningEngine:
                 })
 
             except Exception as exc:
+
                 logger.exception(
                     "[ReasoningEngine] Agent execution failed: %s",
                     agent_name,
@@ -2077,6 +2580,7 @@ class ReasoningEngine:
         query,
         result,
     ):
+
         prompt = f"""
 User Goal:{query}
 
@@ -2093,14 +2597,23 @@ Return JSON:
 }}
 """
 
-        if not self.llm_router or not hasattr(self.llm_router, "chat"):
+        if (
+            not self.llm_router
+            or not hasattr(
+                self.llm_router,
+                "chat",
+            )
+        ):
             return {
                 "goal_completed": False,
                 "confidence": 0.0,
-                "missing": ["LLM evaluator unavailable"],
+                "missing": [
+                    "LLM evaluator unavailable"
+                ],
             }
 
         try:
+
             response = await self.llm_router.chat(
                 [
                     {
@@ -2113,45 +2626,107 @@ Return JSON:
                     },
                 ]
             )
+
         except Exception as exc:
-            logger.warning("[ReasoningEngine] Result evaluation failed: %s", exc)
+
+            logger.warning(
+                "[ReasoningEngine] Result evaluation failed: %s",
+                exc,
+            )
+
             return {
                 "goal_completed": False,
                 "confidence": 0.0,
-                "missing": ["LLM evaluator failed"],
+                "missing": [
+                    "LLM evaluator failed"
+                ],
             }
 
-        if not isinstance(response, str) or not response.strip():
+        if (
+            not isinstance(response, str)
+            or not response.strip()
+        ):
             return {
                 "goal_completed": False,
                 "confidence": 0.0,
-                "missing": ["LLM response unavailable"],
+                "missing": [
+                    "LLM response unavailable"
+                ],
             }
 
-        return self.llm_router.extract_json(response)
+        return self.llm_router.extract_json(
+            response
+        )
 
     @staticmethod
-    def _decision_value(decision: Any, key: str, default: Any = None) -> Any:
+    def _decision_value(
+        decision: Any,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+
         if decision is None:
             return default
-        if isinstance(decision, dict):
-            return decision.get(key, default)
-        return getattr(decision, key, default)
+
+        if isinstance(
+            decision,
+            dict,
+        ):
+            return decision.get(
+                key,
+                default,
+            )
+
+        return getattr(
+            decision,
+            key,
+            default,
+        )
 
     @staticmethod
-    def _as_bool(value: Any) -> bool:
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
+    def _as_bool(
+        value: Any,
+    ) -> bool:
+
+        if isinstance(
+            value,
+            str,
+        ):
+            return value.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
         return bool(value)
 
-    def _safe_capability_names(self) -> List[str]:
+    def _safe_capability_names(
+        self,
+    ) -> List[str]:
+
         names = []
         manager = self.tool_manager
+
         if manager is not None:
-            registry = getattr(manager, "tools", None)
-            if isinstance(registry, dict):
-                names.extend(str(k) for k in registry.keys())
-        return list(dict.fromkeys(names))
+            registry = getattr(
+                manager,
+                "tools",
+                None,
+            )
+
+            if isinstance(
+                registry,
+                dict,
+            ):
+                names.extend(
+                    str(k)
+                    for k in registry.keys()
+                )
+
+        return list(
+            dict.fromkeys(names)
+        )
 
     def _build_decision_contract(
         self,
@@ -2169,7 +2744,16 @@ Return JSON:
         mode: str,
         action: str,
     ) -> Dict[str, Any]:
-        intent_name = str(getattr(intent, "intent_type", "chat") or "chat")
+
+        intent_name = str(
+            getattr(
+                intent,
+                "intent_type",
+                "chat",
+            )
+            or "chat"
+        )
+
         return {
             "version": "11.0",
             "intent": intent_name,
@@ -2177,7 +2761,9 @@ Return JSON:
             "action": action,
             "reasoning_mode": mode,
             "strategy": strategy,
-            "selected_agents": list(selected_agents),
+            "selected_agents": list(
+                selected_agents
+            ),
             "requires": {
                 "memory": requires_memory,
                 "documents": requires_documents,
@@ -2186,15 +2772,27 @@ Return JSON:
                 "planning": requires_planning,
                 "clarification": requires_clarification,
             },
-            "available_tools": self._safe_capability_names(),
+            "available_tools": (
+                self._safe_capability_names()
+            ),
             "execution_owner": "cognitive_core",
         }
 
-    async def reason(self, context: Dict[str, Any]) -> ReasoningResult:
-        # Reasoning is request-scoped. Never store the active request on the
-        # engine instance because concurrent conversations can otherwise leak
-        # context into one another.
-        user_query = str(context.get("query", "")).strip()
+    async def reason(
+        self,
+        context: Dict[str, Any],
+    ) -> ReasoningResult:
+
+        # Reasoning is request-scoped. Never store the active request
+        # on the engine instance because concurrent conversations can
+        # otherwise leak context into one another.
+
+        user_query = str(
+            context.get(
+                "query",
+                "",
+            )
+        ).strip()
 
         intent = await self.intent_analyzer.analyze(
             user_query
@@ -2204,45 +2802,78 @@ Return JSON:
 
         intent_name = (
             intent.intent_type
-            if hasattr(intent, "intent_type")
+            if hasattr(
+                intent,
+                "intent_type",
+            )
             else str(intent)
         ).lower()
-        intent_confidence = getattr(intent, "confidence", 1.0)
+
+        intent_confidence = getattr(
+            intent,
+            "confidence",
+            1.0,
+        )
 
         # -----------------------------------------------------
         # EXECUTABLE ACTION
         # -----------------------------------------------------
+
         if (
-            intent_name in ("action", "tool")
+            intent_name in (
+                "action",
+                "tool",
+            )
             or bool(
-                getattr(intent, "data", None)
-                and intent.data.get("action_name")
+                getattr(
+                    intent,
+                    "data",
+                    None,
+                )
+                and intent.data.get(
+                    "action_name"
+                )
             )
         ):
 
             intent_data = getattr(
                 intent,
                 "data",
-                {}
+                {},
             ) or {}
 
             action_name = intent_data.get(
                 "action_name"
             )
 
-            action_params = intent_data.get(
-                "action_params",
-                {}
-            ) or {}
+            action_params = (
+                intent_data.get(
+                    "action_params",
+                    {},
+                )
+                or {}
+            )
 
-            task_plan = context.get("task_plan", [])
-            task_workflows = context.get("task_workflows", {})
-            workflow = context.get("workflow")
+            task_plan = context.get(
+                "task_plan",
+                [],
+            )
+
+            task_workflows = context.get(
+                "task_workflows",
+                {},
+            )
+
+            workflow = context.get(
+                "workflow"
+            )
 
             return ReasoningResult(
                 primary_action="action",
                 confidence=intent_confidence,
-                reasoning="Executable system action requested.",
+                reasoning=(
+                    "Executable system action requested."
+                ),
                 metadata={
                     "goal": "action_execution",
                     "execution_plan": ["action"],
@@ -2266,21 +2897,39 @@ Return JSON:
 
         logger.info(
             "[ReasoningEngine] Intent=%s confidence=%.2f",
-            getattr(intent, "intent_type", "unknown"),
-            float(getattr(intent, "confidence", 0.0) or 0.0),
+            getattr(
+                intent,
+                "intent_type",
+                "unknown",
+            ),
+            float(
+                getattr(
+                    intent,
+                    "confidence",
+                    0.0,
+                )
+                or 0.0
+            ),
         )
 
-        semantic_context = self._build_semantic_context()
+        semantic_context = (
+            self._build_semantic_context()
+        )
 
         if semantic_context:
-            context["semantic_memory"] = semantic_context
+            context[
+                "semantic_memory"
+            ] = semantic_context
+
             logger.info(
                 "[Reasoning] Using semantic relationships."
             )
 
-        strategy = self._select_reasoning_strategy(
-            user_query,
-            context,
+        strategy = (
+            self._select_reasoning_strategy(
+                user_query,
+                context,
+            )
         )
 
         if intent.intent_type == "memory":
@@ -2299,65 +2948,148 @@ Return JSON:
         elif intent.intent_type == "greeting":
             strategy = "conversation"
 
-        decision = context.get("decision")
+        decision = context.get(
+            "decision"
+        )
 
         if decision:
-            if self._as_bool(self._decision_value(decision, "use_memory", False)):
+
+            if self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_memory",
+                    False,
+                )
+            ):
                 strategy = "memory_first"
 
-            elif self._as_bool(self._decision_value(decision, "use_planner", False)):
+            elif self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_planner",
+                    False,
+                )
+            ):
                 strategy = "planning"
 
-            elif self._as_bool(self._decision_value(decision, "use_documents", False)):
+            elif self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_documents",
+                    False,
+                )
+            ):
                 strategy = "document"
 
-            elif self._as_bool(self._decision_value(decision, "use_world_model", False)):
+            elif self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_world_model",
+                    False,
+                )
+            ):
                 strategy = "knowledge_first"
 
-            elif self._as_bool(self._decision_value(decision, "use_reasoning", False)):
+            elif self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_reasoning",
+                    False,
+                )
+            ):
                 if strategy == "knowledge_first":
                     strategy = "deep_reasoning"
 
-        context["reasoning_strategy"] = strategy
+        context[
+            "reasoning_strategy"
+        ] = strategy
 
         logger.info(
-            f"[Reasoning] Strategy={strategy} Decision={decision}"
+            "[Reasoning] Strategy=%s Decision=%s",
+            strategy,
+            decision,
         )
 
-        feedback = self._analyze_execution_feedback(
-            context.get("execution_result")
+        feedback = (
+            self._analyze_execution_feedback(
+                context.get(
+                    "execution_result"
+                )
+            )
         )
-        context["execution_feedback"] = feedback
+
+        context[
+            "execution_feedback"
+        ] = feedback
 
         if (
-            context.get("observe_goals_in_reasoning", False)
+            context.get(
+                "observe_goals_in_reasoning",
+                False,
+            )
             and self.goal_manager
-            and hasattr(self.goal_manager, "observe")
+            and hasattr(
+                self.goal_manager,
+                "observe",
+            )
         ):
-            await self.goal_manager.observe(query=user_query, context=context)
+            await self.goal_manager.observe(
+                query=user_query,
+                context=context,
+            )
 
         active_goal = None
 
-        if self.goal_manager and hasattr(self.goal_manager, "current_goal"):
-            active_goal = self.goal_manager.current_goal()
+        if (
+            self.goal_manager
+            and hasattr(
+                self.goal_manager,
+                "current_goal",
+            )
+        ):
+            active_goal = (
+                self.goal_manager.current_goal()
+            )
 
         next_task = None
 
-        if self.goal_manager and hasattr(self.goal_manager, "next_subgoal"):
-            next_task = self.goal_manager.next_subgoal()
+        if (
+            self.goal_manager
+            and hasattr(
+                self.goal_manager,
+                "next_subgoal",
+            )
+        ):
+            next_task = (
+                self.goal_manager.next_subgoal()
+            )
 
         context["active_goal"] = (
-            getattr(active_goal, "title", str(active_goal))
+            getattr(
+                active_goal,
+                "title",
+                str(active_goal),
+            )
             if active_goal
             else None
         )
+
         context["goal_progress"] = (
-            getattr(active_goal, "progress", 0.0)
+            getattr(
+                active_goal,
+                "progress",
+                0.0,
+            )
             if active_goal
             else 0.0
         )
+
         context["next_goal"] = (
-            getattr(next_task, "title", str(next_task))
+            getattr(
+                next_task,
+                "title",
+                str(next_task),
+            )
             if next_task
             else None
         )
@@ -2365,46 +3097,82 @@ Return JSON:
         if active_goal:
             logger.info(
                 "[ReasoningEngine] Active goal: %s (%.0f%%)",
-                getattr(active_goal, "title", "Goal"),
-                getattr(active_goal, "progress", 0.0),
+                getattr(
+                    active_goal,
+                    "title",
+                    "Goal",
+                ),
+                getattr(
+                    active_goal,
+                    "progress",
+                    0.0,
+                ),
             )
 
         if next_task:
             logger.info(
                 "[ReasoningEngine] Next suggested task: %s",
-                getattr(next_task, "title", "Task"),
+                getattr(
+                    next_task,
+                    "title",
+                    "Task",
+                ),
             )
 
         start_time = time.time()
         raw_query = user_query
         reasoning_steps = []
+
         reasoning_steps.append(
             f"Detected intent: {intent.intent_type} "
             f"(confidence={intent.confidence:.2f})"
         )
 
-        conv_tracking = await self.track_conversation(context)
-        reasoning_steps.append("Tracked conversation state")
+        conv_tracking = (
+            await self.track_conversation(
+                context
+            )
+        )
+
+        reasoning_steps.append(
+            "Tracked conversation state"
+        )
 
         logger.info(
             "[Conversation DEBUG] query=%r active_thread=%r topic=%r subject=%r history=%d",
             raw_query,
-            conv_tracking.get("thread_id"),
-            conv_tracking.get("active_topic"),
-            conv_tracking.get("active_subject"),
+            conv_tracking.get(
+                "thread_id"
+            ),
+            conv_tracking.get(
+                "active_topic"
+            ),
+            conv_tracking.get(
+                "active_subject"
+            ),
             len(
-                conv_tracking.get("thread", {}).get("history", [])
+                conv_tracking.get(
+                    "thread",
+                    {},
+                ).get(
+                    "history",
+                    [],
+                )
             ),
         )
 
-        context["conversation_state"] = conv_tracking
+        context[
+            "conversation_state"
+        ] = conv_tracking
 
-        resolved_query_raw = await self.resolve_references(
-            raw_query,
-            {
-                **context,
-                "conversation_state": conv_tracking,
-            },
+        resolved_query_raw = (
+            await self.resolve_references(
+                raw_query,
+                {
+                    **context,
+                    "conversation_state": conv_tracking,
+                },
+            )
         )
 
         logger.info(
@@ -2413,165 +3181,348 @@ Return JSON:
         )
 
         context["raw_query"] = raw_query
-        context["resolved_query"] = self._clean_context_text(resolved_query_raw)
-        query = context["resolved_query"]
 
-        context["conversation_state"] = conv_tracking
-        context["active_topic"] = conv_tracking.get("active_topic")
-        context["active_subject"] = conv_tracking.get("active_subject")
-        context["conversation_history"] = conv_tracking.get("recent_history", [])
-        context["active_thread_history"] = (
-            conv_tracking.get("thread", {}).get("history", [])
+        context[
+            "resolved_query"
+        ] = self._clean_context_text(
+            resolved_query_raw
         )
-        context["contextual_followup"] = self._is_contextual_followup(query)
+
+        query = context[
+            "resolved_query"
+        ]
+
+        context[
+            "conversation_state"
+        ] = conv_tracking
+
+        context[
+            "active_topic"
+        ] = conv_tracking.get(
+            "active_topic"
+        )
+
+        context[
+            "active_subject"
+        ] = conv_tracking.get(
+            "active_subject"
+        )
+
+        context[
+            "conversation_history"
+        ] = conv_tracking.get(
+            "recent_history",
+            [],
+        )
+
+        context[
+            "active_thread_history"
+        ] = (
+            conv_tracking.get(
+                "thread",
+                {},
+            ).get(
+                "history",
+                [],
+            )
+        )
+
+        context[
+            "contextual_followup"
+        ] = self._is_contextual_followup(
+            query
+        )
 
         reasoning_steps.append(
             "Resolved conversational references"
         )
 
-        requires_clarification = await self.needs_clarification(query, context)
+        requires_clarification = (
+            await self.needs_clarification(
+                query,
+                context,
+            )
+        )
+
         if requires_clarification:
-            reasoning_steps.append("Flagged need for clarification")
+            reasoning_steps.append(
+                "Flagged need for clarification"
+            )
 
-        goal = await self.track_goal(context)
-        reasoning_steps.append(f"Tracked user goal as '{goal}'")
+        goal = await self.track_goal(
+            context
+        )
 
-        topic_changed = await self.detect_topic_shift(context)
+        reasoning_steps.append(
+            f"Tracked user goal as '{goal}'"
+        )
+
+        topic_changed = (
+            await self.detect_topic_shift(
+                context
+            )
+        )
+
         if topic_changed:
-            reasoning_steps.append("Detected topic shift")
+            reasoning_steps.append(
+                "Detected topic shift"
+            )
 
-        working_memory = await self.build_working_memory(context)
-        reasoning_steps.append("Built working memory context")
+        working_memory = (
+            await self.build_working_memory(
+                context
+            )
+        )
 
-        decision = context.get("decision")
+        reasoning_steps.append(
+            "Built working memory context"
+        )
 
-        if decision is None and self.working_memory:
+        decision = context.get(
+            "decision"
+        )
+
+        if (
+            decision is None
+            and self.working_memory
+        ):
             decision = getattr(
                 self.working_memory,
                 "metadata",
-                {}
-            ).get("cognitive_decision")
+                {},
+            ).get(
+                "cognitive_decision"
+            )
 
         if decision:
-            mode = decision.reasoning_mode or strategy
+            mode = (
+                decision.reasoning_mode
+                or strategy
+            )
         else:
             mode = strategy
 
-        if mode in (None, "", "knowledge_first", "fast"):
+        if mode in (
+            None,
+            "",
+            "knowledge_first",
+            "fast",
+        ):
             mode = strategy
 
-        reasoning_steps.append(f"Chosen reasoning mode: {mode}")
-
-        # ---------------------------------------------------------
-        # PHASE 2: Intent-driven agent selection + execution
-        # ---------------------------------------------------------
-
-        intent_type = getattr(intent, "intent_type", None)
-
-        # Select agents strictly from the detected intent.
-        selected_agents = self.choose_best_agents(
-            query=query,
-            intent_name=intent_type,
+        reasoning_steps.append(
+            f"Chosen reasoning mode: {mode}"
         )
 
-        # Add explicitly requested capabilities from the cognitive decision.
+        # ---------------------------------------------------------
+        # PHASE 2: Intent-driven agent selection
+        # ---------------------------------------------------------
+
+        intent_type = getattr(
+            intent,
+            "intent_type",
+            None,
+        )
+
+        selected_agents = (
+            self.choose_best_agents(
+                query=query,
+                intent_name=intent_type,
+            )
+        )
+
         if decision:
+
             capability_agents = []
 
-            if self._as_bool(self._decision_value(decision, "use_memory", False)):
-                capability_agents.append("memory")
+            if self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_memory",
+                    False,
+                )
+            ):
+                capability_agents.append(
+                    "memory"
+                )
 
-            if self._as_bool(self._decision_value(decision, "use_documents", False)):
-                capability_agents.append("document")
+            if self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_documents",
+                    False,
+                )
+            ):
+                capability_agents.append(
+                    "document"
+                )
 
-            if self._as_bool(self._decision_value(decision, "use_planner", False)):
-                capability_agents.append("planning")
+            if self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_planner",
+                    False,
+                )
+            ):
+                capability_agents.append(
+                    "planning"
+                )
 
-            if self._as_bool(self._decision_value(decision, "use_web", False)):
-                capability_agents.append("research")
+            if self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_web",
+                    False,
+                )
+            ):
+                capability_agents.append(
+                    "research"
+                )
 
-            if self._as_bool(self._decision_value(decision, "use_tools", False)):
-                capability_agents.append("coding")
+            if self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_tools",
+                    False,
+                )
+            ):
+                capability_agents.append(
+                    "coding"
+                )
 
             for agent_name in capability_agents:
                 if agent_name not in selected_agents:
-                    selected_agents.append(agent_name)
+                    selected_agents.append(
+                        agent_name
+                    )
 
-        # Always have a valid fallback.
         if not selected_agents:
             selected_agents = ["chat"]
 
-        # Remove duplicates while preserving execution order.
-        selected_agents = list(dict.fromkeys(selected_agents))
-
-        reasoning_steps.append(
-            f"Selected agents from intent={intent_type}: {selected_agents}"
+        selected_agents = list(
+            dict.fromkeys(
+                selected_agents
+            )
         )
 
-        # Build deterministic execution plan.
-        execution_plan = self.build_execution_plan(
-            agents=selected_agents,
-            intent_name=intent_type,
-            goal=goal,
+        reasoning_steps.append(
+            f"Selected agents from intent={intent_type}: "
+            f"{selected_agents}"
         )
 
-        context["execution_plan"] = execution_plan
+        execution_plan = (
+            self.build_execution_plan(
+                agents=selected_agents,
+                intent_name=intent_type,
+                goal=goal,
+            )
+        )
+
+        context[
+            "execution_plan"
+        ] = execution_plan
 
         reasoning_steps.append(
-            f"Built execution plan with {len(execution_plan)} step(s)"
+            f"Built execution plan with "
+            f"{len(execution_plan)} step(s)"
         )
 
         # ---------------------------------------------------------
-        # Capability flags
+        # CAPABILITY FLAGS
         # ---------------------------------------------------------
 
         requires_planning = (
-            self._as_bool(self._decision_value(decision, "use_planner", False))
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_planner",
+                    False,
+                )
+            )
             if decision
             else strategy == "planning_first"
         )
 
         requires_tools = (
-            self._as_bool(self._decision_value(decision, "use_tools", False))
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_tools",
+                    False,
+                )
+            )
             if decision
             else False
         )
 
         requires_memory = (
-            self._as_bool(self._decision_value(decision, "use_memory", False))
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_memory",
+                    False,
+                )
+            )
             if decision
             else strategy == "memory_first"
         )
 
         requires_documents = (
-            self._as_bool(self._decision_value(decision, "use_documents", False))
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_documents",
+                    False,
+                )
+            )
             if decision
             else strategy == "document_first"
         )
 
         requires_web = (
-            self._as_bool(self._decision_value(decision, "use_web", False))
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_web",
+                    False,
+                )
+            )
             if decision
             else strategy == "research_first"
         )
 
-        # Intent requirements always take priority.
         requires_memory = (
             requires_memory
-            or getattr(intent, "requires_memory", False)
+            or getattr(
+                intent,
+                "requires_memory",
+                False,
+            )
         )
 
         requires_documents = (
             requires_documents
-            or getattr(intent, "requires_documents", False)
+            or getattr(
+                intent,
+                "requires_documents",
+                False,
+            )
         )
 
         requires_web = (
             requires_web
-            or getattr(intent, "requires_web", False)
+            or getattr(
+                intent,
+                "requires_web",
+                False,
+            )
         )
 
-        if getattr(intent, "requires_reasoning", False):
+        if getattr(
+            intent,
+            "requires_reasoning",
+            False,
+        ):
             mode = "deep_reasoning"
 
         if strategy == "research_first":
@@ -2585,12 +3536,19 @@ Return JSON:
         )
 
         # ---------------------------------------------------------
-        # Agent execution
+        # AGENT EXECUTION
         # ---------------------------------------------------------
 
         agent_results = []
 
-        if self.agent_coordinator and selected_agents and context.get("execute_agents_in_reasoning", False):
+        if (
+            self.agent_coordinator
+            and selected_agents
+            and context.get(
+                "execute_agents_in_reasoning",
+                False,
+            )
+        ):
 
             execution_plan_payload = {
                 "agents": selected_agents,
@@ -2599,20 +3557,30 @@ Return JSON:
                 "plan": execution_plan,
             }
 
-            # Give the Lead Agent the opportunity to optimize ordering.
             if (
                 self.lead_agent
-                and hasattr(self.lead_agent, "create_execution_plan")
+                and hasattr(
+                    self.lead_agent,
+                    "create_execution_plan",
+                )
             ):
                 try:
-                    lead_plan = await self.lead_agent.create_execution_plan(
-                        query,
-                        context,
-                        selected_agents,
+
+                    lead_plan = (
+                        await self.lead_agent.create_execution_plan(
+                            query,
+                            context,
+                            selected_agents,
+                        )
                     )
 
-                    if isinstance(lead_plan, dict):
-                        execution_plan_payload.update(lead_plan)
+                    if isinstance(
+                        lead_plan,
+                        dict,
+                    ):
+                        execution_plan_payload.update(
+                            lead_plan
+                        )
 
                 except Exception:
                     logger.exception(
@@ -2625,28 +3593,39 @@ Return JSON:
                 execution_plan_payload,
             )
 
-            if hasattr(self.agent_coordinator, "execute"):
+            if hasattr(
+                self.agent_coordinator,
+                "execute",
+            ):
                 try:
-                    coordination = await self.agent_coordinator.execute(
-                        execution_plan_payload.get(
-                            "agents",
-                            selected_agents,
-                        ),
-                        execution_plan_payload.get(
-                            "query",
-                            query,
-                        ),
-                        execution_plan_payload.get(
-                            "context",
-                            context,
-                        ),
+
+                    coordination = (
+                        await self.agent_coordinator.execute(
+                            execution_plan_payload.get(
+                                "agents",
+                                selected_agents,
+                            ),
+                            execution_plan_payload.get(
+                                "query",
+                                query,
+                            ),
+                            execution_plan_payload.get(
+                                "context",
+                                context,
+                            ),
+                        )
                     )
 
-                    if isinstance(coordination, dict):
+                    if isinstance(
+                        coordination,
+                        dict,
+                    ):
 
-                        agent_results = coordination.get(
-                            "outputs",
-                            [],
+                        agent_results = (
+                            coordination.get(
+                                "outputs",
+                                [],
+                            )
                         )
 
                         context.update(
@@ -2656,18 +3635,26 @@ Return JSON:
                             )
                         )
 
-                        context["execution_result"] = coordination
+                        context[
+                            "execution_result"
+                        ] = coordination
 
                 except Exception:
                     logger.exception(
                         "[ReasoningEngine] Phase 2 agent coordination failed."
                     )
+
                     agent_results = []
 
-        context["best_agent"] = (
+        context[
+            "best_agent"
+        ] = (
             agent_results[0].get("agent")
             if agent_results
-            and isinstance(agent_results[0], dict)
+            and isinstance(
+                agent_results[0],
+                dict,
+            )
             else None
         )
 
@@ -2676,29 +3663,47 @@ Return JSON:
             len(agent_results),
         )
 
-        # Normalize specialist-agent outputs.
         workflow = AgentWorkflow()
         agent_outputs = {}
 
         for result in agent_results:
 
-            if not isinstance(result, dict):
+            if not isinstance(
+                result,
+                dict,
+            ):
                 continue
 
-            agent_name = result.get("agent", "unknown")
-            agent_result = result.get("result")
+            agent_name = result.get(
+                "agent",
+                "unknown",
+            )
+
+            agent_result = result.get(
+                "result"
+            )
 
             if agent_result is None:
                 agent_result = ""
 
-            confidence_value = result.get("confidence", 0.0)
+            confidence_value = result.get(
+                "confidence",
+                0.0,
+            )
 
             try:
-                confidence_value = float(confidence_value)
-            except (TypeError, ValueError):
+                confidence_value = float(
+                    confidence_value
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
                 confidence_value = 0.0
 
-            agent_outputs[agent_name] = agent_result
+            agent_outputs[
+                agent_name
+            ] = agent_result
 
             logger.info(
                 "\nAgent: %s\nConfidence: %.2f\n%s\n",
@@ -2708,85 +3713,285 @@ Return JSON:
             )
 
         reasoning_steps.append(
-            f"Executed {len(agent_results)} specialist agent(s) "
-            f"via Phase 2 coordinator"
+            f"Executed {len(agent_results)} "
+            f"specialist agent(s) via Phase 2 coordinator"
         )
 
-        retrieval = await self.retrieve_context(
-            query,
-            requires_memory=requires_memory,
-            conversation_state=conv_tracking,
+        # ---------------------------------------------------------
+        # RETRIEVE LIGHTWEIGHT REASONING CONTEXT
+        # ---------------------------------------------------------
+
+        retrieval = (
+            await self.retrieve_context(
+                query,
+                requires_memory=requires_memory,
+                conversation_state=conv_tracking,
+            )
         )
-        raw_memories = retrieval["memories"] if requires_memory else []
-        knowledge = retrieval["knowledge"]
-        graph_results = retrieval["graph"]
-        world_state = retrieval["world"]
-        reasoning_steps.append("Retrieved context evidence")
+
+        raw_memories = (
+            retrieval["memories"]
+            if requires_memory
+            else []
+        )
+
+        # IMPORTANT:
+        # This is intentionally empty in Step 5.
+        #
+        # KnowledgeManager is responsible for canonical knowledge
+        # retrieval later in CognitiveCore.
+        knowledge = []
+
+        graph_results = retrieval[
+            "graph"
+        ]
+
+        world_state = retrieval[
+            "world"
+        ]
+
+        reasoning_steps.append(
+            "Retrieved lightweight reasoning context; "
+            "knowledge retrieval deferred to KnowledgeManager"
+        )
 
         memory_summary_parts = []
+
         for m in raw_memories:
-            content = m.get("content", str(m)) if isinstance(m, dict) else str(m)
-            memory_summary_parts.append(content)
-        memory_summary = ". ".join(memory_summary_parts)
 
-        memories = [{"source": "memory", "confidence": 0.95, "importance": 85, "content": memory_summary}] if memory_summary else []
+            content = (
+                m.get(
+                    "content",
+                    str(m),
+                )
+                if isinstance(
+                    m,
+                    dict,
+                )
+                else str(m)
+            )
 
-        merged_evidence = await self.merge_evidence(memories, knowledge, graph_results, world_state)
-        evidence = await self.multi_hop_reasoning(query, merged_evidence)
-        ranked_evidence = await self.rank_evidence(evidence)
+            memory_summary_parts.append(
+                content
+            )
 
-        hypotheses = await self.generate_hypotheses(query, ranked_evidence)
-        reasoning_steps.append(f"Generated {len(hypotheses)} hypotheses")
+        memory_summary = ". ".join(
+            memory_summary_parts
+        )
 
-        simulations = await self.simulate_future([], goal)
-        reasoning_steps.append("Simulated future execution paths")
+        memories = (
+            [{
+                "source": "memory",
+                "confidence": 0.95,
+                "importance": 85,
+                "content": memory_summary,
+            }]
+            if memory_summary
+            else []
+        )
 
-        critique = await self.self_critique(hypotheses, ranked_evidence)
-        reasoning_steps.append("Completed self-critique check")
+        merged_evidence = (
+            await self.merge_evidence(
+                memories,
+                knowledge,
+                graph_results,
+                world_state,
+            )
+        )
 
-        base_confidence = await self.confidence_score(ranked_evidence, critique)
+        evidence = (
+            await self.multi_hop_reasoning(
+                query,
+                merged_evidence,
+            )
+        )
+
+        ranked_evidence = (
+            await self.rank_evidence(
+                evidence
+            )
+        )
+
+        hypotheses = (
+            await self.generate_hypotheses(
+                query,
+                ranked_evidence,
+            )
+        )
+
+        reasoning_steps.append(
+            f"Generated {len(hypotheses)} hypotheses"
+        )
+
+        simulations = (
+            await self.simulate_future(
+                [],
+                goal,
+            )
+        )
+
+        reasoning_steps.append(
+            "Simulated future execution paths"
+        )
+
+        critique = (
+            await self.self_critique(
+                hypotheses,
+                ranked_evidence,
+            )
+        )
+
+        reasoning_steps.append(
+            "Completed self-critique check"
+        )
+
+        base_confidence = (
+            await self.confidence_score(
+                ranked_evidence,
+                critique,
+            )
+        )
+
         confidence = base_confidence
 
-        if feedback["needs_replanning"]:
+        if feedback[
+            "needs_replanning"
+        ]:
             confidence *= 0.85
 
-        reasoning_steps.append(f"Calculated advanced confidence score: {confidence:.2f}")
+        reasoning_steps.append(
+            f"Calculated advanced confidence score: "
+            f"{confidence:.2f}"
+        )
 
-        action_predictions = await self.action_prediction(goal, context)
-        reasoning_steps.append("Predicted follow-up actions")
+        action_predictions = (
+            await self.action_prediction(
+                goal,
+                context,
+            )
+        )
 
-        best_path = await self.choose_best_reasoning(hypotheses, simulations)
-        reasoning_steps.append(f"Selected best reasoning path: {best_path}")
+        reasoning_steps.append(
+            "Predicted follow-up actions"
+        )
 
-        conflicts = await self.detect_conflicts(ranked_evidence)
+        best_path = (
+            await self.choose_best_reasoning(
+                hypotheses,
+                simulations,
+            )
+        )
+
+        reasoning_steps.append(
+            f"Selected best reasoning path: {best_path}"
+        )
+
+        conflicts = (
+            await self.detect_conflicts(
+                ranked_evidence
+            )
+        )
 
         plan = []
+
         if requires_planning:
-            if self.planner and hasattr(self.planner, "create_plan"):
+
+            if (
+                self.planner
+                and hasattr(
+                    self.planner,
+                    "create_plan",
+                )
+            ):
                 try:
-                    task_plan = await self.planner.create_plan(query, context)
-                    if task_plan and hasattr(task_plan, "tasks"):
+
+                    task_plan = (
+                        await self.planner.create_plan(
+                            query,
+                            context,
+                        )
+                    )
+
+                    if (
+                        task_plan
+                        and hasattr(
+                            task_plan,
+                            "tasks",
+                        )
+                    ):
                         plan = task_plan.tasks
-                        reasoning_steps.append("Generated structured plan")
+
+                        reasoning_steps.append(
+                            "Generated structured plan"
+                        )
+
                 except Exception:
-                    logger.exception("[ReasoningEngine] Task planning failed.")
+                    logger.exception(
+                        "[ReasoningEngine] Task planning failed."
+                    )
 
         answer = None
+
         if requires_clarification:
-            answer = "Could you please clarify your request with a bit more detail?"
+            answer = (
+                "Could you please clarify your request "
+                "with a bit more detail?"
+            )
 
-        if "summarize" in query.lower() or "summary" in query.lower():
-            conversation = context.get("conversation_history", [])
+        if (
+            "summarize" in query.lower()
+            or "summary" in query.lower()
+        ):
+
+            conversation = context.get(
+                "conversation_history",
+                [],
+            )
+
             goal_obj = None
-            if self.goal_manager and hasattr(self.goal_manager, "current_goal"):
-                goal_obj = self.goal_manager.current_goal()
 
-            use_memory = self._as_bool(self._decision_value(decision, "use_memory", False)) if decision else False
+            if (
+                self.goal_manager
+                and hasattr(
+                    self.goal_manager,
+                    "current_goal",
+                )
+            ):
+                goal_obj = (
+                    self.goal_manager.current_goal()
+                )
+
+            use_memory = (
+                self._as_bool(
+                    self._decision_value(
+                        decision,
+                        "use_memory",
+                        False,
+                    )
+                )
+                if decision
+                else False
+            )
 
             summary_memories = []
-            if use_memory and hasattr(self, "memory_engine") and self.memory_engine:
-                if hasattr(self.memory_engine, "retrieve"):
-                    summary_memories = await self.memory_engine.retrieve(query)
+
+            if (
+                use_memory
+                and hasattr(
+                    self,
+                    "memory_engine",
+                )
+                and self.memory_engine
+            ):
+                if hasattr(
+                    self.memory_engine,
+                    "retrieve",
+                ):
+                    summary_memories = (
+                        await self.memory_engine.retrieve(
+                            query
+                        )
+                    )
 
             summary_context = {
                 "conversation": conversation,
@@ -2794,56 +3999,159 @@ Return JSON:
                 "memories": summary_memories,
             }
 
-            if self.llm_router and hasattr(self.llm_router, "chat"):
+            if (
+                self.llm_router
+                and hasattr(
+                    self.llm_router,
+                    "chat",
+                )
+            ):
                 try:
+
                     summary_prompt = (
-                        f"Summarize what has been done so far based on context:\n"
+                        "Summarize what has been done so far "
+                        "based on context:\n"
                         f"Goal: {getattr(goal_obj, 'title', 'None')}\n"
                         f"Progress: {getattr(goal_obj, 'progress', 0.0)}%\n"
                         f"Conversation: {conversation}\n"
                         f"Memories: {summary_memories}"
                     )
-                    reply = await self.llm_router.chat([{"role": "user", "content": summary_prompt}])
-                    if isinstance(reply, str) and reply.strip():
+
+                    reply = (
+                        await self.llm_router.chat(
+                            [
+                                {
+                                    "role": "user",
+                                    "content": summary_prompt,
+                                }
+                            ]
+                        )
+                    )
+
+                    if (
+                        isinstance(
+                            reply,
+                            str,
+                        )
+                        and reply.strip()
+                    ):
                         answer = reply.strip()
+
                     else:
                         answer = (
-                            "Here is the summary of your current "
-                            "project and progress."
+                            "Here is the summary of your "
+                            "current project and progress."
                         )
+
                 except Exception:
-                    answer = f"Current Goal: {getattr(goal_obj, 'title', 'None')} (Progress: {getattr(goal_obj, 'progress', 0.0)}%)"
+
+                    answer = (
+                        f"Current Goal: "
+                        f"{getattr(goal_obj, 'title', 'None')} "
+                        f"(Progress: "
+                        f"{getattr(goal_obj, 'progress', 0.0)}%)"
+                    )
 
         action = "chat"
-        if goal == "remember" or goal == "delete":
+
+        if goal in (
+            "remember",
+            "delete",
+        ):
             action = "memory_conversation"
+
         elif goal == "plan":
             action = "planner"
 
-        # Respect authoritative decision action if provided
-        decision_action = self._decision_value(decision, "action")
+        decision_action = (
+            self._decision_value(
+                decision,
+                "action",
+            )
+        )
+
         if decision_action:
-            action = str(decision_action)
+
+            action = str(
+                decision_action
+            )
+
             if action == "planner":
+
                 requires_planning = True
+
                 if "planning" not in selected_agents:
-                    selected_agents.append("planning")
+                    selected_agents.append(
+                        "planning"
+                    )
 
-        reasoning_time = round(time.time() - start_time, 3)
+        reasoning_time = round(
+            time.time() - start_time,
+            3,
+        )
 
-        memory_used = bool(memories)
-        graph_used = bool(graph_results)
-        world_used = bool(world_state)
+        memory_used = bool(
+            memories
+        )
+
+        graph_used = bool(
+            graph_results
+        )
+
+        world_used = bool(
+            world_state
+        )
+
         web_used = requires_web
-        planner_used = bool(plan)
-        tool_used = bool(agent_results)
 
-        mem_conf = max([m.get("confidence", 0.5) for m in memories], default=0.5) if memories else 0.5
-        know_conf = max([k.get("confidence", 0.5) for k in knowledge], default=0.5) if knowledge else 0.5
-        world_conf = 0.90 if world_state else 0.5
+        planner_used = bool(
+            plan
+        )
 
-        response_to_store = answer or (ranked_evidence[0].get("content") if ranked_evidence else "Done.")
-        response_to_store = self._sanitize_response_text(response_to_store)
+        tool_used = bool(
+            agent_results
+        )
+
+        mem_conf = (
+            max(
+                [
+                    m.get(
+                        "confidence",
+                        0.5,
+                    )
+                    for m in memories
+                ],
+                default=0.5,
+            )
+            if memories
+            else 0.5
+        )
+
+        # Knowledge is intentionally not locally retrieved here.
+        know_conf = 0.0
+
+        world_conf = (
+            0.90
+            if world_state
+            else 0.5
+        )
+
+        response_to_store = (
+            answer
+            or (
+                ranked_evidence[0].get(
+                    "content"
+                )
+                if ranked_evidence
+                else "Done."
+            )
+        )
+
+        response_to_store = (
+            self._sanitize_response_text(
+                response_to_store
+            )
+        )
 
         if (
             next_task
@@ -2852,39 +4160,72 @@ Return JSON:
             and len(response_to_store) < 800
         ):
             response_to_store += (
-                f"\n\nA good next step would be to "
+                "\n\nA good next step would be to "
                 f"{getattr(next_task, 'title', 'proceed').lower()}."
             )
 
-        response_to_store = self._sanitize_response_text(response_to_store)
+        response_to_store = (
+            self._sanitize_response_text(
+                response_to_store
+            )
+        )
 
-        active_thread = conv_tracking.get("thread")
+        active_thread = (
+            conv_tracking.get(
+                "thread"
+            )
+        )
 
         if active_thread:
-            active_thread["last_user"] = raw_query
-            active_thread["last_resolved_query"] = query
-            active_thread["last_assistant"] = response_to_store
-            active_thread["last_result"] = response_to_store
 
-            active_thread.setdefault("history", [])
+            active_thread[
+                "last_user"
+            ] = raw_query
 
-            active_thread["history"].append({
+            active_thread[
+                "last_resolved_query"
+            ] = query
+
+            active_thread[
+                "last_assistant"
+            ] = response_to_store
+
+            active_thread[
+                "last_result"
+            ] = response_to_store
+
+            active_thread.setdefault(
+                "history",
+                [],
+            )
+
+            active_thread[
+                "history"
+            ].append({
                 "role": "user",
                 "content": raw_query,
             })
 
-            active_thread["history"].append({
+            active_thread[
+                "history"
+            ].append({
                 "role": "assistant",
                 "content": response_to_store,
             })
 
-            active_thread["history"] = (
-                active_thread["history"][-20:]
+            active_thread[
+                "history"
+            ] = (
+                active_thread[
+                    "history"
+                ][-20:]
             )
 
-        critique_result = self._self_critique(
-            response_to_store,
-            context,
+        critique_result = (
+            self._self_critique(
+                response_to_store,
+                context,
+            )
         )
 
         logger.info(
@@ -2892,15 +4233,19 @@ Return JSON:
             critique_result["score"],
         )
 
-        if critique_result["score"] < 0.5:
+        if critique_result[
+            "score"
+        ] < 0.5:
             logger.warning(
                 "[Reasoning] Low quality answer detected."
             )
 
-        final_confidence = self._calculate_final_confidence(
-            confidence,
-            feedback,
-            critique_result,
+        final_confidence = (
+            self._calculate_final_confidence(
+                confidence,
+                feedback,
+                critique_result,
+            )
         )
 
         confidence = final_confidence
@@ -2913,10 +4258,18 @@ Return JSON:
         metadata = {
             "intent": intent.intent_type,
             "intent_confidence": intent.confidence,
-            "intent_requires_memory": intent.requires_memory,
-            "intent_requires_documents": intent.requires_documents,
-            "intent_requires_web": intent.requires_web,
-            "intent_requires_reasoning": intent.requires_reasoning,
+            "intent_requires_memory": (
+                intent.requires_memory
+            ),
+            "intent_requires_documents": (
+                intent.requires_documents
+            ),
+            "intent_requires_web": (
+                intent.requires_web
+            ),
+            "intent_requires_reasoning": (
+                intent.requires_reasoning
+            ),
             "reasoning_time": reasoning_time,
             "planner_used": planner_used,
             "memory_used": memory_used,
@@ -2924,29 +4277,80 @@ Return JSON:
             "world_used": world_used,
             "web_used": web_used,
             "tool_used": tool_used,
+
+            # Knowledge retrieval is delegated to KnowledgeManager.
+            "knowledge_retrieval_owner": (
+                "knowledge_manager"
+            ),
+
+            "reasoning_engine_knowledge_retrieval": (
+                False
+            ),
+
             "confidence_breakdown": {
                 "memory": mem_conf,
                 "knowledge": know_conf,
                 "world": world_conf,
             },
-            "source": ranked_evidence[0].get("source") if ranked_evidence else "chat",
-            "response_depth": context.get("response", {}).get("depth", "normal"),
+
+            "source": (
+                ranked_evidence[0].get(
+                    "source"
+                )
+                if ranked_evidence
+                else "chat"
+            ),
+
+            "response_depth": (
+                context.get(
+                    "response",
+                    {},
+                ).get(
+                    "depth",
+                    "normal",
+                )
+            ),
+
             "conflicts": conflicts,
             "reasoning_steps": reasoning_steps,
             "best_path": best_path,
             "strategy": strategy,
             "self_critique": critique_result,
             "final_confidence": final_confidence,
+
             "conversation": {
-                "active_thread_id": conv_tracking.get("thread_id"),
-                "active_topic": conv_tracking.get("active_topic"),
-                "active_subject": conv_tracking.get("active_subject"),
-                "contextual_followup": self._is_contextual_followup(query),
-                "history": conv_tracking.get("recent_history", []),
+                "active_thread_id": (
+                    conv_tracking.get(
+                        "thread_id"
+                    )
+                ),
+                "active_topic": (
+                    conv_tracking.get(
+                        "active_topic"
+                    )
+                ),
+                "active_subject": (
+                    conv_tracking.get(
+                        "active_subject"
+                    )
+                ),
+                "contextual_followup": (
+                    self._is_contextual_followup(
+                        query
+                    )
+                ),
+                "history": (
+                    conv_tracking.get(
+                        "recent_history",
+                        [],
+                    )
+                ),
             },
         }
 
-        metadata["decision_contract"] = self._build_decision_contract(
+        metadata[
+            "decision_contract"
+        ] = self._build_decision_contract(
             intent=intent,
             strategy=strategy,
             goal=goal,
@@ -2961,27 +4365,86 @@ Return JSON:
             action=action,
         )
 
-        if feedback["needs_replanning"]:
-            metadata["replan"] = True
+        if feedback[
+            "needs_replanning"
+        ]:
+            metadata[
+                "replan"
+            ] = True
 
-        trace = await self.build_reasoning_trace(reasoning_steps)
+        trace = (
+            await self.build_reasoning_trace(
+                reasoning_steps
+            )
+        )
 
         logger.info(
             "[ReasoningEngine] Mode=%s Agents=%s Memory=%s Planner=%s",
             mode,
             selected_agents,
-            self._as_bool(self._decision_value(decision, "use_memory", False)) if decision else False,
-            self._as_bool(self._decision_value(decision, "use_planner", False)) if decision else False,
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_memory",
+                    False,
+                )
+            )
+            if decision
+            else False,
+            self._as_bool(
+                self._decision_value(
+                    decision,
+                    "use_planner",
+                    False,
+                )
+            )
+            if decision
+            else False,
         )
 
-        if self.working_memory and context.get("update_working_memory_in_reasoning", False):
-            topic_str = conv_tracking.get("active_topic", conv_tracking.get("topic", ""))
-            if topic_str and confidence > 0.7 and hasattr(self.working_memory, "set_topic"):
-                self.working_memory.set_topic(topic_str)
-            if hasattr(self.working_memory, "remember_exchange"):
-                self.working_memory.remember_exchange(raw_query, response_to_store)
+        if (
+            self.working_memory
+            and context.get(
+                "update_working_memory_in_reasoning",
+                False,
+            )
+        ):
 
-        response_strategy = await self.decide_response_strategy(goal, context)
+            topic_str = conv_tracking.get(
+                "active_topic",
+                conv_tracking.get(
+                    "topic",
+                    "",
+                ),
+            )
+
+            if (
+                topic_str
+                and confidence > 0.7
+                and hasattr(
+                    self.working_memory,
+                    "set_topic",
+                )
+            ):
+                self.working_memory.set_topic(
+                    topic_str
+                )
+
+            if hasattr(
+                self.working_memory,
+                "remember_exchange",
+            ):
+                self.working_memory.remember_exchange(
+                    raw_query,
+                    response_to_store,
+                )
+
+        response_strategy = (
+            await self.decide_response_strategy(
+                goal,
+                context,
+            )
+        )
 
         return ReasoningResult(
             goal=goal,
@@ -2995,17 +4458,26 @@ Return JSON:
             graph_results=graph_results,
             world_state=world_state,
             metadata=metadata,
-            answer=response_to_store if answer else answer,
+            answer=(
+                response_to_store
+                if answer
+                else answer
+            ),
             requires_memory=requires_memory,
             requires_documents=requires_documents,
             requires_tools=requires_tools,
             requires_web=requires_web,
             requires_planning=requires_planning,
-            requires_clarification=requires_clarification,
+            requires_clarification=(
+                requires_clarification
+            ),
             resolved_query=query,
             topic=conv_tracking.get(
                 "active_topic",
-                conv_tracking.get("topic", ""),
+                conv_tracking.get(
+                    "topic",
+                    "",
+                ),
             ),
             working_memory=working_memory,
             response_strategy=response_strategy,
@@ -3017,7 +4489,11 @@ Return JSON:
             critique=critique,
             action_predictions=action_predictions,
             primary_action=action,
-            reasoning=f"Advanced resolution of objective '{goal}' under mode '{mode}' with confidence {confidence:.2f}.",
+            reasoning=(
+                f"Advanced resolution of objective "
+                f"'{goal}' under mode '{mode}' "
+                f"with confidence {confidence:.2f}."
+            ),
             workflow=workflow,
-            agent_outputs=agent_outputs
+            agent_outputs=agent_outputs,
         )
