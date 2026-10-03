@@ -2,14 +2,18 @@ import logging
 import random
 import re
 from typing import Dict, Any
+
 from personality.response import SystemResponse
 from personality.conversation_style import ConversationStyle
 from personality.addressing import AddressingEngine
 
+
 logger = logging.getLogger("aria")
+
 
 class ResponseSource:
     """Constants for standardized routing of response sources."""
+
     CHAT = "chat"
     MEMORY = "memory"
     MEMORY_CONVERSATION = "memory_conversation"
@@ -22,6 +26,20 @@ class ResponseSource:
     PLANNER = "planner_executor"
     GREETING = "greeting_fast_path"
     PLANNER_CONVERSATIONAL = "planner_conversational"
+
+    # ---------------------------------------------------------
+    # LOCAL KNOWLEDGE
+    # ---------------------------------------------------------
+    #
+    # These responses have already been resolved by ARIA's
+    # KnowledgeManager / local knowledge subsystem.
+    #
+    # They MUST NOT be sent to the external LLM personality
+    # layer merely for rewriting.
+    #
+    KNOWLEDGE = "knowledge"
+    LOCAL_KNOWLEDGE = "local_knowledge"
+    KNOWLEDGE_MANAGER = "knowledge_manager"
 
 
 GLOBAL_ARIA_STYLE = """
@@ -90,8 +108,11 @@ Return ONLY the final user-facing response.
 
 
 class PersonalityEngine:
+
     def __init__(self, llm_router=None):
+
         self.llm_router = llm_router
+
         self.addressing = AddressingEngine()
 
         self.conversation_style = {
@@ -99,6 +120,10 @@ class PersonalityEngine:
             "verbosity": "balanced",
             "humor": False,
         }
+
+    # =========================================================
+    # STYLE
+    # =========================================================
 
     def update_style(
         self,
@@ -120,69 +145,336 @@ class PersonalityEngine:
 
         return self.conversation_style
 
+    # =========================================================
+    # LOCAL KNOWLEDGE DETECTION
+    # =========================================================
+
+    @staticmethod
+    def _is_local_knowledge_response(
+        source: str,
+        data: Any,
+    ) -> bool:
+        """
+        Determine whether a response was produced by ARIA's
+        local knowledge subsystem.
+
+        Local knowledge answers are already authoritative outputs
+        of the KnowledgeManager and must not be passed through
+        an external LLM simply for personality rewriting.
+
+        This intentionally recognizes multiple source names so
+        the personality layer remains compatible with different
+        KnowledgeManager routing paths.
+        """
+
+        normalized_source = str(
+            source or ""
+        ).strip().lower()
+
+        local_sources = {
+            ResponseSource.KNOWLEDGE,
+            ResponseSource.LOCAL_KNOWLEDGE,
+            ResponseSource.KNOWLEDGE_MANAGER,
+            "knowledge",
+            "local_knowledge",
+            "knowledge_manager",
+            "knowledge_database",
+            "local_answer",
+            "local_knowledge_answer",
+            "knowledge_result",
+        }
+
+        if normalized_source in local_sources:
+            return True
+
+        if not isinstance(data, dict):
+            return False
+
+        # -----------------------------------------------------
+        # Explicit routing metadata
+        # -----------------------------------------------------
+
+        for key in (
+            "source",
+            "response_source",
+            "answer_source",
+            "knowledge_source",
+            "owner",
+            "answer_owner",
+        ):
+
+            value = str(
+                data.get(key, "")
+            ).strip().lower()
+
+            if value in local_sources:
+                return True
+
+        # -----------------------------------------------------
+        # KnowledgeManager metadata
+        # -----------------------------------------------------
+
+        if data.get(
+            "local_knowledge"
+        ) is True:
+            return True
+
+        if data.get(
+            "knowledge_manager"
+        ) is True:
+            return True
+
+        if data.get(
+            "external_llm_synthesis"
+        ) is False and (
+            data.get("knowledge")
+            or data.get("answer")
+            or data.get("response")
+        ):
+            return True
+
+        return False
+
+    # =========================================================
+    # MAIN PERSONALITY PIPELINE
+    # =========================================================
+
     async def apply_personality(
         self,
         session_id: str,
         user_text: str,
         response: SystemResponse,
     ) -> str:
-        """Transforms structured SystemResponse payloads into natural, contextual language."""
+        """
+        Transforms structured SystemResponse payloads into
+        natural, contextual language.
+
+        IMPORTANT:
+        Local knowledge, memory, deterministic, tool, document,
+        and other authoritative responses bypass the external
+        personality LLM.
+        """
+
         try:
+
             if not response.success:
-                return self._format_error(response.error)
+
+                return self._format_error(
+                    response.error
+                )
 
             data = response.data or {}
-            source = response.source
-            intent = data.get("intent")
 
-            # Route to specific private formatters
-            if source == ResponseSource.TIME and "time" in data:
-                reply = f"The current time is {data['time']}, Sir."
-            elif source == ResponseSource.DATE and "date" in data:
-                reply = f"Today is {data['date']}, Sir."
-            elif source in [ResponseSource.WEATHER, ResponseSource.SEARCH] and "message" in data:
-                reply = str(data["message"])
-            elif source == ResponseSource.CHAT and "response" in data:
-                reply = str(data["response"])
+            source = response.source
+
+            intent = data.get(
+                "intent"
+            )
+
+            # -------------------------------------------------
+            # LOCAL KNOWLEDGE HARD GATE
+            # -------------------------------------------------
+            #
+            # This MUST happen before any universal personality
+            # LLM call.
+            #
+            # KnowledgeManager already owns the answer.
+            #
+            # Example:
+            #
+            #   User:
+            #       What does TCP provide?
+            #
+            #   KnowledgeManager:
+            #       local answer
+            #
+            #   PersonalityEngine:
+            #       return local answer directly
+            #
+            # NOT:
+            #
+            #   local answer
+            #       ↓
+            #   Groq
+            #       ↓
+            #   Gemini
+            #       ↓
+            #   OpenRouter
+            #       ↓
+            #   Mistral
+            #
+            # -------------------------------------------------
+
+            is_local_knowledge = (
+                self._is_local_knowledge_response(
+                    source,
+                    data,
+                )
+            )
+
+            if is_local_knowledge:
+
+                logger.info(
+                    "[Personality] Local knowledge response "
+                    "detected; external LLM personality pass skipped."
+                )
+
+                reply = self._extract_response(
+                    data
+                )
+
+                if not reply:
+
+                    reply = self._format_fallback(
+                        data
+                    )
+
+                return self._post_process(
+                    reply
+                )
+
+            # -------------------------------------------------
+            # PRIVATE FORMATTERS
+            # -------------------------------------------------
+
+            if (
+                source == ResponseSource.TIME
+                and "time" in data
+            ):
+
+                reply = (
+                    f"The current time is "
+                    f"{data['time']}, Sir."
+                )
+
+            elif (
+                source == ResponseSource.DATE
+                and "date" in data
+            ):
+
+                reply = (
+                    f"Today is "
+                    f"{data['date']}, Sir."
+                )
+
+            elif (
+                source in [
+                    ResponseSource.WEATHER,
+                    ResponseSource.SEARCH,
+                ]
+                and "message" in data
+            ):
+
+                reply = str(
+                    data["message"]
+                )
+
+            elif (
+                source == ResponseSource.CHAT
+                and "response" in data
+            ):
+
+                reply = str(
+                    data["response"]
+                )
+
             elif source == "agent":
+
                 if "response" in data:
-                    reply = str(data["response"])
+
+                    reply = str(
+                        data["response"]
+                    )
+
                 elif "message" in data:
-                    reply = str(data["message"])
+
+                    reply = str(
+                        data["message"]
+                    )
+
                 else:
-                    reply = self._format_fallback(data)
-            elif source == ResponseSource.CALCULATOR and "result" in data:
-                reply = f"The answer is {data['result']}, Sir."
-            elif source in [ResponseSource.GREETING, ResponseSource.PLANNER_CONVERSATIONAL] or intent in ["greeting", "conversational"]:
-                reply = self._format_greeting(user_text)
+
+                    reply = self._format_fallback(
+                        data
+                    )
+
+            elif (
+                source == ResponseSource.CALCULATOR
+                and "result" in data
+            ):
+
+                reply = (
+                    f"The answer is "
+                    f"{data['result']}, Sir."
+                )
+
+            elif (
+                source in [
+                    ResponseSource.GREETING,
+                    ResponseSource.PLANNER_CONVERSATIONAL,
+                ]
+                or intent in [
+                    "greeting",
+                    "conversational",
+                ]
+            ):
+
+                reply = self._format_greeting(
+                    user_text
+                )
+
             elif source in [
                 ResponseSource.MEMORY,
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
                 "memory_profile",
             ]:
-                reply = self._format_memory(data)
-            elif source == "conversation":
-                reply = str(
-                    data.get("response")
-                    or data.get("message")
-                    or self._format_fallback(data)
-                )
-            elif source in {"capability", "llm_unavailable"}:
-                reply = str(
-                    data.get("response")
-                    or data.get("message")
-                    or self._format_fallback(data)
-                )
-            elif source == ResponseSource.PLANNER:
-                reply = self._format_planner(data)
-            elif source == "action_manager":
-                reply = self._format_action(data)
-            else:
-                reply = self._format_fallback(data)
 
-            # Apply conversation styling only to normal conversational replies.
-            # Memory/profile responses are already structured and must remain intact.
+                reply = self._format_memory(
+                    data
+                )
+
+            elif source == "conversation":
+
+                reply = str(
+                    data.get("response")
+                    or data.get("message")
+                    or self._format_fallback(data)
+                )
+
+            elif source in [
+                "capability",
+                "llm_unavailable",
+            ]:
+
+                reply = str(
+                    data.get("response")
+                    or data.get("message")
+                    or self._format_fallback(data)
+                )
+
+            elif source == ResponseSource.PLANNER:
+
+                reply = self._format_planner(
+                    data
+                )
+
+            elif source == "action_manager":
+
+                reply = self._format_action(
+                    data
+                )
+
+            else:
+
+                reply = self._format_fallback(
+                    data
+                )
+
+            # -------------------------------------------------
+            # CONVERSATION STYLE
+            # -------------------------------------------------
+
             if source not in {
                 ResponseSource.MEMORY,
                 ResponseSource.PROFILE,
@@ -191,49 +483,49 @@ class PersonalityEngine:
                 "conversation",
                 "capability",
                 "llm_unavailable",
+                ResponseSource.KNOWLEDGE,
+                ResponseSource.LOCAL_KNOWLEDGE,
+                ResponseSource.KNOWLEDGE_MANAGER,
             }:
-                reply = ConversationStyle.apply(reply)
-                reply = ConversationStyle.follow_up(reply, user_text)
 
-            # ---------------------------------------------------------
-            # FACTUAL / ROUTED RESPONSES MUST NOT BE REINTERPRETED
-            # ---------------------------------------------------------
-            #
-            # These responses already contain the authoritative result
-            # produced by ARIA's routing, memory, tools, planners, etc.
-            #
-            # The universal personality LLM is presentation-only and must
-            # never be allowed to replace a correct answer with a different
-            # answer or claim that known information is unknown.
-            #
-            # This is especially important for memory questions such as:
-            # "What is my favorite color?"
-            # "What is my favorite language?"
-            #
-            # Example:
-            #   Draft: "Your favorite color is blue."
-            #   MUST remain: "Your favorite color is blue."
-            #
-            # The personality layer must never turn it into:
-            #   "I don't have that information."
-            # ---------------------------------------------------------
+                reply = ConversationStyle.apply(
+                    reply
+                )
+
+                reply = ConversationStyle.follow_up(
+                    reply,
+                    user_text,
+                )
+
+            # -------------------------------------------------
+            # PROTECTED SOURCES
+            # -------------------------------------------------
 
             protected_sources = {
+
                 ResponseSource.MEMORY,
                 ResponseSource.PROFILE,
                 ResponseSource.MEMORY_CONVERSATION,
                 "memory_profile",
+
                 "conversation",
                 "capability",
                 "llm_unavailable",
+
                 ResponseSource.TIME,
                 ResponseSource.DATE,
                 ResponseSource.WEATHER,
                 ResponseSource.SEARCH,
                 ResponseSource.CALCULATOR,
+
                 ResponseSource.PLANNER,
                 ResponseSource.PLANNER_CONVERSATIONAL,
                 ResponseSource.GREETING,
+
+                ResponseSource.KNOWLEDGE,
+                ResponseSource.LOCAL_KNOWLEDGE,
+                ResponseSource.KNOWLEDGE_MANAGER,
+
                 "fast_router",
                 "execution_router",
                 "coding_engine",
@@ -242,15 +534,18 @@ class PersonalityEngine:
             }
 
             if source in protected_sources:
-                return self._post_process(reply)
 
-            # ---------------------------------------------------------
+                return self._post_process(
+                    reply
+                )
+
+            # -------------------------------------------------
             # UNIVERSAL ARIA PERSONALITY PASS
-            # ---------------------------------------------------------
+            # -------------------------------------------------
             #
-            # Only genuinely conversational responses reach the LLM
-            # personality layer.
-            # ---------------------------------------------------------
+            # Only genuinely conversational responses reach
+            # the external personality model.
+            # -------------------------------------------------
 
             reply = await self._apply_aria_voice(
                 user_text=user_text,
@@ -262,63 +557,182 @@ class PersonalityEngine:
                 reply,
             )
 
-            return self._post_process(reply)
+            return self._post_process(
+                reply
+            )
 
         except Exception as e:
-            logger.exception("[PersonalityEngine ERROR] Failed to format response: %s", e)
-            return "Operation completed, though a formatting error occurred, Sir."
 
-    def _format_error(self, error_msg: str) -> str:
-        error_msg = str(error_msg or "").strip()
+            logger.exception(
+                "[PersonalityEngine ERROR] "
+                "Failed to format response: %s",
+                e,
+            )
+
+            return (
+                "Operation completed, "
+                "though a formatting error occurred, Sir."
+            )
+
+    # =========================================================
+    # RESPONSE EXTRACTION
+    # =========================================================
+
+    @staticmethod
+    def _extract_response(
+        data: Any,
+    ) -> str:
+        """
+        Extract the already-generated user-facing answer from
+        a structured local knowledge response.
+
+        Priority:
+            response
+            answer
+            message
+            content
+            text
+            result
+        """
+
+        if isinstance(data, str):
+
+            return data.strip()
+
+        if not isinstance(data, dict):
+
+            return ""
+
+        for key in (
+            "response",
+            "answer",
+            "message",
+            "content",
+            "text",
+            "result",
+        ):
+
+            value = data.get(
+                key
+            )
+
+            if isinstance(
+                value,
+                str,
+            ) and value.strip():
+
+                return value.strip()
+
+        return ""
+
+    # =========================================================
+    # ERROR FORMAT
+    # =========================================================
+
+    def _format_error(
+        self,
+        error_msg: str,
+    ) -> str:
+
+        error_msg = str(
+            error_msg or ""
+        ).strip()
+
         lowered = error_msg.lower()
 
-        if "no profile" in lowered or "no relevant" in lowered:
-            return "I couldn't find anything matching that request, Sir."
+        if (
+            "no profile" in lowered
+            or "no relevant" in lowered
+        ):
+
+            return (
+                "I couldn't find anything "
+                "matching that request, Sir."
+            )
 
         if (
             "429" in lowered
             or "too many requests" in lowered
             or "rate limit" in lowered
             or "quota" in lowered
-            or "all configured llm providers failed" in lowered
+            or "all configured llm providers failed"
+            in lowered
         ):
+
             return (
-                "My AI services are temporarily rate-limited, Sir. "
-                "Try again shortly."
+                "My AI services are temporarily "
+                "rate-limited, Sir. Try again shortly."
             )
 
         if not error_msg:
+
             return (
-                "I couldn't complete that request just now, Sir. "
-                "Try again shortly."
+                "I couldn't complete that request "
+                "just now, Sir. Try again shortly."
             )
 
         logger.error(
             "[Personality] Internal operation error: %s",
-            error_msg
+            error_msg,
         )
 
-        return "I couldn't complete that operation, Sir."
+        return (
+            "I couldn't complete that operation, Sir."
+        )
 
-    def _format_greeting(self, user_text: str) -> str:
+    # =========================================================
+    # GREETING
+    # =========================================================
+
+    def _format_greeting(
+        self,
+        user_text: str,
+    ) -> str:
+
         query = user_text.lower()
+
         if "how are you" in query:
-            return "All systems operational and fully optimized, Sir. How may I assist you today?"
+
+            return (
+                "All systems operational and fully "
+                "optimized, Sir. How may I assist "
+                "you today?"
+            )
+
         elif "morning" in query:
-            return "Good morning, Sir. All operational parameters are nominal."
+
+            return (
+                "Good morning, Sir. All operational "
+                "parameters are nominal."
+            )
+
         elif "evening" in query:
-            return "Good evening, Sir. Ready for your instructions."
+
+            return (
+                "Good evening, Sir. Ready for your "
+                "instructions."
+            )
 
         responses = [
             "Greetings, Sir. ARIA operational and ready.",
             "Good to see you again, Sir.",
             "At your service, Sir.",
             "Systems online. How may I assist?",
-            "Ready whenever you are, Sir."
+            "Ready whenever you are, Sir.",
         ]
-        return random.choice(responses)
 
-    def _format_memory(self, data: Any) -> str:
+        return random.choice(
+            responses
+        )
+
+    # =========================================================
+    # MEMORY
+    # =========================================================
+
+    def _format_memory(
+        self,
+        data: Any,
+    ) -> str:
         """
         Convert memory records into a natural user-facing response.
 
@@ -328,21 +742,47 @@ class PersonalityEngine:
         Never expose raw internal memory dictionaries.
         """
 
-        data_dict = data if isinstance(data, dict) else {}
+        data_dict = (
+            data
+            if isinstance(data, dict)
+            else {}
+        )
 
-        message = data_dict.get("message")
-        if isinstance(message, str) and message.strip():
+        message = data_dict.get(
+            "message"
+        )
+
+        if (
+            isinstance(message, str)
+            and message.strip()
+        ):
+
             return message.strip()
 
-        memories = data_dict.get("memories", [])
+        memories = data_dict.get(
+            "memories",
+            [],
+        )
 
-        if not isinstance(memories, list):
-            return "I don't have any relevant memories about you yet."
+        if not isinstance(
+            memories,
+            list,
+        ):
+
+            return (
+                "I don't have any relevant "
+                "memories about you yet."
+            )
 
         normalized = {}
 
         for memory in memories:
-            if not isinstance(memory, dict):
+
+            if not isinstance(
+                memory,
+                dict,
+            ):
+
                 continue
 
             key = str(
@@ -360,11 +800,15 @@ class PersonalityEngine:
             )
 
             if not key or value is None:
+
                 continue
 
-            value = str(value).strip()
+            value = str(
+                value
+            ).strip()
 
             if not value:
+
                 continue
 
             if key.lower() in {
@@ -374,12 +818,17 @@ class PersonalityEngine:
                 "embedding",
                 "metadata",
             }:
+
                 continue
 
             normalized[key] = value
 
         if not normalized:
-            return "I don't have any relevant memories about you yet."
+
+            return (
+                "I don't have any relevant "
+                "memories about you yet."
+            )
 
         labels = {
             "name": "name",
@@ -429,20 +878,37 @@ class PersonalityEngine:
         }
 
         if not filtered:
-            return "I don't have any relevant memories about you yet."
+
+            return (
+                "I don't have any relevant "
+                "memories about you yet."
+            )
 
         if len(filtered) == 1:
-            key, value = next(iter(filtered.items()))
+
+            key, value = next(
+                iter(
+                    filtered.items()
+                )
+            )
 
             label = labels.get(
                 key,
-                key.replace("_", " ").strip().lower()
+                key.replace(
+                    "_",
+                    " ",
+                ).strip().lower(),
             )
 
             if key == "name":
-                return f"Your name is {value}."
 
-            return f"Your {label} is {value}."
+                return (
+                    f"Your name is {value}."
+                )
+
+            return (
+                f"Your {label} is {value}."
+            )
 
         priority = [
             "name",
@@ -473,87 +939,146 @@ class PersonalityEngine:
         ordered_keys = []
 
         for key in priority:
-            if key in filtered and key not in ordered_keys:
-                ordered_keys.append(key)
+
+            if (
+                key in filtered
+                and key not in ordered_keys
+            ):
+
+                ordered_keys.append(
+                    key
+                )
 
         for key in filtered:
+
             if key not in ordered_keys:
-                ordered_keys.append(key)
+
+                ordered_keys.append(
+                    key
+                )
 
         lines = []
 
         for key in ordered_keys:
+
             value = filtered[key]
+
             label = labels.get(
                 key,
-                key.replace("_", " ").capitalize()
+                key.replace(
+                    "_",
+                    " ",
+                ).capitalize(),
             )
-            lines.append(f"• {label.capitalize()}: {value}")
+
+            lines.append(
+                f"• {label.capitalize()}: {value}"
+            )
 
         if not lines:
-            return "I don't have any relevant memories about you yet."
+
+            return (
+                "I don't have any relevant "
+                "memories about you yet."
+            )
 
         return (
             "Here's what I remember about you:\n\n"
             + "\n".join(lines)
         )
 
-    def _format_planner(self, data: Any) -> str:
-        if not isinstance(data, dict):
-            return "Task executed successfully, Sir."
+    # =========================================================
+    # PLANNER
+    # =========================================================
 
-        # ---------------------------------------------------------
-        # 1. USER-FACING FINAL RESPONSE
-        #
-        # CognitiveCore already extracts the final task's natural
-        # response into these top-level fields.
-        # ---------------------------------------------------------
+    def _format_planner(
+        self,
+        data: Any,
+    ) -> str:
 
-        response = data.get("response")
+        if not isinstance(
+            data,
+            dict,
+        ):
 
-        if isinstance(response, str) and response.strip():
+            return (
+                "Task executed successfully, Sir."
+            )
+
+        response = data.get(
+            "response"
+        )
+
+        if (
+            isinstance(response, str)
+            and response.strip()
+        ):
+
             return response.strip()
 
-        message = data.get("message")
+        message = data.get(
+            "message"
+        )
 
-        if isinstance(message, str) and message.strip():
+        if (
+            isinstance(message, str)
+            and message.strip()
+        ):
+
             return message.strip()
 
-        # ---------------------------------------------------------
-        # 2. LEGACY CHAT OUTPUT
-        # ---------------------------------------------------------
+        chat = data.get(
+            "chat"
+        )
 
-        chat = data.get("chat")
+        if isinstance(
+            chat,
+            dict,
+        ):
 
-        if isinstance(chat, dict):
+            response = chat.get(
+                "response"
+            )
 
-            response = chat.get("response")
+            if (
+                isinstance(response, str)
+                and response.strip()
+            ):
 
-            if isinstance(response, str) and response.strip():
                 return response.strip()
 
-            message = chat.get("message")
+            message = chat.get(
+                "message"
+            )
 
-            if isinstance(message, str) and message.strip():
+            if (
+                isinstance(message, str)
+                and message.strip()
+            ):
+
                 return message.strip()
-
-        # ---------------------------------------------------------
-        # 3. SEARCH THROUGH TASK OUTPUTS
-        # ---------------------------------------------------------
 
         task_outputs = data.get(
             "task_outputs",
-            {}
+            {},
         )
 
-        if isinstance(task_outputs, dict):
+        if isinstance(
+            task_outputs,
+            dict,
+        ):
 
-            # Reverse insertion order so the final task wins.
             for output in reversed(
-                list(task_outputs.values())
+                list(
+                    task_outputs.values()
+                )
             ):
 
-                if not isinstance(output, dict):
+                if not isinstance(
+                    output,
+                    dict,
+                ):
+
                     continue
 
                 for field in (
@@ -564,18 +1089,24 @@ class PersonalityEngine:
                     "summary",
                 ):
 
-                    value = output.get(field)
+                    value = output.get(
+                        field
+                    )
 
-                    if isinstance(value, str) and value.strip():
+                    if (
+                        isinstance(value, str)
+                        and value.strip()
+                    ):
+
                         return value.strip()
-
-        # ---------------------------------------------------------
-        # 4. GENERIC NESTED OUTPUT FALLBACK
-        # ---------------------------------------------------------
 
         for output in data.values():
 
-            if not isinstance(output, dict):
+            if not isinstance(
+                output,
+                dict,
+            ):
+
                 continue
 
             for field in (
@@ -586,86 +1117,182 @@ class PersonalityEngine:
                 "summary",
             ):
 
-                value = output.get(field)
+                value = output.get(
+                    field
+                )
 
-                if isinstance(value, str) and value.strip():
+                if (
+                    isinstance(value, str)
+                    and value.strip()
+                ):
+
                     return value.strip()
 
-        # ---------------------------------------------------------
-        # 5. NOTHING USER-FACING WAS RETURNED
-        # ---------------------------------------------------------
+        return (
+            "Execution completed successfully, Sir."
+        )
 
-        return "Execution completed successfully, Sir."
+    # =========================================================
+    # ACTION
+    # =========================================================
 
-    def _format_action(self, data: Any) -> str:
-        if not isinstance(data, dict):
-            return "Action completed successfully, Sir."
+    def _format_action(
+        self,
+        data: Any,
+    ) -> str:
 
-        action_name = data.get("action_name")
-        result = data.get("result", {})
+        if not isinstance(
+            data,
+            dict,
+        ):
+
+            return (
+                "Action completed successfully, Sir."
+            )
+
+        action_name = data.get(
+            "action_name"
+        )
+
+        result = data.get(
+            "result",
+            {},
+        )
 
         if action_name == "notification_action":
-            if isinstance(result, dict):
-                message = result.get("message")
+
+            if isinstance(
+                result,
+                dict,
+            ):
+
+                message = result.get(
+                    "message"
+                )
 
                 if message:
-                    return f"Notification dispatched: {message}, Sir."
 
-            return "Notification dispatched successfully, Sir."
+                    return (
+                        f"Notification dispatched: "
+                        f"{message}, Sir."
+                    )
 
-        # File actions
+            return (
+                "Notification dispatched successfully, Sir."
+            )
+
         if action_name == "file_action":
-            if isinstance(result, dict):
 
-                # READ
+            if isinstance(
+                result,
+                dict,
+            ):
+
                 if "content" in result:
-                    content = str(result["content"])
+
+                    content = str(
+                        result["content"]
+                    )
 
                     if content:
+
                         return content
 
-                    return "The file is empty, Sir."
+                    return (
+                        "The file is empty, Sir."
+                    )
 
-                # WRITE
-                if result.get("status") == "written successfully":
-                    return "File written successfully, Sir."
+                if (
+                    result.get("status")
+                    == "written successfully"
+                ):
 
-            return "File operation completed successfully, Sir."
+                    return (
+                        "File written successfully, Sir."
+                    )
 
-        # Generic formatting for future actions
-        if isinstance(result, dict):
+            return (
+                "File operation completed successfully, Sir."
+            )
+
+        if isinstance(
+            result,
+            dict,
+        ):
+
             if "message" in result:
-                return str(result["message"])
+
+                return str(
+                    result["message"]
+                )
 
             if "response" in result:
-                return str(result["response"])
 
-        return "Action completed successfully, Sir."
+                return str(
+                    result["response"]
+                )
 
-    def _format_fallback(self, data: Any) -> str:
+        return (
+            "Action completed successfully, Sir."
+        )
 
-        if isinstance(data, dict):
+    # =========================================================
+    # GENERIC FALLBACK
+    # =========================================================
 
-            # Highest priority
+    def _format_fallback(
+        self,
+        data: Any,
+    ) -> str:
+
+        if isinstance(
+            data,
+            dict,
+        ):
+
             if "response" in data:
-                return str(data["response"])
+
+                return str(
+                    data["response"]
+                )
 
             if "message" in data:
-                return str(data["message"])
+
+                return str(
+                    data["message"]
+                )
 
             if "result" in data:
-                return str(data["result"])
+
+                return str(
+                    data["result"]
+                )
 
             if "output" in data:
-                return f"Python Output\n\n{data['output']}"
 
-            # Last resort
-            return "\n".join(str(v) for v in data.values() if v)
+                return (
+                    f"Python Output\n\n"
+                    f"{data['output']}"
+                )
 
-        if isinstance(data, str):
+            return "\n".join(
+                str(v)
+                for v in data.values()
+                if v
+            )
+
+        if isinstance(
+            data,
+            str,
+        ):
+
             return data
 
         return "Done."
+
+    # =========================================================
+    # UNIVERSAL ARIA VOICE
+    # =========================================================
 
     async def _apply_aria_voice(
         self,
@@ -675,17 +1302,20 @@ class PersonalityEngine:
         """
         Universal ARIA personality pass.
 
-        Rewrites presentation only.
-        Facts, code, numbers, URLs, commands, filenames,
-        warnings and technical details must remain unchanged.
+        This function is deliberately NOT used for local
+        knowledge responses.
         """
 
-        reply = str(reply or "").strip()
+        reply = str(
+            reply or ""
+        ).strip()
 
         if not reply:
+
             return reply
 
         if self.llm_router is None:
+
             return reply
 
         messages = [
@@ -704,22 +1334,27 @@ class PersonalityEngine:
         ]
 
         try:
+
             styled = await self.llm_router.chat(
                 messages,
                 temperature=0.45,
                 max_tokens=1800,
             )
 
-            styled = str(styled or "").strip()
+            styled = str(
+                styled or ""
+            ).strip()
 
             if styled:
+
                 logger.info(
                     "[Personality] Universal ARIA voice applied."
                 )
+
                 return styled
 
         except Exception:
-            # Personality must never break an otherwise valid response.
+
             logger.exception(
                 "[Personality] Universal ARIA voice pass failed. "
                 "Using original response."
@@ -727,21 +1362,36 @@ class PersonalityEngine:
 
         return reply
 
-    def _post_process(self, reply: str) -> str:
+    # =========================================================
+    # FINAL POST PROCESSING
+    # =========================================================
+
+    def _post_process(
+        self,
+        reply: str,
+    ) -> str:
         """
         Final presentation cleanup for all ARIA responses.
 
         Keeps useful structure and code intact while removing
-        necessary Markdown noise commonly produced by LLMs.
+        unnecessary Markdown noise.
         """
 
         if reply is None:
-            return "I couldn't generate a response, Sir."
 
-        reply = str(reply).strip()
+            return (
+                "I couldn't generate a response, Sir."
+            )
+
+        reply = str(
+            reply
+        ).strip()
 
         if not reply:
-            return "I couldn't generate a response, Sir."
+
+            return (
+                "I couldn't generate a response, Sir."
+            )
 
         # -----------------------------------------------------
         # Protect fenced code blocks
@@ -750,80 +1400,72 @@ class PersonalityEngine:
         code_blocks = []
 
         def protect_code(match):
-            code_blocks.append(match.group(0))
-            return f"ARIA_CODE_BLOCK_PLACEHOLDER_{len(code_blocks) - 1}"
+
+            code_blocks.append(
+                match.group(0)
+            )
+
+            return (
+                f"ARIA_CODE_BLOCK_PLACEHOLDER_"
+                f"{len(code_blocks) - 1}"
+            )
 
         reply = re.sub(
             r"```[\s\S]*?```",
             protect_code,
-            reply
+            reply,
         )
 
         # -----------------------------------------------------
         # Clean Markdown headings
-        #
-        # ## Python Basics -> Python Basics
-        # ### Variables    -> Variables
         # -----------------------------------------------------
 
         reply = re.sub(
             r"(?m)^\s{0,3}#{1,6}\s+",
             "",
-            reply
+            reply,
         )
 
         # -----------------------------------------------------
         # Remove Markdown bold/italic markers
-        #
-        # **Python** -> Python
-        # __Python__ -> Python
         # -----------------------------------------------------
 
         reply = re.sub(
             r"\*\*(.*?)\*\*",
             r"\1",
-            reply
+            reply,
         )
 
         reply = re.sub(
             r"__(.*?)__",
             r"\1",
-            reply
+            reply,
         )
 
-        # Simple italic Markdown
         reply = re.sub(
             r"(?<!\*)\*([^*\n]+)\*(?!\*)",
             r"\1",
-            reply
+            reply,
         )
 
         # -----------------------------------------------------
-        # Remove horizontal Markdown separators
+        # Remove horizontal separators
         # -----------------------------------------------------
 
         reply = re.sub(
             r"(?m)^\s*(?:---+|\*\*\*+|___+)\s*$",
             "",
-            reply
+            reply,
         )
 
         # -----------------------------------------------------
         # Normalize bullets
-        #
-        # - item
-        # * item
-        # + item
-        #
-        # becomes:
-        #
-        # • item
         # -----------------------------------------------------
 
         reply = re.sub(
             r"(?m)^\s*[-*+]\s+",
             "• ",
-            reply
+            reply,
         )
 
         # -----------------------------------------------------
@@ -833,17 +1475,17 @@ class PersonalityEngine:
         reply = re.sub(
             r"\n[ \t]+\n",
             "\n\n",
-            reply
+            reply,
         )
 
         reply = re.sub(
             r"\n{3,}",
             "\n\n",
-            reply
+            reply,
         )
 
         # -----------------------------------------------------
-        # Remove trailing spaces from each line
+        # Remove trailing spaces
         # -----------------------------------------------------
 
         reply = "\n".join(
@@ -855,10 +1497,16 @@ class PersonalityEngine:
         # Restore protected code blocks
         # -----------------------------------------------------
 
-        for index, block in enumerate(code_blocks):
+        for index, block in enumerate(
+            code_blocks
+        ):
+
             reply = reply.replace(
-                f"ARIA_CODE_BLOCK_PLACEHOLDER_{index}",
-                block
+                (
+                    f"ARIA_CODE_BLOCK_PLACEHOLDER_"
+                    f"{index}"
+                ),
+                block,
             )
 
         reply = reply.strip()
@@ -867,8 +1515,12 @@ class PersonalityEngine:
         # Add punctuation only to simple one-line responses
         # -----------------------------------------------------
 
-        if reply and "\n" not in reply:
-            if reply[-1] not in ".!?":
-                reply += "."
+        if (
+            reply
+            and "\n" not in reply
+            and reply[-1] not in ".!?"
+        ):
+
+            reply += "."
 
         return reply
