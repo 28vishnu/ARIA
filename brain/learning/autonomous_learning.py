@@ -6,7 +6,6 @@ logger = logging.getLogger("aria")
 
 
 class AutonomousLearning:
-
     """
     Central automatic learning system.
 
@@ -29,24 +28,16 @@ class AutonomousLearning:
     # SAFETY LIMITS
     # =========================================================
 
-    # Maximum size for reusable autonomous-learning content.
-    #
-    # This is intentionally far below MongoDB's 16 MB BSON limit
-    # because database.store() may add metadata and embeddings.
+    # Keep substantially below MongoDB's 16 MB BSON limit because
+    # database.store() may add metadata and embeddings.
     MAX_LEARNING_CONTENT_CHARS = 32_000
 
-    # Smaller limit for metadata.
     MAX_METADATA_CHARS = 8_000
 
-    # Maximum individual text value when recursively compacting
-    # arbitrary dictionaries/lists.
     MAX_VALUE_CHARS = 8_000
 
-    # Maximum number of dictionary items retained from arbitrary
-    # runtime objects.
     MAX_DICT_ITEMS = 40
 
-    # Maximum list items retained from arbitrary runtime objects.
     MAX_LIST_ITEMS = 40
 
     # =========================================================
@@ -69,35 +60,20 @@ class AutonomousLearning:
         self.world = world_model
 
         self.statistics = {
-
             "documents": 0,
-
             "chats": 0,
-
             "web": 0,
-
             "skills": 0,
-
             "plans": 0,
-
             "failures": 0,
-
             "success": 0,
-
             "reasoning_learned": 0,
-
             "reflections_learned": 0,
-
             "executions_learned": 0,
-
             "improvement_signals": 0,
-
             "planner_feedback": 0,
-
             "reasoning_feedback": 0,
-
             "consolidations": 0,
-
             "payloads_trimmed": 0,
         }
 
@@ -113,8 +89,6 @@ class AutonomousLearning:
     ) -> str:
         """
         Convert a value to text and safely bound its size.
-
-        This is the primary BSON protection layer.
         """
 
         if value is None:
@@ -156,7 +130,6 @@ class AutonomousLearning:
         into MongoDB.
         """
 
-        # Prevent pathological recursive objects.
         if depth > 3:
             return self._truncate(
                 value,
@@ -178,6 +151,7 @@ class AutonomousLearning:
             return value
 
         if isinstance(value, dict):
+
             compacted = {}
 
             items = list(value.items())
@@ -192,7 +166,7 @@ class AutonomousLearning:
                     len(items),
                 )
 
-            for key, item in items[: self.MAX_DICT_ITEMS]:
+            for key, item in items[:self.MAX_DICT_ITEMS]:
 
                 safe_key = self._truncate(
                     key,
@@ -206,9 +180,9 @@ class AutonomousLearning:
                 )
 
             if len(items) > self.MAX_DICT_ITEMS:
-                compacted[
-                    "_truncated_items"
-                ] = len(items) - self.MAX_DICT_ITEMS
+                compacted["_truncated_items"] = (
+                    len(items) - self.MAX_DICT_ITEMS
+                )
 
             return compacted
 
@@ -231,7 +205,7 @@ class AutonomousLearning:
                     item,
                     depth + 1,
                 )
-                for item in items[: self.MAX_LIST_ITEMS]
+                for item in items[:self.MAX_LIST_ITEMS]
             ]
 
             if len(items) > self.MAX_LIST_ITEMS:
@@ -242,7 +216,6 @@ class AutonomousLearning:
 
             return compacted
 
-        # Avoid serializing arbitrary complex runtime objects directly.
         return self._truncate(
             value,
             self.MAX_VALUE_CHARS,
@@ -255,8 +228,6 @@ class AutonomousLearning:
     ) -> str:
         """
         Convert learning input into safe textual form.
-
-        Complex dictionaries/lists are compacted before conversion.
         """
 
         if value is None:
@@ -266,6 +237,7 @@ class AutonomousLearning:
             return value.strip()
 
         if isinstance(value, dict):
+
             compacted = self._compact_value(value)
 
             parts = []
@@ -282,6 +254,7 @@ class AutonomousLearning:
             return "\n".join(parts).strip()
 
         if isinstance(value, (list, tuple, set)):
+
             compacted = self._compact_value(value)
 
             return "\n".join(
@@ -303,8 +276,6 @@ class AutonomousLearning:
     ) -> str:
         """
         Final content boundary before knowledge_database.store().
-
-        This is intentionally the last safety gate.
         """
 
         content = self._normalize_text(value)
@@ -321,8 +292,6 @@ class AutonomousLearning:
     ) -> Dict[str, Any]:
         """
         Produce small, bounded metadata.
-
-        Metadata must never contain the full runtime state.
         """
 
         if not isinstance(value, dict):
@@ -334,15 +303,11 @@ class AutonomousLearning:
             return {}
 
         metadata_text = self._truncate(
-            compacted,
+            self._normalize_text(compacted),
             self.MAX_METADATA_CHARS,
             "learning metadata",
         )
 
-        # Keep metadata as a small dictionary.
-        #
-        # Reconstructing through text guarantees it cannot carry
-        # arbitrary huge nested runtime structures.
         return {
             "summary": metadata_text
         }
@@ -352,8 +317,7 @@ class AutonomousLearning:
         content: str,
     ) -> bool:
         """
-        Prevent empty, trivial, or obviously non-learning events
-        from polluting the knowledge base.
+        Prevent empty, trivial, or obviously non-learning events.
         """
 
         if not content:
@@ -384,9 +348,7 @@ class AutonomousLearning:
         """
         Central safe storage wrapper.
 
-        Every autonomous learning signal should pass through this
-        method so that future learning paths cannot accidentally
-        create oversized MongoDB documents.
+        Every autonomous learning signal passes through this method.
         """
 
         safe_title = self._truncate(
@@ -423,11 +385,13 @@ class AutonomousLearning:
             return True
 
         except Exception:
+
             logger.exception(
-                "[AutonomousLearning] Safe knowledge storage failed "
-                "for source=%s.",
+                "[AutonomousLearning] Safe knowledge storage "
+                "failed for source=%s.",
                 source,
             )
+
             return False
 
     # =========================================================
@@ -455,21 +419,25 @@ class AutonomousLearning:
 
             if not trace:
 
-                # If no explicit reasoning_trace exists, do not dump
-                # the entire object blindly.
                 if isinstance(
                     reasoning_result,
                     dict,
                 ):
-                    trace = reasoning_result.get(
-                        "reasoning_trace"
-                    ) or reasoning_result.get(
-                        "summary"
-                    ) or reasoning_result.get(
-                        "result"
+
+                    trace = (
+                        reasoning_result.get(
+                            "reasoning_trace"
+                        )
+                        or reasoning_result.get(
+                            "summary"
+                        )
+                        or reasoning_result.get(
+                            "result"
+                        )
                     )
 
                 if not trace:
+
                     trace = self._normalize_text(
                         reasoning_result
                     )
@@ -488,29 +456,41 @@ class AutonomousLearning:
                 {},
             )
 
-            if not isinstance(metadata, dict):
+            if not isinstance(
+                metadata,
+                dict,
+            ):
 
                 if isinstance(
                     reasoning_result,
                     dict,
                 ):
+
                     metadata = reasoning_result.get(
                         "metadata",
                         {},
                     )
 
                 else:
+
                     metadata = {}
+
+            # IMPORTANT:
+            # Do not use a nested f-string expression here.
+            # Build metadata separately so the module remains valid
+            # Python syntax.
+
+            metadata_text = self._truncate(
+                self._normalize_text(metadata),
+                self.MAX_METADATA_CHARS,
+                "reasoning metadata",
+            )
 
             content = (
                 f"Reasoning trace:\n"
                 f"{trace}\n\n"
                 f"Metadata:\n"
-                f"{self._truncate("
-                f"self._normalize_text(metadata), "
-                f"self.MAX_METADATA_CHARS, "
-                f"'reasoning metadata'"
-                f")}"
+                f"{metadata_text}"
             )
 
             stored = await self._store_learning(
@@ -520,11 +500,13 @@ class AutonomousLearning:
             )
 
             if stored:
+
                 self.statistics[
                     "reasoning_learned"
                 ] += 1
 
         except Exception:
+
             logger.exception(
                 "[AutonomousLearning] "
                 "learn_from_reasoning failed."
@@ -537,7 +519,6 @@ class AutonomousLearning:
         """
         Convert reflection into reusable learning signals.
 
-        IMPORTANT:
         Reflection objects can contain the entire conversation,
         reasoning context, retrieval results, tool outputs, etc.
 
@@ -551,8 +532,6 @@ class AutonomousLearning:
                 dict,
             ):
 
-                # Prefer actual reflective fields instead of the
-                # entire runtime object.
                 evaluation = reflection_data.get(
                     "evaluation",
                     {},
@@ -588,6 +567,7 @@ class AutonomousLearning:
                 }
 
                 if correction is not None:
+
                     selected["reflection"] = (
                         self._compact_value(
                             correction
@@ -599,6 +579,7 @@ class AutonomousLearning:
                 )
 
             else:
+
                 content = self._normalize_text(
                     reflection_data
                 )
@@ -625,51 +606,56 @@ class AutonomousLearning:
                 )
             ):
 
-                # World model receives the same bounded content,
-                # never the original giant object.
                 try:
+
                     await self.world.record_reflection(
                         content
                     )
+
                 except Exception:
+
                     logger.exception(
                         "[AutonomousLearning] "
                         "World reflection recording failed."
                     )
 
             if stored:
+
                 self.statistics[
                     "reflections_learned"
                 ] += 1
-
-            # -----------------------------------------------------
-            # Improvement signals
-            # -----------------------------------------------------
 
             if isinstance(
                 reflection_data,
                 dict,
             ):
 
-                suggestions = reflection_data.get(
-                    "suggestions",
-                    [],
-                ) or []
+                suggestions = (
+                    reflection_data.get(
+                        "suggestions",
+                        [],
+                    )
+                    or []
+                )
 
                 evaluation = reflection_data.get(
                     "evaluation",
                     {},
                 )
 
-                safe_evaluation = self._compact_value(
-                    evaluation
+                safe_evaluation = (
+                    self._compact_value(
+                        evaluation
+                    )
                 )
 
                 for suggestion in suggestions:
 
-                    signal = self._safe_learning_content(
-                        suggestion,
-                        "reflection improvement signal",
+                    signal = (
+                        self._safe_learning_content(
+                            suggestion,
+                            "reflection improvement signal",
+                        )
                     )
 
                     if not self._is_learnable(
@@ -689,17 +675,19 @@ class AutonomousLearning:
                             ),
                             metadata={
                                 "evaluation":
-                                safe_evaluation
+                                    safe_evaluation
                             },
                         )
                     )
 
                     if stored_signal:
+
                         self.statistics[
                             "improvement_signals"
                         ] += 1
 
         except Exception:
+
             logger.exception(
                 "[AutonomousLearning] "
                 "learn_from_reflection failed."
@@ -721,13 +709,13 @@ class AutonomousLearning:
                 execution_result,
                 dict,
             ):
+
                 execution_result = {
                     "result": self._normalize_text(
                         execution_result
                     )
                 }
 
-            # Do NOT stringify the complete execution result.
             safe_execution = {}
 
             important_fields = (
@@ -794,6 +782,7 @@ class AutonomousLearning:
             )
 
             if stored:
+
                 self.statistics[
                     "executions_learned"
                 ] += 1
@@ -814,6 +803,7 @@ class AutonomousLearning:
                 )
 
         except Exception:
+
             logger.exception(
                 "[AutonomousLearning] "
                 "learn_from_execution failed."
@@ -825,21 +815,23 @@ class AutonomousLearning:
         feedback: str,
     ):
         """
-        Store reusable planner feedback from reflection.
-
-        Plan and feedback are bounded independently.
+        Store reusable planner feedback.
         """
 
         try:
 
-            feedback_text = self._safe_learning_content(
-                feedback,
-                "planner feedback",
+            feedback_text = (
+                self._safe_learning_content(
+                    feedback,
+                    "planner feedback",
+                )
             )
 
-            plan_text = self._safe_learning_content(
-                plan,
-                "planner plan",
+            plan_text = (
+                self._safe_learning_content(
+                    plan,
+                    "planner plan",
+                )
             )
 
             if not self._is_learnable(
@@ -871,6 +863,7 @@ class AutonomousLearning:
                 ] += 1
 
         except Exception:
+
             logger.exception(
                 "[AutonomousLearning] "
                 "improve_planner failed."
@@ -882,14 +875,16 @@ class AutonomousLearning:
         correction: str,
     ):
         """
-        Store reusable reasoning corrections for future improvement.
+        Store reusable reasoning corrections.
         """
 
         try:
 
-            query_text = self._safe_learning_content(
-                query,
-                "reasoning query",
+            query_text = (
+                self._safe_learning_content(
+                    query,
+                    "reasoning query",
+                )
             )
 
             correction_text = (
@@ -928,6 +923,7 @@ class AutonomousLearning:
                 ] += 1
 
         except Exception:
+
             logger.exception(
                 "[AutonomousLearning] "
                 "improve_reasoning failed."
@@ -965,6 +961,7 @@ class AutonomousLearning:
             self.learning,
             "learn_chat",
         ):
+
             await self.learning.learn_chat(
                 user_text,
                 assistant_text,
@@ -977,17 +974,12 @@ class AutonomousLearning:
             f"{assistant_text}"
         )
 
-        # Bound autonomous learning storage.
         content = self._safe_learning_content(
             content,
             "conversation learning content",
         )
 
-        # Do not automatically promote every conversation
-        # into durable knowledge.
-        if self._is_learnable(
-            content
-        ):
+        if self._is_learnable(content):
 
             await self._store_learning(
                 title="Conversation Experience",
@@ -1049,10 +1041,6 @@ class AutonomousLearning:
             summary_text
         )
 
-        # IMPORTANT:
-        # Document ingestion should eventually use the dedicated
-        # chunking pipeline. This safety boundary prevents one
-        # autonomous event from becoming a giant MongoDB document.
         await self._store_learning(
             title=filename_text,
             content=summary_text,
@@ -1141,10 +1129,6 @@ class AutonomousLearning:
                     "web graph learning",
                 )
             )
-
-        # IMPORTANT:
-        # Web knowledge must not automatically become
-        # personal memory.
 
         if (
             self.world is not None
@@ -1247,9 +1231,11 @@ class AutonomousLearning:
         profile,
     ):
 
-        profile_str = self._safe_learning_content(
-            profile,
-            "profile learning content",
+        profile_str = (
+            self._safe_learning_content(
+                profile,
+                "profile learning content",
+            )
         )
 
         if hasattr(
@@ -1293,9 +1279,11 @@ class AutonomousLearning:
         query,
     ):
 
-        query_text = self._safe_learning_content(
-            query,
-            "failure query",
+        query_text = (
+            self._safe_learning_content(
+                query,
+                "failure query",
+            )
         )
 
         await self._store_learning(
@@ -1314,14 +1302,18 @@ class AutonomousLearning:
         answer,
     ):
 
-        query_text = self._safe_learning_content(
-            query,
-            "success query",
+        query_text = (
+            self._safe_learning_content(
+                query,
+                "success query",
+            )
         )
 
-        answer_text = self._safe_learning_content(
-            answer,
-            "success answer",
+        answer_text = (
+            self._safe_learning_content(
+                answer,
+                "success answer",
+            )
         )
 
         content = (
@@ -1351,8 +1343,8 @@ class AutonomousLearning:
         """
         Safely reinforce learned signals.
 
-        Kept intentionally lightweight. Large-scale knowledge
-        consolidation belongs in the knowledge ingestion pipeline.
+        Large-scale knowledge consolidation belongs in the
+        dedicated knowledge ingestion pipeline.
         """
 
         try:
@@ -1445,6 +1437,7 @@ class AutonomousLearning:
                     continue
 
                 try:
+
                     access_count = int(
                         record.get(
                             "access_count",
@@ -1480,13 +1473,10 @@ class AutonomousLearning:
             return {
                 "status":
                     "consolidation_complete",
-
                 "processed":
                     len(records),
-
                 "unique":
                     len(seen),
-
                 "reinforced":
                     reinforced,
             }
@@ -1501,9 +1491,7 @@ class AutonomousLearning:
             return {
                 "status":
                     "consolidation_failed",
-
                 "processed": 0,
-
                 "reinforced": 0,
             }
 
@@ -1523,9 +1511,6 @@ class AutonomousLearning:
     ):
         """
         Universal learning event dispatcher.
-
-        Every learning event is normalized before entering
-        the appropriate subsystem.
         """
 
         source = str(
