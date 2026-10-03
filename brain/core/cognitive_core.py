@@ -2797,7 +2797,32 @@ class CognitiveCore:
 
                     if doc_res:
                         answer = doc_res
-                        source = "document"
+
+                        # -------------------------------------------------
+                        # LOCAL KNOWLEDGE OWNERSHIP
+                        # -------------------------------------------------
+                        # KnowledgeManager already resolved ordinary factual
+                        # questions locally. Preserve that ownership here so
+                        # the response cannot be mistaken for a generic
+                        # document/chat answer and sent through the external
+                        # personality LLM.
+                        if context.get("local_knowledge_query"):
+                            source = "local_knowledge"
+                            context["local_knowledge"] = True
+                            context["knowledge_source"] = (
+                                "local_foundational_knowledge"
+                            )
+                            context["answer_owner"] = "knowledge_manager"
+                            context["external_llm_synthesis"] = False
+
+                            logger.info(
+                                "[LocalKnowledge] KnowledgeManager answer "
+                                "accepted as local answer owner; "
+                                "external LLM synthesis disabled."
+                            )
+                        else:
+                            source = "document"
+
                         confidence = 0.89
                     elif reasoning and getattr(reasoning, "graph_results", None):
                         answer = str(reasoning.graph_results)
@@ -3319,6 +3344,9 @@ usable evidence is present. Do not invent details absent from the evidence.
             "memory_conversation",
             "capability",
             "llm_unavailable",
+            "local_knowledge",
+            "local_foundational_knowledge",
+            "knowledge_database",
         }:
             return SystemResponse(
                 success=True,
@@ -3327,6 +3355,41 @@ usable evidence is present. Do not invent details absent from the evidence.
                 data={
                     "response": formatted_answer,
                     "message": formatted_answer,
+                    "local_knowledge": source in {
+                        "local_knowledge",
+                        "local_foundational_knowledge",
+                        "knowledge_database",
+                    },
+                    "knowledge_source": (
+                        context.get(
+                            "knowledge_source",
+                            source,
+                        )
+                        if source in {
+                            "local_knowledge",
+                            "local_foundational_knowledge",
+                            "knowledge_database",
+                        }
+                        else source
+                    ),
+                    "answer_owner": (
+                        "knowledge_manager"
+                        if source in {
+                            "local_knowledge",
+                            "local_foundational_knowledge",
+                            "knowledge_database",
+                        }
+                        else None
+                    ),
+                    "external_llm_synthesis": (
+                        False
+                        if source in {
+                            "local_knowledge",
+                            "local_foundational_knowledge",
+                            "knowledge_database",
+                        }
+                        else None
+                    ),
                 },
             )
 
