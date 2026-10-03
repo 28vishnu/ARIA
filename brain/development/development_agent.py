@@ -822,35 +822,26 @@ class DevelopmentAgent:
                 error=" ".join(errors),
             )
 
+        tests_payload = payload.get("tests", [])
+        if tests_payload is None:
+            tests_payload = []
+        if not isinstance(tests_payload, list):
+            return CodeGenerationResult(
+                success=False,
+                summary=str(payload.get("summary", "")),
+                reasoning=str(payload.get("reasoning", "")),
+                changes=tuple(generated),
+                raw_response=raw_response[:20_000],
+                error="'tests' must be a JSON array.",
+            )
+
         return CodeGenerationResult(
             success=True,
-            summary=str(
-                payload.get(
-                    "summary",
-                    "",
-                )
-            ),
-            reasoning=str(
-                payload.get(
-                    "reasoning",
-                    "",
-                )
-            ),
+            summary=str(payload.get("summary", "")),
+            reasoning=str(payload.get("reasoning", "")),
             changes=tuple(generated),
-            tests=tuple(
-                str(item)
-                for item in payload.get(
-                    "tests",
-                    []
-                )
-                if isinstance(
-                    item,
-                    str,
-                )
-            ),
-            raw_response=raw_response[
-                :20_000
-            ],
+            tests=tuple(str(item) for item in tests_payload if isinstance(item, str)),
+            raw_response=raw_response[:20_000],
         )
 
     # ========================================================
@@ -1030,6 +1021,17 @@ class DevelopmentAgent:
             # The operation is not merely descriptive. Enforce it against
             # the actual workspace state so an AI cannot turn a create-only
             # request into an overwrite.
+            if (
+                requirement is not None
+                and self._is_create_only_requirement(requirement)
+                and change.operation != "create"
+            ):
+                errors.append(
+                    "Create-only requirement rejected non-create operation: "
+                    f"{path}"
+                )
+                continue
+
             if change.operation == "create" and exists:
                 errors.append(
                     f"Create operation targets an existing path: {path}"
@@ -1064,18 +1066,25 @@ class DevelopmentAgent:
                 continue
 
             # If the planner explicitly identified requested paths, prevent
-            # the generator from silently changing an unrelated existing
-            # file. New supporting files are allowed only when the plan did
-            # not specify an explicit file list.
+            # the generator from silently changing an unrelated existing file
+            # and require the generated operation to agree with the plan.
+            if plan is not None and not self._path_is_planned(path, plan):
+                errors.append(
+                    f"Generated path was not present in the change plan: {path}"
+                )
+                continue
+
             if plan is not None:
-                planned_paths = {
-                    str(item.path).replace("\\", "/").lstrip("./")
+                planned_actions = {
+                    str(item.path).replace("\\", "/").lstrip("./"): item.action
                     for item in plan.changes
                     if item.path
                 }
-                if planned_paths and path not in planned_paths:
+                expected_action = planned_actions.get(path)
+                if expected_action in {"create", "modify", "delete"} and change.operation != expected_action:
                     errors.append(
-                        f"Generated path was not present in the change plan: {path}"
+                        f"Generated operation '{change.operation}' conflicts with planned "
+                        f"operation '{expected_action}' for {path}"
                     )
                     continue
 
@@ -1123,6 +1132,43 @@ class DevelopmentAgent:
             "without modifying any existing files",
         )
         return any(pattern in normalized for pattern in patterns)
+
+    @staticmethod
+    def _is_create_only_requirement(
+        requirement: Requirement,
+    ) -> bool:
+        """Return True when the requirement explicitly requires new files only."""
+
+        text = re.sub(r"\s+", " ", str(requirement.raw_text or "").lower())
+        phrases = (
+            "create only",
+            "create-only",
+            "only create new files",
+            "only create files",
+            "new file only",
+            "new files only",
+            "do not modify any existing files",
+            "do not modify existing files",
+            "don't modify any existing files",
+            "don't modify existing files",
+            "must not modify existing files",
+            "must not modify any existing files",
+        )
+        return any(phrase in text for phrase in phrases)
+
+    @staticmethod
+    def _path_is_planned(
+        path: str,
+        plan: ChangePlan | None,
+    ) -> bool:
+        if plan is None:
+            return True
+        planned = {
+            str(item.path).replace("\\", "/").lstrip("./")
+            for item in plan.changes
+            if item.path
+        }
+        return not planned or path in planned
 
     @staticmethod
     def _forbids_deployment_or_push(
@@ -1813,6 +1859,8 @@ class DevelopmentAgent:
                 self._validate_generated_changes(
                     repair_generation.changes,
                     workspace,
+                    requirement=requirement,
+                    plan=plan,
                 )
             )
 
@@ -1919,39 +1967,60 @@ class DevelopmentAgent:
                 errors=(str(exc),),
             )
 
+        final_validation = validation
+        final_acceptance_error = self._check_exact_content_requirement(
+            requirement,
+            workspace,
+        )
+
+        if repair_result.success:
+            try:
+                final_validation = validator.validate_repository()
+            except Exception as exc:
+                final_acceptance_error = (
+                    final_acceptance_error
+                    or f"Final validation failed to execute: {exc}"
+                )
+
+        if final_acceptance_error:
+            errors.append(final_acceptance_error)
+
         failure = (
-            failure_analyzer.analyze(
-                initial_test
-            )
+            failure_analyzer.analyze(initial_test)
+            if not repair_result.success
+            else None
+        )
+
+        final_success = bool(
+            repair_result.success
+            and final_validation.valid
+            and not final_acceptance_error
         )
 
         return DevelopmentReport(
-            success=repair_result.success,
+            success=final_success,
             requirement=requirement,
             plan=plan,
             workspace=workspace,
-            writes=tuple(
-                write_results
-            ),
-            validation=validation,
+            writes=tuple(write_results),
+            validation=final_validation,
             tests=initial_test,
             repair=repair_result,
             generation=generation,
             failure=failure,
             status=(
                 "repair_succeeded"
-                if repair_result.success
+                if final_success
+                else "repair_completed_but_acceptance_failed"
+                if repair_result.success and final_acceptance_error
                 else "tests_failed"
             ),
             errors=tuple(errors),
             metadata={
-                "generated_change_count": len(
-                    generated_changes
-                ),
-                "generated_files": [
-                    change.path
-                    for change in generated_changes
-                ],
+                "generated_change_count": len(generated_changes),
+                "generated_files": [change.path for change in generated_changes],
+                "final_acceptance_passed": final_acceptance_error is None,
+                "final_validation_passed": final_validation.valid,
             },
         )
 
