@@ -1,78 +1,36 @@
-"""
-ARIA Repository Manager
-=======================
-
-Phase 1 / Step 1
-
-Provides safe, deterministic repository discovery for ARIA's
-self-development system.
-
-Responsibilities
-----------------
-- Discover repository files and directories.
-- Ignore generated/cache/runtime directories.
-- Calculate file metadata.
-- Calculate SHA-256 hashes.
-- Detect programming languages.
-- Detect configuration files.
-- Detect likely application entry points.
-- Identify Python packages/modules.
-- Identify protected paths.
-- Produce a deterministic repository snapshot.
-
-This module DOES NOT modify repository files.
-
-That separation is intentional.
-
-The repository manager is read-only and should be safe to run against
-ARIA's production source tree.
-"""
-
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Iterable, Optional
 
 
 logger = logging.getLogger("aria.development.repository")
 
 
-# ---------------------------------------------------------------------------
-# Default ignored directories
-# ---------------------------------------------------------------------------
-
-DEFAULT_IGNORED_DIRECTORIES: Set[str] = {
+DEFAULT_IGNORED_DIRECTORIES = {
     ".git",
-    ".github",
-    ".idea",
-    ".vscode",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
     ".tox",
-    ".coverage",
-    "venv",
     ".venv",
+    "venv",
     "env",
-    ".env",
     "node_modules",
     "dist",
     "build",
-    "site-packages",
     ".eggs",
-    "*.egg-info",
+    ".idea",
+    ".vscode",
 }
 
 
-# ---------------------------------------------------------------------------
-# File classification
-# ---------------------------------------------------------------------------
-
-LANGUAGE_BY_EXTENSION: Dict[str, str] = {
+LANGUAGE_BY_EXTENSION = {
     ".py": "python",
     ".pyw": "python",
     ".js": "javascript",
@@ -102,8 +60,6 @@ LANGUAGE_BY_EXTENSION: Dict[str, str] = {
     ".sql": "sql",
     ".sh": "shell",
     ".bash": "shell",
-    ".zsh": "shell",
-    ".ps1": "powershell",
     ".json": "json",
     ".yaml": "yaml",
     ".yml": "yaml",
@@ -116,17 +72,14 @@ LANGUAGE_BY_EXTENSION: Dict[str, str] = {
 }
 
 
-CONFIG_FILE_NAMES: Set[str] = {
+CONFIG_NAMES = {
     "requirements.txt",
     "requirements-dev.txt",
-    "requirements-test.txt",
     "pyproject.toml",
     "setup.py",
     "setup.cfg",
     "package.json",
     "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
     "poetry.lock",
     "pipfile",
     "pipfile.lock",
@@ -144,7 +97,7 @@ CONFIG_FILE_NAMES: Set[str] = {
 }
 
 
-ENTRY_POINT_NAMES: Set[str] = {
+ENTRY_POINT_NAMES = {
     "main.py",
     "app.py",
     "run.py",
@@ -160,43 +113,22 @@ ENTRY_POINT_NAMES: Set[str] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Protected paths
-# ---------------------------------------------------------------------------
-
-# These paths are classified as protected metadata. The repository manager
-# does not block anything itself; later development-policy components will
-# decide which modifications require Master approval.
-DEFAULT_PROTECTED_PATH_PATTERNS: tuple[str, ...] = (
-    ".git/",
-    ".github/workflows/",
+DEFAULT_PROTECTED_PATTERNS = (
     ".env",
     ".env.",
-    "secrets",
-    "secret",
-    "credentials",
-    "credential",
-    "keys",
-    "private",
-    "certificates",
-    "certs",
-    "Dockerfile",
-    "docker-compose.yml",
-    "docker-compose.yaml",
+    "secrets/",
+    "secret/",
+    "credentials/",
+    "credential/",
+    "private/",
+    "certificates/",
+    "certs/",
+    ".github/workflows/",
 )
-
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class FileMetadata:
-    """
-    Immutable metadata describing one repository file.
-    """
-
     path: str
     name: str
     extension: str
@@ -210,70 +142,79 @@ class FileMetadata:
 
 @dataclass
 class RepositorySnapshot:
-    """
-    Complete deterministic snapshot of a repository.
-    """
-
     root: str
 
-    directories: List[str] = field(default_factory=list)
-    files: List[FileMetadata] = field(default_factory=list)
+    directories: list[str] = field(
+        default_factory=list
+    )
 
-    languages: List[str] = field(default_factory=list)
-    configuration_files: List[str] = field(default_factory=list)
-    entry_points: List[str] = field(default_factory=list)
-    protected_files: List[str] = field(default_factory=list)
+    files: list[FileMetadata] = field(
+        default_factory=list
+    )
 
-    python_packages: List[str] = field(default_factory=list)
-    python_modules: List[str] = field(default_factory=list)
+    languages: list[str] = field(
+        default_factory=list
+    )
+
+    configuration_files: list[str] = field(
+        default_factory=list
+    )
+
+    entry_points: list[str] = field(
+        default_factory=list
+    )
+
+    protected_files: list[str] = field(
+        default_factory=list
+    )
+
+    python_packages: list[str] = field(
+        default_factory=list
+    )
+
+    python_modules: list[str] = field(
+        default_factory=list
+    )
 
     total_files: int = 0
     total_directories: int = 0
     total_size_bytes: int = 0
 
     def to_dict(self) -> dict:
-        """
-        Convert the snapshot into a JSON-serializable dictionary.
-        """
-
         return {
             "root": self.root,
-            "directories": list(self.directories),
+            "directories": self.directories,
             "files": [
-                asdict(file_metadata)
-                for file_metadata in self.files
+                asdict(item)
+                for item in self.files
             ],
-            "languages": list(self.languages),
-            "configuration_files": list(self.configuration_files),
-            "entry_points": list(self.entry_points),
-            "protected_files": list(self.protected_files),
-            "python_packages": list(self.python_packages),
-            "python_modules": list(self.python_modules),
+            "languages": self.languages,
+            "configuration_files": self.configuration_files,
+            "entry_points": self.entry_points,
+            "protected_files": self.protected_files,
+            "python_packages": self.python_packages,
+            "python_modules": self.python_modules,
             "total_files": self.total_files,
             "total_directories": self.total_directories,
             "total_size_bytes": self.total_size_bytes,
         }
 
 
-# ---------------------------------------------------------------------------
-# Repository Manager
-# ---------------------------------------------------------------------------
-
-
 class RepositoryManager:
     """
-    Read-only repository intelligence manager.
+    Read-only repository discovery and metadata service.
 
-    This class deliberately does not modify source code.
-
-    Future components such as CodeWriter, ChangePlanner and
-    DevelopmentController will consume the information generated here.
+    This class never modifies repository files.
     """
 
     def __init__(
         self,
-        ignored_directories: Optional[Iterable[str]] = None,
-        protected_patterns: Optional[Iterable[str]] = None,
+        ignored_directories: Optional[
+            Iterable[str]
+        ] = None,
+        protected_patterns: Optional[
+            Iterable[str]
+        ] = None,
         max_file_size_bytes: int = 10 * 1024 * 1024,
     ) -> None:
 
@@ -286,7 +227,7 @@ class RepositoryManager:
         self.protected_patterns = tuple(
             protected_patterns
             if protected_patterns is not None
-            else DEFAULT_PROTECTED_PATH_PATTERNS
+            else DEFAULT_PROTECTED_PATTERNS
         )
 
         self.max_file_size_bytes = max(
@@ -294,28 +235,16 @@ class RepositoryManager:
             int(max_file_size_bytes),
         )
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def inspect(
         self,
         repository_path: str | Path,
     ) -> RepositorySnapshot:
-        """
-        Inspect a repository without modifying anything.
 
-        Raises:
-            ValueError:
-                If the supplied path does not exist or is not a directory.
-        """
-
-        root = Path(repository_path).expanduser().resolve()
-
-        if not root.exists():
-            raise ValueError(
-                f"Repository path does not exist: {root}"
-            )
+        root = (
+            Path(repository_path)
+            .expanduser()
+            .resolve()
+        )
 
         if not root.is_dir():
             raise ValueError(
@@ -326,29 +255,34 @@ class RepositoryManager:
             root=str(root)
         )
 
-        languages: Set[str] = set()
+        languages = set()
 
-        for current_root, directory_names, file_names in self._walk(root):
+        for current_root, directories, files in os.walk(
+            root,
+            topdown=True,
+            followlinks=False,
+        ):
 
-            current_path = Path(current_root)
+            directories[:] = sorted(
+                directory
+                for directory in directories
+                if not self._ignored(directory)
+            )
 
-            for directory_name in sorted(directory_names):
+            current = Path(current_root)
 
-                directory_path = current_path / directory_name
-
-                relative = self._relative_path(
-                    directory_path,
-                    root,
+            for directory in directories:
+                snapshot.directories.append(
+                    self._relative(
+                        current / directory,
+                        root,
+                    )
                 )
 
-                snapshot.directories.append(relative)
-
-            for file_name in sorted(file_names):
-
-                file_path = current_path / file_name
+            for filename in sorted(files):
 
                 metadata = self._inspect_file(
-                    file_path,
+                    current / filename,
                     root,
                 )
 
@@ -357,8 +291,14 @@ class RepositoryManager:
 
                 snapshot.files.append(metadata)
 
+                snapshot.total_size_bytes += (
+                    metadata.size_bytes
+                )
+
                 if metadata.language:
-                    languages.add(metadata.language)
+                    languages.add(
+                        metadata.language
+                    )
 
                 if metadata.is_configuration:
                     snapshot.configuration_files.append(
@@ -375,8 +315,6 @@ class RepositoryManager:
                         metadata.path
                     )
 
-                snapshot.total_size_bytes += metadata.size_bytes
-
         snapshot.files.sort(
             key=lambda item: item.path
         )
@@ -387,24 +325,27 @@ class RepositoryManager:
         snapshot.entry_points.sort()
         snapshot.protected_files.sort()
 
-        snapshot.languages = sorted(languages)
-
-        self._discover_python_structure(
-            root=root,
-            snapshot=snapshot,
+        snapshot.languages = sorted(
+            languages
         )
 
-        snapshot.total_files = len(snapshot.files)
+        self._python_structure(
+            snapshot
+        )
+
+        snapshot.total_files = len(
+            snapshot.files
+        )
+
         snapshot.total_directories = len(
             snapshot.directories
         )
 
         logger.info(
-            "[RepositoryManager] Repository inspected | "
-            "files=%d directories=%d languages=%s",
+            "[RepositoryManager] "
+            "Repository inspected | files=%d directories=%d",
             snapshot.total_files,
             snapshot.total_directories,
-            ",".join(snapshot.languages),
         )
 
         return snapshot
@@ -414,357 +355,205 @@ class RepositoryManager:
         repository_path: str | Path,
         relative_path: str,
     ) -> FileMetadata:
-        """
-        Inspect one file inside a repository.
 
-        The file must remain inside the repository root.
-        """
+        root = (
+            Path(repository_path)
+            .expanduser()
+            .resolve()
+        )
 
-        root = Path(repository_path).expanduser().resolve()
+        path = (
+            root / relative_path
+        ).resolve()
 
-        if not root.is_dir():
-            raise ValueError(
-                f"Repository path is not a directory: {root}"
-            )
-
-        file_path = (root / relative_path).resolve()
-
-        self._ensure_inside_repository(
-            file_path,
+        self._ensure_inside(
+            path,
             root,
         )
 
-        if not file_path.exists():
+        if not path.is_file():
             raise FileNotFoundError(
-                f"Repository file does not exist: {relative_path}"
+                relative_path
             )
 
-        if not file_path.is_file():
-            raise ValueError(
-                f"Repository path is not a file: {relative_path}"
-            )
-
-        metadata = self._inspect_file(
-            file_path,
+        result = self._inspect_file(
+            path,
             root,
         )
 
-        if metadata is None:
+        if result is None:
             raise ValueError(
                 f"Unable to inspect file: {relative_path}"
             )
 
-        return metadata
+        return result
 
     def file_exists(
         self,
         repository_path: str | Path,
         relative_path: str,
     ) -> bool:
-        """
-        Return True when the requested relative path exists inside
-        the repository.
-        """
 
-        root = Path(repository_path).expanduser().resolve()
-        candidate = (root / relative_path).resolve()
+        root = (
+            Path(repository_path)
+            .expanduser()
+            .resolve()
+        )
+
+        path = (
+            root / relative_path
+        ).resolve()
 
         try:
-            self._ensure_inside_repository(
-                candidate,
+            self._ensure_inside(
+                path,
                 root,
             )
         except ValueError:
             return False
 
-        return candidate.exists()
+        return path.exists()
 
     def is_protected_path(
         self,
         relative_path: str,
     ) -> bool:
-        """
-        Determine whether a repository path belongs to the protected
-        area.
 
-        This is classification only.
-
-        Actual authorization will be handled by the future
-        DeploymentPolicy / ApprovalManager components.
-        """
-
-        normalized = self._normalize_relative_path(
+        value = self._normalize(
             relative_path
-        )
-
-        lower = normalized.lower()
+        ).lower()
 
         for pattern in self.protected_patterns:
 
-            normalized_pattern = (
-                pattern.replace("\\", "/")
-                .strip("/")
-                .lower()
-            )
+            normalized = self._normalize(
+                pattern
+            ).lower()
 
-            if not normalized_pattern:
-                continue
-
-            if normalized_pattern.endswith("/"):
-
+            if normalized.endswith("/"):
                 if (
-                    lower.startswith(
-                        normalized_pattern
-                    )
-                    or f"/{normalized_pattern}" in lower
+                    value.startswith(normalized)
+                    or f"/{normalized}" in value
                 ):
                     return True
 
-            elif normalized_pattern in lower:
+            elif (
+                value == normalized
+                or value.startswith(normalized)
+                or f"/{normalized}" in value
+            ):
                 return True
 
         return False
 
-    # ------------------------------------------------------------------
-    # Walking
-    # ------------------------------------------------------------------
-
-    def _walk(
-        self,
-        root: Path,
-    ):
-        """
-        Safe os.walk-style repository traversal.
-
-        Symlinked directories are not followed.
-        """
-
-        import os
-
-        for current_root, directory_names, file_names in os.walk(
-            root,
-            topdown=True,
-            followlinks=False,
-        ):
-
-            directory_names[:] = [
-                name
-                for name in directory_names
-                if not self._is_ignored_directory(name)
-            ]
-
-            yield current_root, directory_names, file_names
-
-    def _is_ignored_directory(
-        self,
-        name: str,
-    ) -> bool:
-        """
-        Check whether a directory should be excluded.
-        """
-
-        if name in self.ignored_directories:
-            return True
-
-        if name.endswith(".egg-info"):
-            return True
-
-        if name.startswith(".") and name not in {
-            ".github",
-        }:
-            return True
-
-        return False
-
-    # ------------------------------------------------------------------
-    # File inspection
-    # ------------------------------------------------------------------
-
     def _inspect_file(
         self,
-        file_path: Path,
+        path: Path,
         root: Path,
     ) -> Optional[FileMetadata]:
 
         try:
 
-            if file_path.is_symlink():
+            if path.is_symlink():
                 return None
 
-            stat = file_path.stat()
+            size = path.stat().st_size
 
-        except (OSError, PermissionError) as exc:
+            if size > self.max_file_size_bytes:
+                logger.warning(
+                    "[RepositoryManager] "
+                    "Skipping oversized file: %s",
+                    path,
+                )
+                return None
+
+            digest = hashlib.sha256()
+
+            with path.open("rb") as handle:
+
+                for chunk in iter(
+                    lambda: handle.read(
+                        1024 * 1024
+                    ),
+                    b"",
+                ):
+                    digest.update(chunk)
+
+        except (
+            OSError,
+            PermissionError,
+        ):
 
             logger.warning(
-                "[RepositoryManager] Cannot stat %s: %s",
-                file_path,
-                exc,
+                "[RepositoryManager] "
+                "Could not inspect file: %s",
+                path,
             )
 
             return None
 
-        if stat.st_size > self.max_file_size_bytes:
-
-            logger.warning(
-                "[RepositoryManager] Skipping oversized file: %s "
-                "(%d bytes)",
-                file_path,
-                stat.st_size,
-            )
-
-            return None
-
-        relative = self._relative_path(
-            file_path,
-            root,
-        )
-
-        extension = file_path.suffix.lower()
+        name = path.name
+        extension = path.suffix.lower()
 
         language = LANGUAGE_BY_EXTENSION.get(
             extension
         )
 
-        if (
-            not language
-            and file_path.name.lower() == "dockerfile"
-        ):
+        if name.lower() == "dockerfile":
             language = "docker"
 
-        try:
-
-            digest = self._sha256(
-                file_path
-            )
-
-        except (OSError, PermissionError) as exc:
-
-            logger.warning(
-                "[RepositoryManager] Cannot hash %s: %s",
-                file_path,
-                exc,
-            )
-
-            return None
+        relative = self._relative(
+            path,
+            root,
+        )
 
         return FileMetadata(
             path=relative,
-            name=file_path.name,
+            name=name,
             extension=extension,
             language=language,
-            size_bytes=stat.st_size,
-            sha256=digest,
-            is_configuration=self._is_configuration_file(
-                file_path
+            size_bytes=size,
+            sha256=digest.hexdigest(),
+            is_configuration=(
+                name.lower() in CONFIG_NAMES
+                or name.lower().startswith(".env")
             ),
-            is_entry_point=self._is_entry_point(
-                file_path
+            is_entry_point=(
+                name in ENTRY_POINT_NAMES
             ),
             is_protected=self.is_protected_path(
                 relative
             ),
         )
 
-    @staticmethod
-    def _sha256(
-        file_path: Path,
-        chunk_size: int = 1024 * 1024,
-    ) -> str:
-        """
-        Calculate SHA-256 incrementally.
-        """
-
-        digest = hashlib.sha256()
-
-        with file_path.open(
-            "rb"
-        ) as handle:
-
-            while True:
-
-                chunk = handle.read(
-                    chunk_size
-                )
-
-                if not chunk:
-                    break
-
-                digest.update(chunk)
-
-        return digest.hexdigest()
-
-    # ------------------------------------------------------------------
-    # Classification
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _is_configuration_file(
-        file_path: Path,
-    ) -> bool:
-
-        name = file_path.name.lower()
-
-        if name in CONFIG_FILE_NAMES:
-            return True
-
-        if name.startswith(".env"):
-            return True
-
-        return False
-
-    @staticmethod
-    def _is_entry_point(
-        file_path: Path,
-    ) -> bool:
-
-        return file_path.name in ENTRY_POINT_NAMES
-
-    # ------------------------------------------------------------------
-    # Python structure
-    # ------------------------------------------------------------------
-
-    def _discover_python_structure(
+    def _python_structure(
         self,
-        root: Path,
         snapshot: RepositorySnapshot,
     ) -> None:
-        """
-        Discover Python packages and modules.
 
-        A package is a directory containing __init__.py.
-        """
+        packages = set()
+        modules = set()
 
-        packages: Set[str] = set()
-        modules: Set[str] = set()
+        for item in snapshot.files:
 
-        for file_metadata in snapshot.files:
-
-            if file_metadata.language != "python":
+            if item.language != "python":
                 continue
 
-            path = Path(file_metadata.path)
+            path = Path(item.path)
 
             if path.name == "__init__.py":
 
-                package_path = path.parent
-
-                if str(package_path) == ".":
-                    continue
-
-                packages.add(
-                    self._path_to_module_name(
-                        package_path
+                if path.parent != Path("."):
+                    packages.add(
+                        ".".join(
+                            path.parent.parts
+                        )
                     )
-                )
 
             else:
 
-                if path.suffix.lower() != ".py":
-                    continue
-
                 modules.add(
-                    self._path_to_module_name(
-                        path.with_suffix("")
+                    ".".join(
+                        path.with_suffix("").parts
                     )
                 )
 
@@ -776,58 +565,31 @@ class RepositoryManager:
             modules
         )
 
-    @staticmethod
-    def _path_to_module_name(
-        path: Path,
-    ) -> str:
+    def _ignored(
+        self,
+        name: str,
+    ) -> bool:
 
-        parts = [
-            part
-            for part in path.parts
-            if part not in {
-                "",
-                ".",
-            }
-        ]
-
-        return ".".join(parts)
-
-    # ------------------------------------------------------------------
-    # Path safety
-    # ------------------------------------------------------------------
+        return (
+            name in self.ignored_directories
+            or name.endswith(".egg-info")
+        )
 
     @staticmethod
-    def _ensure_inside_repository(
-        candidate: Path,
-        root: Path,
-    ) -> None:
-
-        try:
-            candidate.relative_to(root)
-
-        except ValueError as exc:
-
-            raise ValueError(
-                "Path escapes repository root: "
-                f"{candidate}"
-            ) from exc
-
-    @staticmethod
-    def _relative_path(
+    def _relative(
         path: Path,
         root: Path,
     ) -> str:
 
-        relative = path.relative_to(
-            root
-        )
-
-        return RepositoryManager._normalize_relative_path(
-            relative
+        return str(
+            path.relative_to(root)
+        ).replace(
+            "\\",
+            "/",
         )
 
     @staticmethod
-    def _normalize_relative_path(
+    def _normalize(
         path: str | Path,
     ) -> str:
 
@@ -835,6 +597,21 @@ class RepositoryManager:
             "\\",
             "/",
         ).strip("/")
+
+    @staticmethod
+    def _ensure_inside(
+        path: Path,
+        root: Path,
+    ) -> None:
+
+        try:
+            path.relative_to(root)
+
+        except ValueError as exc:
+
+            raise ValueError(
+                f"Path escapes repository root: {path}"
+            ) from exc
 
 
 __all__ = [
