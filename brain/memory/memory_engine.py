@@ -2925,6 +2925,7 @@ class MemoryEngine:
         conversation_state: Optional[
             Dict[str, Any]
         ] = None,
+        bypass_knowledge_gate: bool = False,
     ) -> list[dict]:
 
         # =====================================================
@@ -2954,8 +2955,11 @@ class MemoryEngine:
             query or ""
         ).lower().strip()
 
-        if self._is_ordinary_knowledge_query(
-            lower
+        if (
+            not bypass_knowledge_gate
+            and self._is_ordinary_knowledge_query(
+                lower
+            )
         ):
 
             logger.info(
@@ -4039,6 +4043,7 @@ class MemoryEngine:
             Dict[str, Any]
         ] = None,
         limit: int = 50,
+        bypass_knowledge_gate: bool = False,
     ) -> list[dict]:
         """
         Public memory-retrieval entry point.
@@ -4048,6 +4053,7 @@ class MemoryEngine:
             query=query,
             limit=limit,
             conversation_state=conversation_state,
+            bypass_knowledge_gate=bypass_knowledge_gate,
         )
 
     # =========================================================
