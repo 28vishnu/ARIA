@@ -321,21 +321,29 @@ class DevelopmentAgent:
     # Repository inspection
     # ========================================================
 
-    def _repository_paths(self) -> list[str]:
+    def _repository_paths(
+        self,
+        repository_path: str | Path | None = None,
+    ) -> list[str]:
+        """Return repository-relative file paths from a read-only snapshot.
 
-        snapshot = (
-            self.repository_manager.inspect()
+        RepositoryManager.inspect() requires the repository root explicitly.
+        Keeping that requirement here prevents the development agent from
+        accidentally inspecting the process working directory.
+        """
+
+        root = (
+            Path(repository_path)
+            if repository_path is not None
+            else Path(self.workspace_manager.repository_root)
         )
 
-        paths: list[str] = []
+        snapshot = self.repository_manager.inspect(root)
 
-        for file_info in snapshot.files:
-
-            paths.append(
-                str(file_info.path)
-            )
-
-        return paths
+        return [
+            str(file_info.path).replace("\\", "/").lstrip("./")
+            for file_info in snapshot.files
+        ]
 
     def _workspace_paths(
         self,
@@ -918,6 +926,9 @@ class DevelopmentAgent:
         self,
         changes: tuple[GeneratedChange, ...],
         workspace: WorkspaceInfo,
+        *,
+        requirement: Requirement | None = None,
+        plan: ChangePlan | None = None,
     ) -> tuple[
         list[GeneratedChange],
         list[str],
@@ -998,12 +1009,11 @@ class DevelopmentAgent:
 
                 continue
 
-            full_path = (
-                workspace.source_root / path
-            )
+            full_path = workspace.source_root / path
 
             try:
-                full_path.resolve().relative_to(
+                resolved_path = full_path.resolve()
+                resolved_path.relative_to(
                     workspace.source_root.resolve()
                 )
 
@@ -1013,6 +1023,75 @@ class DevelopmentAgent:
                     f"Generated path escapes workspace: {path}"
                 )
 
+                continue
+
+            exists = resolved_path.exists()
+
+            # The operation is not merely descriptive. Enforce it against
+            # the actual workspace state so an AI cannot turn a create-only
+            # request into an overwrite.
+            if change.operation == "create" and exists:
+                errors.append(
+                    f"Create operation targets an existing path: {path}"
+                )
+                continue
+
+            if change.operation == "modify" and not exists:
+                errors.append(
+                    f"Modify operation targets a missing path: {path}"
+                )
+                continue
+
+            if change.operation == "delete" and not exists:
+                errors.append(
+                    f"Delete operation targets a missing path: {path}"
+                )
+                continue
+
+            # If the Master explicitly prohibited modification of existing
+            # files, enforce that constraint deterministically rather than
+            # trusting the generated JSON.
+            if (
+                exists
+                and change.operation in {"modify", "delete"}
+                and requirement is not None
+                and self._forbids_existing_modification(requirement)
+            ):
+                errors.append(
+                    "Requirement forbids modifying existing files: "
+                    f"{path}"
+                )
+                continue
+
+            # If the planner explicitly identified requested paths, prevent
+            # the generator from silently changing an unrelated existing
+            # file. New supporting files are allowed only when the plan did
+            # not specify an explicit file list.
+            if plan is not None:
+                planned_paths = {
+                    str(item.path).replace("\\", "/").lstrip("./")
+                    for item in plan.changes
+                    if item.path
+                }
+                if planned_paths and path not in planned_paths:
+                    errors.append(
+                        f"Generated path was not present in the change plan: {path}"
+                    )
+                    continue
+
+            # Never permit protected paths even if a future writer is
+            # accidentally configured with weaker defaults.
+            try:
+                guard = FilesystemGuard(workspace.source_root)
+                if guard.is_protected(resolved_path):
+                    errors.append(
+                        f"Protected development path rejected: {path}"
+                    )
+                    continue
+            except Exception as exc:
+                errors.append(
+                    f"Could not verify path safety for {path}: {exc}"
+                )
                 continue
 
             valid.append(
@@ -1025,6 +1104,144 @@ class DevelopmentAgent:
 
         return valid, errors
 
+    @staticmethod
+    def _forbids_existing_modification(
+        requirement: Requirement,
+    ) -> bool:
+        """Return True when the Master explicitly forbids existing-file edits."""
+
+        text = str(requirement.raw_text or "").lower()
+        normalized = re.sub(r"\s+", " ", text)
+        patterns = (
+            "do not modify any existing files",
+            "do not modify existing files",
+            "don't modify any existing files",
+            "don't modify existing files",
+            "must not modify existing files",
+            "must not modify any existing files",
+            "without modifying existing files",
+            "without modifying any existing files",
+        )
+        return any(pattern in normalized for pattern in patterns)
+
+    @staticmethod
+    def _forbids_deployment_or_push(
+        requirement: Requirement,
+    ) -> bool:
+        """Detect explicit negative deployment/push constraints."""
+
+        text = re.sub(
+            r"\s+",
+            " ",
+            str(requirement.raw_text or "").lower(),
+        )
+        negative_phrases = (
+            "do not deploy",
+            "don't deploy",
+            "must not deploy",
+            "do not push",
+            "don't push",
+            "must not push",
+            "do not push to github",
+            "don't push to github",
+        )
+        return any(phrase in text for phrase in negative_phrases)
+
+    @staticmethod
+    def _extract_exact_content_requirement(
+        requirement: Requirement,
+    ) -> tuple[str, str] | None:
+        """Extract simple deterministic 'file containing exactly X' acceptance text."""
+
+        text = str(requirement.raw_text or "")
+        match = re.search(
+            r"(?:file\s+(?:called|named)\s+[`\"]?([^`\"\s]+)[`\"]?)"
+            r"[^.\n]*?containing\s+exactly\s+(.+?)(?:\.|$)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+
+        path = match.group(1).strip()
+        content = match.group(2).strip()
+        return path, content
+
+    def _check_exact_content_requirement(
+        self,
+        requirement: Requirement,
+        workspace: WorkspaceInfo,
+    ) -> str | None:
+        extracted = self._extract_exact_content_requirement(requirement)
+        if extracted is None:
+            return None
+
+        path, expected = extracted
+        try:
+            target = FilesystemGuard(workspace.source_root).assert_allowed(
+                path,
+                allow_missing=False,
+            )
+            actual = target.read_text(encoding="utf-8")
+        except Exception as exc:
+            return f"Acceptance check could not read {path}: {exc}"
+
+        if actual != expected:
+            return (
+                f"Exact-content acceptance check failed for {path}: "
+                "file content does not exactly match the requirement."
+            )
+
+        return None
+
+    def _select_test_paths(
+        self,
+        workspace: WorkspaceInfo,
+        generation: CodeGenerationResult | None,
+        explicit_test_paths: list[str] | None,
+        generated_changes: list[GeneratedChange],
+    ) -> list[str]:
+        """Select only real pytest paths; never pass natural-language test descriptions to pytest."""
+
+        candidates = (
+            explicit_test_paths
+            if explicit_test_paths is not None
+            else list(generation.tests) if generation else []
+        )
+
+        selected: list[str] = []
+        for raw in candidates:
+            value = str(raw).strip().replace("\\", "/").lstrip("./")
+            if not value or any(token in value for token in (";", "&&", "||", "|", "`", "$(")):
+                continue
+            candidate = workspace.source_root / value
+            try:
+                candidate.resolve().relative_to(workspace.source_root.resolve())
+            except ValueError:
+                continue
+            if candidate.exists() and (candidate.is_file() or candidate.is_dir()):
+                if value not in selected:
+                    selected.append(value)
+
+        if selected:
+            return selected
+
+        # For Python/source changes, the repository test suite is a sensible
+        # default. For a non-code artifact such as aria_test.txt, do not run
+        # an unrelated entire test suite; deterministic acceptance checks are
+        # performed separately.
+        code_changed = any(
+            Path(change.path).suffix.lower() in {
+                ".py", ".pyw", ".js", ".jsx", ".ts", ".tsx",
+                ".java", ".go", ".rs", ".c", ".cpp", ".cs",
+            }
+            for change in generated_changes
+        )
+        if code_changed:
+            return self._default_test_paths(workspace)
+
+        return []
+
     # ========================================================
     # Apply generated changes
     # ========================================================
@@ -1034,50 +1251,37 @@ class DevelopmentAgent:
         writer: CodeWriter,
         changes: list[GeneratedChange],
     ) -> list[WriteResult]:
-
-        write_operations: list[
-            tuple[str, str]
-        ] = []
-
-        for change in changes:
-
-            if change.operation == "delete":
-
-                # CodeWriter's delete API is intentionally
-                # called separately so deletion remains
-                # explicit.
-                continue
-
-            write_operations.append(
-                (
-                    change.path,
-                    change.content,
-                )
-            )
+        """Apply each generated operation with its exact safety semantics."""
 
         results: list[WriteResult] = []
 
-        if write_operations:
-
-            results.extend(
-                writer.apply_files(
-                    write_operations,
-                    backup=True,
-                )
-            )
-
         for change in changes:
-
-            if change.operation != "delete":
-                continue
-
-            result = writer.delete_file(
-                change.path
-            )
-
-            results.append(
-                result
-            )
+            if change.operation == "create":
+                results.append(
+                    writer.write(
+                        change.path,
+                        change.content,
+                        create_only=True,
+                        backup=False,
+                    )
+                )
+            elif change.operation == "modify":
+                results.append(
+                    writer.write(
+                        change.path,
+                        change.content,
+                        create_only=False,
+                        backup=True,
+                    )
+                )
+            elif change.operation == "delete":
+                results.append(
+                    writer.delete(change.path)
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported generated operation: {change.operation}"
+                )
 
         return results
 
@@ -1107,7 +1311,9 @@ class DevelopmentAgent:
         try:
 
             repository_paths = (
-                self._repository_paths()
+                self._repository_paths(
+                    self.workspace_manager.repository_root
+                )
             )
 
         except Exception as exc:
@@ -1277,6 +1483,8 @@ class DevelopmentAgent:
                 self._validate_generated_changes(
                     generation.changes,
                     workspace,
+                    requirement=requirement,
+                    plan=plan,
                 )
             )
 
@@ -1328,6 +1536,8 @@ class DevelopmentAgent:
                 self._validate_generated_changes(
                     tuple(generated_changes),
                     workspace,
+                    requirement=requirement,
+                    plan=plan,
                 )
             )
 
@@ -1374,6 +1584,33 @@ class DevelopmentAgent:
                 generation=generation,
                 status="write_failed",
                 errors=tuple(errors),
+            )
+
+        # ----------------------------------------------------
+        # Deterministic requirement acceptance checks
+        # ----------------------------------------------------
+
+        acceptance_error = self._check_exact_content_requirement(
+            requirement,
+            workspace,
+        )
+
+        if acceptance_error:
+            failure = FailureAnalysis(
+                failed=True,
+                summary=acceptance_error,
+                repairable=True,
+            )
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=plan,
+                workspace=workspace,
+                writes=tuple(write_results),
+                generation=generation,
+                failure=failure,
+                status="acceptance_check_failed",
+                errors=(acceptance_error,),
             )
 
         # ----------------------------------------------------
@@ -1429,16 +1666,11 @@ class DevelopmentAgent:
         # Select tests
         # ----------------------------------------------------
 
-        selected_tests = (
-            test_paths
-            or (
-                list(generation.tests)
-                if generation
-                and generation.tests
-                else self._default_test_paths(
-                    workspace
-                )
-            )
+        selected_tests = self._select_test_paths(
+            workspace,
+            generation,
+            test_paths,
+            generated_changes,
         )
 
         if not selected_tests:
