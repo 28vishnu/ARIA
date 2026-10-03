@@ -51,7 +51,7 @@ IMPORTANCE = {
 # =========================================================
 
 SENSITIVE_MEMORY_KEY_PATTERNS = (
-    "[Aadhaar Redacted]",
+    "aadhaar",
     "aadhar",
     "uidai",
     "pan_number",
@@ -1213,6 +1213,21 @@ class MemoryEngine:
             "favorite_language",
             "preferred_watch_material",
         }
+
+        importance = memory.get(
+            "importance",
+            0.0
+        )
+
+        try:
+            importance = float(importance)
+        except (TypeError, ValueError):
+            importance = {
+                "low": 0.25,
+                "medium": 0.5,
+                "high": 0.75,
+                "critical": 1.0,
+            }.get(str(importance).strip().lower(), 0.0)
 
         if (
             key in preference_keys
