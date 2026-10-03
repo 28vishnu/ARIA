@@ -2778,6 +2778,90 @@ Return JSON:
             "execution_owner": "cognitive_core",
         }
 
+    @staticmethod
+    def _looks_like_ordinary_knowledge_query(
+        query: str,
+    ) -> bool:
+        """
+        Detect stable factual/educational questions that should be
+        handled by ARIA's local knowledge system.
+
+        These queries MUST NOT enter the LLM-backed IntentAnalyzer.
+
+        Current/latest/online requests are excluded because those may
+        legitimately require web/current-information handling.
+        """
+
+        q = str(query or "").strip().lower()
+
+        if not q:
+            return False
+
+        # ---------------------------------------------------------
+        # CURRENT / WEB INFORMATION
+        # ---------------------------------------------------------
+        # These requests may legitimately require web/current-data
+        # handling, so do NOT classify them as local-only knowledge.
+        # ---------------------------------------------------------
+
+        current_markers = (
+            "latest",
+            "current",
+            "today",
+            "now",
+            "recent",
+            "this week",
+            "this month",
+            "this year",
+            "breaking",
+            "online",
+            "search the web",
+            "look up",
+            "on the internet",
+            "internet",
+            "web search",
+        )
+
+        if any(
+            marker in q
+            for marker in current_markers
+        ):
+            return False
+
+        # ---------------------------------------------------------
+        # STABLE KNOWLEDGE QUESTION PATTERNS
+        # ---------------------------------------------------------
+
+        prefixes = (
+            "what is ",
+            "what are ",
+            "what does ",
+            "what do ",
+            "what was ",
+            "what were ",
+
+            "why is ",
+            "why are ",
+            "why does ",
+            "why do ",
+
+            "how does ",
+            "how do ",
+            "how is ",
+            "how are ",
+
+            "explain ",
+            "define ",
+            "describe ",
+
+            "tell me about ",
+            "difference between ",
+            "what's ",
+            "whats ",
+        )
+
+        return q.startswith(prefixes)
+
     async def reason(
         self,
         context: Dict[str, Any],
@@ -2793,6 +2877,102 @@ Return JSON:
                 "",
             )
         ).strip()
+
+        # =============================================================
+        # LOCAL KNOWLEDGE HARD GATE
+        # =============================================================
+        #
+        # Ordinary factual/educational questions belong to
+        # KnowledgeManager.
+        #
+        # IMPORTANT:
+        #
+        # IntentAnalyzer is LLM-backed.
+        #
+        # Therefore a query such as:
+        #
+        #     What does TCP provide?
+        #
+        # MUST NOT execute:
+        #
+        #     IntentAnalyzer
+        #          -> LLMRouter
+        #          -> Groq
+        #          -> Gemini
+        #          -> OpenRouter
+        #          -> Mistral
+        #
+        # KnowledgeManager is the canonical owner of ordinary
+        # knowledge retrieval.
+        #
+        # CognitiveCore already marks these requests with
+        # local_knowledge_query, but we independently detect them here
+        # because ReasoningEngine may also be called directly.
+        # =============================================================
+
+        local_knowledge_query = bool(
+            context.get(
+                "local_knowledge_query",
+                False,
+            )
+            or self._looks_like_ordinary_knowledge_query(
+                user_query
+            )
+        )
+
+        if local_knowledge_query:
+
+            context["local_knowledge_query"] = True
+
+            # Do not allow any stale intent object to influence this
+            # request.
+            context["intent"] = None
+
+            # Tell downstream components that KnowledgeManager owns
+            # the answer path.
+            context["reasoning_strategy"] = (
+                "knowledge_first"
+            )
+
+            context["knowledge_owner"] = (
+                "knowledge_manager"
+            )
+
+            context["external_llm_allowed"] = False
+
+            logger.info(
+                "[LocalKnowledge] ReasoningEngine hard gate active; "
+                "IntentAnalyzer/LLM skipped. "
+                "KnowledgeManager owns this query."
+            )
+
+            # Return a lightweight result.
+            #
+            # CognitiveCore will continue the canonical
+            # KnowledgeManager pipeline.
+            #
+            # We intentionally do NOT perform:
+            # - IntentAnalyzer
+            # - semantic intent classification
+            # - episodic memory retrieval
+            # - knowledge database retrieval
+            # - LLM generation
+            #
+            # This removes the duplicate reasoning/knowledge path.
+            return self._empty_reasoning_result(
+                goal="answer",
+                action="chat",
+                confidence=0.85,
+                answer=None,
+            )
+
+        # =============================================================
+        # NORMAL REASONING PATH
+        # =============================================================
+        #
+        # Only non-local-knowledge requests reach the LLM-backed
+        # IntentAnalyzer.
+        # =============================================================
 
         intent = await self.intent_analyzer.analyze(
             user_query
