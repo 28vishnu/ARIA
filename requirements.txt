@@ -19,3 +19,7 @@ pymupdf
 pillow
 rapidocr-onnxruntime
 python-multipart
+
+# Local AI / embeddings
+sentence-transformers
+torch
