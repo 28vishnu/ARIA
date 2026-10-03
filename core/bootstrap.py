@@ -121,6 +121,7 @@ from brain.decision.decision_engine import DecisionEngine
 from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.llm.llm_router import LLMRouter
+from brain.development.code_generation_bridge import LLMCodeGenerationBridge
 
 from brain.events.event_bus import EventBus
 from brain.events.event import Event
@@ -922,9 +923,39 @@ async def bootstrap_application() -> ServiceRegistry:
     # It must therefore receive only the APIs it actually
     # accepts: RepositoryManager + DevelopmentWorkspace.
 
+    # ---------------------------------------------------------
+    # Phase 1 — LLM Code Generation Bridge
+    # ---------------------------------------------------------
+    #
+    # This bridge only requests structured code-generation data.
+    # DevelopmentAgent remains responsible for workspace isolation,
+    # path validation, writing, validation, testing, and repair.
+    #
+    code_generation_bridge = LLMCodeGenerationBridge(
+        llm_router=llm_router,
+        temperature=float(
+            os.getenv(
+                "ARIA_CODE_GENERATION_TEMPERATURE",
+                "0.15",
+            )
+        ),
+        max_tokens=int(
+            os.getenv(
+                "ARIA_CODE_GENERATION_MAX_TOKENS",
+                "16384",
+            )
+        ),
+    )
+
+    registry.register(
+        "code_generation_bridge",
+        code_generation_bridge,
+    )
+
     development_agent = DevelopmentAgent(
         repository_manager=repository_manager,
         workspace_manager=development_workspace,
+        code_generator=code_generation_bridge,
         max_repair_attempts=int(
             os.getenv(
                 "ARIA_REPAIR_MAX_ATTEMPTS",
@@ -971,6 +1002,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "test_runner_factory": DevelopmentTestRunner,
             "failure_analyzer": failure_analyzer,
             "repair_engine": repair_engine,
+            "code_generation_bridge": code_generation_bridge,
             "development_agent": development_agent,
             "development_controller": development_controller,
             "git_manager": git_manager,
