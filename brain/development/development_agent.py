@@ -245,12 +245,18 @@ class DevelopmentAgent:
     - GitHub/deployment/rollback are outside this class.
     """
 
+    # Maximum amount of repository context sent to the
+    # generation layer.
     DEFAULT_MAX_CONTEXT_CHARS = 120_000
 
+    # Maximum generated response accepted from an AI provider.
     DEFAULT_MAX_GENERATION_CHARS = 500_000
 
+    # Prevent an AI response from creating an unreasonable
+    # number of files in one development request.
     DEFAULT_MAX_GENERATED_FILES = 30
 
+    # Prevent pathological individual generated files.
     DEFAULT_MAX_FILE_CHARS = 2_000_000
 
     def __init__(
@@ -316,31 +322,9 @@ class DevelopmentAgent:
     # ========================================================
 
     def _repository_paths(self) -> list[str]:
-        """
-        Inspect the actual ARIA repository in read-only mode.
-
-        RepositoryManager.inspect() requires an explicit
-        repository path. DevelopmentWorkspace owns the
-        canonical repository root, so that root is supplied
-        explicitly here.
-
-        This method performs inspection only. It does not
-        modify the production repository.
-        """
-
-        repository_root = (
-            self.workspace_manager.repository_root
-        )
-
-        logger.info(
-            "[DevelopmentAgent] Inspecting repository | root=%s",
-            repository_root,
-        )
 
         snapshot = (
-            self.repository_manager.inspect(
-                repository_root
-            )
+            self.repository_manager.inspect()
         )
 
         paths: list[str] = []
@@ -350,11 +334,6 @@ class DevelopmentAgent:
             paths.append(
                 str(file_info.path)
             )
-
-        logger.info(
-            "[DevelopmentAgent] Repository inspection complete | files=%s",
-            len(paths),
-        )
 
         return paths
 
@@ -416,6 +395,7 @@ class DevelopmentAgent:
 
             relative_path = relative.as_posix()
 
+            # Skip obvious generated/cache content.
             if any(
                 part in {
                     ".git",
@@ -440,6 +420,7 @@ class DevelopmentAgent:
             except OSError:
                 continue
 
+            # Avoid enormous binary/media files.
             if size > 2_000_000:
                 continue
 
@@ -496,6 +477,11 @@ class DevelopmentAgent:
         failure: FailureAnalysis | None = None,
         previous_changes: list[GeneratedChange] | None = None,
     ) -> str:
+        """
+        Construct the strict code-generation contract.
+
+        The generator must return JSON only.
+        """
 
         failure_text = ""
 
@@ -1056,6 +1042,10 @@ class DevelopmentAgent:
         for change in changes:
 
             if change.operation == "delete":
+
+                # CodeWriter's delete API is intentionally
+                # called separately so deletion remains
+                # explicit.
                 continue
 
             write_operations.append(
@@ -1121,10 +1111,6 @@ class DevelopmentAgent:
             )
 
         except Exception as exc:
-
-            logger.exception(
-                "[DevelopmentAgent] Repository inspection failed."
-            )
 
             return DevelopmentReport(
                 success=False,
