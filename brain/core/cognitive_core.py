@@ -3572,6 +3572,8 @@ usable evidence is present. Do not invent details absent from the evidence.
             "universities",
             "college",
             "affordability",
+            "user_likes",
+            "general_preference",
         )
 
         profile = []
@@ -5309,6 +5311,28 @@ usable evidence is present. Do not invent details absent from the evidence.
                 logger.info(
                     "[MemoryAdmission] Preference statement detected; "
                     "allowing MemoryEngine durable-memory admission."
+                )
+                try:
+                    if self.memory_engine and hasattr(self.memory_engine, "process_and_store"):
+                        observation = await self.memory_engine.process_and_store(query)
+                        context["memory_observation"] = observation or {}
+                        logger.info(
+                            "[MemoryAdmission] Preference stored deterministically: %s",
+                            observation.get("action", "none") if isinstance(observation, dict) else "stored",
+                        )
+                except Exception as exc:
+                    logger.warning("[MemoryAdmission] Preference storage failed: %s", exc)
+
+                # A preference statement is an instruction/fact to remember,
+                # not a request for semantic reasoning or LLM intent analysis.
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="conversation",
+                    data={
+                        "response": "Understood, Sir.",
+                        "message": "Understood, Sir.",
+                    },
                 )
 
             # =========================================================
