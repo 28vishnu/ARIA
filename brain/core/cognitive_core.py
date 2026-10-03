@@ -3526,7 +3526,6 @@ usable evidence is present. Do not invent details absent from the evidence.
             return []
 
         excluded_exact = {
-            "user_likes",
             "user_dislikes",
             "exam_preparation",
             "exam",
@@ -3691,6 +3690,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             for item in profile:
                 readable_key = (
                     item["key"]
+                    .replace("user_likes", "likes")
                     .replace("favorite_", "favorite ")
                     .replace("favourite_", "favorite ")
                     .replace("preferred_", "preferred ")
@@ -5301,13 +5301,14 @@ usable evidence is present. Do not invent details absent from the evidence.
                         error="I couldn't retrieve your memories right now.",
                     )
 
-            # Ordinary likes/preferences are conversational unless explicitly
-            # saved. Never let stale preference records answer these statements.
+            # Ordinary preference statements are now eligible for durable
+            # memory. A direct statement such as "I like pandas" is a stable
+            # user preference and should be available to later memory recall.
+            # The MemoryEngine applies the final admission policy.
             if not compound_memory_request and self._looks_like_non_durable_preference_statement(query):
-                logger.info("[MemoryAdmission] Conversational preference kept out of durable-memory recall.")
-                return SystemResponse(
-                    success=True, confidence=1.0, source="conversation",
-                    data={"response": "Understood, Sir.", "message": "Understood, Sir."},
+                logger.info(
+                    "[MemoryAdmission] Preference statement detected; "
+                    "allowing MemoryEngine durable-memory admission."
                 )
 
             # =========================================================
