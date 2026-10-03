@@ -12,6 +12,15 @@ from typing import Optional
 
 
 # ============================================================
+# IMPLEMENTATION VERSION
+# ============================================================
+
+WORKSPACE_IMPLEMENTATION_VERSION = (
+    "PHASE1-WORKSPACE-20261003-FIX2"
+)
+
+
+# ============================================================
 # Helpers
 # ============================================================
 
@@ -34,12 +43,10 @@ class WorkspaceInfo:
     source_root: Path
     created_at: str
 
-    # Snapshot information.
     source_file_count: int = 0
     source_directory_count: int = 0
     source_snapshot_hash: str = ""
 
-    # Actual copied repository information.
     copied_file_count: int = 0
     copied_directory_count: int = 0
     copied_snapshot_hash: str = ""
@@ -69,25 +76,26 @@ class DevelopmentWorkspace:
 
     The production repository is never modified by this class.
 
-    Important implementation detail:
+    IMPORTANT:
 
-    The default workspace directory is located INSIDE the
-    repository. Therefore shutil.copytree() is deliberately not
-    used for the repository snapshot.
+    The workspace directory can live inside the production
+    repository. Therefore the source repository is snapshotted
+    BEFORE a workspace is created.
 
-    Instead:
+    The snapshot is then copied explicitly into the isolated
+    workspace.
 
-        1. Snapshot the source tree first.
-        2. Create the destination.
-        3. Copy the recorded files explicitly.
-        4. Verify the destination.
-        5. Write workspace metadata.
+    This prevents:
 
-    This prevents recursive/nested workspace-copy problems.
+        repository
+            -> workspace
+                -> workspace
+                    -> workspace
+                        -> ...
+
+    recursive-copy problems.
     """
 
-    # Directories that must never be copied into a development
-    # workspace.
     DEFAULT_IGNORED_DIRECTORIES = frozenset(
         {
             ".git",
@@ -105,8 +113,6 @@ class DevelopmentWorkspace:
         }
     )
 
-    # Files that are normally unnecessary for development
-    # context and may contain local/environment information.
     DEFAULT_IGNORED_FILES = frozenset(
         {
             ".DS_Store",
@@ -131,7 +137,10 @@ class DevelopmentWorkspace:
             .expanduser()
             .resolve()
             if workspace_base is not None
-            else self.repository_root / ".aria_workspaces"
+            else (
+                self.repository_root
+                / ".aria_workspaces"
+            )
         )
 
         self.max_workspaces = max(
@@ -139,7 +148,6 @@ class DevelopmentWorkspace:
             int(max_workspaces),
         )
 
-        # Keep the ignored sets immutable.
         self.ignored_directories = set(
             self.DEFAULT_IGNORED_DIRECTORIES
         )
@@ -153,6 +161,7 @@ class DevelopmentWorkspace:
     # ========================================================
 
     def _validate_repository(self) -> None:
+
         if not self.repository_root.exists():
             raise FileNotFoundError(
                 f"Repository does not exist: "
@@ -166,6 +175,7 @@ class DevelopmentWorkspace:
             )
 
     def _validate_workspace_base(self) -> None:
+
         self.workspace_base.mkdir(
             parents=True,
             exist_ok=True,
@@ -175,9 +185,7 @@ class DevelopmentWorkspace:
             self.workspace_base.resolve()
         )
 
-        # If workspace_base is inside the repository, that is
-        # supported. It is explicitly excluded from the source
-        # snapshot.
+        # Workspace base may be inside repository.
         try:
             resolved_base.relative_to(
                 self.repository_root
@@ -186,7 +194,7 @@ class DevelopmentWorkspace:
         except ValueError:
             pass
 
-        # A workspace outside the repository is also valid.
+        # Workspace base outside repository is also valid.
 
     @staticmethod
     def _validate_workspace_id(
@@ -235,9 +243,6 @@ class DevelopmentWorkspace:
         if directory.name in self.ignored_directories:
             return True
 
-        # Most importantly, prevent the destination workspace
-        # tree from being treated as source material when the
-        # workspace base lives inside the repository.
         if self._is_workspace_base_path(directory):
             return True
 
@@ -272,14 +277,6 @@ class DevelopmentWorkspace:
     def _snapshot_source_tree(
         self,
     ) -> tuple[list[Path], list[Path], str]:
-        """
-        Build a complete source manifest BEFORE creating the
-        destination workspace.
-
-        This is intentionally done before workspace creation so
-        the destination cannot accidentally become part of the
-        source traversal.
-        """
 
         files: list[Path] = []
         directories: list[Path] = []
@@ -291,13 +288,16 @@ class DevelopmentWorkspace:
             topdown=True,
             followlinks=False,
         ):
+
             current = Path(current_root)
 
-            # Remove ignored directories from traversal.
             kept_dirs: list[str] = []
 
             for directory_name in sorted(dir_names):
-                directory = current / directory_name
+
+                directory = (
+                    current / directory_name
+                )
 
                 if self._is_ignored_directory(
                     directory
@@ -312,19 +312,19 @@ class DevelopmentWorkspace:
                     directory
                 )
 
-            # Mutate os.walk's traversal list.
             dir_names[:] = kept_dirs
 
             for file_name in sorted(file_names):
-                file_path = current / file_name
+
+                file_path = (
+                    current / file_name
+                )
 
                 if self._is_ignored_file(
                     file_path
                 ):
                     continue
 
-                # Never follow symlinked files. They may point
-                # outside the repository.
                 if file_path.is_symlink():
                     continue
 
@@ -367,7 +367,9 @@ class DevelopmentWorkspace:
         digest = hashlib.sha256()
 
         for file_path in files:
+
             try:
+
                 relative = (
                     self._relative_source_path(
                         file_path
@@ -379,23 +381,19 @@ class DevelopmentWorkspace:
                 digest.update(
                     _normalise_path(
                         relative
-                    ).encode(
-                        "utf-8"
-                    )
+                    ).encode("utf-8")
                 )
 
                 digest.update(
-                    str(stat.st_size).encode(
-                        "utf-8"
-                    )
+                    str(
+                        stat.st_size
+                    ).encode("utf-8")
                 )
 
                 digest.update(
                     str(
                         stat.st_mtime_ns
-                    ).encode(
-                        "utf-8"
-                    )
+                    ).encode("utf-8")
                 )
 
             except (
@@ -417,7 +415,6 @@ class DevelopmentWorkspace:
         source_root: Path,
     ) -> tuple[int, int]:
 
-        # Create directories first.
         for source_directory in source_directories:
 
             relative = (
@@ -437,6 +434,10 @@ class DevelopmentWorkspace:
 
         copied_files = 0
 
+        resolved_source_root = (
+            source_root.resolve()
+        )
+
         for source_file in source_files:
 
             relative = (
@@ -454,20 +455,18 @@ class DevelopmentWorkspace:
                 exist_ok=True,
             )
 
-            # Final safety check.
             resolved_destination = (
                 destination.resolve()
             )
 
-            resolved_source_root = (
-                source_root.resolve()
-            )
-
             try:
+
                 resolved_destination.relative_to(
                     resolved_source_root
                 )
+
             except ValueError as exc:
+
                 raise ValueError(
                     "Refusing to copy outside workspace "
                     f"source root: {destination}"
@@ -518,9 +517,11 @@ class DevelopmentWorkspace:
             topdown=True,
             followlinks=False,
         ):
+
             current = Path(current_root)
 
             for file_name in file_names:
+
                 path = current / file_name
 
                 if path.is_symlink():
@@ -558,16 +559,19 @@ class DevelopmentWorkspace:
         }
 
         missing = sorted(
-            expected_relative - actual_relative
+            expected_relative
+            - actual_relative
         )
 
         unexpected = sorted(
-            actual_relative - expected_relative
+            actual_relative
+            - expected_relative
         )
 
         errors: list[str] = []
 
         if missing:
+
             errors.append(
                 "Missing copied files: "
                 + ", ".join(
@@ -576,6 +580,7 @@ class DevelopmentWorkspace:
             )
 
         if unexpected:
+
             errors.append(
                 "Unexpected copied files: "
                 + ", ".join(
@@ -583,7 +588,6 @@ class DevelopmentWorkspace:
                 )
             )
 
-        # Verify file sizes and contents.
         if not errors:
 
             for source_file in source_files:
@@ -599,6 +603,7 @@ class DevelopmentWorkspace:
                 )
 
                 try:
+
                     source_size = (
                         source_file.stat().st_size
                     )
@@ -608,20 +613,25 @@ class DevelopmentWorkspace:
                     )
 
                 except OSError as exc:
+
                     errors.append(
                         f"Unable to stat copied file "
                         f"{relative}: {exc}"
                     )
+
                     continue
 
-                if source_size != destination_size:
+                if (
+                    source_size
+                    != destination_size
+                ):
+
                     errors.append(
                         f"Size mismatch for "
                         f"{relative}: "
                         f"{source_size} != "
                         f"{destination_size}"
                     )
-                    continue
 
         copied_hash = (
             self._calculate_workspace_hash(
@@ -659,8 +669,11 @@ class DevelopmentWorkspace:
         for file_path in files:
 
             try:
-                relative = file_path.relative_to(
-                    source_root
+
+                relative = (
+                    file_path.relative_to(
+                        source_root
+                    )
                 )
 
                 stat = file_path.stat()
@@ -668,21 +681,19 @@ class DevelopmentWorkspace:
                 digest.update(
                     _normalise_path(
                         relative
-                    ).encode(
-                        "utf-8"
-                    )
+                    ).encode("utf-8")
                 )
 
                 digest.update(
-                    str(stat.st_size).encode(
-                        "utf-8"
-                    )
+                    str(
+                        stat.st_size
+                    ).encode("utf-8")
                 )
 
                 digest.update(
-                    str(stat.st_mtime_ns).encode(
-                        "utf-8"
-                    )
+                    str(
+                        stat.st_mtime_ns
+                    ).encode("utf-8")
                 )
 
             except OSError:
@@ -694,7 +705,9 @@ class DevelopmentWorkspace:
     # Workspace lifecycle
     # ========================================================
 
-    def _active_workspaces(self) -> list[Path]:
+    def _active_workspaces(
+        self,
+    ) -> list[Path]:
 
         if not self.workspace_base.exists():
             return []
@@ -706,8 +719,6 @@ class DevelopmentWorkspace:
             if not path.is_dir():
                 continue
 
-            # Only treat directories containing workspace.json
-            # as managed workspaces.
             if not (
                 path / "workspace.json"
             ).is_file():
@@ -730,17 +741,20 @@ class DevelopmentWorkspace:
 
         active = self._active_workspaces()
 
-        # Always keep the workspace that was just created.
         if keep_workspace is not None:
+
             keep_workspace = (
                 keep_workspace.resolve()
             )
 
         for old_workspace in active:
 
-            if len(
-                self._active_workspaces()
-            ) <= self.max_workspaces:
+            if (
+                len(
+                    self._active_workspaces()
+                )
+                <= self.max_workspaces
+            ):
                 break
 
             if (
@@ -751,9 +765,11 @@ class DevelopmentWorkspace:
                 continue
 
             try:
+
                 shutil.rmtree(
                     old_workspace
                 )
+
             except OSError:
                 continue
 
@@ -766,12 +782,19 @@ class DevelopmentWorkspace:
         workspace_id: Optional[str] = None,
     ) -> WorkspaceInfo:
 
+        print(
+            "[DevelopmentWorkspace] CREATE START | "
+            f"version={WORKSPACE_IMPLEMENTATION_VERSION} | "
+            f"repository_root={self.repository_root} | "
+            f"workspace_base={self.workspace_base}"
+        )
+
         self._validate_repository()
         self._validate_workspace_base()
 
         # ----------------------------------------------------
         # CRITICAL:
-        # Snapshot the source BEFORE creating the destination.
+        # Snapshot BEFORE creating workspace.
         # ----------------------------------------------------
 
         (
@@ -780,21 +803,47 @@ class DevelopmentWorkspace:
             source_snapshot_hash,
         ) = self._snapshot_source_tree()
 
+        print(
+            "[DevelopmentWorkspace] SOURCE SNAPSHOT | "
+            f"files={len(source_files)} | "
+            f"directories={len(source_directories)} | "
+            f"hash={source_snapshot_hash[:16]}"
+        )
+
+        # Show a small sample so we know exactly what Render
+        # thinks is inside /app.
+        print(
+            "[DevelopmentWorkspace] SOURCE SAMPLE | "
+            + str(
+                [
+                    _normalise_path(
+                        self._relative_source_path(path)
+                    )
+                    for path in source_files[:10]
+                ]
+            )
+        )
+
         if not source_files:
+
             raise RuntimeError(
                 "Repository snapshot is empty; "
-                "refusing to create an empty development workspace."
+                "refusing to create an empty development "
+                "workspace."
             )
 
-        identifier = workspace_id or (
-            "dev-"
-            + datetime.now(
-                timezone.utc
-            ).strftime(
-                "%Y%m%d%H%M%S"
+        identifier = (
+            workspace_id
+            or (
+                "dev-"
+                + datetime.now(
+                    timezone.utc
+                ).strftime(
+                    "%Y%m%d%H%M%S"
+                )
+                + "-"
+                + uuid.uuid4().hex[:8]
             )
-            + "-"
-            + uuid.uuid4().hex[:8]
         )
 
         self._validate_workspace_id(
@@ -811,15 +860,19 @@ class DevelopmentWorkspace:
         )
 
         try:
+
             workspace_root.relative_to(
                 workspace_base_resolved
             )
+
         except ValueError as exc:
+
             raise ValueError(
                 "Workspace path escapes workspace base."
             ) from exc
 
         if workspace_root.exists():
+
             raise FileExistsError(
                 "Workspace already exists: "
                 f"{workspace_root}"
@@ -830,6 +883,7 @@ class DevelopmentWorkspace:
         )
 
         try:
+
             workspace_root.mkdir(
                 parents=True,
                 exist_ok=False,
@@ -840,6 +894,12 @@ class DevelopmentWorkspace:
                 exist_ok=False,
             )
 
+            print(
+                "[DevelopmentWorkspace] DESTINATION CREATED | "
+                f"workspace_root={workspace_root} | "
+                f"source_root={source_root}"
+            )
+
             (
                 copied_files,
                 copied_directories,
@@ -847,6 +907,13 @@ class DevelopmentWorkspace:
                 source_files=source_files,
                 source_directories=source_directories,
                 source_root=source_root,
+            )
+
+            print(
+                "[DevelopmentWorkspace] COPY COMPLETE | "
+                f"source_files={len(source_files)} | "
+                f"copied_files={copied_files} | "
+                f"copied_directories={copied_directories}"
             )
 
             (
@@ -860,7 +927,16 @@ class DevelopmentWorkspace:
                 source_root=source_root,
             )
 
+            print(
+                "[DevelopmentWorkspace] COPY VERIFICATION | "
+                f"valid={valid} | "
+                f"verified_files={verified_file_count} | "
+                f"expected_files={len(source_files)} | "
+                f"sample={sample}"
+            )
+
             if not valid:
+
                 raise RuntimeError(
                     "Workspace copy verification failed. "
                     f"expected_files={len(source_files)} "
@@ -871,6 +947,7 @@ class DevelopmentWorkspace:
             if copied_files != len(
                 source_files
             ):
+
                 raise RuntimeError(
                     "Workspace copy count mismatch. "
                     f"source={len(source_files)} "
@@ -916,28 +993,35 @@ class DevelopmentWorkspace:
                 encoding="utf-8",
             )
 
-            # Verify metadata exists before returning.
             if not metadata_path.is_file():
+
                 raise RuntimeError(
-                    "Workspace metadata could not be created."
+                    "Workspace metadata could not "
+                    "be created."
                 )
 
-            # Keep the newly-created workspace.
             self._enforce_workspace_limit(
                 keep_workspace=workspace_root
+            )
+
+            print(
+                "[DevelopmentWorkspace] CREATE SUCCESS | "
+                f"workspace_id={identifier} | "
+                f"files={verified_file_count}"
             )
 
             return metadata
 
         except Exception:
 
-            # Never leave a partially-created workspace behind.
             if workspace_root.exists():
 
                 try:
+
                     shutil.rmtree(
                         workspace_root
                     )
+
                 except OSError:
                     pass
 
@@ -962,10 +1046,13 @@ class DevelopmentWorkspace:
         ).resolve()
 
         try:
+
             workspace_root.relative_to(
                 self.workspace_base.resolve()
             )
+
         except ValueError:
+
             return False
 
         return (
@@ -995,10 +1082,13 @@ class DevelopmentWorkspace:
         )
 
         try:
+
             workspace_root.relative_to(
                 workspace_base_resolved
             )
+
         except ValueError as exc:
+
             raise ValueError(
                 "Workspace path escapes workspace base."
             ) from exc
@@ -1009,6 +1099,7 @@ class DevelopmentWorkspace:
         )
 
         if not metadata_path.is_file():
+
             raise FileNotFoundError(
                 "Workspace metadata not found: "
                 f"{workspace_id}"
@@ -1024,16 +1115,17 @@ class DevelopmentWorkspace:
             workspace_root / "repo"
         ).resolve()
 
-        # Do not trust an arbitrary source_root stored in
-        # metadata. Reconstruct it from the verified workspace
-        # root.
         try:
+
             source_root.relative_to(
                 workspace_root
             )
+
         except ValueError as exc:
+
             raise ValueError(
-                "Workspace repository path escapes workspace root."
+                "Workspace repository path escapes "
+                "workspace root."
             ) from exc
 
         return WorkspaceInfo(
@@ -1101,6 +1193,7 @@ class DevelopmentWorkspace:
         )
 
         if not source_root.is_dir():
+
             return {
                 "valid": False,
                 "workspace_id": workspace_id,
@@ -1123,6 +1216,7 @@ class DevelopmentWorkspace:
             topdown=True,
             followlinks=False,
         ):
+
             actual_directories += len(
                 dir_names
             )
@@ -1187,10 +1281,13 @@ class DevelopmentWorkspace:
         )
 
         try:
+
             workspace_root.relative_to(
                 workspace_base_resolved
             )
+
         except ValueError as exc:
+
             raise ValueError(
                 "Workspace path escapes workspace base."
             ) from exc
@@ -1199,11 +1296,13 @@ class DevelopmentWorkspace:
             workspace_root
             == workspace_base_resolved
         ):
+
             raise ValueError(
                 "Refusing to destroy workspace base."
             )
 
         if workspace_root.exists():
+
             shutil.rmtree(
                 workspace_root
             )
@@ -1221,6 +1320,7 @@ class DevelopmentWorkspace:
         for directory in self._active_workspaces():
 
             try:
+
                 result.append(
                     self.get(
                         directory.name
@@ -1234,6 +1334,18 @@ class DevelopmentWorkspace:
                 TypeError,
                 json.JSONDecodeError,
             ):
+
                 continue
 
         return result
+
+
+# ============================================================
+# IMPORT DIAGNOSTIC
+# ============================================================
+
+print(
+    "[DevelopmentWorkspace] LOADED | "
+    f"version={WORKSPACE_IMPLEMENTATION_VERSION} | "
+    f"module={__file__}"
+)
