@@ -594,6 +594,118 @@ class MemoryEngine:
         )
 
     # =========================================================
+    # ORDINARY KNOWLEDGE QUERY DETECTION
+    # =========================================================
+    #
+    # General factual / educational questions belong to
+    # KnowledgeManager, NOT MemoryEngine.
+    #
+    # This gate is intentionally placed here because
+    # MemoryEngine can be reached before CognitiveCore's later
+    # knowledge checks.
+    #
+    # IMPORTANT:
+    #
+    # This check must happen BEFORE:
+    #
+    #   - MongoDB memory retrieval
+    #   - personal-memory ranking
+    #   - semantic memory selection
+    #   - LLMRouter.select_relevant_memories()
+    #
+    # Examples:
+    #
+    #   What is TCP?
+    #   What does TCP provide?
+    #   What are arrays?
+    #   How does DNS work?
+    #   Explain operating systems.
+    #   Why does TCP use acknowledgements?
+    #
+    # Current/latest/web requests are deliberately excluded.
+    # =========================================================
+
+    @staticmethod
+    def _is_ordinary_knowledge_query(
+        query: str,
+    ) -> bool:
+        """
+        Detect stable factual/educational questions that should
+        never trigger personal-memory retrieval.
+
+        These questions belong to KnowledgeManager.
+
+        Returns:
+            True  -> KnowledgeManager owns the query.
+            False -> MemoryEngine may continue normally.
+        """
+
+        q = str(
+            query or ""
+        ).strip().lower()
+
+        if not q:
+            return False
+
+        # -----------------------------------------------------
+        # Current / web-sensitive requests
+        # -----------------------------------------------------
+        #
+        # These are NOT ordinary stable-knowledge queries because
+        # they may legitimately require current information.
+        # -----------------------------------------------------
+
+        current_markers = (
+            "latest",
+            "current",
+            "today",
+            "now",
+            "recent",
+            "this week",
+            "this month",
+            "this year",
+            "breaking",
+            "online",
+            "search the web",
+            "look up",
+            "on the internet",
+        )
+
+        if any(
+            marker in q
+            for marker in current_markers
+        ):
+            return False
+
+        # -----------------------------------------------------
+        # Stable educational / factual question prefixes
+        # -----------------------------------------------------
+
+        prefixes = (
+            "what is ",
+            "what are ",
+            "what does ",
+            "what do ",
+            "what was ",
+            "what were ",
+            "why is ",
+            "why are ",
+            "why does ",
+            "why do ",
+            "how does ",
+            "how do ",
+            "how is ",
+            "how are ",
+            "explain ",
+            "define ",
+            "describe ",
+            "tell me about ",
+            "difference between ",
+        )
+
+        return q.startswith(prefixes)
+
+    # =========================================================
     # SHOULD MEMORY BE USED?
     # =========================================================
 
@@ -611,11 +723,28 @@ class MemoryEngine:
 
         q = query.lower().strip()
 
+        # =====================================================
+        # ORDINARY KNOWLEDGE HARD GATE
+        # =====================================================
+        #
+        # This is intentionally checked before all other
+        # memory-selection logic.
+        #
+        # It prevents ordinary educational questions from
+        # being interpreted as personal-memory requests.
+        # =====================================================
+
+        if self._is_ordinary_knowledge_query(q):
+            return False
+
         # A declarative preference is conversation, not a memory lookup.
         # Explicit "remember/save..." requests are still handled as memory.
         if (
             not self._explicit_memory_instruction(q)
-            and re.match(r"^(?:i|i'm|i am)\s+(?:like|love|prefer)\b", q)
+            and re.match(
+                r"^(?:i|i'm|i am)\s+(?:like|love|prefer)\b",
+                q
+            )
         ):
             return False
 
@@ -670,13 +799,25 @@ class MemoryEngine:
             "who is",
             "who was",
             "what is",
+            "what are",
+            "what does",
+            "what do",
             "what was",
+            "what were",
             "where is",
             "where was",
             "when was",
             "how does",
             "how do",
+            "how is",
+            "how are",
+            "why is",
+            "why are",
+            "why does",
+            "why do",
             "explain",
+            "define",
+            "describe",
             "calculate",
         )
 
@@ -765,54 +906,139 @@ class MemoryEngine:
 
     def _auth_secret_key(self, key: Any) -> bool:
         normalized = _normalized_memory_key(key)
-        return any(token in normalized for token in (
-            "password", "passcode", "otp", "one_time_password",
-            "pin", "cvv", "cvc", "api_key", "access_token",
-            "refresh_token", "auth_token", "private_key", "secret",
-        ))
+        return any(
+            token in normalized
+            for token in (
+                "password",
+                "passcode",
+                "otp",
+                "one_time_password",
+                "pin",
+                "cvv",
+                "cvc",
+                "api_key",
+                "access_token",
+                "refresh_token",
+                "auth_token",
+                "private_key",
+                "secret",
+            )
+        )
 
-    def _sensitive_key_from_text(self, text: str) -> Optional[str]:
+    def _sensitive_key_from_text(
+        self,
+        text: str
+    ) -> Optional[str]:
+
         q = str(text or "").lower()
-        if re.search(r"\baadhaar\b|\baadhar\b|\buidai\b", q):
+
+        if re.search(
+            r"\baadhaar\b|\baadhar\b|\buidai\b",
+            q
+        ):
             return "aadhaar_number"
-        if re.search(r"\bpan\s*(?:number|card)?\b", q):
+
+        if re.search(
+            r"\bpan\s*(?:number|card)?\b",
+            q
+        ):
             return "pan_number"
-        if re.search(r"\bpassport\s*(?:number|id)?\b", q):
+
+        if re.search(
+            r"\bpassport\s*(?:number|id)?\b",
+            q
+        ):
             return "passport_number"
-        if re.search(r"\bvoter\s*(?:id|number)\b", q):
+
+        if re.search(
+            r"\bvoter\s*(?:id|number)\b",
+            q
+        ):
             return "voter_id"
-        if re.search(r"\b(?:driving|driver)\s*licen[cs]e(?:\s+number)?\b", q):
+
+        if re.search(
+            r"\b(?:driving|driver)\s*licen[cs]e(?:\s+number)?\b",
+            q
+        ):
             return "driving_license"
-        if re.search(r"\b(?:bank\s+account|account\s+number)\b", q):
+
+        if re.search(
+            r"\b(?:bank\s+account|account\s+number)\b",
+            q
+        ):
             return "bank_account"
-        if re.search(r"\b(?:credit|debit)\s+card(?:\s+number)?\b|\bcard\s+number\b", q):
+
+        if re.search(
+            r"\b(?:credit|debit)\s+card(?:\s+number)?\b|\bcard\s+number\b",
+            q
+        ):
             return "card_number"
+
         return None
 
-    def _extract_sensitive_memory(self, text: str) -> Optional[Dict[str, Any]]:
+    def _extract_sensitive_memory(
+        self,
+        text: str
+    ) -> Optional[Dict[str, Any]]:
         """Extract only high-confidence personal identifiers into the protected vault."""
-        original = str(text or "").strip()
+
+        original = str(
+            text or ""
+        ).strip()
+
         if not original:
             return None
 
-        key = self._sensitive_key_from_text(original)
+        key = self._sensitive_key_from_text(
+            original
+        )
+
         if not key or self._auth_secret_key(key):
             return None
 
         patterns = {
-            "aadhaar_number": [r"\b(?:my\s+)?(?:aadhaar|aadhar)(?:\s+number)?\s*(?:is|=|:)\s*([0-9]{4}\s?[0-9]{4}\s?[0-9]{4})\b"],
-            "pan_number": [r"\b(?:my\s+)?pan(?:\s+(?:number|card))?\s*(?:is|=|:)\s*([A-Z]{5}[0-9]{4}[A-Z])\b"],
-            "passport_number": [r"\b(?:my\s+)?passport(?:\s+(?:number|id))?\s*(?:is|=|:)\s*([A-Z0-9][A-Z0-9-]{4,20})\b"],
-            "voter_id": [r"\b(?:my\s+)?voter\s*(?:id|number)\s*(?:is|=|:)\s*([A-Z0-9-]{4,30})\b"],
-            "driving_license": [r"\b(?:my\s+)?(?:driving|driver)\s*licen[cs]e(?:\s+number)?\s*(?:is|=|:)\s*([A-Z0-9-]{5,30})\b"],
-            "bank_account": [r"\b(?:my\s+)?(?:bank\s+account|account\s+number)\s*(?:is|=|:)\s*([0-9]{6,30})\b"],
-            "card_number": [r"\b(?:my\s+)?(?:credit|debit)\s+card(?:\s+number)?\s*(?:is|=|:)\s*([0-9][0-9 -]{7,25})\b"],
+            "aadhaar_number": [
+                r"\b(?:my\s+)?(?:aadhaar|aadhar)(?:\s+number)?\s*(?:is|=|:)\s*([0-9]{4}\s?[0-9]{4}\s?[0-9]{4})\b"
+            ],
+            "pan_number": [
+                r"\b(?:my\s+)?pan(?:\s+(?:number|card))?\s*(?:is|=|:)\s*([A-Z]{5}[0-9]{4}[A-Z])\b"
+            ],
+            "passport_number": [
+                r"\b(?:my\s+)?passport(?:\s+(?:number|id))?\s*(?:is|=|:)\s*([A-Z0-9][A-Z0-9-]{4,20})\b"
+            ],
+            "voter_id": [
+                r"\b(?:my\s+)?voter\s*(?:id|number)\s*(?:is|=|:)\s*([A-Z0-9-]{4,30})\b"
+            ],
+            "driving_license": [
+                r"\b(?:my\s+)?(?:driving|driver)\s*licen[cs]e(?:\s+number)?\s*(?:is|=|:)\s*([A-Z0-9-]{5,30})\b"
+            ],
+            "bank_account": [
+                r"\b(?:my\s+)?(?:bank\s+account|account\s+number)\s*(?:is|=|:)\s*([0-9]{6,30})\b"
+            ],
+            "card_number": [
+                r"\b(?:my\s+)?(?:credit|debit)\s+card(?:\s+number)?\s*(?:is|=|:)\s*([0-9][0-9 -]{7,25})\b"
+            ],
         }
 
-        for pattern in patterns.get(key, []):
-            match = re.search(pattern, original, re.IGNORECASE)
+        for pattern in patterns.get(
+            key,
+            []
+        ):
+
+            match = re.search(
+                pattern,
+                original,
+                re.IGNORECASE
+            )
+
             if match:
-                value = re.sub(r"\s+", "", match.group(1)).strip()
+
+                value = re.sub(
+                    r"\s+",
+                    "",
+                    match.group(1)
+                ).strip()
+
                 return {
                     "key": key,
                     "value": value,
@@ -824,20 +1050,47 @@ class MemoryEngine:
                     "requires_explicit_request": True,
                     "source": "direct_user_statement",
                 }
+
         return None
 
-    async def _store_sensitive_memory(self, memory: Dict[str, Any]) -> dict:
+    async def _store_sensitive_memory(
+        self,
+        memory: Dict[str, Any]
+    ) -> dict:
         """Store restricted personal identifiers outside normal memory."""
-        if self.sensitive_col is None or not isinstance(memory, dict):
-            return {"success": False, "action": "protected_store_unavailable"}
 
-        key = _normalized_memory_key(memory.get("key"))
-        value = str(memory.get("value") or "").strip()
-        if not key or not value or self._auth_secret_key(key):
-            return {"success": False, "action": "blocked_sensitive_memory"}
+        if (
+            self.sensitive_col is None
+            or not isinstance(memory, dict)
+        ):
+            return {
+                "success": False,
+                "action": "protected_store_unavailable"
+            }
+
+        key = _normalized_memory_key(
+            memory.get("key")
+        )
+
+        value = str(
+            memory.get("value") or ""
+        ).strip()
+
+        if (
+            not key
+            or not value
+            or self._auth_secret_key(key)
+        ):
+            return {
+                "success": False,
+                "action": "blocked_sensitive_memory"
+            }
 
         # Do not log or mirror the actual sensitive value.
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(
+            timezone.utc
+        ).isoformat()
+
         record = {
             "key": key,
             "value": value,
@@ -851,22 +1104,56 @@ class MemoryEngine:
         }
 
         await self.sensitive_col.update_one(
-            {"key": key},
-            {"$set": record, "$setOnInsert": {"created_at": now}},
+            {
+                "key": key
+            },
+            {
+                "$set": record,
+                "$setOnInsert": {
+                    "created_at": now
+                }
+            },
             upsert=True,
         )
-        logger.info("[MemorySecurity] Protected memory stored for key: %s", key)
-        return {"success": True, "key": key, "action": "protected_store"}
 
-    def _explicit_sensitive_retrieval(self, query: str) -> bool:
-        q = str(query or "").lower().strip()
+        logger.info(
+            "[MemorySecurity] Protected memory stored for key: %s",
+            key
+        )
+
+        return {
+            "success": True,
+            "key": key,
+            "action": "protected_store"
+        }
+
+    def _explicit_sensitive_retrieval(
+        self,
+        query: str
+    ) -> bool:
+
+        q = str(
+            query or ""
+        ).lower().strip()
+
         if not self._sensitive_key_from_text(q):
             return False
-        return bool(re.search(
-            r"\b(?:what\s+is|what's|tell\s+me|show\s+me|give\s+me|retrieve|recall|remember|my)\b",
-            q,
-            re.IGNORECASE,
-        )) and bool(re.search(r"\b(?:my|me)\b", q))
+
+        return (
+            bool(
+                re.search(
+                    r"\b(?:what\s+is|what's|tell\s+me|show\s+me|give\s+me|retrieve|recall|remember|my)\b",
+                    q,
+                    re.IGNORECASE,
+                )
+            )
+            and bool(
+                re.search(
+                    r"\b(?:my|me)\b",
+                    q
+                )
+            )
+        )
 
     def _durable_memory_candidate_allowed(
         self,
@@ -874,17 +1161,40 @@ class MemoryEngine:
         memory: Dict[str, Any],
     ) -> bool:
         """Allow durable memory only for stable facts or explicit save requests."""
-        if not isinstance(memory, dict):
-            return False
-        if _is_sensitive_memory(memory):
+
+        if not isinstance(
+            memory,
+            dict
+        ):
             return False
 
-        if self._explicit_memory_instruction(text):
+        if _is_sensitive_memory(
+            memory
+        ):
+            return False
+
+        if self._explicit_memory_instruction(
+            text
+        ):
             return True
 
-        key = _normalized_memory_key(memory.get("key"))
-        category = str(memory.get("category", "")).strip().lower()
-        memory_type = str(memory.get("memory_type", "")).strip().lower()
+        key = _normalized_memory_key(
+            memory.get("key")
+        )
+
+        category = str(
+            memory.get(
+                "category",
+                ""
+            )
+        ).strip().lower()
+
+        memory_type = str(
+            memory.get(
+                "memory_type",
+                ""
+            )
+        ).strip().lower()
 
         # Conversational preferences/trivia are contextual unless explicitly
         # requested. This includes old records such as user_likes.
@@ -903,6 +1213,7 @@ class MemoryEngine:
             "favorite_language",
             "preferred_watch_material",
         }
+
         if (
             key in preference_keys
             or category == "preference"
@@ -911,42 +1222,150 @@ class MemoryEngine:
             return False
 
         stable_tokens = (
-            "name", "education", "degree", "study", "career", "goal",
-            "project", "skill", "location", "university", "plan",
-            "country", "work", "job", "address_by_name",
+            "name",
+            "education",
+            "degree",
+            "study",
+            "career",
+            "goal",
+            "project",
+            "skill",
+            "location",
+            "university",
+            "plan",
+            "country",
+            "work",
+            "job",
+            "address_by_name",
         )
-        return any(token in key for token in stable_tokens) or category in {
-            "identity", "education", "goal", "project", "skill",
-            "decision", "relationship", "personal",
-        }
 
-    def _llm_memory_candidate_allowed(self, text: str, memory: Dict[str, Any]) -> bool:
+        return (
+            any(
+                token in key
+                for token in stable_tokens
+            )
+            or category in {
+                "identity",
+                "education",
+                "goal",
+                "project",
+                "skill",
+                "decision",
+                "relationship",
+                "personal",
+            }
+        )
+
+    def _llm_memory_candidate_allowed(
+        self,
+        text: str,
+        memory: Dict[str, Any]
+    ) -> bool:
         """Use LLM extraction only as a secondary extractor, not as the memory policy."""
-        if not isinstance(memory, dict):
+
+        if not isinstance(
+            memory,
+            dict
+        ):
             return False
-        if self._explicit_memory_instruction(text):
+
+        if self._explicit_memory_instruction(
+            text
+        ):
             return True
-        key = _normalized_memory_key(memory.get("key"))
-        category = str(memory.get("category", "")).lower()
-        memory_type = str(memory.get("memory_type", "")).lower()
-        importance = memory.get("importance", 0.0)
+
+        key = _normalized_memory_key(
+            memory.get("key")
+        )
+
+        category = str(
+            memory.get(
+                "category",
+                ""
+            )
+        ).lower()
+
+        memory_type = str(
+            memory.get(
+                "memory_type",
+                ""
+            )
+        ).lower()
+
+        importance = memory.get(
+            "importance",
+            0.0
+        )
+
         try:
-            importance = float(importance)
-        except (TypeError, ValueError):
-            importance = {"low": .25, "medium": .5, "high": .75, "critical": 1.0}.get(str(importance).lower(), .0)
+            importance = float(
+                importance
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
+            importance = {
+                "low": .25,
+                "medium": .5,
+                "high": .75,
+                "critical": 1.0
+            }.get(
+                str(
+                    importance
+                ).lower(),
+                .0
+            )
 
         stable_tokens = (
-            "name", "education", "degree", "study", "career", "goal",
-            "project", "skill", "location", "university", "preferred",
-            "preference", "favorite", "language", "plan", "country",
-            "work", "job", "address_by_name",
+            "name",
+            "education",
+            "degree",
+            "study",
+            "career",
+            "goal",
+            "project",
+            "skill",
+            "location",
+            "university",
+            "preferred",
+            "preference",
+            "favorite",
+            "language",
+            "plan",
+            "country",
+            "work",
+            "job",
+            "address_by_name",
         )
-        if any(token in key for token in stable_tokens):
+
+        if any(
+            token in key
+            for token in stable_tokens
+        ):
             return True
-        if category in {"personal", "education", "goal", "project", "skill", "decision", "relationship"}:
+
+        if category in {
+            "personal",
+            "education",
+            "goal",
+            "project",
+            "skill",
+            "decision",
+            "relationship"
+        }:
             return importance >= 0.5
-        if memory_type in {"goal", "project", "fact", "decision", "skill"}:
+
+        if memory_type in {
+            "goal",
+            "project",
+            "fact",
+            "decision",
+            "skill"
+        }:
             return importance >= 0.5
+
         # Low-value generic likes should stay in short-term context unless explicitly requested.
         return False
 
@@ -1300,7 +1719,10 @@ class MemoryEngine:
             0.5
         )
 
-        if isinstance(imp, str):
+        if isinstance(
+            imp,
+            str
+        ):
 
             imp = {
                 "low": 0.25,
@@ -1313,7 +1735,9 @@ class MemoryEngine:
             )
 
         try:
-            imp = float(imp)
+            imp = float(
+                imp
+            )
 
         except (
             TypeError,
@@ -1322,79 +1746,59 @@ class MemoryEngine:
             imp = 0.5
 
         return {
-
             "key": memory["key"],
-
             "value": memory["value"],
-
             "summary": memory.get(
                 "summary",
                 str(memory["value"])
             ),
-
             "category": memory.get(
                 "category",
                 "general"
             ),
-
             "memory_type": memory.get(
                 "memory_type",
                 "fact"
             ),
-
             "importance": imp,
-
             "confidence": memory.get(
                 "confidence",
                 1.0
             ),
-
             "source": memory.get(
                 "source",
                 "conversation"
             ),
-
             "entities": memory.get(
                 "entities",
                 []
             ),
-
             "relationships": memory.get(
                 "relationships",
                 []
             ),
-
             "topics": memory.get(
                 "topics",
                 []
             ),
-
             "aliases": memory.get(
                 "aliases",
                 []
             ),
-
             "tags": memory.get(
                 "tags",
                 []
             ),
-
             "embedding_id": memory.get(
                 "embedding_id"
             ),
-
             "document_id": memory.get(
                 "document_id"
             ),
-
             "created_at": now,
-
             "updated_at": now,
-
             "last_accessed": now,
-
             "access_count": 0,
-
             "schema_version": MEMORY_SCHEMA_VERSION
         }
 
@@ -1418,20 +1822,27 @@ class MemoryEngine:
         try:
 
             memory = await self.memory_col.find_one(
-                {"key": key}
+                {
+                    "key": key
+                }
             )
 
-            if _is_sensitive_memory(memory):
+            if _is_sensitive_memory(
+                memory
+            ):
+
                 logger.warning(
                     "[MemorySecurity] Blocked sensitive memory retrieval "
                     "for key: %s",
                     _normalized_memory_key(key)
                 )
+
                 return None
 
             return memory
 
         except Exception:
+
             logger.exception(
                 "[MemoryEngine] Failed to get memory."
             )
@@ -1448,7 +1859,10 @@ class MemoryEngine:
                 "success": False
             }
 
-        if not isinstance(memory, dict):
+        if not isinstance(
+            memory,
+            dict
+        ):
             return {
                 "success": False
             }
@@ -1456,12 +1870,10 @@ class MemoryEngine:
         # =====================================================
         # FINAL SECURITY GATE
         # =====================================================
-        #
-        # This protects both deterministic extraction and
-        # LLM-generated memory extraction.
-        # =====================================================
 
-        if _is_sensitive_memory(memory):
+        if _is_sensitive_memory(
+            memory
+        ):
 
             logger.warning(
                 "[MemorySecurity] Blocked sensitive memory storage: %s",
@@ -1501,7 +1913,9 @@ class MemoryEngine:
 
         # Never allow a sensitive identifier to pass through
         # under an unrelated/custom key.
-        if _contains_sensitive_value(value):
+        if _contains_sensitive_value(
+            value
+        ):
 
             logger.warning(
                 "[MemorySecurity] Blocked sensitive memory value."
@@ -1516,6 +1930,7 @@ class MemoryEngine:
         if key.startswith(
             "favorite_"
         ):
+
             key = self._normalize_key(
                 key.replace(
                     "favorite_",
@@ -1525,7 +1940,9 @@ class MemoryEngine:
             )
 
         # Final key security check after normalization.
-        if _is_sensitive_memory_key(key):
+        if _is_sensitive_memory_key(
+            key
+        ):
 
             logger.warning(
                 "[MemorySecurity] Blocked sensitive normalized "
@@ -1582,7 +1999,9 @@ class MemoryEngine:
         if existing is not None:
 
             # Existing sensitive record protection.
-            if _is_sensitive_memory(existing):
+            if _is_sensitive_memory(
+                existing
+            ):
 
                 logger.warning(
                     "[MemorySecurity] Refusing to update "
@@ -1620,7 +2039,6 @@ class MemoryEngine:
                 existing["updated_at"]
             )
 
-            # Never mirror sensitive data.
             if not _is_sensitive_memory(
                 updated_memory
             ):
@@ -1687,14 +2105,15 @@ class MemoryEngine:
                 ):
                     continue
 
-                # Protect individual list items.
                 if _contains_sensitive_value(
                     item
                 ):
+
                     logger.warning(
                         "[MemorySecurity] Blocked sensitive "
                         "list-memory item."
                     )
+
                     continue
 
                 item_memory = dict(
@@ -1828,7 +2247,6 @@ class MemoryEngine:
             memory["is_permanent"]
         )
 
-        # Final record-level security gate.
         if _is_sensitive_memory(
             record
         ):
@@ -1843,7 +2261,7 @@ class MemoryEngine:
                 "action": "blocked_sensitive_memory",
             }
 
-        insert_result = await self.memory_col.insert_one(
+        await self.memory_col.insert_one(
             record
         )
 
@@ -1872,111 +2290,253 @@ class MemoryEngine:
         self,
         user_text: str
     ):
+
         if self.memory_col is None:
             return
 
-        # Sensitive statements bypass normal extraction and go directly
-        # to the isolated protected-memory collection.
-        sensitive = self._extract_sensitive_memory(user_text)
+        sensitive = self._extract_sensitive_memory(
+            user_text
+        )
+
         if sensitive:
-            await self._store_sensitive_memory(sensitive)
+            await self._store_sensitive_memory(
+                sensitive
+            )
             return
 
-        if not self._should_extract(user_text):
+        if not self._should_extract(
+            user_text
+        ):
             return
 
-        memory = self._extract_memory(user_text)
+        memory = self._extract_memory(
+            user_text
+        )
+
         if (
             memory
             and not _is_sensitive_memory(memory)
-            and self._durable_memory_candidate_allowed(user_text, memory)
+            and self._durable_memory_candidate_allowed(
+                user_text,
+                memory
+            )
         ):
-            await self._store_extracted_memory(memory)
+            await self._store_extracted_memory(
+                memory
+            )
 
     async def process_and_store(
         self,
         user_text: str
     ) -> dict:
+
         if self.memory_col is None:
-            return {"success": False}
+            return {
+                "success": False
+            }
 
         # 1. Protected personal identifiers are handled without an LLM.
-        sensitive = self._extract_sensitive_memory(user_text)
-        if sensitive:
-            return await self._store_sensitive_memory(sensitive)
+        sensitive = self._extract_sensitive_memory(
+            user_text
+        )
 
-        if not self._should_extract(user_text):
-            return {"success": False}
+        if sensitive:
+            return await self._store_sensitive_memory(
+                sensitive
+            )
+
+        if not self._should_extract(
+            user_text
+        ):
+            return {
+                "success": False
+            }
 
         # 2. Deterministic extraction is always first and cheapest.
-        memory = self._extract_memory(user_text)
+        memory = self._extract_memory(
+            user_text
+        )
+
         if memory:
-            if _is_sensitive_memory(memory):
-                return {"success": False, "action": "blocked_sensitive_memory"}
-            if not self._durable_memory_candidate_allowed(user_text, memory):
-                return {"success": False, "action": "short_term_only"}
-            res = await self._store_extracted_memory(memory)
-            if res.get("success") and self.learning_engine:
+
+            if _is_sensitive_memory(
+                memory
+            ):
+                return {
+                    "success": False,
+                    "action": "blocked_sensitive_memory"
+                }
+
+            if not self._durable_memory_candidate_allowed(
+                user_text,
+                memory
+            ):
+                return {
+                    "success": False,
+                    "action": "short_term_only"
+                }
+
+            res = await self._store_extracted_memory(
+                memory
+            )
+
+            if (
+                res.get("success")
+                and self.learning_engine
+            ):
                 try:
-                    await self.learning_engine.learn_from_memory(memory)
+                    await self.learning_engine.learn_from_memory(
+                        memory
+                    )
                 except Exception:
-                    logger.exception("[MemoryEngine] Learning from memory failed.")
+                    logger.exception(
+                        "[MemoryEngine] Learning from memory failed."
+                    )
+
             return res
 
         # 3. Do not invoke an LLM for every conversational sentence.
         #    Ambiguous text is promoted to LLM extraction only when it has
         #    a credible long-term-memory signal.
-        q = str(user_text or "").lower()
-        memory_signal = (
-            self._explicit_memory_instruction(q)
-            or bool(re.search(
-                r"\b(?:i am|i'm|i work|i study|i plan|i want|i intend|"
-                r"i hope|my goal|my career|my project|i live|i moved|"
-                r"i prefer|my favorite|my favourite|i use|i know)\b",
-                q,
-                re.IGNORECASE,
-            ))
-        )
-        if not memory_signal:
-            return {"success": False, "action": "short_term_only"}
+        q = str(
+            user_text or ""
+        ).lower()
 
-        if self.llm_router is not None and hasattr(self.llm_router, "extract_memories"):
+        memory_signal = (
+            self._explicit_memory_instruction(
+                q
+            )
+            or bool(
+                re.search(
+                    r"\b(?:i am|i'm|i work|i study|i plan|i want|i intend|"
+                    r"i hope|my goal|my career|my project|i live|i moved|"
+                    r"i prefer|my favorite|my favourite|i use|i know)\b",
+                    q,
+                    re.IGNORECASE,
+                )
+            )
+        )
+
+        if not memory_signal:
+            return {
+                "success": False,
+                "action": "short_term_only"
+            }
+
+        if (
+            self.llm_router is not None
+            and hasattr(
+                self.llm_router,
+                "extract_memories"
+            )
+        ):
+
             try:
-                memories = await self.llm_router.extract_memories(user_text)
+
+                memories = await self.llm_router.extract_memories(
+                    user_text
+                )
+
                 stored_results = []
+
                 for extracted in memories or []:
-                    if not isinstance(extracted, dict):
+
+                    if not isinstance(
+                        extracted,
+                        dict
+                    ):
                         continue
+
                     memory_data = {
-                        "key": extracted.get("key"),
-                        "value": extracted.get("value"),
-                        "category": extracted.get("category", "general"),
-                        "memory_type": extracted.get("memory_type", "fact"),
-                        "importance": extracted.get("importance", 0.5),
-                        "confidence": extracted.get("confidence", 0.8),
+                        "key": extracted.get(
+                            "key"
+                        ),
+                        "value": extracted.get(
+                            "value"
+                        ),
+                        "category": extracted.get(
+                            "category",
+                            "general"
+                        ),
+                        "memory_type": extracted.get(
+                            "memory_type",
+                            "fact"
+                        ),
+                        "importance": extracted.get(
+                            "importance",
+                            0.5
+                        ),
+                        "confidence": extracted.get(
+                            "confidence",
+                            0.8
+                        ),
                         "is_list": False,
                     }
-                    if not memory_data["key"] or not memory_data["value"]:
-                        continue
-                    if _is_sensitive_memory(memory_data):
-                        continue
-                    if not self._llm_memory_candidate_allowed(user_text, memory_data):
-                        continue
-                    result = await self._store_extracted_memory(memory_data)
-                    if result.get("success"):
-                        stored_results.append(result)
-                        if self.learning_engine:
-                            try:
-                                await self.learning_engine.learn_from_memory(memory_data)
-                            except Exception:
-                                logger.exception("[MemoryEngine] Learning from LLM memory failed.")
-                if stored_results:
-                    logger.info("[MemoryEngine] Secondary LLM extraction stored %d durable memories.", len(stored_results))
-                    return {"success": True, "action": "intelligent_store", "memories": stored_results}
-            except Exception:
-                logger.exception("[MemoryEngine] Secondary LLM memory extraction failed.")
 
-        return {"success": False}
+                    if (
+                        not memory_data["key"]
+                        or not memory_data["value"]
+                    ):
+                        continue
+
+                    if _is_sensitive_memory(
+                        memory_data
+                    ):
+                        continue
+
+                    if not self._llm_memory_candidate_allowed(
+                        user_text,
+                        memory_data
+                    ):
+                        continue
+
+                    result = await self._store_extracted_memory(
+                        memory_data
+                    )
+
+                    if result.get(
+                        "success"
+                    ):
+
+                        stored_results.append(
+                            result
+                        )
+
+                        if self.learning_engine:
+
+                            try:
+                                await self.learning_engine.learn_from_memory(
+                                    memory_data
+                                )
+
+                            except Exception:
+                                logger.exception(
+                                    "[MemoryEngine] Learning from LLM memory failed."
+                                )
+
+                if stored_results:
+
+                    logger.info(
+                        "[MemoryEngine] Secondary LLM extraction "
+                        "stored %d durable memories.",
+                        len(stored_results)
+                    )
+
+                    return {
+                        "success": True,
+                        "action": "intelligent_store",
+                        "memories": stored_results
+                    }
+
+            except Exception:
+
+                logger.exception(
+                    "[MemoryEngine] Secondary LLM memory extraction failed."
+                )
+
+        return {
+            "success": False
+        }
 
     # =========================================================
     # MEMORY SCORING
@@ -2009,6 +2569,7 @@ class MemoryEngine:
             )
 
         try:
+
             importance = float(
                 importance
             )
@@ -2084,7 +2645,6 @@ class MemoryEngine:
 
         for memory in memories:
 
-            # Never allow sensitive memories into consolidation.
             if _is_sensitive_memory(
                 memory
             ):
@@ -2162,7 +2722,6 @@ class MemoryEngine:
         ] = None,
     ):
 
-        # Sensitive records must never participate in ranking.
         if _is_sensitive_memory(
             memory
         ):
@@ -2224,7 +2783,7 @@ class MemoryEngine:
             token
             for token in re.findall(
                 r"\b[a-z0-9_]+\b",
-                memory_text,
+                memory_text
             )
             if len(token) > 2
         }
@@ -2310,6 +2869,7 @@ class MemoryEngine:
         )
 
         try:
+
             importance = float(
                 importance
             )
@@ -2321,6 +2881,7 @@ class MemoryEngine:
             importance = 0.5
 
         try:
+
             confidence = float(
                 confidence
             )
@@ -2349,14 +2910,49 @@ class MemoryEngine:
         ] = None,
     ) -> list[dict]:
 
+        # =====================================================
+        # LOCAL KNOWLEDGE HARD GATE
+        # =====================================================
+        #
+        # IMPORTANT:
+        #
+        # This MUST happen before:
+        #
+        #   - MongoDB personal-memory retrieval
+        #   - memory scoring
+        #   - semantic memory selection
+        #   - LLMRouter.select_relevant_memories()
+        #
+        # The previous architecture allowed a query such as:
+        #
+        #     "What does TCP provide?"
+        #
+        # to reach the LLM-backed memory selector before the
+        # later KnowledgeManager checks could stop it.
+        #
+        # This gate closes that path at the MemoryEngine itself.
+        # =====================================================
+
+        lower = str(
+            query or ""
+        ).lower().strip()
+
+        if self._is_ordinary_knowledge_query(
+            lower
+        ):
+
+            logger.info(
+                "[LocalKnowledge] MemoryEngine hard gate active; "
+                "personal-memory retrieval skipped for ordinary "
+                "knowledge query."
+            )
+
+            return []
+
         if self.memory_col is None:
             return []
 
         try:
-
-            lower = str(
-                query or ""
-            ).lower().strip()
 
             # =================================================
             # SENSITIVE QUERY PROTECTION
@@ -2373,17 +2969,52 @@ class MemoryEngine:
             # from accidentally retrieving an unrelated memory.
             # =================================================
 
-            if _contains_sensitive_query(lower):
-                # Only an explicit, specific request can access the protected
-                # vault. Never include protected records in broad retrieval.
-                if self._explicit_sensitive_retrieval(lower) and self.sensitive_col is not None:
-                    key = self._sensitive_key_from_text(lower)
-                    protected = await self.sensitive_col.find_one({"key": key})
+            if _contains_sensitive_query(
+                lower
+            ):
+
+                # Only an explicit, specific request can access the
+                # protected vault. Never include protected records in
+                # broad retrieval.
+                if (
+                    self._explicit_sensitive_retrieval(
+                        lower
+                    )
+                    and self.sensitive_col is not None
+                ):
+
+                    key = self._sensitive_key_from_text(
+                        lower
+                    )
+
+                    protected = await self.sensitive_col.find_one(
+                        {
+                            "key": key
+                        }
+                    )
+
                     if protected:
-                        logger.info("[MemorySecurity] Explicit protected-memory retrieval for key: %s", key)
-                        protected.pop("_id", None)
-                        return [protected]
-                logger.warning("[MemorySecurity] Sensitive-memory query denied or not specific enough.")
+
+                        logger.info(
+                            "[MemorySecurity] Explicit protected-memory "
+                            "retrieval for key: %s",
+                            key
+                        )
+
+                        protected.pop(
+                            "_id",
+                            None
+                        )
+
+                        return [
+                            protected
+                        ]
+
+                logger.warning(
+                    "[MemorySecurity] Sensitive-memory query denied "
+                    "or not specific enough."
+                )
+
                 return []
 
             filter_query = None
@@ -2512,7 +3143,6 @@ class MemoryEngine:
                     length=limit
                 )
 
-                # Defense-in-depth against old sensitive records.
                 memories = [
                     memory
                     for memory in memories
@@ -2728,7 +3358,6 @@ class MemoryEngine:
                     length=limit
                 )
 
-                # Never return sensitive records.
                 memories = [
                     memory
                     for memory in memories
@@ -2849,7 +3478,6 @@ class MemoryEngine:
                 length=200
             )
 
-            # Critical defense-in-depth filter.
             all_memories = [
                 memory
                 for memory in all_memories
@@ -3016,7 +3644,6 @@ class MemoryEngine:
 
             for memory in all_memories:
 
-                # Additional safety check.
                 if _is_sensitive_memory(
                     memory
                 ):
@@ -3136,6 +3763,14 @@ class MemoryEngine:
 
             # =========================================================
             # LLM MEMORY SELECTION
+            # =========================================================
+            #
+            # This block is now unreachable for ordinary knowledge
+            # queries because of the hard gate at the beginning of
+            # get_relevant_memories().
+            #
+            # It remains available for genuine personal-memory
+            # retrieval where semantic LLM selection is useful.
             # =========================================================
 
             if (
@@ -3291,7 +3926,6 @@ class MemoryEngine:
                         "updated_at": memory.get(
                             "updated_at"
                         ),
-                        # Preserve ID so access tracking works.
                         "_id": memory.get(
                             "_id"
                         )
@@ -3429,8 +4063,6 @@ class MemoryEngine:
                 flags=re.IGNORECASE
             ).strip()
 
-            # Never process a sensitive deletion query as an
-            # ordinary memory lookup.
             if _contains_sensitive_query(
                 cleaned
             ):
@@ -3452,8 +4084,6 @@ class MemoryEngine:
 
             if target_key:
 
-                # Do not delete sensitive records through
-                # generalized matching.
                 if _is_sensitive_memory_key(
                     target_key
                 ):
@@ -3525,7 +4155,6 @@ class MemoryEngine:
         ):
             return
 
-        # Filter sensitive profile fields before persistence.
         safe_profile = {}
 
         for key, value in profile.items():
@@ -3533,20 +4162,24 @@ class MemoryEngine:
             if _is_sensitive_memory_key(
                 key
             ):
+
                 logger.warning(
                     "[MemorySecurity] Blocked sensitive "
                     "profile field: %s",
                     key
                 )
+
                 continue
 
             if _contains_sensitive_value(
                 value
             ):
+
                 logger.warning(
                     "[MemorySecurity] Blocked sensitive "
                     "profile value."
                 )
+
                 continue
 
             safe_profile[key] = value
@@ -3577,7 +4210,6 @@ class MemoryEngine:
         ):
             return False
 
-        # Never allow an update to introduce sensitive data.
         if _is_sensitive_memory(
             data
         ):
@@ -3608,8 +4240,6 @@ class MemoryEngine:
         if self.memory_col is None:
             return False
 
-        # Sensitive information must not be checked through
-        # the general memory existence API.
         if _contains_sensitive_query(
             query
         ):
@@ -3672,10 +4302,12 @@ class MemoryEngine:
             if _is_sensitive_memory(
                 memory
             ):
+
                 logger.warning(
                     "[MemorySecurity] Blocked access tracking "
                     "for sensitive memory."
                 )
+
                 return False
 
             await self.memory_col.update_one(
