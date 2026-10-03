@@ -5281,7 +5281,10 @@ usable evidence is present. Do not invent details absent from the evidence.
                 try:
                     if not self.memory_engine:
                         raise RuntimeError("Memory engine is unavailable.")
-                    memories = await self.memory_engine.retrieve(query) or []
+                    memories = await self.memory_engine.retrieve(
+                        query,
+                        bypass_knowledge_gate=True,
+                    ) or []
                     safe_memories = self._safe_memory_items(memories)
                     profile_answer = self._build_profile_memory_response(query, safe_memories)
                     if profile_answer:
