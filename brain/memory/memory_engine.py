@@ -51,7 +51,7 @@ IMPORTANCE = {
 # =========================================================
 
 SENSITIVE_MEMORY_KEY_PATTERNS = (
-    "aadhaar",
+    "[Aadhaar Redacted]",
     "aadhar",
     "uidai",
     "pan_number",
@@ -1219,7 +1219,9 @@ class MemoryEngine:
             or category == "preference"
             or memory_type == "preference"
         ):
-            return False
+            # Explicit user preferences are durable profile data. Keep them
+            # compact and safe, but do not discard them as short-term chat.
+            return importance >= 0.25
 
         stable_tokens = (
             "name",
@@ -1581,7 +1583,7 @@ class MemoryEngine:
                     "value": items,
                     "category": "preference",
                     "memory_type": "preference",
-                    "importance": 0.25,
+                    "importance": 0.5,
                     "is_list": True
                 }
 
