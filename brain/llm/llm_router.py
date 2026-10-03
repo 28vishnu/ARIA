@@ -33,8 +33,8 @@ class LLMRouter:
         # from stale model settings left over from older deployments.
         self.groq_model = self._normalize_model(
             getattr(config, "groq_model", None),
-            "llama-3.3-70b-versatile",
-            {"", "none", "null"},
+            "openai/gpt-oss-120b",
+            {"", "none", "null", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"},
         )
         self.gemini_model = self._normalize_model(
             getattr(config, "gemini_model", None),
@@ -62,7 +62,7 @@ class LLMRouter:
         # Known-good fallbacks used if an existing deployment contains a
         # stale provider model and the API responds with HTTP 404.
         self._fallback_models = {
-            "Groq": "llama-3.3-70b-versatile",
+            "Groq": "openai/gpt-oss-120b",
             "Gemini": "gemini-3.8-flash",
             "OpenRouter": "openrouter/free",
             "Mistral": "mistral-small-latest",
@@ -742,8 +742,8 @@ class LLMRouter:
             return ""
         return value
 
-    @staticmethod
-    def _extract_openai_content(choice: Dict[str, Any], provider_name: str) -> str:
+    @classmethod
+    def _extract_openai_content(cls, choice: Dict[str, Any], provider_name: str) -> str:
         """
         Normalize OpenAI-compatible provider message content.
 
@@ -754,7 +754,7 @@ class LLMRouter:
         content = message.get("content")
 
         if isinstance(content, str):
-            result = self._reject_internal_safety_output(content)
+            result = cls._reject_internal_safety_output(content)
         elif isinstance(content, list):
             parts = []
 
