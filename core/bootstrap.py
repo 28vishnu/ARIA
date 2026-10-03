@@ -96,6 +96,25 @@ from core.health_checker import HealthChecker
 logger = logging.getLogger("aria")
 
 
+# =========================================================
+# Local Knowledge Configuration
+# =========================================================
+
+# IMPORTANT:
+# sentence-transformers/all-MiniLM-L6-v2 produces 384-dimensional
+# embeddings.
+#
+# Do NOT reuse the previous BGE-M3 collection because BGE-M3
+# produced 1024-dimensional vectors.
+#
+# A new collection prevents Chroma dimension conflicts.
+KNOWLEDGE_VECTOR_COLLECTION = "aria_knowledge_minilm_v1"
+
+# The legacy collection is intentionally preserved.
+# Other existing ARIA components may still use it.
+LEGACY_VECTOR_COLLECTION = "aria_memory"
+
+
 async def bootstrap_application() -> ServiceRegistry:
 
     logger.info("[BOOT TEST] 1 - Bootstrap started")
@@ -172,6 +191,7 @@ async def bootstrap_application() -> ServiceRegistry:
     memory_conversation_manager = None
 
     if memory_engine is not None:
+
         memory_conversation_manager = MemoryConversationManager(
             memory_engine=memory_engine
         )
@@ -184,9 +204,12 @@ async def bootstrap_application() -> ServiceRegistry:
         logger.info(
             "[BOOT TEST] MemoryConversationManager configured"
         )
+
     else:
+
         logger.warning(
-            "[BOOT TEST] MemoryConversationManager disabled because MemoryEngine is unavailable"
+            "[BOOT TEST] MemoryConversationManager disabled because "
+            "MemoryEngine is unavailable"
         )
 
     # ---------------------------------------------------------
@@ -201,17 +224,35 @@ async def bootstrap_application() -> ServiceRegistry:
         path=config.vector_persist_path
     )
 
-    # Keep the existing collection for legacy document/memory consumers.
+    # ---------------------------------------------------------
+    # Legacy memory/document collection
+    # ---------------------------------------------------------
+
     vector_store = chroma_client.get_or_create_collection(
-        name="aria_memory"
+        name=LEGACY_VECTOR_COLLECTION
     )
 
-    # Knowledge uses a separate versioned collection because the embedding
-    # model is changing from the old Gemini 768-dim vectors to the local
-    # BGE-M3 1024-dim vectors. Mixing dimensions in one Chroma collection
-    # would make retrieval/indexing fail.
+    # ---------------------------------------------------------
+    # Local Knowledge Collection
+    # ---------------------------------------------------------
+    #
+    # The local embedding model is now:
+    #
+    # sentence-transformers/all-MiniLM-L6-v2
+    #
+    # Dimension = 384
+    #
+    # This MUST NOT share a collection with:
+    #
+    # BGE-M3 -> 1024 dimensions
+    #
+    # Gemini embeddings -> previously ~768 dimensions
+    #
+    # Therefore we create a completely new versioned collection.
+    # ---------------------------------------------------------
+
     knowledge_vector_store = chroma_client.get_or_create_collection(
-        name="aria_knowledge_bge_m3_v1"
+        name=KNOWLEDGE_VECTOR_COLLECTION
     )
 
     registry.register(
@@ -225,7 +266,10 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     logger.info(
-        "[BOOT TEST] 5 - ChromaDB configured | legacy=aria_memory | knowledge=aria_knowledge_bge_m3_v1"
+        "[BOOT TEST] 5 - ChromaDB configured | "
+        "legacy=%s | knowledge=%s | local_embedding_dim=384",
+        LEGACY_VECTOR_COLLECTION,
+        KNOWLEDGE_VECTOR_COLLECTION,
     )
 
     # ---------------------------------------------------------
@@ -259,6 +303,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     if memory_engine is not None:
+
         memory_engine.llm_router = llm_router
 
         logger.info(
@@ -266,6 +311,7 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
     if memory_conversation_manager is not None:
+
         memory_conversation_manager.llm_router = llm_router
 
         logger.info(
@@ -294,17 +340,36 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     state_manager = StateManager()
-    world_model = WorldModel(mongodb=db_inst if mongo_client else None)
+
+    world_model = WorldModel(
+        mongodb=db_inst if mongo_client else None
+    )
+
     await world_model.load()
 
+    # ---------------------------------------------------------
+    # Knowledge Database
+    # ---------------------------------------------------------
+    #
+    # IMPORTANT:
+    # KnowledgeDatabase now uses the 384-dimensional local
+    # MiniLM collection.
+    # ---------------------------------------------------------
+
     knowledge_database = KnowledgeDatabase(
-        mongo_collection=db_inst["knowledge"] if db_inst is not None else None,
+        mongo_collection=(
+            db_inst["knowledge"]
+            if db_inst is not None
+            else None
+        ),
         vector_db=knowledge_vector_store,
     )
+
     knowledge_graph = KnowledgeGraph(
         mongodb=db_inst if mongo_client else None,
         vector_db=vector_store,
     )
+
     await knowledge_graph.load_graph()
 
     graph_builder = GraphBuilder(
@@ -322,11 +387,16 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     if memory_engine is not None:
+
         memory_engine.learning_engine = learning_engine
 
         logger.info(
             "[Bootstrap] LearningEngine connected to MemoryEngine."
         )
+
+    # ---------------------------------------------------------
+    # Knowledge Manager
+    # ---------------------------------------------------------
 
     knowledge_manager = KnowledgeManager(
         document_ai=doc_intelligence,
@@ -345,12 +415,15 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     working_memory = WorkingMemory()
+
     graph = working_memory.semantic().load_semantic_graph()
 
     if graph:
+
         semantic = working_memory.semantic()
 
         for node_id, node in graph.get("nodes", {}).items():
+
             semantic.add_node(
                 node_id=node_id,
                 node_type=node["node_type"],
@@ -359,6 +432,7 @@ async def bootstrap_application() -> ServiceRegistry:
             )
 
         for edge in graph.get("edges", []):
+
             semantic.add_relation(
                 edge["source"],
                 edge["relation"],
@@ -376,7 +450,15 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_graph=knowledge_graph,
         document_repository=document_repository,
     )
-    registry.register("memory_router", memory_router)
+
+    registry.register(
+        "memory_router",
+        memory_router
+    )
+
+    # ---------------------------------------------------------
+    # Self Reflection
+    # ---------------------------------------------------------
 
     self_reflection = SelfReflection(
         memory_engine=memory_engine,
@@ -384,6 +466,10 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_graph=knowledge_graph,
         learning_engine=learning_engine,
     )
+
+    # ---------------------------------------------------------
+    # Autonomous Learning
+    # ---------------------------------------------------------
 
     autonomous_learning = AutonomousLearning(
         memory_engine=memory_engine,
@@ -393,18 +479,66 @@ async def bootstrap_application() -> ServiceRegistry:
         world_model=world_model,
     )
 
+    # ---------------------------------------------------------
+    # Event Listeners
+    # ---------------------------------------------------------
+
     def register_event_listeners():
-        event_bus.register_listener(event_types.RESPONSE_GENERATED, autonomous_learning)
-        event_bus.register_listener(event_types.RESPONSE_GENERATED, self_reflection)
-        event_bus.register_listener(event_types.DOCUMENT_UPLOADED, autonomous_learning)
-        event_bus.register_listener(event_types.DOCUMENT_SUMMARIZED, autonomous_learning)
-        event_bus.register_listener(event_types.PLAN_COMPLETED, autonomous_learning)
-        event_bus.register_listener(event_types.WORKFLOW_COMPLETED, self_reflection)
-        event_bus.register_listener(event_types.TASK_FAILED, self_reflection)
-        event_bus.register_listener(event_types.TASK_COMPLETED, autonomous_learning)
-        event_bus.register_listener(event_types.WORKFLOW_COMPLETED, autonomous_learning)
-        event_bus.register_listener(event_types.KNOWLEDGE_ADDED, knowledge_graph)
-        event_bus.register_listener(event_types.KNOWLEDGE_ADDED, world_model)
+
+        event_bus.register_listener(
+            event_types.RESPONSE_GENERATED,
+            autonomous_learning
+        )
+
+        event_bus.register_listener(
+            event_types.RESPONSE_GENERATED,
+            self_reflection
+        )
+
+        event_bus.register_listener(
+            event_types.DOCUMENT_UPLOADED,
+            autonomous_learning
+        )
+
+        event_bus.register_listener(
+            event_types.DOCUMENT_SUMMARIZED,
+            autonomous_learning
+        )
+
+        event_bus.register_listener(
+            event_types.PLAN_COMPLETED,
+            autonomous_learning
+        )
+
+        event_bus.register_listener(
+            event_types.WORKFLOW_COMPLETED,
+            self_reflection
+        )
+
+        event_bus.register_listener(
+            event_types.TASK_FAILED,
+            self_reflection
+        )
+
+        event_bus.register_listener(
+            event_types.TASK_COMPLETED,
+            autonomous_learning
+        )
+
+        event_bus.register_listener(
+            event_types.WORKFLOW_COMPLETED,
+            autonomous_learning
+        )
+
+        event_bus.register_listener(
+            event_types.KNOWLEDGE_ADDED,
+            knowledge_graph
+        )
+
+        event_bus.register_listener(
+            event_types.KNOWLEDGE_ADDED,
+            world_model
+        )
 
     register_event_listeners()
 
@@ -435,6 +569,7 @@ async def bootstrap_application() -> ServiceRegistry:
         "goal_manager",
         goal_manager
     )
+
     registry.register(
         "task_manager",
         task_manager,
@@ -453,54 +588,105 @@ async def bootstrap_application() -> ServiceRegistry:
     # Knowledge & Memory
     # ---------------------------------------------------------
 
-    registry.register("knowledge_database", knowledge_database)
-    registry.register("knowledge_graph", knowledge_graph)
-    registry.register("world_model", world_model)
-    registry.register("graph_builder", graph_builder)
-    registry.register("knowledge_manager", knowledge_manager)
+    registry.register(
+        "knowledge_database",
+        knowledge_database
+    )
+
+    registry.register(
+        "knowledge_graph",
+        knowledge_graph
+    )
+
+    registry.register(
+        "world_model",
+        world_model
+    )
+
+    registry.register(
+        "graph_builder",
+        graph_builder
+    )
+
+    registry.register(
+        "knowledge_manager",
+        knowledge_manager
+    )
 
     # ---------------------------------------------------------
     # Learning & Events
     # ---------------------------------------------------------
 
-    registry.register("learning_engine", learning_engine)
-    registry.register("self_reflection", self_reflection)
-    registry.register("autonomous_learning", autonomous_learning)
-    registry.register("event_bus", event_bus)
-    registry.register("context_builder", context_builder)
+    registry.register(
+        "learning_engine",
+        learning_engine
+    )
+
+    registry.register(
+        "self_reflection",
+        self_reflection
+    )
+
+    registry.register(
+        "autonomous_learning",
+        autonomous_learning
+    )
+
+    registry.register(
+        "event_bus",
+        event_bus
+    )
+
+    registry.register(
+        "context_builder",
+        context_builder
+    )
 
     logger.info(
         "[BOOT TEST] 7 - DocumentIntelligence created"
     )
 
     # ---------------------------------------------------------
-    # Knowledge & Learning Engine
+    # Document & Learning Engine
     # ---------------------------------------------------------
 
     document_manager = DocumentManager()
+
     chunker = Chunker()
+
     concept_extractor = ConceptExtractor()
+
     document_memory = DocumentMemory()
+
     semantic_search = SemanticSearch(
         document_memory,
     )
+
     study_engine = StudyEngine(
         semantic_search,
         document_memory,
     )
+
     flashcard_generator = FlashcardGenerator(
         document_memory,
     )
+
     mcq_generator = MCQGenerator(
         document_memory,
     )
+
     revision_engine = RevisionEngine(
         document_memory,
     )
+
     repo_analyzer = RepositoryAnalyzer()
+
     code_parser = CodeParser()
+
     dependency_graph = DependencyGraph()
+
     repository_memory = RepositoryMemory()
+
     pipeline = DocumentPipeline(
         document_manager=document_manager,
         chunker=chunker,
@@ -509,27 +695,105 @@ async def bootstrap_application() -> ServiceRegistry:
         semantic_search=semantic_search,
     )
 
-    document_manager.register_parser(".pdf", PDFParser())
-    document_manager.register_parser(".docx", DOCXParser())
-    document_manager.register_parser(".jpg", ImageParser())
-    document_manager.register_parser(".jpeg", ImageParser())
-    document_manager.register_parser(".png", ImageParser())
-    document_manager.register_parser(".zip", ZIPParser())
+    document_manager.register_parser(
+        ".pdf",
+        PDFParser()
+    )
 
-    registry.register("document_manager", document_manager)
-    registry.register("document_pipeline", pipeline)
-    registry.register("chunker", chunker)
-    registry.register("concept_extractor", concept_extractor)
-    registry.register("document_memory", document_memory)
-    registry.register("semantic_search", semantic_search)
-    registry.register("study_engine", study_engine)
-    registry.register("flashcard_generator", flashcard_generator)
-    registry.register("mcq_generator", mcq_generator)
-    registry.register("revision_engine", revision_engine)
-    registry.register("repo_analyzer", repo_analyzer)
-    registry.register("code_parser", code_parser)
-    registry.register("dependency_graph", dependency_graph)
-    registry.register("repository_memory", repository_memory)
+    document_manager.register_parser(
+        ".docx",
+        DOCXParser()
+    )
+
+    document_manager.register_parser(
+        ".jpg",
+        ImageParser()
+    )
+
+    document_manager.register_parser(
+        ".jpeg",
+        ImageParser()
+    )
+
+    document_manager.register_parser(
+        ".png",
+        ImageParser()
+    )
+
+    document_manager.register_parser(
+        ".zip",
+        ZIPParser()
+    )
+
+    registry.register(
+        "document_manager",
+        document_manager
+    )
+
+    registry.register(
+        "document_pipeline",
+        pipeline
+    )
+
+    registry.register(
+        "chunker",
+        chunker
+    )
+
+    registry.register(
+        "concept_extractor",
+        concept_extractor
+    )
+
+    registry.register(
+        "document_memory",
+        document_memory
+    )
+
+    registry.register(
+        "semantic_search",
+        semantic_search
+    )
+
+    registry.register(
+        "study_engine",
+        study_engine
+    )
+
+    registry.register(
+        "flashcard_generator",
+        flashcard_generator
+    )
+
+    registry.register(
+        "mcq_generator",
+        mcq_generator
+    )
+
+    registry.register(
+        "revision_engine",
+        revision_engine
+    )
+
+    registry.register(
+        "repo_analyzer",
+        repo_analyzer
+    )
+
+    registry.register(
+        "code_parser",
+        code_parser
+    )
+
+    registry.register(
+        "dependency_graph",
+        dependency_graph
+    )
+
+    registry.register(
+        "repository_memory",
+        repository_memory
+    )
 
     # ---------------------------------------------------------
     # Agents, Coordinator & Lead Agent
@@ -540,18 +804,47 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     agent_manager = AgentManager()
-    agent_coordinator = AgentCoordinator(agent_manager)
+
+    agent_coordinator = AgentCoordinator(
+        agent_manager
+    )
+
     lead_agent = LeadAgent()
 
-    agent_manager.register(CodeAgent())
-    agent_manager.register(MathAgent())
-    agent_manager.register(PlanningAgent())
-    agent_manager.register(ResearchAgent())
-    agent_manager.register(WritingAgent())
+    agent_manager.register(
+        CodeAgent()
+    )
 
-    registry.register("agent_manager", agent_manager)
-    registry.register("agent_coordinator", agent_coordinator)
-    registry.register("lead_agent", lead_agent)
+    agent_manager.register(
+        MathAgent()
+    )
+
+    agent_manager.register(
+        PlanningAgent()
+    )
+
+    agent_manager.register(
+        ResearchAgent()
+    )
+
+    agent_manager.register(
+        WritingAgent()
+    )
+
+    registry.register(
+        "agent_manager",
+        agent_manager
+    )
+
+    registry.register(
+        "agent_coordinator",
+        agent_coordinator
+    )
+
+    registry.register(
+        "lead_agent",
+        lead_agent
+    )
 
     logger.info(
         "[BOOT TEST] Registered %d specialist agents",
@@ -562,49 +855,85 @@ async def bootstrap_application() -> ServiceRegistry:
     # Skills & Actions
     # ---------------------------------------------------------
 
-    session_manager = SessionManager(state_manager)
+    session_manager = SessionManager(
+        state_manager
+    )
 
     skill_manager = SkillManager()
 
-    skill_manager.register(ChatSkill())
-    skill_manager.register(DocumentSkill())
-    skill_manager.register(MemorySkill())
-    skill_manager.register(ProfileSkill())
-    skill_manager.register(ResearchSkill())
-    skill_manager.register(CalculatorSkill())
+    skill_manager.register(
+        ChatSkill()
+    )
+
+    skill_manager.register(
+        DocumentSkill()
+    )
+
+    skill_manager.register(
+        MemorySkill()
+    )
+
+    skill_manager.register(
+        ProfileSkill()
+    )
+
+    skill_manager.register(
+        ResearchSkill()
+    )
+
+    skill_manager.register(
+        CalculatorSkill()
+    )
 
     action_manager = ActionManager(
         permission_mode=config.permission_mode
     )
 
-    action_manager.register(FileAction())
-    action_manager.register(NotificationAction())
-    action_manager.register(WebSearchAction())
-    action_manager.register(TimeAction())
-    action_manager.register(WeatherAction())
+    action_manager.register(
+        FileAction()
+    )
 
-    # ---------------------------------------------------------
-    # Phase 9 — Shared Real-World Intelligence
-    # ---------------------------------------------------------
+    action_manager.register(
+        NotificationAction()
+    )
+
+    action_manager.register(
+        WebSearchAction()
+    )
+
+    action_manager.register(
+        TimeAction()
+    )
+
+    action_manager.register(
+        WeatherAction()
+    )
 
     # ---------------------------------------------------------
     # Phase 11 — Central Tool Orchestration
     # ---------------------------------------------------------
-    # ToolManager is the canonical BaseTool orchestration layer. It is kept
-    # separate from ActionManager because ActionManager owns executable
-    # actions/permissions, while ToolManager owns tool discovery, selection,
-    # execution, timeout handling and telemetry.
+
     tool_manager = ToolManager(
         selection_threshold=max(
             0.0,
             min(
                 1.0,
-                float(os.getenv("ARIA_TOOL_SELECTION_THRESHOLD", "0.25")),
+                float(
+                    os.getenv(
+                        "ARIA_TOOL_SELECTION_THRESHOLD",
+                        "0.25"
+                    )
+                ),
             ),
         ),
         execution_timeout=max(
             1.0,
-            float(os.getenv("ARIA_TOOL_EXECUTION_TIMEOUT", "60")),
+            float(
+                os.getenv(
+                    "ARIA_TOOL_EXECUTION_TIMEOUT",
+                    "60"
+                )
+            ),
         ),
     )
 
@@ -614,18 +943,27 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     logger.info(
-        "[Phase11] ToolManager initialized | threshold=%.2f timeout=%.1fs",
+        "[Phase11] ToolManager initialized | "
+        "threshold=%.2f timeout=%.1fs",
         tool_manager.selection_threshold,
         tool_manager.execution_timeout,
     )
 
-    # One shared search service is created at bootstrap. Actions,
-    # watchers, and the cognitive layer reuse the same provider.
+    # ---------------------------------------------------------
+    # Shared Search Tool
+    # ---------------------------------------------------------
+
     search_tool = SearchTool(
         max_results=10,
         timeout=max(
             3.0,
-            float(getattr(config, "timeout_seconds", 20.0)),
+            float(
+                getattr(
+                    config,
+                    "timeout_seconds",
+                    20.0
+                )
+            ),
         ),
     )
 
@@ -634,10 +972,8 @@ async def bootstrap_application() -> ServiceRegistry:
         search_tool,
     )
 
-    # SearchTool becomes the first canonical BaseTool managed by ToolManager.
-    # Aliases make explicit web-search intent resolvable without duplicating
-    # the underlying service instance.
     try:
+
         tool_manager.register(
             search_tool,
             aliases=[
@@ -647,37 +983,63 @@ async def bootstrap_application() -> ServiceRegistry:
                 "online_search",
             ],
         )
+
     except Exception:
+
         logger.exception(
-            "[Phase11] Failed to register SearchTool with ToolManager."
+            "[Phase11] Failed to register SearchTool "
+            "with ToolManager."
         )
 
     logger.info(
-        "[Bootstrap] SearchTool registered | available=%s | tools=%s",
+        "[Bootstrap] SearchTool registered | "
+        "available=%s | tools=%s",
         search_tool.is_available(),
         tool_manager.list_tools(),
     )
 
-    # Reuse the same search provider in the action layer when supported.
-    web_search_action = action_manager.actions.get("web_search_action")
+    # ---------------------------------------------------------
+    # Shared Web Search Action
+    # ---------------------------------------------------------
+
+    web_search_action = action_manager.actions.get(
+        "web_search_action"
+    )
+
     if web_search_action is not None:
+
         try:
+
             web_search_action.search_tool = search_tool
+
             logger.info(
-                "[Bootstrap] Shared SearchTool connected to WebSearchAction."
-            )
-        except Exception:
-            logger.exception(
-                "[Bootstrap] Failed to connect SearchTool to WebSearchAction."
+                "[Bootstrap] Shared SearchTool connected "
+                "to WebSearchAction."
             )
 
-    # Shared autonomous scheduler.
+        except Exception:
+
+            logger.exception(
+                "[Bootstrap] Failed to connect SearchTool "
+                "to WebSearchAction."
+            )
+
+    # ---------------------------------------------------------
+    # Background Scheduler
+    # ---------------------------------------------------------
+
     scheduler = BackgroundScheduler(
         max_concurrent_jobs=int(
-            os.getenv("ARIA_MAX_CONCURRENT_JOBS", "5")
+            os.getenv(
+                "ARIA_MAX_CONCURRENT_JOBS",
+                "5"
+            )
         ),
         default_timeout_seconds=float(
-            os.getenv("ARIA_JOB_TIMEOUT_SECONDS", "300")
+            os.getenv(
+                "ARIA_JOB_TIMEOUT_SECONDS",
+                "300"
+            )
         ),
     )
 
@@ -686,7 +1048,10 @@ async def bootstrap_application() -> ServiceRegistry:
         scheduler,
     )
 
-    # Real-world read-only watchers.
+    # ---------------------------------------------------------
+    # Automation Watchers
+    # ---------------------------------------------------------
+
     tavily_client = getattr(
         web_search_action,
         "tavily",
@@ -695,18 +1060,30 @@ async def bootstrap_application() -> ServiceRegistry:
 
     automation_watchers = AutomationWatchers(
         tavily_client=tavily_client,
-        telegram_token=getattr(config, "telegram_token", None),
-        admin_chat_id=os.getenv("ADMIN_CHAT_ID"),
+        telegram_token=getattr(
+            config,
+            "telegram_token",
+            None
+        ),
+        admin_chat_id=os.getenv(
+            "ADMIN_CHAT_ID"
+        ),
         search_tool=search_tool,
         http_timeout=max(
             3.0,
-            float(getattr(config, "timeout_seconds", 20.0)),
+            float(
+                getattr(
+                    config,
+                    "timeout_seconds",
+                    20.0
+                )
+            ),
         ),
     )
 
     registry.register(
         "automation_watchers",
-        automation_watchers,
+        automation_watchers
     )
 
     logger.info(
@@ -720,49 +1097,74 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Phase 10 — Autonomous Self-Improvement Cycle
     # ---------------------------------------------------------
-    # The scheduler is deliberately configured here, after all
-    # reflection/learning services exist. This makes the cycle
-    # persistent across application restarts without creating
-    # duplicate jobs inside a single bootstrap.
 
     async def _run_daily_reflection():
+
         result = await self_reflection.daily_review()
+
         logger.info(
             "[Phase10] Daily reflection completed: %s",
-            result.get("type") if isinstance(result, dict) else "completed",
+            result.get("type")
+            if isinstance(result, dict)
+            else "completed",
         )
+
         return result
 
     async def _run_weekly_reflection():
+
         result = await self_reflection.weekly_review()
+
         logger.info(
             "[Phase10] Weekly reflection completed: %s",
-            result.get("type") if isinstance(result, dict) else "completed",
+            result.get("type")
+            if isinstance(result, dict)
+            else "completed",
         )
+
         return result
 
     async def _run_learning_consolidation():
+
         result = await autonomous_learning.consolidate()
+
         logger.info(
             "[Phase10] Learning consolidation completed: %s",
-            result.get("status") if isinstance(result, dict) else "completed",
+            result.get("status")
+            if isinstance(result, dict)
+            else "completed",
         )
+
         return result
 
-    # Keep intervals configurable while providing safe production
-    # defaults: consolidation every 6 hours, daily review every
-    # 24 hours, and weekly review every 7 days.
     consolidation_interval = max(
         3600.0,
-        float(os.getenv("ARIA_LEARNING_CONSOLIDATION_INTERVAL", "21600")),
+        float(
+            os.getenv(
+                "ARIA_LEARNING_CONSOLIDATION_INTERVAL",
+                "21600"
+            )
+        ),
     )
+
     daily_review_interval = max(
         3600.0,
-        float(os.getenv("ARIA_DAILY_REFLECTION_INTERVAL", "86400")),
+        float(
+            os.getenv(
+                "ARIA_DAILY_REFLECTION_INTERVAL",
+                "86400"
+            )
+        ),
     )
+
     weekly_review_interval = max(
         3600.0,
-        float(os.getenv("ARIA_WEEKLY_REFLECTION_INTERVAL", "604800")),
+        float(
+            os.getenv(
+                "ARIA_WEEKLY_REFLECTION_INTERVAL",
+                "604800"
+            )
+        ),
     )
 
     consolidation_job_id = scheduler.schedule_recurring(
@@ -815,6 +1217,10 @@ async def bootstrap_application() -> ServiceRegistry:
         weekly_review_interval,
     )
 
+    # ---------------------------------------------------------
+    # Planner / Executor
+    # ---------------------------------------------------------
+
     planner = Planner(
         llm_router=llm_router,
     )
@@ -829,6 +1235,10 @@ async def bootstrap_application() -> ServiceRegistry:
         agent_coordinator=agent_coordinator,
     )
 
+    # ---------------------------------------------------------
+    # Personality / Decision / Intent
+    # ---------------------------------------------------------
+
     personality_engine = PersonalityEngine(
         llm_router=llm_router
     )
@@ -837,9 +1247,14 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_manager=knowledge_manager,
         self_reflection=self_reflection,
     )
+
     intent_analyzer = IntentAnalyzer(
         llm_router=llm_router
     )
+
+    # ---------------------------------------------------------
+    # Reasoning Engine
+    # ---------------------------------------------------------
 
     reasoning_engine = ReasoningEngine(
         agent_manager=agent_manager,
@@ -859,20 +1274,60 @@ async def bootstrap_application() -> ServiceRegistry:
     # Core Services & AI
     # ---------------------------------------------------------
 
-    registry.register("session_manager", session_manager)
-    registry.register("state_manager", state_manager)
-    registry.register("skill_manager", skill_manager)
-    registry.register("action_manager", action_manager)
-    registry.register("planner", planner)
-    registry.register("executor", executor)
-    registry.register("personality_engine", personality_engine)
-    registry.register("decision_engine", decision_engine)
-    registry.register("intent_analyzer", intent_analyzer)
-    registry.register("reasoning_engine", reasoning_engine)
+    registry.register(
+        "session_manager",
+        session_manager
+    )
 
-    # Phase 11 canonical capability graph. This is diagnostic/runtime metadata
-    # rather than a second dependency-injection container. CognitiveCore still
-    # receives the actual service instances explicitly below.
+    registry.register(
+        "state_manager",
+        state_manager
+    )
+
+    registry.register(
+        "skill_manager",
+        skill_manager
+    )
+
+    registry.register(
+        "action_manager",
+        action_manager
+    )
+
+    registry.register(
+        "planner",
+        planner
+    )
+
+    registry.register(
+        "executor",
+        executor
+    )
+
+    registry.register(
+        "personality_engine",
+        personality_engine
+    )
+
+    registry.register(
+        "decision_engine",
+        decision_engine
+    )
+
+    registry.register(
+        "intent_analyzer",
+        intent_analyzer
+    )
+
+    registry.register(
+        "reasoning_engine",
+        reasoning_engine
+    )
+
+    # ---------------------------------------------------------
+    # Phase 11 Capability Registry
+    # ---------------------------------------------------------
+
     registry.register(
         "phase11_capability_registry",
         {
@@ -895,27 +1350,36 @@ async def bootstrap_application() -> ServiceRegistry:
         tool_manager.list_tools(),
     )
 
-    # ---------- Cross Wiring ----------
+    # ---------------------------------------------------------
+    # Cross Wiring
+    # ---------------------------------------------------------
 
     planner.executor = executor
     planner.memory_engine = memory_engine
     planner.reasoning_engine = reasoning_engine
+
     executor.planner = planner
     executor.memory_engine = memory_engine
     executor.reasoning_engine = reasoning_engine
+
     reasoning_engine.memory_engine = memory_engine
     reasoning_engine.planner = planner
     reasoning_engine.executor = executor
+
     decision_engine.reasoning_engine = reasoning_engine
     decision_engine.memory_engine = memory_engine
+
     agent_coordinator.reasoning_engine = reasoning_engine
     agent_coordinator.memory_engine = memory_engine
 
     if memory_engine is not None:
+
         memory_engine.reasoning_engine = reasoning_engine
         memory_engine.planner = planner
 
-    logger.info("[Bootstrap] Cross wiring complete.")
+    logger.info(
+        "[Bootstrap] Cross wiring complete."
+    )
 
     # ---------------------------------------------------------
     # Cognitive Core
@@ -974,11 +1438,22 @@ async def bootstrap_application() -> ServiceRegistry:
         },
     )
 
-    health_checker = HealthChecker(registry)
+    # ---------------------------------------------------------
+    # Health Checker
+    # ---------------------------------------------------------
+
+    health_checker = HealthChecker(
+        registry
+    )
+
     registry.register(
         "health_checker",
         health_checker
     )
+
+    # ---------------------------------------------------------
+    # Semantic Graph Persistence
+    # ---------------------------------------------------------
 
     working_memory.semantic().save_semantic_graph()
 
@@ -986,6 +1461,10 @@ async def bootstrap_application() -> ServiceRegistry:
         "[Bootstrap] Semantic Graph: %s",
         working_memory.semantic_summary(),
     )
+
+    # ---------------------------------------------------------
+    # System Started Event
+    # ---------------------------------------------------------
 
     await event_bus.publish(
         Event(
