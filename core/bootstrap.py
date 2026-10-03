@@ -201,8 +201,17 @@ async def bootstrap_application() -> ServiceRegistry:
         path=config.vector_persist_path
     )
 
+    # Keep the existing collection for legacy document/memory consumers.
     vector_store = chroma_client.get_or_create_collection(
         name="aria_memory"
+    )
+
+    # Knowledge uses a separate versioned collection because the embedding
+    # model is changing from the old Gemini 768-dim vectors to the local
+    # BGE-M3 1024-dim vectors. Mixing dimensions in one Chroma collection
+    # would make retrieval/indexing fail.
+    knowledge_vector_store = chroma_client.get_or_create_collection(
+        name="aria_knowledge_bge_m3_v1"
     )
 
     registry.register(
@@ -210,8 +219,13 @@ async def bootstrap_application() -> ServiceRegistry:
         vector_store
     )
 
+    registry.register(
+        "knowledge_vector_db",
+        knowledge_vector_store
+    )
+
     logger.info(
-        "[BOOT TEST] 5 - ChromaDB configured"
+        "[BOOT TEST] 5 - ChromaDB configured | legacy=aria_memory | knowledge=aria_knowledge_bge_m3_v1"
     )
 
     # ---------------------------------------------------------
@@ -285,7 +299,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     knowledge_database = KnowledgeDatabase(
         mongo_collection=db_inst["knowledge"] if db_inst is not None else None,
-        vector_db=vector_store,
+        vector_db=knowledge_vector_store,
     )
     knowledge_graph = KnowledgeGraph(
         mongodb=db_inst if mongo_client else None,
