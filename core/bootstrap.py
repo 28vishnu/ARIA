@@ -1675,16 +1675,23 @@ async def bootstrap_application() -> ServiceRegistry:
             "development_workspace": development_workspace,
             "requirement_parser": requirement_parser,
             "change_planner": change_planner,
-            "code_writer": code_writer,
-            "validator": validator,
-            "test_runner": test_runner,
+
+            # Workspace-scoped services are exposed as factories.
+            # They are instantiated only inside an isolated
+            # development workspace, never against production.
+            "filesystem_guard_factory": FilesystemGuard,
+            "development_sandbox_factory": DevelopmentSandbox,
+            "code_writer_factory": CodeWriter,
+            "validator_factory": DevelopmentValidator,
+            "test_runner_factory": DevelopmentTestRunner,
+            "build_manager_factory": BuildManager,
+
             "failure_analyzer": failure_analyzer,
             "repair_engine": repair_engine,
             "development_agent": development_agent,
             "development_controller": development_controller,
             "git_manager": git_manager,
             "github_manager": github_manager,
-            "build_manager": build_manager,
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
