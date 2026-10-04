@@ -108,23 +108,89 @@ class AuthoritativeVerificationEngine:
                 "verify(), evaluate(), or validate()."
             )
 
-        try:
-            result = method(
-                request,
-                implementation_result=implementation_result,
+        # The existing IntelligentVerification service exposes
+        # evaluate(requirement_text=..., generated_changes=..., ...),
+        # while other verifiers expose verify(request).  Normalize both
+        # forms at this boundary.
+        method_name = getattr(method, "__name__", "")
+        if method_name == "evaluate" or (
+            not hasattr(method, "__self__")
+            and "evaluate" in str(method)
+        ):
+            report = {}
+            if implementation_result is not None:
+                metadata = getattr(
+                    implementation_result,
+                    "metadata",
+                    {},
+                )
+                if isinstance(metadata, dict):
+                    report = metadata.get(
+                        "legacy_report",
+                        {},
+                    ) or {}
+
+            generated_changes = []
+            changes = getattr(
+                implementation_result,
+                "changes",
+                (),
+            ) if implementation_result is not None else ()
+            for change in changes or ():
+                generated_changes.append(
+                    change
+                )
+
+            validation = _dict_object(
+                report.get("validation")
             )
-        except TypeError:
+            test_result = _dict_object(
+                report.get("tests")
+            )
+            workspace = _dict_object(
+                report.get("workspace")
+            )
+
             try:
                 result = method(
-                    request,
+                    requirement_text=request.requirement,
+                    generated_changes=generated_changes,
+                    validation=validation,
+                    test_result=test_result,
+                    workspace_verified=bool(workspace),
+                    tests_selected=tuple(
+                        request.metadata.get(
+                            "tests_selected",
+                            (),
+                        )
+                    ),
                 )
             except TypeError:
                 result = method(
-                    requirement=request.requirement,
-                    acceptance_criteria=(
-                        request.acceptance_criteria
-                    ),
+                    requirement_text=request.requirement,
+                    generated_changes=generated_changes,
+                    validation=validation,
+                    test_result=test_result,
+                    workspace_verified=bool(workspace),
                 )
+        else:
+            try:
+                result = method(
+                    request,
+                    implementation_result=implementation_result,
+                )
+            except TypeError:
+                try:
+                    result = method(
+                        request,
+                    )
+                except TypeError:
+                    result = method(
+                        requirement=request.requirement,
+                        acceptance_criteria=(
+                            request.acceptance_criteria
+                        ),
+                    )
 
         if hasattr(
             result,
@@ -804,3 +870,15 @@ class AuthoritativeVerificationEngine:
 __all__ = [
     "AuthoritativeVerificationEngine",
 ]
+
+def _dict_object(value: Any) -> Any:
+    """Expose dictionary evidence through the attribute API used by legacy verifiers."""
+    if not isinstance(value, dict):
+        return value
+
+    class _Evidence:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.__dict__.update(payload)
+
+    return _Evidence(value)
+
