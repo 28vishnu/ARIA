@@ -36,6 +36,17 @@ from .engineering_requirement import (
     EngineeringPermission,
     EngineeringRequirement,
 )
+from .repository_model import (
+    RepositoryPathKind,
+    RepositoryComponentKind,
+    RepositoryPath,
+    RepositoryComponent,
+    RepositoryModel,
+)
+from .repository_scan_policy import (
+    RepositoryScanPolicy,
+    DEFAULT_REPOSITORY_SCAN_POLICY,
+)
 
 __all__ = [
     "EngineeringPhase",
@@ -59,4 +70,11 @@ __all__ = [
     "PermissionScope",
     "EngineeringPermission",
     "EngineeringRequirement",
+    "RepositoryPathKind",
+    "RepositoryComponentKind",
+    "RepositoryPath",
+    "RepositoryComponent",
+    "RepositoryModel",
+    "RepositoryScanPolicy",
+    "DEFAULT_REPOSITORY_SCAN_POLICY",
 ]
