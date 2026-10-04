@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .change_planner import ChangePlan, ChangePlanner
+from .change_impact_planner import ChangeImpactAnalysis, ChangeImpactPlanner
+from .architecture_intelligence import ArchitectureIntelligence
 from .code_writer import CodeWriter, WriteResult
 from .failure_analyzer import FailureAnalysis, FailureAnalyzer
 from .filesystem_guard import FilesystemGuard
@@ -264,13 +266,21 @@ class DevelopmentAgent:
         max_generated_files: int = DEFAULT_MAX_GENERATED_FILES,
         max_generated_file_chars: int = DEFAULT_MAX_FILE_CHARS,
         requirement_intelligence: RequirementIntelligence | None = None,
+        architecture_intelligence: ArchitectureIntelligence | None = None,
+        change_impact_planner: ChangeImpactPlanner | None = None,
     ) -> None:
         self.repository_manager = repository_manager
         self.workspace_manager = workspace_manager
 
         self.requirement_parser = RequirementParser()
         self.requirement_intelligence = requirement_intelligence or RequirementIntelligence(self.requirement_parser)
+        self.architecture_intelligence = architecture_intelligence or ArchitectureIntelligence(
+            repository_manager=repository_manager,
+        )
         self.change_planner = ChangePlanner()
+        self.change_impact_planner = change_impact_planner or ChangeImpactPlanner(
+            self.architecture_intelligence,
+        )
         self.code_generator = code_generator
 
         self.max_repair_attempts = max(
@@ -728,6 +738,7 @@ class DevelopmentAgent:
         requirement: Requirement,
         plan: ChangePlan,
         repository_context: dict[str, Any],
+        impact_analysis: ChangeImpactAnalysis | None = None,
         *,
         failure: FailureAnalysis | None = None,
         previous_changes: list[GeneratedChange] | None = None,
@@ -1840,6 +1851,61 @@ class DevelopmentAgent:
             )
 
         # ----------------------------------------------------
+        # Change impact analysis
+        # ----------------------------------------------------
+
+        try:
+            impact_analysis = self.change_impact_planner.analyze(
+                requirement_analysis,
+                repository_root,
+                existing_paths=repository_paths,
+            )
+        except Exception as exc:
+            logger.exception(
+                "[DevelopmentAgent] Change impact analysis failed."
+            )
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=plan,
+                workspace=None,
+                status="impact_analysis_failed",
+                errors=(str(exc),),
+                metadata={
+                    **requirement_analysis_metadata,
+                    "change_impact_analysis": {"error": str(exc)},
+                },
+            )
+
+        requirement_analysis_metadata = {
+            **requirement_analysis_metadata,
+            "change_impact_analysis": impact_analysis.to_dict(),
+        }
+
+        logger.info(
+            "[DevelopmentAgent] Change impact analyzed | direct=%s | dependent=%s | related=%s | affected=%s | confidence=%s",
+            len(impact_analysis.direct_targets),
+            len(impact_analysis.dependent_targets),
+            len(impact_analysis.related_targets),
+            len(impact_analysis.affected_files),
+            impact_analysis.confidence,
+        )
+
+        if impact_analysis.blocked:
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=plan,
+                workspace=None,
+                status="impact_blocked",
+                errors=(
+                    "Change impact analysis identified protected repository targets: "
+                    + ", ".join(impact_analysis.protected_affected),
+                ),
+                metadata=requirement_analysis_metadata,
+            )
+
+        # ----------------------------------------------------
         # Isolated workspace
         # ----------------------------------------------------
 
@@ -2074,6 +2140,7 @@ class DevelopmentAgent:
                 {
                     "requirement": requirement.to_dict(),
                     "plan": plan.to_dict(),
+                    "change_impact": impact_analysis.to_dict(),
                     "repository": repository_context,
                     "workspace": {
                         "id": workspace.workspace_id,
