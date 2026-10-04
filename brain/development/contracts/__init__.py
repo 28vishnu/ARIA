@@ -155,9 +155,18 @@ from .self_upgrade_gate import (
     UpgradeGateStatus,
 )
 
+from .engineering_git import (
+    GitAuthorization,
+    GitLifecyclePlan,
+    GitLifecycleRequest,
+    GitLifecycleResult,
+    GitLifecycleStatus,
+    GitOperation,
+    GitRisk,
+)
+
 
 __all__ = [
-    # Acceptance
     "AcceptanceCriterion",
     "AcceptanceCriterionStatus",
     "AcceptanceDecision",
@@ -166,7 +175,6 @@ __all__ = [
     "AcceptanceRequest",
     "AcceptanceStatus",
 
-    # Diagnosis
     "DiagnosisAction",
     "DiagnosisCategory",
     "DiagnosisConfidence",
@@ -176,11 +184,9 @@ __all__ = [
     "DiagnosisResult",
     "RootCauseHypothesis",
 
-    # Evidence
     "EvidenceKind",
     "EngineeringEvidence",
 
-    # Experience
     "EngineeringExperience",
     "EngineeringExperienceContext",
     "ExperienceKind",
@@ -189,33 +195,28 @@ __all__ = [
     "ExperienceOutcome",
     "ExperienceQuery",
 
-    # Implementation
     "ImplementationChange",
     "ImplementationEvidence",
     "ImplementationRequest",
     "ImplementationResult",
     "ImplementationStatus",
 
-    # Knowledge
     "EngineeringKnowledgeContext",
     "EngineeringKnowledgeItem",
     "EngineeringKnowledgePolicy",
     "KnowledgeAuthority",
     "KnowledgeKind",
 
-    # Lifecycle
     "EngineeringLifecycle",
     "LifecycleExecution",
     "LifecycleTransition",
 
-    # Plan
     "AdaptiveEngineeringPlan",
     "EngineeringPlanStep",
     "PlanChangeReason",
     "PlanRevision",
     "PlanStatus",
 
-    # Recovery
     "RecoveryAction",
     "RecoveryDecision",
     "RecoveryRequest",
@@ -224,17 +225,14 @@ __all__ = [
     "RepairRequest",
     "RetestRequest",
 
-    # Requirement
     "EngineeringPermission",
     "EngineeringRequirement",
     "PermissionScope",
     "RequirementIntent",
 
-    # Result
     "EngineeringOutcome",
     "EngineeringResult",
 
-    # Repository
     "RepositoryComponent",
     "RepositoryComponentKind",
     "RepositoryModel",
@@ -242,25 +240,20 @@ __all__ = [
     "RepositoryPathKind",
     "RepositoryScanPolicy",
 
-    # Session
     "AuthoritativeEngineeringSession",
     "EngineeringSession",
     "SessionTransition",
 
-    # State
     "EngineeringPhase",
     "EngineeringState",
 
-    # Store
     "EngineeringStore",
 
-    # Task graph
     "EngineeringTask",
     "EngineeringTaskGraph",
     "EngineeringTaskKind",
     "EngineeringTaskStatus",
 
-    # Verification
     "VerificationAction",
     "VerificationDecision",
     "VerificationDimension",
@@ -269,7 +262,6 @@ __all__ = [
     "VerificationResult",
     "VerificationStatus",
 
-    # Self-modification
     "SelfModificationAction",
     "SelfModificationConstraint",
     "SelfModificationDecision",
@@ -283,7 +275,6 @@ __all__ = [
     "SelfModificationTarget",
     "SelfModificationVerification",
 
-    # Self-upgrade gate
     "SelfUpgradeGateDecision",
     "SelfUpgradeGateRequest",
     "UpgradeAuthorization",
@@ -291,4 +282,12 @@ __all__ = [
     "UpgradeGateAction",
     "UpgradeGateFinding",
     "UpgradeGateStatus",
+
+    "GitAuthorization",
+    "GitLifecyclePlan",
+    "GitLifecycleRequest",
+    "GitLifecycleResult",
+    "GitLifecycleStatus",
+    "GitOperation",
+    "GitRisk",
 ]
