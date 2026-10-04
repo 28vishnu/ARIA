@@ -78,6 +78,19 @@ class LifecycleExecution:
         }
 
 
+# ------------------------------------------------------------------
+# Backward-compatible public name
+# ------------------------------------------------------------------
+#
+# contracts/__init__.py and some integration code use the more
+# explicit name LifecycleExecutionRecord.
+#
+# Keep LifecycleExecution as the canonical implementation while
+# exposing LifecycleExecutionRecord as an exact compatibility alias.
+#
+LifecycleExecutionRecord = LifecycleExecution
+
+
 class EngineeringLifecycle:
     """Canonical lifecycle coordinator.
 
@@ -549,5 +562,6 @@ __all__ = [
     "LifecycleHook",
     "LifecycleStep",
     "LifecycleExecution",
+    "LifecycleExecutionRecord",
     "EngineeringLifecycle",
 ]
