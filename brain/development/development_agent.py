@@ -817,8 +817,6 @@ class DevelopmentAgent:
             "unless explicitly required.\n"
             "10. Do not include Markdown fences.\n"
             "11. Do not include prose outside JSON.\n"
-            "12. If the Master asks for an exact-content file, create ONLY the requested file unless the change plan explicitly includes additional files. The file content must be the literal requested text, without surrounding quotes, explanations, Markdown, or invented test files.\n"
-            "13. The tests field may reference EXISTING tests only. Do not create a new test file unless the change plan explicitly includes that test file.\n"
             "\n"
             "MASTER REQUIREMENT:\n"
             f"{requirement.raw_text}\n"
@@ -1415,28 +1413,11 @@ class DevelopmentAgent:
                     path,
                     plan,
                 ):
-                    # A coding model may discover that a new test is useful
-                    # while implementing a planned change. Permit only a
-                    # newly-created test file outside the deterministic plan.
-                    # Production/source files must remain plan-controlled.
-                    path_obj = Path(path)
-                    name = path_obj.name.lower()
-                    normalized_path = path.replace("\\", "/").lstrip("./")
-                    is_test_only_create = (
-                        operation == "create"
-                        and (
-                            normalized_path.startswith("tests/")
-                            or name.startswith("test_")
-                            or name.endswith("_test.py")
-                        )
+                    errors.append(
+                        "Generated path was not present "
+                        f"in the change plan: {path}"
                     )
-
-                    if not is_test_only_create:
-                        errors.append(
-                            "Generated path was not present "
-                            f"in the change plan: {path}"
-                        )
-                        continue
+                    continue
 
                 expected = planned_actions.get(path)
 
@@ -1538,14 +1519,14 @@ class DevelopmentAgent:
                 f"{safe_path}: {exc}"
             )
 
-        # A generated text file may legitimately end with one conventional
-        # POSIX newline even when the requested payload is a single exact line.
-        # Accept that single terminal newline while rejecting every other
-        # content difference.
-        normalized_actual = actual.replace("\r\n", "\n").replace("\r", "\n")
-        normalized_expected = expected.replace("\r\n", "\n").replace("\r", "\n")
+        # Treat a conventional terminal newline as formatting, not as a
+        # semantic content change.  The requirement parser itself is also
+        # normalized this way so an exact-content request remains strict
+        # while accepting the newline normally written by text/code emitters.
+        actual_normalized = actual.rstrip("\r\n")
+        expected_normalized = expected.rstrip("\r\n")
 
-        if normalized_actual != normalized_expected and normalized_actual != normalized_expected + "\n":
+        if actual_normalized != expected_normalized:
             return (
                 "Exact-content acceptance check failed "
                 f"for {safe_path}: file content does not "
