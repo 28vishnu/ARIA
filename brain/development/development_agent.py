@@ -14,6 +14,7 @@ from .failure_analyzer import FailureAnalysis, FailureAnalyzer
 from .filesystem_guard import FilesystemGuard
 from .repository_manager import RepositoryManager
 from .requirement_parser import Requirement, RequirementParser
+from .requirement_intelligence import RequirementAnalysis, RequirementIntelligence
 from .repair_engine import RepairEngine, RepairResult
 from .sandbox import DevelopmentSandbox
 from .test_runner import DevelopmentTestRunner, TestResult
@@ -262,11 +263,13 @@ class DevelopmentAgent:
         max_generation_chars: int = DEFAULT_MAX_GENERATION_CHARS,
         max_generated_files: int = DEFAULT_MAX_GENERATED_FILES,
         max_generated_file_chars: int = DEFAULT_MAX_FILE_CHARS,
+        requirement_intelligence: RequirementIntelligence | None = None,
     ) -> None:
         self.repository_manager = repository_manager
         self.workspace_manager = workspace_manager
 
         self.requirement_parser = RequirementParser()
+        self.requirement_intelligence = requirement_intelligence or RequirementIntelligence(self.requirement_parser)
         self.change_planner = ChangePlanner()
         self.code_generator = code_generator
 
@@ -1701,25 +1704,52 @@ class DevelopmentAgent:
         # ----------------------------------------------------
 
         try:
-            requirement = (
-                self.requirement_parser.parse(
+            requirement_analysis = (
+                self.requirement_intelligence.analyze(
                     requirement_text
                 )
             )
+            requirement = requirement_analysis.requirement
         except Exception as exc:
             logger.exception(
-                "[DevelopmentAgent] Requirement parsing failed."
+                "[DevelopmentAgent] Requirement intelligence failed."
             )
 
             raise RuntimeError(
-                f"Requirement parsing failed: {exc}"
+                f"Requirement intelligence failed: {exc}"
             ) from exc
+
+        if not requirement_analysis.ready_for_planning:
+            logger.warning(
+                "[DevelopmentAgent] Requirement is not sufficiently specified | "
+                "intent=%s | ambiguity=%s",
+                requirement_analysis.intent,
+                requirement_analysis.ambiguity_flags,
+            )
+
+            return DevelopmentReport(
+                success=False,
+                requirement=requirement,
+                plan=None,
+                workspace=None,
+                status="requirement_unclear",
+                errors=tuple(requirement_analysis.clarification_questions) or (
+                    "The requirement is not specific enough for safe planning.",
+                ),
+                metadata={
+                    "requirement_analysis": requirement_analysis.to_dict(),
+                },
+            )
 
         logger.info(
             "[DevelopmentAgent] Starting development job | "
             "requirement=%r",
             requirement.raw_text,
         )
+
+        requirement_analysis_metadata = {
+            "requirement_analysis": requirement_analysis.to_dict(),
+        }
 
         # ----------------------------------------------------
         # Production repository inspection
@@ -1748,6 +1778,7 @@ class DevelopmentAgent:
                 workspace=None,
                 status="repository_inspection_failed",
                 errors=(str(exc),),
+                metadata=requirement_analysis_metadata,
             )
 
         logger.info(
@@ -1768,6 +1799,7 @@ class DevelopmentAgent:
                     "Production repository inspection returned "
                     "zero files. Development is blocked.",
                 ),
+                metadata=requirement_analysis_metadata,
             )
 
         # ----------------------------------------------------
@@ -2712,6 +2744,7 @@ class DevelopmentAgent:
             metadata=self._report_metadata(
                 generated_changes,
                 extra={
+                    **requirement_analysis_metadata,
                     "tests_selected": selected_tests,
                     "final_acceptance_passed": (
                         final_acceptance_error is None
