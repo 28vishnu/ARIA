@@ -55,6 +55,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Sequence
 
+from brain.development.autonomous_engineer_orchestrator import AutonomousEngineerOrchestrator
+
 
 logger = logging.getLogger("aria.autonomous_development")
 
@@ -207,9 +209,7 @@ class AutonomousDevelopmentBridge:
                 "execute()."
             )
 
-        self.controller = (
-            development_controller
-        )
+        self.controller = development_controller
 
         self.timeout_seconds = max(
             30.0,
@@ -217,6 +217,11 @@ class AutonomousDevelopmentBridge:
                 7200.0,
                 float(timeout_seconds),
             ),
+        )
+
+        self.orchestrator = AutonomousEngineerOrchestrator(
+            development_controller,
+            timeout_seconds=self.timeout_seconds,
         )
 
         self.statistics = {
@@ -413,15 +418,33 @@ class AutonomousDevelopmentBridge:
             # for filesystem operations.
             # ---------------------------------------------------------
 
-            job = await asyncio.wait_for(
-                self.controller.execute(
+            orchestration = await asyncio.wait_for(
+                self.orchestrator.execute(
                     normalized_requirement,
                     changes=changes,
                     test_paths=test_paths,
                     workspace_id=workspace_id,
+                    context=context,
                 ),
                 timeout=self.timeout_seconds,
             )
+
+            elapsed = (
+                time.monotonic()
+                - started
+            )
+
+            job = orchestration.job
+            if job is None:
+                self.statistics["failed"] += 1
+                return AutonomousDevelopmentResult(
+                    success=False,
+                    status=orchestration.status,
+                    requirement=normalized_requirement,
+                    errors=list(orchestration.errors),
+                    elapsed_seconds=elapsed,
+                    metadata=dict(orchestration.metadata),
+                )
 
             elapsed = (
                 time.monotonic()
@@ -443,17 +466,6 @@ class AutonomousDevelopmentBridge:
                 None,
             )
 
-            # Preserve the DevelopmentAgent's real outcome.  The
-            # controller intentionally exposes a coarse job status
-            # (completed/failed), while DevelopmentReport contains the
-            # actionable Phase-1 status and diagnostics.  Never discard
-            # those diagnostics at the bridge boundary.
-            report_errors: list[str] = []
-            report_status = None
-            report_failure = None
-            report_generation_error = None
-            report_workspace_id = None
-
             if report is not None:
                 success = bool(
                     getattr(
@@ -461,89 +473,6 @@ class AutonomousDevelopmentBridge:
                         "success",
                         success,
                     )
-                )
-
-                report_status = str(
-                    getattr(
-                        report,
-                        "status",
-                        "",
-                    )
-                    or ""
-                ).strip() or None
-
-                report_errors = [
-                    str(item)
-                    for item in (
-                        getattr(
-                            report,
-                            "errors",
-                            (),
-                        )
-                        or ()
-                    )
-                    if str(item).strip()
-                ]
-
-                failure = getattr(
-                    report,
-                    "failure",
-                    None,
-                )
-                if failure is not None:
-                    report_failure = (
-                        failure.to_dict()
-                        if hasattr(failure, "to_dict")
-                        else str(failure)
-                    )
-
-                generation = getattr(
-                    report,
-                    "generation",
-                    None,
-                )
-                if generation is not None:
-                    report_generation_error = (
-                        getattr(
-                            generation,
-                            "error",
-                            None,
-                        )
-                    )
-
-                workspace = getattr(
-                    report,
-                    "workspace",
-                    None,
-                )
-                if workspace is not None:
-                    report_workspace_id = (
-                        getattr(
-                            workspace,
-                            "workspace_id",
-                            None,
-                        )
-                    )
-
-                if report_generation_error:
-                    report_errors.append(
-                        str(report_generation_error)
-                    )
-
-                if report_failure:
-                    summary = (
-                        report_failure.get("summary")
-                        if isinstance(report_failure, dict)
-                        else None
-                    )
-                    if summary:
-                        report_errors.append(
-                            str(summary)
-                        )
-
-                # Stable de-duplication.
-                report_errors = list(
-                    dict.fromkeys(report_errors)
                 )
 
             if success:
@@ -574,11 +503,6 @@ class AutonomousDevelopmentBridge:
                 None,
             )
 
-            final_workspace_id = (
-                report_workspace_id
-                or workspace_id
-            )
-
             return AutonomousDevelopmentResult(
                 success=success,
                 status=status,
@@ -591,10 +515,10 @@ class AutonomousDevelopmentBridge:
                     else None
                 ),
                 development_report=report,
-                errors=report_errors,
                 elapsed_seconds=elapsed,
                 metadata={
                     "bridge_version": self.VERSION,
+                    "orchestrator_version": self.orchestrator.VERSION,
                     "context_supplied": (
                         isinstance(
                             context,
@@ -602,16 +526,7 @@ class AutonomousDevelopmentBridge:
                         )
                     ),
                     "workspace_id": (
-                        final_workspace_id
-                    ),
-                    "report_status": (
-                        report_status
-                    ),
-                    "report_failure": (
-                        report_failure
-                    ),
-                    "report_generation_error": (
-                        report_generation_error
+                        workspace_id
                     ),
                 },
             )
