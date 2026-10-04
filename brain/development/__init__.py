@@ -19,6 +19,10 @@ from .dependency_analyzer import (
     ModuleInfo,
 )
 
+from .requirement_intelligence import (
+    RequirementAnalysis,
+    RequirementIntelligence,
+)
 
 __all__ = [
     "RepositoryManager",
@@ -32,5 +36,7 @@ __all__ = [
     "DependencyAnalyzer",
     "DependencyGraph",
     "DependencyInfo",
+    "RequirementAnalysis",
+    "RequirementIntelligence",
     "ModuleInfo",
 ]
