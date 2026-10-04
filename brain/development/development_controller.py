@@ -415,6 +415,23 @@ class DevelopmentController:
                     if normalized_workspace_id
                     else None
                 ),
+                # Preserve the detailed DevelopmentAgent outcome
+                # alongside the controller's coarse completed/failed
+                # job status. This prevents the orchestration layer
+                # from losing actionable diagnostics.
+                "report_status": getattr(
+                    report,
+                    "status",
+                    None,
+                ),
+                "report_errors": list(
+                    getattr(
+                        report,
+                        "errors",
+                        (),
+                    )
+                    or ()
+                ),
             }
 
             # Remove None values to keep status compact.
