@@ -22,6 +22,7 @@ from .sandbox import DevelopmentSandbox
 from .test_runner import DevelopmentTestRunner, TestResult
 from .validator import DevelopmentValidator, ValidationResult
 from .workspace import DevelopmentWorkspace, WorkspaceInfo
+from .engineering_reasoning import EngineeringReasoningCore
 
 
 logger = logging.getLogger("aria")
@@ -282,6 +283,7 @@ class DevelopmentAgent:
             self.architecture_intelligence,
         )
         self.code_generator = code_generator
+        self.engineering_reasoning = EngineeringReasoningCore()
 
         self.max_repair_attempts = max(
             1,
@@ -770,6 +772,20 @@ class DevelopmentAgent:
                 )[:50_000]
             )
 
+        reasoning_section = self.engineering_reasoning.build_prompt_section(
+            requirement,
+            requirement_analysis=getattr(
+                self,
+                "_active_requirement_analysis",
+                None,
+            ),
+            plan=plan,
+            impact_analysis=impact_analysis,
+            repository_context=repository_context,
+            generated_changes=previous_changes or (),
+            failure=failure,
+        )
+
         return (
             "You are ARIA's software-development engine.\n"
             "\n"
@@ -829,6 +845,7 @@ class DevelopmentAgent:
             "\n"
             "CURRENT VERIFIED REPOSITORY CONTEXT:\n"
             f"{json.dumps(repository_context, ensure_ascii=False, indent=2)}"
+            f"{reasoning_section}"
             f"{failure_text}"
             f"{previous_text}"
         )
@@ -1854,6 +1871,8 @@ class DevelopmentAgent:
             "requirement=%r",
             requirement.raw_text,
         )
+
+        self._active_requirement_analysis = requirement_analysis
 
         requirement_analysis_metadata = {
             "requirement_analysis": requirement_analysis.to_dict(),
