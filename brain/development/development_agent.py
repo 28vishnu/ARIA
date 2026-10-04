@@ -23,6 +23,7 @@ from .test_runner import DevelopmentTestRunner, TestResult
 from .validator import DevelopmentValidator, ValidationResult
 from .workspace import DevelopmentWorkspace, WorkspaceInfo
 from .engineering_reasoning import EngineeringReasoningCore
+from .intelligent_task_graph import IntelligentTaskGraph, TaskGraph
 from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
 from .adaptive_engineering_plan import AdaptiveEngineeringPlan
 
@@ -286,6 +287,7 @@ class DevelopmentAgent:
         )
         self.code_generator = code_generator
         self.engineering_reasoning = EngineeringReasoningCore()
+        self.intelligent_task_graph = IntelligentTaskGraph()
         self.deep_repository_reasoner = DeepRepositoryReasoner(
             self.architecture_intelligence
         )
@@ -746,6 +748,7 @@ class DevelopmentAgent:
         requirement: Requirement,
         plan: ChangePlan,
         repository_context: dict[str, Any],
+        task_graph: TaskGraph | None = None,
         impact_analysis: ChangeImpactAnalysis | None = None,
         repository_reasoning: RepositoryReasoning | None = None,
         *,
@@ -807,6 +810,15 @@ class DevelopmentAgent:
             adaptive_plan_section = (
                 "\n"
                 + self.adaptive_plan.build_prompt_section()
+            )
+
+        task_graph_section = ""
+        if task_graph is not None:
+            task_graph_section = (
+                "\n"
+                + self.intelligent_task_graph.build_prompt_section(
+                    task_graph
+                )
             )
 
         return (
@@ -1898,6 +1910,7 @@ class DevelopmentAgent:
         )
 
         self._active_requirement_analysis = requirement_analysis
+        self._active_task_graph: TaskGraph | None = None
         self._active_repository_reasoning: RepositoryReasoning | None = None
 
         requirement_analysis_metadata = {
@@ -2347,6 +2360,44 @@ class DevelopmentAgent:
         )
 
         # ----------------------------------------------------
+        # Intelligent task graph
+        # ----------------------------------------------------
+
+        try:
+            task_graph = self.intelligent_task_graph.build(
+                requirement=requirement,
+                plan=plan,
+                repository_reasoning=getattr(
+                    self,
+                    "_active_repository_reasoning",
+                    None,
+                ),
+                generated_changes=(),
+                selected_tests=(),
+                failure=None,
+            )
+            self._active_task_graph = task_graph
+
+            requirement_analysis_metadata = {
+                **requirement_analysis_metadata,
+                "intelligent_task_graph": task_graph.to_dict(),
+            }
+
+            logger.info(
+                "[DevelopmentAgent] Intelligent task graph prepared | "
+                "tasks=%s | order=%s | confidence=%s",
+                len(task_graph.tasks),
+                list(task_graph.execution_order),
+                task_graph.confidence,
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "[DevelopmentAgent] Intelligent task graph construction failed."
+            )
+            self._active_task_graph = None
+
+        # ----------------------------------------------------
         # Generate changes
         # ----------------------------------------------------
 
@@ -2358,6 +2409,11 @@ class DevelopmentAgent:
                     requirement,
                     plan,
                     repository_context,
+                    task_graph=getattr(
+                        self,
+                        "_active_task_graph",
+                        None,
+                    ),
                 )
             )
 
@@ -2527,6 +2583,35 @@ class DevelopmentAgent:
                     "The development engine generated no "
                     "file changes.",
                 ),
+            )
+
+        # ----------------------------------------------------
+        # Rebuild intelligent task graph from implementation evidence
+        # ----------------------------------------------------
+
+        try:
+            task_graph = self.intelligent_task_graph.build(
+                requirement=requirement,
+                plan=plan,
+                repository_reasoning=getattr(
+                    self,
+                    "_active_repository_reasoning",
+                    None,
+                ),
+                generated_changes=generated_changes,
+                selected_tests=generation.tests if generation else (),
+                failure=None,
+                validation=None,
+            )
+            self._active_task_graph = task_graph
+            requirement_analysis_metadata = {
+                **requirement_analysis_metadata,
+                "intelligent_task_graph": task_graph.to_dict(),
+            }
+        except Exception:
+            logger.exception(
+                "[DevelopmentAgent] Task graph rebuild failed; "
+                "continuing with validated changes."
             )
 
         logger.info(
