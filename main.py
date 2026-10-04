@@ -21,6 +21,12 @@ from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
 from brain.development.telegram_development import TelegramDevelopmentInterface
+from brain.development.telegram_autonomous_engineering import (
+    TelegramAutonomousEngineeringInterface,
+)
+from brain.development.telegram_approval_interface import (
+    TelegramApprovalInterface,
+)
 from audio_engine import AudioEngine
 
 
@@ -1906,6 +1912,19 @@ async def _handle_master_development_command(
     user_id,
     text: str,
 ) -> dict[str, Any] | None:
+    phase1_runtime = registry.get(
+        "phase1_runtime"
+    )
+
+    if phase1_runtime is not None:
+        interface = TelegramAutonomousEngineeringInterface(
+            phase1_runtime
+        )
+        return await interface.handle(
+            user_id=user_id,
+            text=text,
+        )
+
     controller = registry.get(
         "development_controller"
     )
@@ -1916,7 +1935,8 @@ async def _handle_master_development_command(
             "success": False,
             "text": (
                 "Self-development is not available because "
-                "DevelopmentController is not registered."
+                "neither Phase 1 runtime nor DevelopmentController "
+                "is registered."
             ),
         }
 
@@ -1925,6 +1945,25 @@ async def _handle_master_development_command(
     )
 
     return await interface.handle(
+        user_id=user_id,
+        text=text,
+    )
+
+
+async def _handle_master_approval_command(
+    *,
+    registry,
+    user_id,
+    text: str,
+) -> dict[str, Any] | None:
+    approval_interface = registry.get(
+        "telegram_approval_interface"
+    )
+
+    if approval_interface is None:
+        return None
+
+    return await approval_interface.handle(
         user_id=user_id,
         text=text,
     )
@@ -2069,6 +2108,33 @@ async def process_telegram_update(
         )
 
         status_started = True
+
+        # -----------------------------------------------------
+        # MASTER APPROVAL / CONTINUATION COMMAND
+        # -----------------------------------------------------
+
+        approval_result = await _handle_master_approval_command(
+            registry=registry,
+            user_id=user_id,
+            text=text,
+        )
+
+        if approval_result is not None:
+            await safe_delete_status(status)
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": approval_result.get(
+                        "text",
+                        "Approval request processed.",
+                    ),
+                    "parse_mode": "HTML",
+                },
+            )
+
+            return approval_result
 
         # -----------------------------------------------------
         # MASTER ARCHITECTURE COMMAND
