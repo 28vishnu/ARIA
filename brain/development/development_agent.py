@@ -1201,6 +1201,65 @@ class DevelopmentAgent:
 
         return result
 
+    @staticmethod
+    def _is_unplanned_test_artifact_allowed(
+        path: str,
+        operation: str,
+        requirement: Requirement | None,
+    ) -> bool:
+        """Allow newly discovered test files without weakening source safety.
+
+        The LLM may discover a concrete test filename only after planning.
+        A new test artifact is therefore allowed when the requirement itself
+        asks for tests/verification, but only as a CREATE operation and only
+        for conventional test paths/names. Existing files and non-test paths
+        must still be present in the deterministic change plan.
+        """
+        if operation != "create" or requirement is None:
+            return False
+
+        text = re.sub(
+            r"\s+",
+            " ",
+            str(requirement.raw_text or "").lower(),
+        )
+
+        test_intent = any(
+            phrase in text
+            for phrase in (
+                "create a test",
+                "create tests",
+                "create test",
+                "test file",
+                "test files",
+                "tests",
+                "verify",
+                "run the tests",
+                "run tests",
+            )
+        )
+
+        if not test_intent:
+            return False
+
+        normalized = str(path).replace("\\", "/").lstrip("./")
+        parts = [part.lower() for part in normalized.split("/") if part]
+        if not parts:
+            return False
+
+        name = parts[-1]
+        in_test_directory = any(
+            part in {"test", "tests"}
+            for part in parts[:-1]
+        )
+        test_named = (
+            name.startswith("test_")
+            or name.endswith("_test.py")
+            or name.endswith(".test.py")
+        )
+
+        return in_test_directory or test_named
+
     @classmethod
     def _path_is_planned(
         cls,
@@ -1413,11 +1472,16 @@ class DevelopmentAgent:
                     path,
                     plan,
                 ):
-                    errors.append(
-                        "Generated path was not present "
-                        f"in the change plan: {path}"
-                    )
-                    continue
+                    if not self._is_unplanned_test_artifact_allowed(
+                        path,
+                        operation,
+                        requirement,
+                    ):
+                        errors.append(
+                            "Generated path was not present "
+                            f"in the change plan: {path}"
+                        )
+                        continue
 
                 expected = planned_actions.get(path)
 
