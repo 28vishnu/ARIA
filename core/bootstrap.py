@@ -99,6 +99,7 @@ from brain.development.health_monitor import HealthMonitor
 from brain.development.rollback_manager import RollbackManager
 
 from brain.development.approval_manager import ApprovalManager
+from brain.development.telegram_approval_interface import TelegramApprovalInterface
 from brain.development.deployment_policy import DeploymentPolicy
 
 from brain.integration.phase1_runtime import create_phase1_runtime
@@ -1035,6 +1036,20 @@ async def bootstrap_application() -> ServiceRegistry:
         approval_manager,
     )
 
+    telegram_approval_interface = TelegramApprovalInterface(
+        approval_manager=approval_manager,
+    )
+
+    registry.register(
+        "telegram_approval_interface",
+        telegram_approval_interface,
+    )
+
+    logger.info(
+        "[Phase1] Telegram approval interface registered | "
+        "master_only=True",
+    )
+
     registry.register(
         "deployment_policy",
         deployment_policy,
@@ -1236,6 +1251,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
+            "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
             "phase_planner": phase_planner,
             "phase_task_execution": phase_task_execution,
@@ -2077,6 +2093,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
+            "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
             "phase_planner": phase_planner,
             "phase_task_execution": phase_task_execution,
