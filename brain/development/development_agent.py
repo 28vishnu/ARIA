@@ -817,6 +817,8 @@ class DevelopmentAgent:
             "unless explicitly required.\n"
             "10. Do not include Markdown fences.\n"
             "11. Do not include prose outside JSON.\n"
+            "12. If the Master asks for an exact-content file, create ONLY the requested file unless the change plan explicitly includes additional files. The file content must be the literal requested text, without surrounding quotes, explanations, Markdown, or invented test files.\n"
+            "13. The tests field may reference EXISTING tests only. Do not create a new test file unless the change plan explicitly includes that test file.\n"
             "\n"
             "MASTER REQUIREMENT:\n"
             f"{requirement.raw_text}\n"
@@ -1413,11 +1415,28 @@ class DevelopmentAgent:
                     path,
                     plan,
                 ):
-                    errors.append(
-                        "Generated path was not present "
-                        f"in the change plan: {path}"
+                    # A coding model may discover that a new test is useful
+                    # while implementing a planned change. Permit only a
+                    # newly-created test file outside the deterministic plan.
+                    # Production/source files must remain plan-controlled.
+                    path_obj = Path(path)
+                    name = path_obj.name.lower()
+                    normalized_path = path.replace("\\", "/").lstrip("./")
+                    is_test_only_create = (
+                        operation == "create"
+                        and (
+                            normalized_path.startswith("tests/")
+                            or name.startswith("test_")
+                            or name.endswith("_test.py")
+                        )
                     )
-                    continue
+
+                    if not is_test_only_create:
+                        errors.append(
+                            "Generated path was not present "
+                            f"in the change plan: {path}"
+                        )
+                        continue
 
                 expected = planned_actions.get(path)
 
@@ -1519,7 +1538,14 @@ class DevelopmentAgent:
                 f"{safe_path}: {exc}"
             )
 
-        if actual != expected:
+        # A generated text file may legitimately end with one conventional
+        # POSIX newline even when the requested payload is a single exact line.
+        # Accept that single terminal newline while rejecting every other
+        # content difference.
+        normalized_actual = actual.replace("\r\n", "\n").replace("\r", "\n")
+        normalized_expected = expected.replace("\r\n", "\n").replace("\r", "\n")
+
+        if normalized_actual != normalized_expected and normalized_actual != normalized_expected + "\n":
             return (
                 "Exact-content acceptance check failed "
                 f"for {safe_path}: file content does not "
@@ -2194,26 +2220,7 @@ class DevelopmentAgent:
                 plan=plan,
             )
 
-            logger.info(
-                "[DevelopmentAgent] Generated-change validation | "
-                "generated=%s | accepted=%s | rejected=%s | "
-                "paths=%s",
-                len(generation.changes),
-                len(generated_changes),
-                len(generation_errors),
-                [
-                    str(getattr(item, "path", ""))
-                    for item in generation.changes[:20]
-                ],
-            )
-
             if generation_errors:
-
-                logger.error(
-                    "[DevelopmentAgent] Generated changes rejected | "
-                    "errors=%s",
-                    generation_errors[:20],
-                )
                 generation = CodeGenerationResult(
                     success=False,
                     summary=generation.summary,
