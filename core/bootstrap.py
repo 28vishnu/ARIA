@@ -126,6 +126,7 @@ from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.llm.llm_router import LLMRouter
 from brain.development.code_generation_router import CodeGenerationRouter
 from brain.development.code_generation_bridge import LLMCodeGenerationBridge
+from brain.integration.phase1_runtime import create_phase1_runtime
 
 from brain.events.event_bus import EventBus
 from brain.events.event import Event
@@ -1045,6 +1046,33 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Phase 1 — Autonomous Runtime Integration
+    # ---------------------------------------------------------
+
+    phase1_runtime = create_phase1_runtime(
+        development_controller=development_controller,
+        git_manager=git_manager,
+        github_manager=github_manager,
+        deployment_manager=deployment_manager,
+        memory_engine=memory_engine,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+        document_ai=doc_intelligence,
+    )
+
+    registry.register(
+        "phase1_runtime",
+        phase1_runtime,
+    )
+
+    logger.info(
+        "[Phase1] Autonomous runtime integration registered | "
+        "healthy=%s | components=%s",
+        phase1_runtime.health()["healthy"],
+        phase1_runtime.status()["component_count"],
+    )
+
+    # ---------------------------------------------------------
     # Phase 1 — Capability Registry
     # ---------------------------------------------------------
 
@@ -1079,6 +1107,35 @@ async def bootstrap_application() -> ServiceRegistry:
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
             "deployment_policy": deployment_policy,
+            "phase1_runtime": phase1_runtime,
+            "autonomous_development_bridge":
+                phase1_runtime.get(
+                    "autonomous_development_bridge"
+                ),
+            "autonomous_coding_loop":
+                phase1_runtime.get(
+                    "autonomous_coding_loop"
+                ),
+            "autonomous_validation_loop":
+                phase1_runtime.get(
+                    "autonomous_validation_loop"
+                ),
+            "autonomous_repair_loop":
+                phase1_runtime.get(
+                    "autonomous_repair_loop"
+                ),
+            "knowledge_coding_feedback":
+                phase1_runtime.get(
+                    "knowledge_coding_feedback"
+                ),
+            "permissioned_git_workflow":
+                phase1_runtime.get(
+                    "permissioned_git_workflow"
+                ),
+            "permissioned_deployment_workflow":
+                phase1_runtime.get(
+                    "permissioned_deployment_workflow"
+                ),
         },
     )
 
@@ -1798,6 +1855,35 @@ async def bootstrap_application() -> ServiceRegistry:
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
             "deployment_policy": deployment_policy,
+            "phase1_runtime": phase1_runtime,
+            "autonomous_development_bridge":
+                phase1_runtime.get(
+                    "autonomous_development_bridge"
+                ),
+            "autonomous_coding_loop":
+                phase1_runtime.get(
+                    "autonomous_coding_loop"
+                ),
+            "autonomous_validation_loop":
+                phase1_runtime.get(
+                    "autonomous_validation_loop"
+                ),
+            "autonomous_repair_loop":
+                phase1_runtime.get(
+                    "autonomous_repair_loop"
+                ),
+            "knowledge_coding_feedback":
+                phase1_runtime.get(
+                    "knowledge_coding_feedback"
+                ),
+            "permissioned_git_workflow":
+                phase1_runtime.get(
+                    "permissioned_git_workflow"
+                ),
+            "permissioned_deployment_workflow":
+                phase1_runtime.get(
+                    "permissioned_deployment_workflow"
+                ),
         },
     )
 
