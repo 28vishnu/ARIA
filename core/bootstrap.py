@@ -131,6 +131,7 @@ from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.llm.llm_router import LLMRouter
 from brain.development.code_generation_router import CodeGenerationRouter
+from brain.development.local_code_model import LocalCodeModel
 from brain.development.code_generation_bridge import LLMCodeGenerationBridge
 
 from brain.events.event_bus import EventBus
@@ -1053,12 +1054,52 @@ async def bootstrap_application() -> ServiceRegistry:
     # DevelopmentAgent remains responsible for workspace isolation,
     # path validation, writing, validation, testing, and repair.
     #
+    local_code_model = LocalCodeModel(
+        backend=os.getenv(
+            "ARIA_LOCAL_CODEGEN_BACKEND",
+            "ollama",
+        ),
+        base_url=os.getenv(
+            "ARIA_LOCAL_CODEGEN_URL",
+            "http://127.0.0.1:11434",
+        ),
+        model=os.getenv(
+            "ARIA_LOCAL_CODEGEN_MODEL",
+            "qwen2.5-coder:7b",
+        ),
+        timeout=float(
+            os.getenv(
+                "ARIA_LOCAL_CODEGEN_TIMEOUT",
+                "180",
+            )
+        ),
+    )
+
+    registry.register(
+        "local_code_model",
+        local_code_model,
+    )
+
     code_generation_router = CodeGenerationRouter(
         config=config,
-        provider=os.getenv("ARIA_CODEGEN_PROVIDER", "groq"),
-        allow_fallback=os.getenv("ARIA_CODEGEN_ALLOW_FALLBACK", "false"),
-        max_input_chars=int(os.getenv("ARIA_CODEGEN_MAX_INPUT_CHARS", "60000")),
+        provider=os.getenv(
+            "ARIA_CODEGEN_PROVIDER",
+            "groq",
+        ),
+        allow_fallback=os.getenv(
+            "ARIA_CODEGEN_ALLOW_FALLBACK",
+            "false",
+        ),
+        max_input_chars=int(
+            os.getenv(
+                "ARIA_CODEGEN_MAX_INPUT_CHARS",
+                "60000",
+            )
+        ),
     )
+
+    # Share the explicitly configured local model with the router.
+    code_generation_router.local_model = local_code_model
 
     registry.register(
         "code_generation_router",
@@ -1170,6 +1211,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "failure_analyzer": failure_analyzer,
             "repair_engine": repair_engine,
             "code_generation_router": code_generation_router,
+            "local_code_model": local_code_model,
             "code_generation_bridge": code_generation_bridge,
             "development_agent": development_agent,
             "development_controller": development_controller,
