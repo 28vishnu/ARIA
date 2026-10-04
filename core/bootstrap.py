@@ -88,6 +88,7 @@ from brain.development.github_manager import GitHubManager
 from brain.development.github_sync import GitHubSync
 from brain.development.git_branch_lifecycle import GitBranchLifecycle
 from brain.development.github_project_creator import GitHubProjectCreator
+from brain.development.research_service import RealTimeResearch
 
 from brain.development.build_manager import BuildManager
 from brain.development.deployment_manager import DeploymentManager
@@ -1177,6 +1178,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
+            "real_time_research": real_time_research,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
@@ -1492,6 +1494,42 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "search_tool",
         search_tool,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Real-Time Research Integration
+    # ---------------------------------------------------------
+
+    real_time_research = RealTimeResearch(
+        search_tool=search_tool,
+        max_results=int(
+            os.getenv(
+                "ARIA_RESEARCH_MAX_RESULTS",
+                "8",
+            )
+        ),
+        search_depth=os.getenv(
+            "ARIA_RESEARCH_SEARCH_DEPTH",
+            "advanced",
+        ),
+        timeout_seconds=float(
+            os.getenv(
+                "ARIA_RESEARCH_TIMEOUT",
+                "30",
+            )
+        ),
+    )
+
+    registry.register(
+        "real_time_research",
+        real_time_research,
+    )
+
+    logger.info(
+        "[Phase1] Real-time research registered | "
+        "available=%s | max_results=%s",
+        real_time_research.health()["search_available"],
+        real_time_research.max_results,
     )
 
     try:
@@ -1908,6 +1946,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
+            "real_time_research": real_time_research,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
