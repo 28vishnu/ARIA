@@ -19,6 +19,12 @@ from .engineering_result import (
     EngineeringOutcome,
     EngineeringResult,
 )
+from .engineering_lifecycle import (
+    LifecycleHook,
+    LifecycleStep,
+    LifecycleExecution,
+    EngineeringLifecycle,
+)
 
 __all__ = [
     "EngineeringPhase",
@@ -32,4 +38,8 @@ __all__ = [
     "SessionTransition",
     "EngineeringOutcome",
     "EngineeringResult",
+    "LifecycleHook",
+    "LifecycleStep",
+    "LifecycleExecution",
+    "EngineeringLifecycle",
 ]
