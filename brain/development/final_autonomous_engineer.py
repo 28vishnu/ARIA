@@ -698,6 +698,14 @@ class FinalAutonomousEngineer:
     def _session_runtime(
         self,
     ) -> Any | None:
+        # The authoritative orchestrator owns the canonical session state.
+        # The legacy persistent runtime is a compatibility fallback only.
+        if self.orchestrator is not None and (
+            callable(getattr(self.orchestrator, "status", None))
+            or callable(getattr(self.orchestrator, "resume", None))
+        ):
+            return self.orchestrator
+
         if self.legacy_runtime is not None:
             return self.legacy_runtime
 
