@@ -1746,6 +1746,160 @@ async def _handle_master_architecture_command(
         }
 
 
+async def _handle_master_requirement_command(
+    *,
+    registry,
+    user_id,
+    text: str,
+) -> dict[str, Any] | None:
+    """Handle Master-only Phase 1 Requirement Intelligence inspection."""
+
+    normalized = (text or "").strip().lower()
+
+    if normalized not in {
+        "/master requirement",
+        "/master  requirement",
+        "master requirement",
+        "master, requirement",
+        "/master req",
+        "/master  req",
+    }:
+        return None
+
+    allowed = os.getenv(
+        "ALLOWED_TELEGRAM_USER_ID",
+        "",
+    ).strip()
+
+    if not allowed or str(user_id) != allowed:
+        logger.warning(
+            "[Phase1][TelegramRequirement] Unauthorized request | user_id=%s",
+            user_id,
+        )
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Requirement Intelligence is available only to "
+                "the authorized Master account."
+            ),
+        }
+
+    intelligence = registry.get(
+        "requirement_intelligence"
+    )
+
+    if intelligence is None:
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Requirement Intelligence is not registered. "
+                "Step 3 integration is incomplete."
+            ),
+        }
+
+    # The command itself needs a requirement payload. Keep this command
+    # read-only and useful by supporting an optional payload after the
+    # command, e.g. /master requirement Create a new API endpoint.
+    prefixes = (
+        "/master requirement",
+        "/master  requirement",
+        "master requirement",
+        "master, requirement",
+        "/master req",
+        "/master  req",
+    )
+
+    requirement_text = ""
+    original = (text or "").strip()
+    lower_original = original.lower()
+    for prefix in prefixes:
+        if lower_original.startswith(prefix):
+            requirement_text = original[len(prefix):].lstrip(" :,-").strip()
+            break
+
+    if not requirement_text:
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Usage: /master requirement <development requirement>\n\n"
+                "Example: /master requirement Create a new file "
+                "aria_test.txt containing exactly ARIA self-development test successful. "
+                "Do not modify existing files."
+            ),
+        }
+
+    try:
+        analysis = await asyncio.to_thread(
+            intelligence.analyze,
+            requirement_text,
+        )
+        data = analysis.to_dict()
+        requirement = data.get("requirement") or {}
+
+        lines = [
+            "🧠 <b>ARIA Requirement Intelligence</b>",
+            "",
+            f"<b>Intent:</b> {html.escape(str(data.get('intent', 'unknown')))}",
+            f"<b>Primary action:</b> {html.escape(str(data.get('primary_action', 'unknown')))}",
+            f"<b>Scope:</b> {html.escape(str(data.get('scope', 'unspecified')))}",
+            f"<b>Confidence:</b> {float(data.get('confidence', 0.0)):.3f}",
+            f"<b>Ready for planning:</b> {'YES' if data.get('ready_for_planning') else 'NO'}",
+            f"<b>Requires approval:</b> {'YES' if requirement.get('requires_approval') else 'NO'}",
+            "",
+            "<b>Goals:</b>",
+        ]
+
+        goals = requirement.get("goals") or []
+        lines.extend(f"• {html.escape(str(item))}" for item in goals[:8])
+        if not goals:
+            lines.append("• None detected")
+
+        lines.append("<b>Requested files:</b>")
+        files = requirement.get("requested_files") or []
+        lines.extend(f"• <code>{html.escape(str(item))}</code>" for item in files[:12])
+        if not files:
+            lines.append("• None detected")
+
+        lines.append("<b>Dependencies:</b>")
+        dependencies = data.get("dependencies") or []
+        lines.append("• " + (", ".join(html.escape(str(x)) for x in dependencies) if dependencies else "None detected"))
+
+        lines.append("<b>Ambiguity:</b>")
+        ambiguity = data.get("ambiguity_flags") or []
+        lines.extend(f"• {html.escape(str(item))}" for item in ambiguity[:8])
+        if not ambiguity:
+            lines.append("• None detected")
+
+        questions = data.get("clarification_questions") or []
+        if questions:
+            lines.append("<b>Clarification:</b>")
+            lines.extend(f"• {html.escape(str(item))}" for item in questions[:5])
+
+        lines.append(
+            "\n<i>Read-only analysis. No files were changed, executed, deployed, or pushed.</i>"
+        )
+
+        return {
+            "handled": True,
+            "success": True,
+            "text": "\n".join(lines),
+            "analysis": data,
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "[Phase1][TelegramRequirement] Requirement analysis failed."
+        )
+        return {
+            "handled": True,
+            "success": False,
+            "text": f"Requirement analysis failed safely: {exc}",
+        }
+
+
 async def _handle_master_development_command(
     *,
     registry,
@@ -1944,6 +2098,33 @@ async def process_telegram_update(
             )
 
             return architecture_result
+
+        # -----------------------------------------------------
+        # MASTER REQUIREMENT INTELLIGENCE COMMAND
+        # -----------------------------------------------------
+
+        requirement_result = await _handle_master_requirement_command(
+            registry=registry,
+            user_id=user_id,
+            text=text,
+        )
+
+        if requirement_result is not None:
+            await safe_delete_status(status)
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": requirement_result.get(
+                        "text",
+                        "Requirement analysis completed.",
+                    ),
+                    "parse_mode": "HTML",
+                },
+            )
+
+            return requirement_result
 
         # -----------------------------------------------------
         # MASTER DEVELOPMENT COMMAND
