@@ -1467,10 +1467,11 @@ class DevelopmentAgent:
         if not match:
             return None
 
-        return (
-            match.group(1).strip(),
-            match.group(2).strip(),
-        )
+        path = match.group(1).strip()
+        expected = match.group(2).strip()
+        if len(expected) >= 2 and expected[0] == expected[-1] and expected[0] in {chr(34), chr(39)}:
+            expected = expected[1:-1]
+        return (path, expected)
 
     def _check_exact_content_requirement(
         self,
