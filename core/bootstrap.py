@@ -1253,8 +1253,6 @@ async def bootstrap_application() -> ServiceRegistry:
             "approval_manager": approval_manager,
             "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
-            "phase_planner": phase_planner,
-            "phase_task_execution": phase_task_execution,
         },
     )
 
