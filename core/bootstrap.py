@@ -89,6 +89,8 @@ from brain.development.github_sync import GitHubSync
 from brain.development.git_branch_lifecycle import GitBranchLifecycle
 from brain.development.github_project_creator import GitHubProjectCreator
 from brain.development.research_service import RealTimeResearch
+from brain.development.phase_task_execution import PhaseTaskExecutionEngine
+from brain.planning.phase_planner import PhasePlanner
 
 from brain.development.build_manager import BuildManager
 from brain.development.deployment_manager import DeploymentManager
@@ -1234,6 +1236,8 @@ async def bootstrap_application() -> ServiceRegistry:
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
             "deployment_policy": deployment_policy,
+            "phase_planner": phase_planner,
+            "phase_task_execution": phase_task_execution,
         },
     )
 
@@ -1834,6 +1838,52 @@ async def bootstrap_application() -> ServiceRegistry:
         mongodb=db_inst if mongo_client else None,
         agent_manager=agent_manager,
         agent_coordinator=agent_coordinator,
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 — Phase → Task Graph → Autonomous Execution
+    # ---------------------------------------------------------
+
+    phase_planner = PhasePlanner(
+        existing_planner=planner,
+        skill_manager=skill_manager,
+        action_manager=action_manager,
+        knowledge_manager=knowledge_manager,
+    )
+
+    phase_task_execution = PhaseTaskExecutionEngine(
+        phase_planner=phase_planner,
+        development_controller=development_controller,
+        max_tasks=int(
+            os.getenv(
+                "ARIA_PHASE_MAX_TASKS",
+                "32",
+            )
+        ),
+        stop_on_failure=(
+            os.getenv(
+                "ARIA_PHASE_STOP_ON_FAILURE",
+                "true",
+            ).strip().lower()
+            not in {"0", "false", "no", "off"}
+        ),
+    )
+
+    registry.register(
+        "phase_planner",
+        phase_planner,
+    )
+
+    registry.register(
+        "phase_task_execution",
+        phase_task_execution,
+    )
+
+    logger.info(
+        "[Phase1] Phase task execution registered | "
+        "max_tasks=%s | stop_on_failure=%s",
+        phase_task_execution.max_tasks,
+        phase_task_execution.stop_on_failure,
     )
 
     # ---------------------------------------------------------
