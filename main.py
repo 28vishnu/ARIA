@@ -1564,6 +1564,188 @@ async def _transcribe_telegram_voice(
     return None
 
 
+async def _handle_master_architecture_command(
+    *,
+    registry,
+    user_id,
+    text: str,
+) -> dict[str, Any] | None:
+    """Handle the Master-only, read-only architecture inspection command."""
+
+    normalized = (text or "").strip().lower()
+
+    if normalized not in {
+        "/master architecture",
+        "/master  architecture",
+        "master architecture",
+        "master, architecture",
+        "/master arch",
+        "/master  arch",
+    }:
+        return None
+
+    allowed = os.getenv(
+        "ALLOWED_TELEGRAM_USER_ID",
+        "",
+    ).strip()
+
+    if not allowed or str(user_id) != allowed:
+        logger.warning(
+            "[Phase1][TelegramArchitecture] Unauthorized request | user_id=%s",
+            user_id,
+        )
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Architecture inspection is available only to "
+                "the authorized Master account."
+            ),
+        }
+
+    architecture = registry.get(
+        "architecture_intelligence"
+    )
+
+    if architecture is None:
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Architecture Intelligence is not registered. "
+                "Step 2 integration is incomplete."
+            ),
+        }
+
+    try:
+        snapshot = await asyncio.to_thread(
+            architecture.inspect,
+            Path.cwd(),
+        )
+        data = snapshot.to_dict()
+
+        repository = data.get("repository") or {}
+        components = data.get("components") or []
+        roles = data.get("module_roles") or {}
+        impact = data.get("change_impact") or {}
+        warnings = data.get("architecture_warnings") or []
+        errors = data.get("analysis_errors") or []
+        protected = data.get("protected_areas") or []
+        languages = repository.get("languages") or {}
+        entry_points = repository.get("entry_points") or []
+
+        component_names: list[str] = []
+        for component in components[:12]:
+            if isinstance(component, dict):
+                name = str(
+                    component.get("name") or ""
+                ).strip()
+                if name:
+                    component_names.append(name)
+
+        impacted = sorted(
+            impact.items(),
+            key=lambda item: len(item[1] or []),
+            reverse=True,
+        )[:5]
+
+        lines = [
+            "🏗️ ARIA Architecture Report",
+            "",
+            f"Project type: {repository.get('project_type', 'unknown')}",
+            f"Files: {repository.get('total_files', 0)}",
+            f"Directories: {repository.get('total_directories', 0)}",
+            f"Python modules: {len(repository.get('python_modules') or [])}",
+            f"Architecture components: {len(components)}",
+            f"Module roles: {len(roles)}",
+            f"Change-impact entries: {len(impact)}",
+            f"Protected areas: {len(protected)}",
+            "",
+            "Languages:",
+        ]
+
+        if languages:
+            for name, count in sorted(
+                languages.items(),
+                key=lambda item: str(item[0]).lower(),
+            )[:12]:
+                lines.append(
+                    f"• {name}: {count}"
+                )
+        else:
+            lines.append("• None detected")
+
+        lines.extend(["", "Entry points:"])
+        if entry_points:
+            lines.extend(
+                f"• {entry}"
+                for entry in entry_points[:10]
+            )
+        else:
+            lines.append("• None detected")
+
+        lines.extend(["", "Major components:"])
+        if component_names:
+            lines.extend(
+                f"• {name}"
+                for name in component_names
+            )
+        else:
+            lines.append("• None detected")
+
+        lines.extend(["", "Highest-impact modules:"])
+        if impacted:
+            for module_name, affected in impacted:
+                lines.append(
+                    f"• {module_name}: {len(affected or [])} affected"
+                )
+        else:
+            lines.append("• None detected")
+
+        lines.extend(["", "Architecture warnings:"])
+        if warnings:
+            lines.extend(
+                f"• {warning}"
+                for warning in warnings[:8]
+            )
+        else:
+            lines.append("• None")
+
+        lines.extend(["", "Analysis errors:"])
+        if errors:
+            lines.extend(
+                f"• {error}"
+                for error in errors[:8]
+            )
+        else:
+            lines.append("• None")
+
+        lines.extend([
+            "",
+            "Mode: READ-ONLY. No files were modified, executed, deployed, or pushed.",
+        ])
+
+        return {
+            "handled": True,
+            "success": True,
+            "text": "\n".join(lines),
+            "architecture": data,
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "[Phase1][TelegramArchitecture] Architecture inspection failed."
+        )
+        return {
+            "handled": True,
+            "success": False,
+            "text": (
+                "Architecture inspection failed safely.\n"
+                f"Reason: {exc}"
+            ),
+        }
+
+
 async def _handle_master_development_command(
     *,
     registry,
@@ -1733,6 +1915,35 @@ async def process_telegram_update(
         )
 
         status_started = True
+
+        # -----------------------------------------------------
+        # MASTER ARCHITECTURE COMMAND
+        # -----------------------------------------------------
+        #
+        # Read-only architecture inspection is handled before the
+        # development pipeline. Voice and text both arrive here as text.
+        #
+        architecture_result = await _handle_master_architecture_command(
+            registry=registry,
+            user_id=user_id,
+            text=text,
+        )
+
+        if architecture_result is not None:
+            await safe_delete_status(status)
+
+            await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": architecture_result.get(
+                        "text",
+                        "Architecture inspection completed.",
+                    ),
+                },
+            )
+
+            return architecture_result
 
         # -----------------------------------------------------
         # MASTER DEVELOPMENT COMMAND
