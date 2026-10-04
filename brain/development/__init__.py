@@ -39,4 +39,12 @@ __all__ = [
     "RequirementAnalysis",
     "RequirementIntelligence",
     "ModuleInfo",
+    "ChangeImpactAnalysis",
+    "ChangeImpactPlanner",
+    "ImpactTarget",
 ]
+from .change_impact_planner import (
+    ChangeImpactAnalysis,
+    ChangeImpactPlanner,
+    ImpactTarget,
+)
