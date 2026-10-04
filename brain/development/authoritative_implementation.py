@@ -231,7 +231,12 @@ class AuthoritativeImplementationEngine:
             status=status,
             changed_paths=changed_paths,
             changes=changes,
-            workspace_id=request.workspace_id,
+            workspace_id=(
+                request.workspace_id
+                or self._extract_workspace_id(
+                    raw_result
+                )
+            ),
             implementation_summary=summary,
             diagnostics=diagnostics,
             errors=errors,
@@ -247,7 +252,12 @@ class AuthoritativeImplementationEngine:
             status=status,
             evidence=evidence,
             changes=changes,
-            workspace_id=request.workspace_id,
+            workspace_id=(
+                request.workspace_id
+                or self._extract_workspace_id(
+                    raw_result
+                )
+            ),
             next_action=(
                 "continue_to_verification"
                 if status
@@ -265,8 +275,67 @@ class AuthoritativeImplementationEngine:
                 "raw_result_type": type(
                     raw_result
                 ).__name__,
+                "legacy_report": self._safe_legacy_report(raw_result),
             },
         )
+
+    @staticmethod
+    def _safe_legacy_report(
+        raw_result: Any,
+    ) -> dict[str, Any]:
+        """
+        Preserve the useful validation/test evidence produced by the
+        existing DevelopmentAgent without leaking a live result object
+        into the authoritative contract.
+        """
+        method = getattr(
+            raw_result,
+            "to_dict",
+            None,
+        )
+        if callable(method):
+            try:
+                value = method()
+                if isinstance(value, dict):
+                    return value
+            except Exception:
+                pass
+
+        if isinstance(raw_result, dict):
+            return dict(raw_result)
+
+        return {
+            "success": bool(
+                getattr(raw_result, "success", False)
+            ),
+            "status": str(
+                getattr(raw_result, "status", "")
+            ),
+            "errors": list(
+                getattr(raw_result, "errors", ())
+                or ()
+            ),
+        }
+
+    @classmethod
+    def _extract_workspace_id(
+        cls,
+        value: Any,
+    ) -> str | None:
+        workspace = cls._read_value(
+            value,
+            "workspace",
+        )
+        if isinstance(workspace, Mapping):
+            raw = workspace.get("workspace_id") or workspace.get("id")
+            return str(raw) if raw else None
+
+        raw = getattr(
+            workspace,
+            "workspace_id",
+            getattr(workspace, "id", None),
+        )
+        return str(raw) if raw else None
 
     def _failure_result(
         self,
@@ -336,11 +405,29 @@ class AuthoritativeImplementationEngine:
                 name
             )
 
-        return getattr(
+        direct = getattr(
             value,
             name,
             None,
         )
+        if direct is not None:
+            return direct
+
+        # DevelopmentController returns DevelopmentJob, whose actual
+        # engineering evidence lives in DevelopmentJob.report.
+        report = getattr(
+            value,
+            "report",
+            None,
+        )
+        if report is not None:
+            return getattr(
+                report,
+                name,
+                None,
+            )
+
+        return None
 
     @classmethod
     def _read_bool(
