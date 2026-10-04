@@ -97,6 +97,9 @@ from brain.development.rollback_manager import RollbackManager
 
 from brain.development.approval_manager import ApprovalManager
 from brain.development.deployment_policy import DeploymentPolicy
+from brain.development.telegram_approval_interface import (
+    TelegramApprovalInterface,
+)
 
 from brain.integration.phase1_runtime import create_phase1_runtime
 from brain.development.phase1_persistent_runtime_adapter import (
@@ -786,12 +789,6 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Phase 1 — Workspace-scoped factories
     # ---------------------------------------------------------
-    #
-    # These services require a specific development workspace,
-    # so they must NOT be created against the production
-    # repository during application bootstrap. DevelopmentAgent
-    # creates the correct guard/sandbox/validator/test runner
-    # for each isolated workspace.
 
     registry.register(
         "filesystem_guard_factory",
@@ -830,6 +827,7 @@ async def bootstrap_application() -> ServiceRegistry:
     requirement_parser = RequirementParser()
     requirement_intelligence = RequirementIntelligence(requirement_parser)
     change_planner = ChangePlanner()
+
     change_impact_planner = ChangeImpactPlanner(
         architecture_intelligence,
         max_targets=int(
@@ -876,7 +874,7 @@ async def bootstrap_application() -> ServiceRegistry:
         max_attempts=int(
             os.getenv(
                 "ARIA_REPAIR_MAX_ATTEMPTS",
-                "3",
+                "3"
             )
         ),
     )
@@ -947,7 +945,6 @@ async def bootstrap_application() -> ServiceRegistry:
         git_branch_lifecycle,
     )
 
-
     # ---------------------------------------------------------
     # Phase 1 — New Project / Repository Creation
     # ---------------------------------------------------------
@@ -982,13 +979,10 @@ async def bootstrap_application() -> ServiceRegistry:
         True,
     )
 
-
     # ---------------------------------------------------------
     # Phase 1 — Build / Deployment / Health / Rollback
     # ---------------------------------------------------------
 
-    # BuildManager is workspace-scoped because it requires a
-    # DevelopmentSandbox. It is therefore exposed as a factory.
     deployment_manager = DeploymentManager(
         git_manager=git_manager,
         allow_staging=(
@@ -1030,9 +1024,21 @@ async def bootstrap_application() -> ServiceRegistry:
 
     deployment_policy = DeploymentPolicy()
 
+    # Telegram approval interface uses the same authoritative
+    # ApprovalManager. It never executes the gated operation
+    # directly; it only approves/rejects an existing request.
+    telegram_approval_interface = TelegramApprovalInterface(
+        approval_manager=approval_manager,
+    )
+
     registry.register(
         "approval_manager",
         approval_manager,
+    )
+
+    registry.register(
+        "telegram_approval_interface",
+        telegram_approval_interface,
     )
 
     registry.register(
@@ -1040,23 +1046,15 @@ async def bootstrap_application() -> ServiceRegistry:
         deployment_policy,
     )
 
-    # ---------------------------------------------------------
-    # Phase 1 — Development Agent
-    # ---------------------------------------------------------
-    #
-    # The current DevelopmentAgent intentionally owns the
-    # workspace-scoped writer/validator/sandbox/test runner.
-    # It must therefore receive only the APIs it actually
-    # accepts: RepositoryManager + DevelopmentWorkspace.
+    logger.info(
+        "[Phase1][TelegramApproval] Telegram approval interface "
+        "registered | master_only=True | fail_closed=True"
+    )
 
     # ---------------------------------------------------------
     # Phase 1 — LLM Code Generation Bridge
     # ---------------------------------------------------------
-    #
-    # This bridge only requests structured code-generation data.
-    # DevelopmentAgent remains responsible for workspace isolation,
-    # path validation, writing, validation, testing, and repair.
-    #
+
     local_code_model = LocalCodeModel(
         backend=os.getenv(
             "ARIA_LOCAL_CODEGEN_BACKEND",
@@ -1101,7 +1099,6 @@ async def bootstrap_application() -> ServiceRegistry:
         ),
     )
 
-    # Share the explicitly configured local model with the router.
     code_generation_router.local_model = local_code_model
 
     registry.register(
@@ -1229,18 +1226,33 @@ async def bootstrap_application() -> ServiceRegistry:
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
             "phase1_runtime": phase1_runtime,
-            "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
-            "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
-            "autonomous_validation_loop": phase1_runtime.get("autonomous_validation_loop"),
-            "autonomous_repair_loop": phase1_runtime.get("autonomous_repair_loop"),
-            "knowledge_coding_feedback": phase1_runtime.get("knowledge_coding_feedback"),
-            "permissioned_git_workflow": phase1_runtime.get("permissioned_git_workflow"),
-            "permissioned_deployment_workflow": phase1_runtime.get("permissioned_deployment_workflow"),
+            "autonomous_development_bridge": phase1_runtime.get(
+                "autonomous_development_bridge"
+            ),
+            "autonomous_coding_loop": phase1_runtime.get(
+                "autonomous_coding_loop"
+            ),
+            "autonomous_validation_loop": phase1_runtime.get(
+                "autonomous_validation_loop"
+            ),
+            "autonomous_repair_loop": phase1_runtime.get(
+                "autonomous_repair_loop"
+            ),
+            "knowledge_coding_feedback": phase1_runtime.get(
+                "knowledge_coding_feedback"
+            ),
+            "permissioned_git_workflow": phase1_runtime.get(
+                "permissioned_git_workflow"
+            ),
+            "permissioned_deployment_workflow": phase1_runtime.get(
+                "permissioned_deployment_workflow"
+            ),
             "build_manager_factory": BuildManager,
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
+            "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
         },
     )
@@ -1378,6 +1390,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     agent_manager = AgentManager()
+
     agent_coordinator = AgentCoordinator(
         agent_manager
     )
@@ -1997,17 +2010,32 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_project_creator": github_project_creator,
             "real_time_research": real_time_research,
             "phase1_runtime": phase1_runtime,
-            "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
-            "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
-            "autonomous_validation_loop": phase1_runtime.get("autonomous_validation_loop"),
-            "autonomous_repair_loop": phase1_runtime.get("autonomous_repair_loop"),
-            "knowledge_coding_feedback": phase1_runtime.get("knowledge_coding_feedback"),
-            "permissioned_git_workflow": phase1_runtime.get("permissioned_git_workflow"),
-            "permissioned_deployment_workflow": phase1_runtime.get("permissioned_deployment_workflow"),
+            "autonomous_development_bridge": phase1_runtime.get(
+                "autonomous_development_bridge"
+            ),
+            "autonomous_coding_loop": phase1_runtime.get(
+                "autonomous_coding_loop"
+            ),
+            "autonomous_validation_loop": phase1_runtime.get(
+                "autonomous_validation_loop"
+            ),
+            "autonomous_repair_loop": phase1_runtime.get(
+                "autonomous_repair_loop"
+            ),
+            "knowledge_coding_feedback": phase1_runtime.get(
+                "knowledge_coding_feedback"
+            ),
+            "permissioned_git_workflow": phase1_runtime.get(
+                "permissioned_git_workflow"
+            ),
+            "permissioned_deployment_workflow": phase1_runtime.get(
+                "permissioned_deployment_workflow"
+            ),
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
+            "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
         },
     )
