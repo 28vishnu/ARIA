@@ -25,6 +25,11 @@ from .engineering_lifecycle import (
     LifecycleExecution,
     EngineeringLifecycle,
 )
+from .engineering_store import (
+    EngineeringStore,
+    EngineeringStoreError,
+    EngineeringSessionNotFound,
+)
 
 __all__ = [
     "EngineeringPhase",
@@ -41,5 +46,7 @@ __all__ = [
     "LifecycleHook",
     "LifecycleStep",
     "LifecycleExecution",
-    "EngineeringLifecycle",
+    "EngineeringStore",
+    "EngineeringStoreError",
+    "EngineeringSessionNotFound",
 ]
