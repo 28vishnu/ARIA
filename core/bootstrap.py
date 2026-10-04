@@ -88,11 +88,7 @@ from brain.development.github_manager import GitHubManager
 from brain.development.github_sync import GitHubSync
 from brain.development.git_branch_lifecycle import GitBranchLifecycle
 from brain.development.github_project_creator import GitHubProjectCreator
-from brain.development.github_pull_request import GitHubPullRequestWorkflow
 from brain.development.research_service import RealTimeResearch
-from brain.development.phase_task_execution import PhaseTaskExecutionEngine
-from brain.development.acceptance_staging_smoke import AcceptanceStagingSmoke
-from brain.planning.phase_planner import PhasePlanner
 
 from brain.development.build_manager import BuildManager
 from brain.development.deployment_manager import DeploymentManager
@@ -100,10 +96,12 @@ from brain.development.health_monitor import HealthMonitor
 from brain.development.rollback_manager import RollbackManager
 
 from brain.development.approval_manager import ApprovalManager
-from brain.development.telegram_approval_interface import TelegramApprovalInterface
 from brain.development.deployment_policy import DeploymentPolicy
 
 from brain.integration.phase1_runtime import create_phase1_runtime
+from brain.development.phase1_persistent_runtime_adapter import (
+    Phase1PersistentRuntimeAdapter,
+)
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -977,21 +975,6 @@ async def bootstrap_application() -> ServiceRegistry:
         github_project_creator,
     )
 
-    github_pull_request = GitHubPullRequestWorkflow(
-        github_manager=github_manager,
-        api_timeout=float(
-            os.getenv(
-                "ARIA_GITHUB_PR_TIMEOUT",
-                "60",
-            )
-        ),
-    )
-
-    registry.register(
-        "github_pull_request",
-        github_pull_request,
-    )
-
     logger.info(
         "[Phase1] Project creation capability registered | "
         "workspace_root=%s | remote_authorization_required=%s",
@@ -1050,20 +1033,6 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "approval_manager",
         approval_manager,
-    )
-
-    telegram_approval_interface = TelegramApprovalInterface(
-        approval_manager=approval_manager,
-    )
-
-    registry.register(
-        "telegram_approval_interface",
-        telegram_approval_interface,
-    )
-
-    logger.info(
-        "[Phase1] Telegram approval interface registered | "
-        "master_only=True",
     )
 
     registry.register(
@@ -1198,7 +1167,7 @@ async def bootstrap_application() -> ServiceRegistry:
     # Phase 1 — Autonomous Runtime Integration
     # ---------------------------------------------------------
 
-    phase1_runtime = create_phase1_runtime(
+    legacy_phase1_runtime = create_phase1_runtime(
         development_controller=development_controller,
         git_manager=git_manager,
         github_manager=github_manager,
@@ -1207,6 +1176,11 @@ async def bootstrap_application() -> ServiceRegistry:
         knowledge_database=knowledge_database,
         knowledge_graph=knowledge_graph,
         document_ai=doc_intelligence,
+    )
+
+    phase1_runtime = Phase1PersistentRuntimeAdapter(
+        legacy_phase1_runtime,
+        development_controller=development_controller,
     )
 
     registry.register(
@@ -1254,7 +1228,6 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
-            "github_pull_request": github_pull_request,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
@@ -1268,7 +1241,6 @@ async def bootstrap_application() -> ServiceRegistry:
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
-            "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
         },
     )
@@ -1873,78 +1845,6 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Phase 1 — Phase → Task Graph → Autonomous Execution
-    # ---------------------------------------------------------
-
-    phase_planner = PhasePlanner(
-        existing_planner=planner,
-        skill_manager=skill_manager,
-        action_manager=action_manager,
-        knowledge_manager=knowledge_manager,
-    )
-
-    phase_task_execution = PhaseTaskExecutionEngine(
-        phase_planner=phase_planner,
-        development_controller=development_controller,
-        max_tasks=int(
-            os.getenv(
-                "ARIA_PHASE_MAX_TASKS",
-                "32",
-            )
-        ),
-        stop_on_failure=(
-            os.getenv(
-                "ARIA_PHASE_STOP_ON_FAILURE",
-                "true",
-            ).strip().lower()
-            not in {"0", "false", "no", "off"}
-        ),
-    )
-
-    registry.register(
-        "phase_planner",
-        phase_planner,
-    )
-
-    registry.register(
-        "phase_task_execution",
-        phase_task_execution,
-    )
-
-    logger.info(
-        "[Phase1] Phase task execution registered | "
-        "max_tasks=%s | stop_on_failure=%s",
-        phase_task_execution.max_tasks,
-        phase_task_execution.stop_on_failure,
-    )
-
-    # ---------------------------------------------------------
-    # Phase 1 — Acceptance / Staging / Smoke Verification
-    # ---------------------------------------------------------
-
-    acceptance_staging_smoke = AcceptanceStagingSmoke(
-        workspace_manager=development_workspace,
-        build_manager_factory=BuildManager,
-        validator_factory=DevelopmentValidator,
-        test_runner_factory=DevelopmentTestRunner,
-        sandbox_factory=DevelopmentSandbox,
-        deployment_manager=deployment_manager,
-        health_monitor=health_monitor,
-    )
-
-    registry.register(
-        "acceptance_staging_smoke",
-        acceptance_staging_smoke,
-    )
-
-    logger.info(
-        "[Phase1] Acceptance/staging/smoke capability registered | "
-        "staging=%s | smoke=%s",
-        acceptance_staging_smoke.health()["staging_available"],
-        acceptance_staging_smoke.health()["smoke_available"],
-    )
-
-    # ---------------------------------------------------------
     # Personality / Decision / Intent
     # ---------------------------------------------------------
 
@@ -2108,11 +2008,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
-            "telegram_approval_interface": telegram_approval_interface,
             "deployment_policy": deployment_policy,
-            "phase_planner": phase_planner,
-            "phase_task_execution": phase_task_execution,
-            "acceptance_staging_smoke": acceptance_staging_smoke,
         },
     )
 
