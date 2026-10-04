@@ -72,6 +72,7 @@ from brain.development.sandbox import DevelopmentSandbox
 from brain.development.requirement_parser import RequirementParser
 from brain.development.requirement_intelligence import RequirementIntelligence
 from brain.development.change_planner import ChangePlanner
+from brain.development.change_impact_planner import ChangeImpactPlanner
 from brain.development.code_writer import CodeWriter
 
 from brain.development.validator import DevelopmentValidator
@@ -818,6 +819,21 @@ async def bootstrap_application() -> ServiceRegistry:
     requirement_parser = RequirementParser()
     requirement_intelligence = RequirementIntelligence(requirement_parser)
     change_planner = ChangePlanner()
+    change_impact_planner = ChangeImpactPlanner(
+        architecture_intelligence,
+        max_targets=int(
+            os.getenv(
+                "ARIA_CHANGE_IMPACT_MAX_TARGETS",
+                "40",
+            )
+        ),
+        max_dependency_hops=int(
+            os.getenv(
+                "ARIA_CHANGE_IMPACT_MAX_HOPS",
+                "2",
+            )
+        ),
+    )
 
     registry.register(
         "requirement_parser",
@@ -832,6 +848,11 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "change_planner",
         change_planner,
+    )
+
+    registry.register(
+        "change_impact_planner",
+        change_impact_planner,
     )
 
     # ---------------------------------------------------------
@@ -982,6 +1003,8 @@ async def bootstrap_application() -> ServiceRegistry:
         workspace_manager=development_workspace,
         code_generator=code_generation_bridge,
         requirement_intelligence=requirement_intelligence,
+        architecture_intelligence=architecture_intelligence,
+        change_impact_planner=change_impact_planner,
         max_repair_attempts=int(
             os.getenv(
                 "ARIA_REPAIR_MAX_ATTEMPTS",
@@ -1023,6 +1046,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "requirement_parser": requirement_parser,
             "requirement_intelligence": requirement_intelligence,
             "change_planner": change_planner,
+            "change_impact_planner": change_impact_planner,
             "filesystem_guard_factory": FilesystemGuard,
             "development_sandbox_factory": DevelopmentSandbox,
             "code_writer_factory": CodeWriter,
@@ -1737,6 +1761,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "requirement_parser": requirement_parser,
             "requirement_intelligence": requirement_intelligence,
             "change_planner": change_planner,
+            "change_impact_planner": change_impact_planner,
 
             # Workspace-scoped services are exposed as factories.
             # They are instantiated only inside an isolated
