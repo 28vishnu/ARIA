@@ -30,6 +30,7 @@ from .intelligent_verification import IntelligentVerification, VerificationDecis
 from .root_cause_engine import RootCauseAssessment, RootCauseEngine
 from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
 from .adaptive_engineering_plan import AdaptiveEngineeringPlan
+from .engineering_judgment import EngineeringJudgment, EngineeringJudgmentEngine
 
 
 logger = logging.getLogger("aria")
@@ -301,6 +302,8 @@ class DevelopmentAgent:
             self.architecture_intelligence
         )
         self.adaptive_plan: AdaptiveEngineeringPlan | None = None
+        self.engineering_judgment = EngineeringJudgmentEngine()
+        self._active_judgment: EngineeringJudgment | None = None
 
         self.max_repair_attempts = max(
             1,
@@ -2950,6 +2953,42 @@ class DevelopmentAgent:
                 tests_selected=selected_tests,
             )
             self._active_verification = verification
+            judgment = self._judge_engineering_acceptance(
+                requirement=requirement,
+                validation=validation,
+                test_result=initial_test,
+                verification=verification,
+                acceptance_error=final_acceptance_error,
+                generated_changes=generated_changes,
+            )
+
+            if not judgment.accepted:
+                return DevelopmentReport(
+                    success=False,
+                    requirement=requirement,
+                    plan=plan,
+                    workspace=workspace,
+                    writes=tuple(write_results),
+                    validation=validation,
+                    tests=initial_test,
+                    generation=generation,
+                    failure=FailureAnalysis(
+                        failed=True,
+                        summary=judgment.rationale,
+                        repairable=not judgment.genuine_blocker,
+                    ),
+                    status=(
+                        "acceptance_blocked"
+                        if judgment.genuine_blocker
+                        else judgment.decision
+                    ),
+                    errors=judgment.blocking_reasons or judgment.missing_criteria,
+                    metadata={
+                        "engineering_judgment": judgment.to_dict(),
+                        "intelligent_verification": verification.to_dict(),
+                        "tests_selected": selected_tests,
+                    },
+                )
 
             if not verification.sufficient:
                 return DevelopmentReport(
@@ -3405,12 +3444,22 @@ class DevelopmentAgent:
             tests_selected=selected_tests,
         )
         self._active_verification = final_verification
+        final_judgment = self._judge_engineering_acceptance(
+            requirement=requirement,
+            validation=final_validation,
+            test_result=final_test,
+            verification=final_verification,
+            acceptance_error=final_acceptance_error,
+            generated_changes=generated_changes,
+            recovery=repair_result,
+        )
 
         final_success = bool(
             repair_result.success
             and final_validation.valid
             and not final_acceptance_error
             and final_verification.sufficient
+            and final_judgment.accepted
         )
 
         failure = None
@@ -3440,6 +3489,10 @@ class DevelopmentAgent:
 
         if final_success:
             status = "repair_succeeded"
+        elif final_judgment.genuine_blocker:
+            status = "engineering_blocked"
+        elif final_judgment.needs_more_evidence:
+            status = "engineering_evidence_insufficient"
         elif repair_result.success:
             status = (
                 "repair_completed_but_final_validation_failed"
@@ -3459,7 +3512,7 @@ class DevelopmentAgent:
             generation=generation,
             failure=failure,
             status=status,
-            errors=tuple(errors),
+            errors=tuple(dict.fromkeys((*errors, *final_judgment.blocking_reasons))),
             metadata=self._report_metadata(
                 generated_changes,
                 extra={
@@ -3472,6 +3525,7 @@ class DevelopmentAgent:
                         final_validation.valid
                     ),
                     "intelligent_verification": final_verification.to_dict(),
+                    "engineering_judgment": final_judgment.to_dict(),
                     "root_cause": (
                         self._active_root_cause.to_dict()
                         if self._active_root_cause is not None
@@ -3497,6 +3551,30 @@ class DevelopmentAgent:
                 },
             ),
         )
+
+    def _judge_engineering_acceptance(
+        self,
+        *,
+        requirement: Requirement,
+        validation: ValidationResult | None,
+        test_result: TestResult | None,
+        verification: VerificationDecision | None,
+        acceptance_error: str | None,
+        generated_changes: list[GeneratedChange] | tuple[GeneratedChange, ...],
+        recovery: Any | None = None,
+    ) -> EngineeringJudgment:
+        judgment = self.engineering_judgment.judge(
+            requirement=requirement,
+            validation=validation,
+            test_result=test_result,
+            verification=verification,
+            acceptance_error=acceptance_error,
+            generated_changes=generated_changes,
+            recovery=recovery,
+            task_graph=self._active_task_executor,
+        )
+        self._active_judgment = judgment
+        return judgment
 
     # ========================================================
     # Default tests
