@@ -1637,7 +1637,11 @@ async def _handle_master_architecture_command(
         warnings = data.get("architecture_warnings") or []
         errors = data.get("analysis_errors") or []
         protected = data.get("protected_areas") or []
-        languages = repository.get("languages") or {}
+        languages = repository.get("languages") or []
+        if isinstance(languages, dict):
+            language_items = list(languages.items())
+        else:
+            language_items = [(str(language), 1) for language in languages]
         entry_points = repository.get("entry_points") or []
 
         component_names: list[str] = []
@@ -1670,9 +1674,9 @@ async def _handle_master_architecture_command(
             "Languages:",
         ]
 
-        if languages:
+        if language_items:
             for name, count in sorted(
-                languages.items(),
+                language_items,
                 key=lambda item: str(item[0]).lower(),
             )[:12]:
                 lines.append(
