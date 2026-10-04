@@ -279,9 +279,23 @@ class AuthoritativeRecoveryEngine:
             )
 
         try:
-            result = method(
-                repair_request
-            )
+            # AutonomousRepairLoop.run() is a higher-level legacy
+            # recovery service.  Give it the original engineering
+            # requirement so it can execute its own bounded repair/test
+            # lifecycle instead of accidentally receiving a RepairRequest
+            # object as the requirement string.
+            if getattr(method, "__name__", "") == "run":
+                result = method(
+                    request.requirement,
+                    changes=None,
+                    test_paths=None,
+                    workspace_id=request.workspace_id,
+                    metadata=request.metadata,
+                )
+            else:
+                result = method(
+                    repair_request
+                )
         except TypeError:
             try:
                 result = method(
