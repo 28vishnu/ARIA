@@ -2194,7 +2194,26 @@ class DevelopmentAgent:
                 plan=plan,
             )
 
+            logger.info(
+                "[DevelopmentAgent] Generated-change validation | "
+                "generated=%s | accepted=%s | rejected=%s | "
+                "paths=%s",
+                len(generation.changes),
+                len(generated_changes),
+                len(generation_errors),
+                [
+                    str(getattr(item, "path", ""))
+                    for item in generation.changes[:20]
+                ],
+            )
+
             if generation_errors:
+
+                logger.error(
+                    "[DevelopmentAgent] Generated changes rejected | "
+                    "errors=%s",
+                    generation_errors[:20],
+                )
                 generation = CodeGenerationResult(
                     success=False,
                     summary=generation.summary,
