@@ -124,6 +124,7 @@ from brain.decision.decision_engine import DecisionEngine
 from brain.intent.intent_analyzer import IntentAnalyzer
 from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.llm.llm_router import LLMRouter
+from brain.development.code_generation_router import CodeGenerationRouter
 from brain.development.code_generation_bridge import LLMCodeGenerationBridge
 
 from brain.events.event_bus import EventBus
@@ -977,8 +978,20 @@ async def bootstrap_application() -> ServiceRegistry:
     # DevelopmentAgent remains responsible for workspace isolation,
     # path validation, writing, validation, testing, and repair.
     #
+    code_generation_router = CodeGenerationRouter(
+        config=config,
+        provider=os.getenv("ARIA_CODEGEN_PROVIDER", "groq"),
+        allow_fallback=os.getenv("ARIA_CODEGEN_ALLOW_FALLBACK", "false"),
+        max_input_chars=int(os.getenv("ARIA_CODEGEN_MAX_INPUT_CHARS", "60000")),
+    )
+
+    registry.register(
+        "code_generation_router",
+        code_generation_router,
+    )
+
     code_generation_bridge = LLMCodeGenerationBridge(
-        llm_router=llm_router,
+        code_generation_router=code_generation_router,
         temperature=float(
             os.getenv(
                 "ARIA_CODE_GENERATION_TEMPERATURE",
@@ -1054,6 +1067,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "test_runner_factory": DevelopmentTestRunner,
             "failure_analyzer": failure_analyzer,
             "repair_engine": repair_engine,
+            "code_generation_router": code_generation_router,
             "code_generation_bridge": code_generation_bridge,
             "development_agent": development_agent,
             "development_controller": development_controller,
