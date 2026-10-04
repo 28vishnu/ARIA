@@ -1455,22 +1455,47 @@ class DevelopmentAgent:
             requirement.raw_text or ""
         )
 
-        match = re.search(
+        path_match = re.search(
             r"(?:file\s+(?:called|named)\s+[`\"]?"
-            r"([^`\"\s]+)[`\"]?)"
-            r"[^.\n]*?"
-            r"containing\s+exactly\s+(.+?)(?:\.|$)",
+            r"([^`\"\s]+)[`\"]?)",
             text,
             flags=re.IGNORECASE,
         )
 
-        if not match:
+        if not path_match:
             return None
 
-        path = match.group(1).strip()
-        expected = match.group(2).strip()
+        path = path_match.group(1).strip()
+
+        # Prefer the quoted literal after phrases such as
+        # ``containing exactly the text "..."``.  The previous
+        # parser incorrectly included the words ``the text`` in the
+        # expected value, making a valid generated file impossible to
+        # accept for this natural-language requirement.
+        quoted_match = re.search(
+            r"containing\s+exactly\s+(?:the\s+)?(?:text\s+)?"
+            r"([\"\'])(.*?)\1",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+        if quoted_match:
+            expected = quoted_match.group(2)
+            return (path, expected)
+
+        fallback_match = re.search(
+            r"containing\s+exactly\s+(.+?)(?:\.|$)",
+            text[path_match.end():],
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+        if not fallback_match:
+            return None
+
+        expected = fallback_match.group(1).strip()
         if len(expected) >= 2 and expected[0] == expected[-1] and expected[0] in {chr(34), chr(39)}:
             expected = expected[1:-1]
+
         return (path, expected)
 
     def _check_exact_content_requirement(
