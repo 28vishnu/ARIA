@@ -24,6 +24,16 @@ from .engineering_evidence import (
     EngineeringEvidence,
 )
 
+from .engineering_experience import (
+    EngineeringExperience,
+    EngineeringExperienceContext,
+    ExperienceKind,
+    ExperienceLearningResult,
+    ExperienceMatch,
+    ExperienceOutcome,
+    ExperienceQuery,
+)
+
 from .engineering_implementation import (
     ImplementationChange,
     ImplementationEvidence,
@@ -120,7 +130,9 @@ from .engineering_verification import (
     VerificationStatus,
 )
 
+
 __all__ = [
+    # Acceptance
     "AcceptanceCriterion",
     "AcceptanceCriterionStatus",
     "AcceptanceDecision",
@@ -128,7 +140,8 @@ __all__ = [
     "AcceptanceFinding",
     "AcceptanceRequest",
     "AcceptanceStatus",
-    "AuthoritativeEngineeringSession",
+
+    # Diagnosis
     "DiagnosisAction",
     "DiagnosisCategory",
     "DiagnosisConfidence",
@@ -136,54 +149,95 @@ __all__ = [
     "DiagnosisEvidence",
     "DiagnosisRequest",
     "DiagnosisResult",
-    "EngineeringEvidence",
-    "EngineeringKnowledgeContext",
-    "EngineeringKnowledgeItem",
-    "EngineeringKnowledgePolicy",
-    "EngineeringLifecycle",
-    "EngineeringOutcome",
-    "EngineeringPermission",
-    "EngineeringPhase",
-    "EngineeringPlanStep",
-    "EngineeringRequirement",
-    "EngineeringResult",
-    "EngineeringSession",
-    "EngineeringState",
-    "EngineeringStore",
-    "EngineeringTask",
-    "EngineeringTaskGraph",
-    "EngineeringTaskKind",
-    "EngineeringTaskStatus",
+    "RootCauseHypothesis",
+
+    # Evidence
     "EvidenceKind",
+    "EngineeringEvidence",
+
+    # Experience
+    "EngineeringExperience",
+    "EngineeringExperienceContext",
+    "ExperienceKind",
+    "ExperienceLearningResult",
+    "ExperienceMatch",
+    "ExperienceOutcome",
+    "ExperienceQuery",
+
+    # Implementation
     "ImplementationChange",
     "ImplementationEvidence",
     "ImplementationRequest",
     "ImplementationResult",
     "ImplementationStatus",
+
+    # Knowledge
+    "EngineeringKnowledgeContext",
+    "EngineeringKnowledgeItem",
+    "EngineeringKnowledgePolicy",
     "KnowledgeAuthority",
     "KnowledgeKind",
+
+    # Lifecycle
+    "EngineeringLifecycle",
     "LifecycleExecution",
     "LifecycleTransition",
-    "PermissionScope",
+
+    # Plan
+    "AdaptiveEngineeringPlan",
+    "EngineeringPlanStep",
     "PlanChangeReason",
     "PlanRevision",
     "PlanStatus",
+
+    # Recovery
     "RecoveryAction",
     "RecoveryDecision",
     "RecoveryRequest",
     "RecoveryResult",
     "RecoveryStatus",
     "RepairRequest",
+    "RetestRequest",
+
+    # Requirement
+    "EngineeringPermission",
+    "EngineeringRequirement",
+    "PermissionScope",
+    "RequirementIntent",
+
+    # Result
+    "EngineeringOutcome",
+    "EngineeringResult",
+
+    # Repository model
     "RepositoryComponent",
     "RepositoryComponentKind",
     "RepositoryModel",
     "RepositoryPath",
     "RepositoryPathKind",
+
+    # Repository scanning
     "RepositoryScanPolicy",
-    "RequirementIntent",
-    "RootCauseHypothesis",
-    "RetestRequest",
+
+    # Session
+    "AuthoritativeEngineeringSession",
+    "EngineeringSession",
     "SessionTransition",
+
+    # State
+    "EngineeringPhase",
+    "EngineeringState",
+
+    # Store
+    "EngineeringStore",
+
+    # Task graph
+    "EngineeringTask",
+    "EngineeringTaskGraph",
+    "EngineeringTaskKind",
+    "EngineeringTaskStatus",
+
+    # Verification
     "VerificationAction",
     "VerificationDecision",
     "VerificationDimension",
