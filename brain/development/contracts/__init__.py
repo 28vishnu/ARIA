@@ -30,6 +30,12 @@ from .engineering_store import (
     EngineeringStoreError,
     EngineeringSessionNotFound,
 )
+from .engineering_requirement import (
+    RequirementIntent,
+    PermissionScope,
+    EngineeringPermission,
+    EngineeringRequirement,
+)
 
 __all__ = [
     "EngineeringPhase",
@@ -49,4 +55,8 @@ __all__ = [
     "EngineeringStore",
     "EngineeringStoreError",
     "EngineeringSessionNotFound",
+    "RequirementIntent",
+    "PermissionScope",
+    "EngineeringPermission",
+    "EngineeringRequirement",
 ]
