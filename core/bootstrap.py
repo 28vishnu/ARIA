@@ -70,6 +70,7 @@ from brain.development.filesystem_guard import FilesystemGuard
 from brain.development.sandbox import DevelopmentSandbox
 
 from brain.development.requirement_parser import RequirementParser
+from brain.development.requirement_intelligence import RequirementIntelligence
 from brain.development.change_planner import ChangePlanner
 from brain.development.code_writer import CodeWriter
 
@@ -815,11 +816,17 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     requirement_parser = RequirementParser()
+    requirement_intelligence = RequirementIntelligence(requirement_parser)
     change_planner = ChangePlanner()
 
     registry.register(
         "requirement_parser",
         requirement_parser,
+    )
+
+    registry.register(
+        "requirement_intelligence",
+        requirement_intelligence,
     )
 
     registry.register(
@@ -974,6 +981,7 @@ async def bootstrap_application() -> ServiceRegistry:
         repository_manager=repository_manager,
         workspace_manager=development_workspace,
         code_generator=code_generation_bridge,
+        requirement_intelligence=requirement_intelligence,
         max_repair_attempts=int(
             os.getenv(
                 "ARIA_REPAIR_MAX_ATTEMPTS",
@@ -1013,6 +1021,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "architecture_intelligence": architecture_intelligence,
             "development_workspace": development_workspace,
             "requirement_parser": requirement_parser,
+            "requirement_intelligence": requirement_intelligence,
             "change_planner": change_planner,
             "filesystem_guard_factory": FilesystemGuard,
             "development_sandbox_factory": DevelopmentSandbox,
@@ -1726,6 +1735,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "architecture_intelligence": architecture_intelligence,
             "development_workspace": development_workspace,
             "requirement_parser": requirement_parser,
+            "requirement_intelligence": requirement_intelligence,
             "change_planner": change_planner,
 
             # Workspace-scoped services are exposed as factories.
