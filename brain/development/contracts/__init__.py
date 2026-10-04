@@ -1,41 +1,30 @@
-"""Stable contracts for ARIA's autonomous engineering lifecycle."""
+"""Authoritative engineering contracts for ARIA Phase 1.
+
+This package contains the stable contracts shared by the autonomous
+engineering lifecycle.
+
+The contracts intentionally remain independent of legacy execution
+implementations. Existing ARIA services will be adapted to these
+contracts during the later integration steps.
+"""
 
 from .engineering_state import (
     EngineeringPhase,
     EngineeringState,
-    TERMINAL_PHASES,
 )
+
 from .engineering_evidence import (
     EvidenceKind,
     EngineeringEvidence,
 )
-from .engineering_session import (
-    EngineeringSession,
-    AuthoritativeEngineeringSession,
-    EngineeringSessionContract,
-    SessionTransition,
-)
-from .engineering_result import (
-    EngineeringOutcome,
-    EngineeringResult,
-)
-from .engineering_lifecycle import (
-    LifecycleHook,
-    LifecycleStep,
-    LifecycleExecution,
-    EngineeringLifecycle,
-)
-from .engineering_store import (
-    EngineeringStore,
-    EngineeringStoreError,
-    EngineeringSessionNotFound,
-)
+
 from .engineering_requirement import (
     RequirementIntent,
     PermissionScope,
     EngineeringPermission,
     EngineeringRequirement,
 )
+
 from .repository_model import (
     RepositoryPathKind,
     RepositoryComponentKind,
@@ -43,38 +32,111 @@ from .repository_model import (
     RepositoryComponent,
     RepositoryModel,
 )
+
 from .repository_scan_policy import (
     RepositoryScanPolicy,
-    DEFAULT_REPOSITORY_SCAN_POLICY,
 )
 
+from .engineering_knowledge import (
+    KnowledgeKind,
+    KnowledgeAuthority,
+    EngineeringKnowledgeItem,
+    EngineeringKnowledgeContext,
+    EngineeringKnowledgePolicy,
+)
+
+from .engineering_plan import (
+    PlanStatus,
+    PlanChangeReason,
+    EngineeringPlanStep,
+    PlanRevision,
+    AdaptiveEngineeringPlan,
+)
+
+from .engineering_task_graph import (
+    EngineeringTaskKind,
+    EngineeringTaskStatus,
+    EngineeringTask,
+    EngineeringTaskGraph,
+)
+
+from .engineering_session import (
+    SessionTransition,
+    EngineeringSession,
+    AuthoritativeEngineeringSession,
+)
+
+from .engineering_lifecycle import (
+    EngineeringLifecycle,
+    LifecycleExecutionRecord,
+)
+
+from .engineering_store import (
+    EngineeringStore,
+)
+
+from .engineering_result import (
+    EngineeringOutcome,
+    EngineeringResult,
+)
+
+
 __all__ = [
+    # State
     "EngineeringPhase",
     "EngineeringState",
-    "TERMINAL_PHASES",
+
+    # Evidence
     "EvidenceKind",
     "EngineeringEvidence",
-    "EngineeringSession",
-    "AuthoritativeEngineeringSession",
-    "EngineeringSessionContract",
-    "SessionTransition",
-    "EngineeringOutcome",
-    "EngineeringResult",
-    "LifecycleHook",
-    "LifecycleStep",
-    "LifecycleExecution",
-    "EngineeringStore",
-    "EngineeringStoreError",
-    "EngineeringSessionNotFound",
+
+    # Requirement
     "RequirementIntent",
     "PermissionScope",
     "EngineeringPermission",
     "EngineeringRequirement",
+
+    # Repository
     "RepositoryPathKind",
     "RepositoryComponentKind",
     "RepositoryPath",
     "RepositoryComponent",
     "RepositoryModel",
     "RepositoryScanPolicy",
-    "DEFAULT_REPOSITORY_SCAN_POLICY",
+
+    # Knowledge
+    "KnowledgeKind",
+    "KnowledgeAuthority",
+    "EngineeringKnowledgeItem",
+    "EngineeringKnowledgeContext",
+    "EngineeringKnowledgePolicy",
+
+    # Planning
+    "PlanStatus",
+    "PlanChangeReason",
+    "EngineeringPlanStep",
+    "PlanRevision",
+    "AdaptiveEngineeringPlan",
+
+    # Task graph
+    "EngineeringTaskKind",
+    "EngineeringTaskStatus",
+    "EngineeringTask",
+    "EngineeringTaskGraph",
+
+    # Session
+    "SessionTransition",
+    "EngineeringSession",
+    "AuthoritativeEngineeringSession",
+
+    # Lifecycle
+    "EngineeringLifecycle",
+    "LifecycleExecutionRecord",
+
+    # Persistence
+    "EngineeringStore",
+
+    # Result
+    "EngineeringOutcome",
+    "EngineeringResult",
 ]
