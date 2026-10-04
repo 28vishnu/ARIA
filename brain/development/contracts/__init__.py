@@ -1,35 +1,6 @@
-from .engineering_acceptance import (
-    AcceptanceCriterion,
-    AcceptanceCriterionStatus,
-    AcceptanceDecision,
-    AcceptanceDecisionResult,
-    AcceptanceFinding,
-    AcceptanceRequest,
-    AcceptanceStatus,
-)
-
-from .engineering_deployment import (
-    DeploymentAuthorization,
-    DeploymentOperation,
-    DeploymentPlan,
-    DeploymentRequest,
-    DeploymentResult,
-    DeploymentRisk,
-    DeploymentRollbackPlan,
-    DeploymentStatus,
-    HealthCheckDefinition,
-    HealthCheckResult,
-)
-
-from .engineering_diagnosis import (
-    DiagnosisAction,
-    DiagnosisCategory,
-    DiagnosisConfidence,
-    DiagnosisDecision,
-    DiagnosisEvidence,
-    DiagnosisRequest,
-    DiagnosisResult,
-    RootCauseHypothesis,
+from .engineering_state import (
+    EngineeringPhase,
+    EngineeringState,
 )
 
 from .engineering_evidence import (
@@ -37,71 +8,61 @@ from .engineering_evidence import (
     EngineeringEvidence,
 )
 
-from .engineering_experience import (
-    EngineeringExperience,
-    EngineeringExperienceContext,
-    ExperienceKind,
-    ExperienceLearningResult,
-    ExperienceMatch,
-    ExperienceOutcome,
-    ExperienceQuery,
+from .engineering_requirement import (
+    RequirementIntent,
+    PermissionScope,
+    EngineeringPermission,
+    EngineeringRequirement,
 )
 
-from .engineering_git import (
-    GitAuthorization,
-    GitLifecyclePlan,
-    GitLifecycleRequest,
-    GitLifecycleResult,
-    GitLifecycleStatus,
-    GitOperation,
-    GitRisk,
+from .repository_model import (
+    RepositoryPathKind,
+    RepositoryComponentKind,
+    RepositoryPath,
+    RepositoryComponent,
+    RepositoryModel,
 )
 
-from .engineering_implementation import (
-    ImplementationChange,
-    ImplementationEvidence,
-    ImplementationRequest,
-    ImplementationResult,
-    ImplementationStatus,
+from .repository_scan_policy import (
+    RepositoryScanPolicy,
 )
 
 from .engineering_knowledge import (
-    EngineeringKnowledgeContext,
-    EngineeringKnowledgeItem,
-    EngineeringKnowledgePolicy,
-    KnowledgeAuthority,
     KnowledgeKind,
+    KnowledgeAuthority,
+    EngineeringKnowledgeItem,
+    EngineeringKnowledgeContext,
+    EngineeringKnowledgePolicy,
+)
+
+from .engineering_plan import (
+    PlanStatus,
+    PlanChangeReason,
+    EngineeringPlanStep,
+    PlanRevision,
+    AdaptiveEngineeringPlan,
+)
+
+from .engineering_task_graph import (
+    EngineeringTaskKind,
+    EngineeringTaskStatus,
+    EngineeringTask,
+    EngineeringTaskGraph,
+)
+
+from .engineering_session import (
+    EngineeringSession,
+    SessionTransition,
+    AuthoritativeEngineeringSession,
 )
 
 from .engineering_lifecycle import (
     EngineeringLifecycle,
-    LifecycleExecution,
-    LifecycleTransition,
+    LifecycleExecutionRecord,
 )
 
-from .engineering_plan import (
-    AdaptiveEngineeringPlan,
-    EngineeringPlanStep,
-    PlanChangeReason,
-    PlanRevision,
-    PlanStatus,
-)
-
-from .engineering_recovery import (
-    RecoveryAction,
-    RecoveryDecision,
-    RecoveryRequest,
-    RecoveryResult,
-    RecoveryStatus,
-    RepairRequest,
-    RetestRequest,
-)
-
-from .engineering_requirement import (
-    EngineeringPermission,
-    EngineeringRequirement,
-    PermissionScope,
-    RequirementIntent,
+from .engineering_store import (
+    EngineeringStore,
 )
 
 from .engineering_result import (
@@ -109,209 +70,328 @@ from .engineering_result import (
     EngineeringResult,
 )
 
-from .engineering_repository_model import (
-    RepositoryComponent,
-    RepositoryComponentKind,
-    RepositoryModel,
-    RepositoryPath,
-    RepositoryPathKind,
-)
-
-from .engineering_repository_scan_policy import (
-    RepositoryScanPolicy,
-)
-
-from .engineering_session import (
-    AuthoritativeEngineeringSession,
-    EngineeringSession,
-    SessionTransition,
-)
-
-from .engineering_state import (
-    EngineeringPhase,
-    EngineeringState,
-)
-
-from .engineering_store import (
-    EngineeringStore,
-)
-
-from .engineering_task_graph import (
-    EngineeringTask,
-    EngineeringTaskGraph,
-    EngineeringTaskKind,
-    EngineeringTaskStatus,
+from .engineering_implementation import (
+    ImplementationStatus,
+    ImplementationRequest,
+    ImplementationChange,
+    ImplementationEvidence,
+    ImplementationResult,
 )
 
 from .engineering_verification import (
-    VerificationAction,
-    VerificationDecision,
     VerificationDimension,
+    VerificationStatus,
+    VerificationAction,
+    VerificationRequirement,
     VerificationFinding,
+    VerificationDecision,
     VerificationRequest,
     VerificationResult,
-    VerificationStatus,
+)
+
+from .engineering_diagnosis import (
+    DiagnosisCategory,
+    DiagnosisConfidence,
+    DiagnosisAction,
+    DiagnosisEvidence,
+    RootCauseHypothesis,
+    DiagnosisRequest,
+    DiagnosisDecision,
+    DiagnosisResult,
+)
+
+from .engineering_recovery import (
+    RecoveryAction,
+    RecoveryStatus,
+    RecoveryRequest,
+    RepairRequest,
+    RetestRequest,
+    RecoveryDecision,
+    RecoveryResult,
+)
+
+from .engineering_acceptance import (
+    AcceptanceStatus,
+    AcceptanceDecision,
+    AcceptanceCriterionStatus,
+    AcceptanceCriterion,
+    AcceptanceFinding,
+    AcceptanceRequest,
+    AcceptanceDecisionResult,
+)
+
+from .engineering_experience import (
+    ExperienceKind,
+    ExperienceOutcome,
+    EngineeringExperience,
+    ExperienceQuery,
+    ExperienceMatch,
+    EngineeringExperienceContext,
+    ExperienceLearningResult,
 )
 
 from .self_modification import (
-    SelfModificationAction,
-    SelfModificationConstraint,
-    SelfModificationDecision,
     SelfModificationKind,
-    SelfModificationPlan,
-    SelfModificationRequest,
     SelfModificationRisk,
-    SelfModificationRollback,
     SelfModificationScope,
     SelfModificationStatus,
+    SelfModificationAction,
     SelfModificationTarget,
+    SelfModificationConstraint,
     SelfModificationVerification,
+    SelfModificationRollback,
+    SelfModificationPlan,
+    SelfModificationRequest,
+    SelfModificationDecision,
 )
 
 from .self_upgrade_gate import (
-    SelfUpgradeGateDecision,
-    SelfUpgradeGateRequest,
-    UpgradeAuthorization,
-    UpgradeAuthority,
-    UpgradeGateAction,
-    UpgradeGateFinding,
     UpgradeGateStatus,
+    UpgradeGateAction,
+    UpgradeAuthority,
+    UpgradeAuthorization,
+    UpgradeGateFinding,
+    SelfUpgradeGateRequest,
+    SelfUpgradeGateDecision,
+)
+
+from .engineering_git import (
+    GitOperation,
+    GitLifecycleStatus,
+    GitRisk,
+    GitAuthorization,
+    GitLifecyclePlan,
+    GitLifecycleRequest,
+    GitLifecycleResult,
+)
+
+from .engineering_deployment import (
+    DeploymentOperation,
+    DeploymentStatus,
+    DeploymentRisk,
+    DeploymentAuthorization,
+    HealthCheckDefinition,
+    DeploymentRollbackPlan,
+    DeploymentPlan,
+    DeploymentRequest,
+    HealthCheckResult,
+    DeploymentResult,
+)
+
+from .telegram_engineering import (
+    TelegramAuthorizationStatus,
+    TelegramEngineeringAction,
+    TelegramEngineeringCommand,
+    TelegramEngineeringRequest,
+    TelegramEngineeringResponse,
 )
 
 
 __all__ = [
-    "AcceptanceCriterion",
-    "AcceptanceCriterionStatus",
-    "AcceptanceDecision",
-    "AcceptanceDecisionResult",
-    "AcceptanceFinding",
-    "AcceptanceRequest",
-    "AcceptanceStatus",
+    # ------------------------------------------------------------
+    # Engineering state
+    # ------------------------------------------------------------
+    "EngineeringPhase",
+    "EngineeringState",
 
-    "DeploymentAuthorization",
-    "DeploymentOperation",
-    "DeploymentPlan",
-    "DeploymentRequest",
-    "DeploymentResult",
-    "DeploymentRisk",
-    "DeploymentRollbackPlan",
-    "DeploymentStatus",
-    "HealthCheckDefinition",
-    "HealthCheckResult",
-
-    "DiagnosisAction",
-    "DiagnosisCategory",
-    "DiagnosisConfidence",
-    "DiagnosisDecision",
-    "DiagnosisEvidence",
-    "DiagnosisRequest",
-    "DiagnosisResult",
-    "RootCauseHypothesis",
-
+    # ------------------------------------------------------------
+    # Evidence
+    # ------------------------------------------------------------
     "EvidenceKind",
     "EngineeringEvidence",
 
-    "EngineeringExperience",
-    "EngineeringExperienceContext",
-    "ExperienceKind",
-    "ExperienceLearningResult",
-    "ExperienceMatch",
-    "ExperienceOutcome",
-    "ExperienceQuery",
+    # ------------------------------------------------------------
+    # Requirement
+    # ------------------------------------------------------------
+    "RequirementIntent",
+    "PermissionScope",
+    "EngineeringPermission",
+    "EngineeringRequirement",
 
+    # ------------------------------------------------------------
+    # Repository model
+    # ------------------------------------------------------------
+    "RepositoryPathKind",
+    "RepositoryComponentKind",
+    "RepositoryPath",
+    "RepositoryComponent",
+    "RepositoryModel",
+    "RepositoryScanPolicy",
+
+    # ------------------------------------------------------------
+    # Knowledge
+    # ------------------------------------------------------------
+    "KnowledgeKind",
+    "KnowledgeAuthority",
+    "EngineeringKnowledgeItem",
+    "EngineeringKnowledgeContext",
+    "EngineeringKnowledgePolicy",
+
+    # ------------------------------------------------------------
+    # Planning
+    # ------------------------------------------------------------
+    "PlanStatus",
+    "PlanChangeReason",
+    "EngineeringPlanStep",
+    "PlanRevision",
+    "AdaptiveEngineeringPlan",
+
+    # ------------------------------------------------------------
+    # Task graph
+    # ------------------------------------------------------------
+    "EngineeringTaskKind",
+    "EngineeringTaskStatus",
+    "EngineeringTask",
+    "EngineeringTaskGraph",
+
+    # ------------------------------------------------------------
+    # Engineering session
+    # ------------------------------------------------------------
+    "EngineeringSession",
+    "SessionTransition",
+    "AuthoritativeEngineeringSession",
+
+    # ------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------
+    "EngineeringLifecycle",
+    "LifecycleExecutionRecord",
+
+    # ------------------------------------------------------------
+    # Persistent store
+    # ------------------------------------------------------------
+    "EngineeringStore",
+
+    # ------------------------------------------------------------
+    # Engineering result
+    # ------------------------------------------------------------
+    "EngineeringOutcome",
+    "EngineeringResult",
+
+    # ------------------------------------------------------------
+    # Autonomous implementation
+    # ------------------------------------------------------------
+    "ImplementationStatus",
+    "ImplementationRequest",
+    "ImplementationChange",
+    "ImplementationEvidence",
+    "ImplementationResult",
+
+    # ------------------------------------------------------------
+    # Verification
+    # ------------------------------------------------------------
+    "VerificationDimension",
+    "VerificationStatus",
+    "VerificationAction",
+    "VerificationRequirement",
+    "VerificationFinding",
+    "VerificationDecision",
+    "VerificationRequest",
+    "VerificationResult",
+
+    # ------------------------------------------------------------
+    # Root-cause diagnosis
+    # ------------------------------------------------------------
+    "DiagnosisCategory",
+    "DiagnosisConfidence",
+    "DiagnosisAction",
+    "DiagnosisEvidence",
+    "RootCauseHypothesis",
+    "DiagnosisRequest",
+    "DiagnosisDecision",
+    "DiagnosisResult",
+
+    # ------------------------------------------------------------
+    # Recovery / repair / retest
+    # ------------------------------------------------------------
+    "RecoveryAction",
+    "RecoveryStatus",
+    "RecoveryRequest",
+    "RepairRequest",
+    "RetestRequest",
+    "RecoveryDecision",
+    "RecoveryResult",
+
+    # ------------------------------------------------------------
+    # Acceptance / engineering judgment
+    # ------------------------------------------------------------
+    "AcceptanceStatus",
+    "AcceptanceDecision",
+    "AcceptanceCriterionStatus",
+    "AcceptanceCriterion",
+    "AcceptanceFinding",
+    "AcceptanceRequest",
+    "AcceptanceDecisionResult",
+
+    # ------------------------------------------------------------
+    # Engineering experience / learning
+    # ------------------------------------------------------------
+    "ExperienceKind",
+    "ExperienceOutcome",
+    "EngineeringExperience",
+    "ExperienceQuery",
+    "ExperienceMatch",
+    "EngineeringExperienceContext",
+    "ExperienceLearningResult",
+
+    # ------------------------------------------------------------
+    # Self-modification
+    # ------------------------------------------------------------
+    "SelfModificationKind",
+    "SelfModificationRisk",
+    "SelfModificationScope",
+    "SelfModificationStatus",
+    "SelfModificationAction",
+    "SelfModificationTarget",
+    "SelfModificationConstraint",
+    "SelfModificationVerification",
+    "SelfModificationRollback",
+    "SelfModificationPlan",
+    "SelfModificationRequest",
+    "SelfModificationDecision",
+
+    # ------------------------------------------------------------
+    # Self-upgrade safety gate
+    # ------------------------------------------------------------
+    "UpgradeGateStatus",
+    "UpgradeGateAction",
+    "UpgradeAuthority",
+    "UpgradeAuthorization",
+    "UpgradeGateFinding",
+    "SelfUpgradeGateRequest",
+    "SelfUpgradeGateDecision",
+
+    # ------------------------------------------------------------
+    # Git / GitHub lifecycle
+    # ------------------------------------------------------------
+    "GitOperation",
+    "GitLifecycleStatus",
+    "GitRisk",
     "GitAuthorization",
     "GitLifecyclePlan",
     "GitLifecycleRequest",
     "GitLifecycleResult",
-    "GitLifecycleStatus",
-    "GitOperation",
-    "GitRisk",
 
-    "ImplementationChange",
-    "ImplementationEvidence",
-    "ImplementationRequest",
-    "ImplementationResult",
-    "ImplementationStatus",
+    # ------------------------------------------------------------
+    # Deployment / health / rollback
+    # ------------------------------------------------------------
+    "DeploymentOperation",
+    "DeploymentStatus",
+    "DeploymentRisk",
+    "DeploymentAuthorization",
+    "HealthCheckDefinition",
+    "DeploymentRollbackPlan",
+    "DeploymentPlan",
+    "DeploymentRequest",
+    "HealthCheckResult",
+    "DeploymentResult",
 
-    "EngineeringKnowledgeContext",
-    "EngineeringKnowledgeItem",
-    "EngineeringKnowledgePolicy",
-    "KnowledgeAuthority",
-    "KnowledgeKind",
-
-    "EngineeringLifecycle",
-    "LifecycleExecution",
-    "LifecycleTransition",
-
-    "AdaptiveEngineeringPlan",
-    "EngineeringPlanStep",
-    "PlanChangeReason",
-    "PlanRevision",
-    "PlanStatus",
-
-    "RecoveryAction",
-    "RecoveryDecision",
-    "RecoveryRequest",
-    "RecoveryResult",
-    "RecoveryStatus",
-    "RepairRequest",
-    "RetestRequest",
-
-    "EngineeringPermission",
-    "EngineeringRequirement",
-    "PermissionScope",
-    "RequirementIntent",
-
-    "EngineeringOutcome",
-    "EngineeringResult",
-
-    "RepositoryComponent",
-    "RepositoryComponentKind",
-    "RepositoryModel",
-    "RepositoryPath",
-    "RepositoryPathKind",
-    "RepositoryScanPolicy",
-
-    "AuthoritativeEngineeringSession",
-    "EngineeringSession",
-    "SessionTransition",
-
-    "EngineeringPhase",
-    "EngineeringState",
-
-    "EngineeringStore",
-
-    "EngineeringTask",
-    "EngineeringTaskGraph",
-    "EngineeringTaskKind",
-    "EngineeringTaskStatus",
-
-    "VerificationAction",
-    "VerificationDecision",
-    "VerificationDimension",
-    "VerificationFinding",
-    "VerificationRequest",
-    "VerificationResult",
-    "VerificationStatus",
-
-    "SelfModificationAction",
-    "SelfModificationConstraint",
-    "SelfModificationDecision",
-    "SelfModificationKind",
-    "SelfModificationPlan",
-    "SelfModificationRequest",
-    "SelfModificationRisk",
-    "SelfModificationRollback",
-    "SelfModificationScope",
-    "SelfModificationStatus",
-    "SelfModificationTarget",
-    "SelfModificationVerification",
-
-    "SelfUpgradeGateDecision",
-    "SelfUpgradeGateRequest",
-    "UpgradeAuthorization",
-    "UpgradeAuthority",
-    "UpgradeGateAction",
-    "UpgradeGateFinding",
-    "UpgradeGateStatus",
+    # ------------------------------------------------------------
+    # Telegram engineering interface
+    # ------------------------------------------------------------
+    "TelegramAuthorizationStatus",
+    "TelegramEngineeringAction",
+    "TelegramEngineeringCommand",
+    "TelegramEngineeringRequest",
+    "TelegramEngineeringResponse",
 ]
