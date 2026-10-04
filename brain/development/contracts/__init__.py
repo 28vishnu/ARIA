@@ -2,10 +2,6 @@
 
 This package contains the stable contracts shared by the autonomous
 engineering lifecycle.
-
-The contracts intentionally remain independent of legacy execution
-implementations. Existing ARIA services are adapted to these contracts
-during the Phase 1 integration steps.
 """
 
 from .engineering_state import (
@@ -77,6 +73,18 @@ from .engineering_verification import (
     VerificationDecision,
     VerificationRequest,
     VerificationResult,
+)
+
+from .engineering_diagnosis import (
+    DiagnosisCategory,
+    DiagnosisConfidence,
+    DiagnosisAction,
+    DiagnosisEvidence,
+    RootCauseHypothesis,
+    DiagnosisRequest,
+    DiagnosisDecision,
+    DiagnosisResult,
+    confidence_level,
 )
 
 from .engineering_session import (
@@ -186,6 +194,20 @@ __all__ = [
     "VerificationDecision",
     "VerificationRequest",
     "VerificationResult",
+
+    # ==============================================================
+    # Diagnosis
+    # ==============================================================
+
+    "DiagnosisCategory",
+    "DiagnosisConfidence",
+    "DiagnosisAction",
+    "DiagnosisEvidence",
+    "RootCauseHypothesis",
+    "DiagnosisRequest",
+    "DiagnosisDecision",
+    "DiagnosisResult",
+    "confidence_level",
 
     # ==============================================================
     # Session
