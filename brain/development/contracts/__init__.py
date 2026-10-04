@@ -8,6 +8,19 @@ from .engineering_acceptance import (
     AcceptanceStatus,
 )
 
+from .engineering_deployment import (
+    DeploymentAuthorization,
+    DeploymentOperation,
+    DeploymentPlan,
+    DeploymentRequest,
+    DeploymentResult,
+    DeploymentRisk,
+    DeploymentRollbackPlan,
+    DeploymentStatus,
+    HealthCheckDefinition,
+    HealthCheckResult,
+)
+
 from .engineering_diagnosis import (
     DiagnosisAction,
     DiagnosisCategory,
@@ -32,6 +45,16 @@ from .engineering_experience import (
     ExperienceMatch,
     ExperienceOutcome,
     ExperienceQuery,
+)
+
+from .engineering_git import (
+    GitAuthorization,
+    GitLifecyclePlan,
+    GitLifecycleRequest,
+    GitLifecycleResult,
+    GitLifecycleStatus,
+    GitOperation,
+    GitRisk,
 )
 
 from .engineering_implementation import (
@@ -155,16 +178,6 @@ from .self_upgrade_gate import (
     UpgradeGateStatus,
 )
 
-from .engineering_git import (
-    GitAuthorization,
-    GitLifecyclePlan,
-    GitLifecycleRequest,
-    GitLifecycleResult,
-    GitLifecycleStatus,
-    GitOperation,
-    GitRisk,
-)
-
 
 __all__ = [
     "AcceptanceCriterion",
@@ -174,6 +187,17 @@ __all__ = [
     "AcceptanceFinding",
     "AcceptanceRequest",
     "AcceptanceStatus",
+
+    "DeploymentAuthorization",
+    "DeploymentOperation",
+    "DeploymentPlan",
+    "DeploymentRequest",
+    "DeploymentResult",
+    "DeploymentRisk",
+    "DeploymentRollbackPlan",
+    "DeploymentStatus",
+    "HealthCheckDefinition",
+    "HealthCheckResult",
 
     "DiagnosisAction",
     "DiagnosisCategory",
@@ -194,6 +218,14 @@ __all__ = [
     "ExperienceMatch",
     "ExperienceOutcome",
     "ExperienceQuery",
+
+    "GitAuthorization",
+    "GitLifecyclePlan",
+    "GitLifecycleRequest",
+    "GitLifecycleResult",
+    "GitLifecycleStatus",
+    "GitOperation",
+    "GitRisk",
 
     "ImplementationChange",
     "ImplementationEvidence",
@@ -282,12 +314,4 @@ __all__ = [
     "UpgradeGateAction",
     "UpgradeGateFinding",
     "UpgradeGateStatus",
-
-    "GitAuthorization",
-    "GitLifecyclePlan",
-    "GitLifecycleRequest",
-    "GitLifecycleResult",
-    "GitLifecycleStatus",
-    "GitOperation",
-    "GitRisk",
 ]
