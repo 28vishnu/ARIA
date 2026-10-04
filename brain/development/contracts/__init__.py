@@ -1,8 +1,4 @@
-"""Stable contracts for ARIA's autonomous engineering lifecycle.
-
-Step 2 introduces data contracts only. These contracts do not execute work,
-modify repositories, run commands, deploy, or change production state.
-"""
+"""Stable contracts for ARIA's autonomous engineering lifecycle."""
 
 from .engineering_state import (
     EngineeringPhase,
@@ -14,7 +10,10 @@ from .engineering_evidence import (
     EngineeringEvidence,
 )
 from .engineering_session import (
+    EngineeringSession,
+    AuthoritativeEngineeringSession,
     EngineeringSessionContract,
+    SessionTransition,
 )
 from .engineering_result import (
     EngineeringOutcome,
@@ -27,7 +26,10 @@ __all__ = [
     "TERMINAL_PHASES",
     "EvidenceKind",
     "EngineeringEvidence",
+    "EngineeringSession",
+    "AuthoritativeEngineeringSession",
     "EngineeringSessionContract",
+    "SessionTransition",
     "EngineeringOutcome",
     "EngineeringResult",
 ]
