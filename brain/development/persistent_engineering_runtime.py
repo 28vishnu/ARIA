@@ -706,7 +706,6 @@ class PersistentEngineeringRuntime:
     async def resume(
         self,
         session_id: str,
-        *,
         **kwargs: Any,
     ) -> PersistentEngineeringResult:
         lifecycle = await self._restore_session(
