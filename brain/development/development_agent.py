@@ -17,7 +17,8 @@ from .filesystem_guard import FilesystemGuard
 from .repository_manager import RepositoryManager
 from .requirement_parser import Requirement, RequirementParser
 from .requirement_intelligence import RequirementAnalysis, RequirementIntelligence
-from .repair_engine import RepairEngine, RepairResult
+from .repair_engine import RepairResult
+from .autonomous_recovery_loop import AutonomousRecoveryLoop, RecoveryDecision, RecoveryResult
 from .sandbox import DevelopmentSandbox
 from .test_runner import DevelopmentTestRunner, TestResult
 from .validator import DevelopmentValidator, ValidationResult
@@ -2262,8 +2263,8 @@ class DevelopmentAgent:
 
         failure_analyzer = FailureAnalyzer()
 
-        repair_engine = RepairEngine(
-            max_attempts=self.max_repair_attempts
+        recovery_loop = AutonomousRecoveryLoop(
+            max_attempts=max(self.max_repair_attempts + 1, 4)
         )
 
         write_results: list[WriteResult] = []
@@ -3053,12 +3054,39 @@ class DevelopmentAgent:
         # Bounded repair
         # ----------------------------------------------------
 
+        def analyze_failure(
+            current_test: TestResult,
+        ) -> FailureAnalysis:
+            analysis = failure_analyzer.analyze(current_test)
+            self._active_root_cause = self.root_cause_engine.assess(
+                test_result=current_test,
+                validation=validation,
+                errors=(
+                    *errors,
+                    getattr(analysis, "summary", ""),
+                    getattr(analysis, "error", ""),
+                ),
+                changed_paths=[
+                    change.path
+                    for change in generated_changes
+                ],
+                requirement_text=requirement.raw_text,
+            )
+            self._active_recovery_test = current_test
+            return analysis
+
         async def apply_repair(
             analysis: FailureAnalysis,
             attempt: int,
+            decision: RecoveryDecision,
         ) -> bool:
+            current_test = getattr(
+                self,
+                "_active_recovery_test",
+                initial_test,
+            )
             self._active_root_cause = self.root_cause_engine.assess(
-                test_result=initial_test,
+                test_result=current_test,
                 validation=validation,
                 errors=(
                     *errors,
@@ -3096,7 +3124,7 @@ class DevelopmentAgent:
             if self.adaptive_plan is not None:
                 revision = self.adaptive_plan.revise(
                     trigger=f"repair_attempt_{attempt}",
-                    test_result=initial_test,
+                    test_result=current_test,
                     failure=analysis,
                     validation=validator.validate_repository(),
                     repository_summary={
@@ -3120,6 +3148,12 @@ class DevelopmentAgent:
                     failure=analysis,
                     previous_changes=generated_changes,
                 )
+            ) + (
+                "\nRECOVERY STRATEGY FOR THIS ATTEMPT:\n"
+                f"Strategy: {decision.strategy}\n"
+                f"Reason: {decision.reason}\n"
+                f"Confidence: {decision.confidence}\n"
+                "Do not repeat a previous repair unchanged.\n"
             )
 
             repair_generation = (
@@ -3143,6 +3177,8 @@ class DevelopmentAgent:
                             else None
                         ),
                         "attempt": attempt,
+                        "recovery_strategy": decision.strategy,
+                        "recovery_reason": decision.reason,
                     },
                 )
             )
@@ -3238,29 +3274,83 @@ class DevelopmentAgent:
             if not rerun_result.results:
                 raise RuntimeError(
                     "Test runner returned no result "
-                    "during repair rerun."
+                    "during recovery retest."
                 )
 
-            return rerun_result.results[-1]
+            latest = rerun_result.results[-1]
+
+            # Recovery is allowed to change the engineering graph only from
+            # observed evidence.  Rebuild it after every fresh test result so
+            # dependencies, verification gates, and repair work are not stale.
+            try:
+                current_graph = self.intelligent_task_graph.build(
+                    requirement=requirement,
+                    plan=plan,
+                    repository_reasoning=getattr(
+                        self,
+                        "_active_repository_reasoning",
+                        None,
+                    ),
+                    generated_changes=generated_changes,
+                    selected_tests=selected_tests,
+                    failure=(
+                        self._active_root_cause
+                        if self._active_root_cause is not None
+                        else None
+                    ),
+                    validation=validator.validate_repository(),
+                )
+                previous_completed = getattr(
+                    getattr(self, "_active_task_executor", None),
+                    "completed",
+                    (),
+                )
+                self._active_task_graph = current_graph
+                self._active_task_executor = self.task_graph_executor.start(
+                    current_graph,
+                    preserve_completed=previous_completed,
+                )
+                if latest.passed:
+                    try:
+                        self._active_task_executor.complete(
+                            "test",
+                            {
+                                "command": list(latest.command),
+                                "return_code": latest.return_code,
+                                "passed": True,
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+            except Exception as graph_exc:
+                logger.warning(
+                    "[DevelopmentAgent] Recovery task graph refresh failed: %s",
+                    graph_exc,
+                )
+
+            return latest
 
         try:
             repair_result = (
-                await repair_engine.repair(
+                await recovery_loop.run(
                     initial_test,
-                    analyze=failure_analyzer.analyze,
+                    analyze=analyze_failure,
+                    root_cause=lambda current_test, analysis: self._active_root_cause,
                     apply_repair=apply_repair,
                     rerun=rerun,
                 )
             )
+            final_test = repair_result.final_result
 
         except Exception as exc:
             logger.exception(
                 "[DevelopmentAgent] Repair execution failed."
             )
 
+            final_test = initial_test
             failure = (
                 failure_analyzer.analyze(
-                    initial_test
+                    final_test
                 )
             )
 
@@ -3271,7 +3361,7 @@ class DevelopmentAgent:
                 workspace=workspace,
                 writes=tuple(write_results),
                 validation=validation,
-                tests=initial_test,
+                tests=final_test,
                 generation=generation,
                 failure=failure,
                 status="repair_execution_failed",
@@ -3309,7 +3399,7 @@ class DevelopmentAgent:
             requirement_text=requirement.raw_text,
             generated_changes=generated_changes,
             validation=final_validation,
-            test_result=initial_test,
+            test_result=final_test,
             acceptance_error=final_acceptance_error,
             workspace_verified=True,
             tests_selected=selected_tests,
@@ -3328,7 +3418,7 @@ class DevelopmentAgent:
         if not final_success:
             failure = (
                 failure_analyzer.analyze(
-                    initial_test
+                    final_test
                 )
             )
 
@@ -3364,7 +3454,7 @@ class DevelopmentAgent:
             workspace=workspace,
             writes=tuple(write_results),
             validation=final_validation,
-            tests=initial_test,
+            tests=final_test,
             repair=repair_result,
             generation=generation,
             failure=failure,
@@ -3391,6 +3481,11 @@ class DevelopmentAgent:
                         repair_result,
                         "attempts",
                         None,
+                    ),
+                    "autonomous_recovery": (
+                        repair_result.to_dict()
+                        if hasattr(repair_result, "to_dict")
+                        else None
                     ),
                     "workspace_file_count": len(
                         workspace_repository_paths
