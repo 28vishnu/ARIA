@@ -88,6 +88,7 @@ from brain.development.github_manager import GitHubManager
 from brain.development.github_sync import GitHubSync
 from brain.development.git_branch_lifecycle import GitBranchLifecycle
 from brain.development.github_project_creator import GitHubProjectCreator
+from brain.development.github_pull_request import GitHubPullRequestWorkflow
 from brain.development.research_service import RealTimeResearch
 from brain.development.phase_task_execution import PhaseTaskExecutionEngine
 from brain.development.acceptance_staging_smoke import AcceptanceStagingSmoke
@@ -976,6 +977,21 @@ async def bootstrap_application() -> ServiceRegistry:
         github_project_creator,
     )
 
+    github_pull_request = GitHubPullRequestWorkflow(
+        github_manager=github_manager,
+        api_timeout=float(
+            os.getenv(
+                "ARIA_GITHUB_PR_TIMEOUT",
+                "60",
+            )
+        ),
+    )
+
+    registry.register(
+        "github_pull_request",
+        github_pull_request,
+    )
+
     logger.info(
         "[Phase1] Project creation capability registered | "
         "workspace_root=%s | remote_authorization_required=%s",
@@ -1238,6 +1254,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
+            "github_pull_request": github_pull_request,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
