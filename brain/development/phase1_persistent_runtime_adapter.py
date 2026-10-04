@@ -989,4 +989,119 @@ class Phase1PersistentRuntimeAdapter:
         except Exception as exc:
 
             return {
-                "healthy":
+                "healthy": False,
+                "error": str(exc),
+            }
+
+        return {}
+
+    def legacy_runtime_health(
+        self,
+    ) -> dict[str, Any]:
+
+        try:
+
+            method = getattr(
+                self.legacy_runtime,
+                "health",
+                None,
+            )
+
+            if callable(method):
+
+                result = method()
+
+                if isinstance(
+                    result,
+                    dict,
+                ):
+                    return result
+
+        except Exception as exc:
+
+            return {
+                "healthy": False,
+                "error": str(exc),
+            }
+
+        return {}
+
+    # ============================================================
+    # DESCRIPTION
+    # ============================================================
+
+    def describe(
+        self,
+    ) -> dict[str, Any]:
+
+        verification = (
+            self.verify_integration()
+        )
+
+        return {
+            "adapter_version": self.VERSION,
+            "persistent_runtime": True,
+            "persistence_configured": (
+                self.persistence is not None
+            ),
+            "legacy_runtime_type": (
+                type(
+                    self.legacy_runtime
+                ).__name__
+            ),
+            "development_runtime_type": (
+                type(
+                    self._development_runtime
+                ).__name__
+            ),
+            "integration": verification,
+            "capabilities": {
+                "develop": callable(
+                    getattr(
+                        self,
+                        "develop",
+                        None,
+                    )
+                ),
+                "resume": callable(
+                    getattr(
+                        self,
+                        "resume",
+                        None,
+                    )
+                ),
+                "status": callable(
+                    getattr(
+                        self,
+                        "status",
+                        None,
+                    )
+                ),
+                "health": callable(
+                    getattr(
+                        self,
+                        "health",
+                        None,
+                    )
+                ),
+                "checkpoint": callable(
+                    getattr(
+                        self,
+                        "checkpoint",
+                        None,
+                    )
+                ),
+                "recoverable_sessions": callable(
+                    getattr(
+                        self,
+                        "recoverable_sessions",
+                        None,
+                    )
+                ),
+            },
+        }
+
+
+__all__ = [
+    "Phase1PersistentRuntimeAdapter",
+]
