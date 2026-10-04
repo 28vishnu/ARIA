@@ -256,6 +256,23 @@ class Phase1JarvisValidator:
         "brain/development/code_generation_router.py",
         "brain/learning/experience_engine.py",
         "brain/memory/experience_consolidator.py",
+
+        # Authoritative Phase 1 integration spine
+        "brain/development/contracts/engineering_requirement.py",
+        "brain/development/contracts/engineering_plan.py",
+        "brain/development/contracts/engineering_task_graph.py",
+        "brain/development/contracts/engineering_implementation.py",
+        "brain/development/contracts/engineering_verification.py",
+        "brain/development/contracts/engineering_diagnosis.py",
+        "brain/development/contracts/engineering_recovery.py",
+        "brain/development/contracts/engineering_acceptance.py",
+        "brain/development/authoritative_engineering_requirement.py",
+        "brain/development/authoritative_engineering_orchestrator.py",
+        "brain/development/final_autonomous_engineer.py",
+        "brain/development/phase1_persistent_runtime_adapter.py",
+        "brain/development/authoritative_engineering_persistence.py",
+        "brain/development/authoritative_engineering_evidence.py",
+        "brain/development/authoritative_engineering_lifecycle_runtime.py",
     )
 
     REQUIRED_CLASSES = {
@@ -310,6 +327,23 @@ class Phase1JarvisValidator:
             "Phase1JarvisValidator",
             "Phase1ValidationReport",
         ),
+
+        # Authoritative integration spine
+        "brain/development/authoritative_engineering_requirement.py": (
+            "AuthoritativeEngineeringRequirement",
+            "RequirementResolution",
+        ),
+        "brain/development/authoritative_engineering_orchestrator.py": (
+            "AuthoritativeEngineeringOrchestrator",
+            "EngineeringOrchestrationResult",
+        ),
+        "brain/development/final_autonomous_engineer.py": (
+            "FinalAutonomousEngineer",
+            "FinalEngineeringResult",
+        ),
+        "brain/development/phase1_persistent_runtime_adapter.py": (
+            "Phase1PersistentRuntimeAdapter",
+        ),
     }
 
     REQUIRED_METHODS = {
@@ -327,6 +361,29 @@ class Phase1JarvisValidator:
         ),
         "brain/development/autonomous_repair_loop.py": (
             "run",
+        ),
+
+        # Authoritative integration spine
+        "brain/development/authoritative_engineering_requirement.py": (
+            "resolve",
+        ),
+        "brain/development/authoritative_engineering_orchestrator.py": (
+            "develop",
+            "resume",
+            "status",
+            "health",
+        ),
+        "brain/development/final_autonomous_engineer.py": (
+            "develop",
+            "resume",
+            "status",
+            "health",
+        ),
+        "brain/development/phase1_persistent_runtime_adapter.py": (
+            "develop",
+            "resume",
+            "status",
+            "health",
         ),
         "brain/development/knowledge_coding_feedback.py": (
             "prepare",
