@@ -2,9 +2,9 @@
 ARIA Phase 1 — Step 7: Knowledge Architecture.
 
 Defines the stable, provider-independent architecture for ARIA's durable
-knowledge foundation.  This module is intentionally read-only with respect
+knowledge foundation. This module is intentionally read-only with respect
 to external knowledge sources: it describes sources, records, provenance,
-quality, lifecycle and storage contracts.  Ingestion and retrieval are
+quality, lifecycle and storage contracts. Ingestion and retrieval are
 implemented in later Phase 1 steps.
 
 Design goals:
@@ -93,13 +93,25 @@ class KnowledgeSource:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "authority", max(0.0, min(1.0, float(self.authority))))
+        object.__setattr__(
+            self,
+            "authority",
+            max(
+                0.0,
+                min(
+                    1.0,
+                    float(self.authority),
+                ),
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
+
         value["freshness"] = self.freshness.value
         value["domains"] = list(self.domains)
         value["metadata"] = dict(self.metadata)
+
         return value
 
 
@@ -141,25 +153,53 @@ class KnowledgeQuality:
             object.__setattr__(
                 self,
                 name,
-                max(0.0, min(1.0, float(getattr(self, name)))),
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        float(getattr(self, name)),
+                    ),
+                ),
             )
-        object.__setattr__(self, "conflict_count", max(0, int(self.conflict_count)))
+
+        object.__setattr__(
+            self,
+            "conflict_count",
+            max(
+                0,
+                int(self.conflict_count),
+            ),
+        )
 
     def score(self) -> float:
         """Return a deterministic composite quality score."""
+
         base = (
             self.confidence * 0.35
             + self.source_authority * 0.30
             + self.relevance * 0.20
             + self.completeness * 0.15
         )
-        penalty = min(0.25, self.conflict_count * 0.05)
-        return max(0.0, min(1.0, base - penalty))
+
+        penalty = min(
+            0.25,
+            self.conflict_count * 0.05,
+        )
+
+        return max(
+            0.0,
+            min(
+                1.0,
+                base - penalty,
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
+
         value["verification"] = self.verification.value
         value["score"] = self.score()
+
         return value
 
 
@@ -170,22 +210,36 @@ class KnowledgeRecord:
     knowledge_id: str
     title: str
     content: str
+
     domain: KnowledgeDomain = KnowledgeDomain.GENERAL
     kind: KnowledgeKind = KnowledgeKind.ARTICLE
     freshness: KnowledgeFreshness = KnowledgeFreshness.DURABLE
+
     provenance: tuple[Provenance, ...] = ()
-    quality: KnowledgeQuality = field(default_factory=KnowledgeQuality)
+
+    quality: KnowledgeQuality = field(
+        default_factory=KnowledgeQuality
+    )
+
     topics: tuple[str, ...] = ()
     entities: tuple[str, ...] = ()
     relations: tuple[str, ...] = ()
+
     parent_id: str | None = None
     chunk_index: int | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    metadata: Mapping[str, Any] = field(
+        default_factory=dict
+    )
+
     active: bool = True
 
     def normalized_text(self) -> str:
         """Return a deterministic normalized representation for indexing."""
-        return " ".join(str(self.content).split())
+
+        return " ".join(
+            str(self.content).split()
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -195,7 +249,10 @@ class KnowledgeRecord:
             "domain": self.domain.value,
             "kind": self.kind.value,
             "freshness": self.freshness.value,
-            "provenance": [item.to_dict() for item in self.provenance],
+            "provenance": [
+                item.to_dict()
+                for item in self.provenance
+            ],
             "quality": self.quality.to_dict(),
             "topics": list(self.topics),
             "entities": list(self.entities),
@@ -212,21 +269,41 @@ class KnowledgeQuery:
     """Provider-independent retrieval request used by later Step 9."""
 
     query: str
+
     domains: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()
     source_ids: tuple[str, ...] = ()
+
     limit: int = 5
     min_quality: float = 0.0
+
     include_current: bool = False
     include_documents: bool = True
     include_aria: bool = True
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "limit", max(1, min(100, int(self.limit))))
+        object.__setattr__(
+            self,
+            "limit",
+            max(
+                1,
+                min(
+                    100,
+                    int(self.limit),
+                ),
+            ),
+        )
+
         object.__setattr__(
             self,
             "min_quality",
-            max(0.0, min(1.0, float(self.min_quality))),
+            max(
+                0.0,
+                min(
+                    1.0,
+                    float(self.min_quality),
+                ),
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -237,7 +314,7 @@ class KnowledgeArchitecture:
     """
     Registry and validation layer for ARIA's durable knowledge foundation.
 
-    This class does not fetch, write or delete knowledge.  It only defines
+    This class does not fetch, write or delete knowledge. It only defines
     the architecture and validates records/sources so Steps 8 and 9 have a
     stable contract.
     """
@@ -251,7 +328,12 @@ class KnowledgeArchitecture:
             source_type="encyclopedia",
             authority=0.88,
             freshness=KnowledgeFreshness.PERIODIC,
-            domains=("general", "science", "engineering", "computer_science"),
+            domains=(
+                "general",
+                "science",
+                "engineering",
+                "computer_science",
+            ),
             ingestion_policy="scheduled",
         ),
         KnowledgeSource(
@@ -260,7 +342,11 @@ class KnowledgeArchitecture:
             source_type="knowledge_graph",
             authority=0.90,
             freshness=KnowledgeFreshness.PERIODIC,
-            domains=("general", "science", "engineering"),
+            domains=(
+                "general",
+                "science",
+                "engineering",
+            ),
             ingestion_policy="scheduled",
         ),
         KnowledgeSource(
@@ -269,7 +355,11 @@ class KnowledgeArchitecture:
             source_type="documentation",
             authority=0.95,
             freshness=KnowledgeFreshness.PERIODIC,
-            domains=("programming", "computer_science", "engineering"),
+            domains=(
+                "programming",
+                "computer_science",
+                "engineering",
+            ),
             ingestion_policy="version_aware",
         ),
         KnowledgeSource(
@@ -278,7 +368,11 @@ class KnowledgeArchitecture:
             source_type="reference",
             authority=0.93,
             freshness=KnowledgeFreshness.DURABLE,
-            domains=("science", "mathematics", "engineering"),
+            domains=(
+                "science",
+                "mathematics",
+                "engineering",
+            ),
             ingestion_policy="curated",
         ),
         KnowledgeSource(
@@ -287,7 +381,10 @@ class KnowledgeArchitecture:
             source_type="documentation_and_papers",
             authority=0.93,
             freshness=KnowledgeFreshness.PERIODIC,
-            domains=("artificial_intelligence", "computer_science"),
+            domains=(
+                "artificial_intelligence",
+                "computer_science",
+            ),
             ingestion_policy="curated_and_scheduled",
         ),
         KnowledgeSource(
@@ -296,7 +393,11 @@ class KnowledgeArchitecture:
             source_type="project_documentation",
             authority=0.98,
             freshness=KnowledgeFreshness.DURABLE,
-            domains=("aria", "programming", "computer_science"),
+            domains=(
+                "aria",
+                "programming",
+                "computer_science",
+            ),
             ingestion_policy="development_event",
         ),
     )
@@ -305,65 +406,142 @@ class KnowledgeArchitecture:
         self,
         sources: Iterable[KnowledgeSource] | None = None,
     ) -> None:
-        self._sources: dict[str, KnowledgeSource] = {}
-        for source in sources or self.DEFAULT_SOURCE_DEFINITIONS:
+
+        self._sources: dict[
+            str,
+            KnowledgeSource,
+        ] = {}
+
+        for source in (
+            sources
+            or self.DEFAULT_SOURCE_DEFINITIONS
+        ):
             self.register_source(source)
 
     @property
-    def sources(self) -> tuple[KnowledgeSource, ...]:
-        return tuple(self._sources.values())
+    def sources(
+        self,
+    ) -> tuple[KnowledgeSource, ...]:
+        return tuple(
+            self._sources.values()
+        )
 
-    def register_source(self, source: KnowledgeSource) -> KnowledgeSource:
-        if not isinstance(source, KnowledgeSource):
-            raise TypeError("source must be KnowledgeSource")
+    def register_source(
+        self,
+        source: KnowledgeSource,
+    ) -> KnowledgeSource:
+
+        if not isinstance(
+            source,
+            KnowledgeSource,
+        ):
+            raise TypeError(
+                "source must be KnowledgeSource"
+            )
+
         source_id = source.source_id.strip()
+
         if not source_id:
-            raise ValueError("source_id cannot be empty")
+            raise ValueError(
+                "source_id cannot be empty"
+            )
+
         if source_id in self._sources:
-            raise ValueError(f"Knowledge source already registered: {source_id}")
+            raise ValueError(
+                f"Knowledge source already registered: {source_id}"
+            )
+
         self._sources[source_id] = source
+
         return source
 
-    def get_source(self, source_id: str) -> KnowledgeSource | None:
-        return self._sources.get(str(source_id).strip())
+    def get_source(
+        self,
+        source_id: str,
+    ) -> KnowledgeSource | None:
 
-    def validate_record(self, record: KnowledgeRecord) -> tuple[str, ...]:
+        return self._sources.get(
+            str(source_id).strip()
+        )
+
+    def validate_record(
+        self,
+        record: KnowledgeRecord,
+    ) -> tuple[str, ...]:
         """Validate structural invariants without contacting any provider."""
+
         errors: list[str] = []
 
         if not record.knowledge_id.strip():
-            errors.append("knowledge_id is empty")
+            errors.append(
+                "knowledge_id is empty"
+            )
+
         if not record.title.strip():
-            errors.append("title is empty")
+            errors.append(
+                "title is empty"
+            )
+
         if not record.content.strip():
-            errors.append("content is empty")
+            errors.append(
+                "content is empty"
+            )
 
         if not record.provenance:
-            errors.append("at least one provenance entry is required")
+            errors.append(
+                "at least one provenance entry is required"
+            )
 
         for provenance in record.provenance:
+
             if not provenance.source_id.strip():
-                errors.append("provenance source_id is empty")
-            elif provenance.source_id not in self._sources:
                 errors.append(
-                    f"unknown provenance source: {provenance.source_id}"
+                    "provenance source_id is empty"
                 )
 
-        if record.chunk_index is not None and record.chunk_index < 0:
-            errors.append("chunk_index cannot be negative")
+            elif (
+                provenance.source_id
+                not in self._sources
+            ):
+                errors.append(
+                    "unknown provenance source: "
+                    f"{provenance.source_id}"
+                )
+
+        if (
+            record.chunk_index is not None
+            and record.chunk_index < 0
+        ):
+            errors.append(
+                "chunk_index cannot be negative"
+            )
 
         return tuple(errors)
 
-    def is_valid_record(self, record: KnowledgeRecord) -> bool:
-        return not self.validate_record(record)
+    def is_valid_record(
+        self,
+        record: KnowledgeRecord,
+    ) -> bool:
 
-    def classify_source(self, source_id: str) -> dict[str, Any]:
-        source = self.get_source(source_id)
+        return not self.validate_record(
+            record
+        )
+
+    def classify_source(
+        self,
+        source_id: str,
+    ) -> dict[str, Any]:
+
+        source = self.get_source(
+            source_id
+        )
+
         if source is None:
             return {
                 "source_id": source_id,
                 "known": False,
             }
+
         return {
             "source_id": source.source_id,
             "known": True,
@@ -378,19 +556,44 @@ class KnowledgeArchitecture:
 
     def describe(self) -> dict[str, Any]:
         """Return a machine-readable architecture contract."""
+
         return {
             "version": self.VERSION,
-            "purpose": "durable_provider-independent knowledge foundation",
+            "purpose": (
+                "durable provider-independent "
+                "knowledge foundation"
+            ),
             "separation": {
-                "personal_memory": "user-specific episodic/semantic memory",
-                "knowledge": "general and project knowledge",
-                "current_information": "live/web/tool retrieval at query time",
+                "personal_memory": (
+                    "user-specific episodic/semantic memory"
+                ),
+                "knowledge": (
+                    "general and project knowledge"
+                ),
+                "current_information": (
+                    "live/web/tool retrieval at query time"
+                ),
             },
-            "domains": [item.value for item in KnowledgeDomain],
-            "kinds": [item.value for item in KnowledgeKind],
-            "freshness": [item.value for item in KnowledgeFreshness],
-            "verification": [item.value for item in VerificationStatus],
-            "sources": [source.to_dict() for source in self.sources],
+            "domains": [
+                item.value
+                for item in KnowledgeDomain
+            ],
+            "kinds": [
+                item.value
+                for item in KnowledgeKind
+            ],
+            "freshness": [
+                item.value
+                for item in KnowledgeFreshness
+            ],
+            "verification": [
+                item.value
+                for item in VerificationStatus
+            ],
+            "sources": [
+                source.to_dict()
+                for source in self.sources
+            ],
             "contracts": {
                 "record": "KnowledgeRecord",
                 "query": "KnowledgeQuery",
