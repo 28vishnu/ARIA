@@ -2,6 +2,10 @@
 
 This package contains the stable contracts shared by the autonomous
 engineering lifecycle.
+
+The contracts intentionally remain independent of legacy execution
+implementations. Existing ARIA services are adapted to these contracts
+during the Phase 1 integration steps.
 """
 
 from .engineering_state import (
@@ -64,6 +68,17 @@ from .engineering_implementation import (
     ImplementationResult,
 )
 
+from .engineering_verification import (
+    VerificationDimension,
+    VerificationStatus,
+    VerificationAction,
+    VerificationRequirement,
+    VerificationFinding,
+    VerificationDecision,
+    VerificationRequest,
+    VerificationResult,
+)
+
 from .engineering_session import (
     SessionTransition,
     EngineeringSession,
@@ -86,67 +101,117 @@ from .engineering_result import (
 
 
 __all__ = [
+    # ==============================================================
     # State
+    # ==============================================================
+
     "EngineeringPhase",
     "EngineeringState",
 
+    # ==============================================================
     # Evidence
+    # ==============================================================
+
     "EvidenceKind",
     "EngineeringEvidence",
 
+    # ==============================================================
     # Requirement
+    # ==============================================================
+
     "RequirementIntent",
     "PermissionScope",
     "EngineeringPermission",
     "EngineeringRequirement",
 
+    # ==============================================================
     # Repository
+    # ==============================================================
+
     "RepositoryPathKind",
     "RepositoryComponentKind",
     "RepositoryPath",
     "RepositoryComponent",
+    "RepositoryModel",
     "RepositoryScanPolicy",
 
+    # ==============================================================
     # Knowledge
+    # ==============================================================
+
     "KnowledgeKind",
     "KnowledgeAuthority",
     "EngineeringKnowledgeItem",
     "EngineeringKnowledgeContext",
     "EngineeringKnowledgePolicy",
 
+    # ==============================================================
     # Planning
+    # ==============================================================
+
     "PlanStatus",
     "PlanChangeReason",
     "EngineeringPlanStep",
     "PlanRevision",
     "AdaptiveEngineeringPlan",
 
-    # Task graph
+    # ==============================================================
+    # Task Graph
+    # ==============================================================
+
     "EngineeringTaskKind",
     "EngineeringTaskStatus",
     "EngineeringTask",
     "EngineeringTaskGraph",
 
+    # ==============================================================
     # Implementation
+    # ==============================================================
+
     "ImplementationStatus",
     "ImplementationRequest",
     "ImplementationChange",
     "ImplementationEvidence",
     "ImplementationResult",
 
+    # ==============================================================
+    # Verification
+    # ==============================================================
+
+    "VerificationDimension",
+    "VerificationStatus",
+    "VerificationAction",
+    "VerificationRequirement",
+    "VerificationFinding",
+    "VerificationDecision",
+    "VerificationRequest",
+    "VerificationResult",
+
+    # ==============================================================
     # Session
+    # ==============================================================
+
     "SessionTransition",
     "EngineeringSession",
     "AuthoritativeEngineeringSession",
 
+    # ==============================================================
     # Lifecycle
+    # ==============================================================
+
     "EngineeringLifecycle",
     "LifecycleExecutionRecord",
 
+    # ==============================================================
     # Persistence
+    # ==============================================================
+
     "EngineeringStore",
 
+    # ==============================================================
     # Result
+    # ==============================================================
+
     "EngineeringOutcome",
     "EngineeringResult",
 ]
