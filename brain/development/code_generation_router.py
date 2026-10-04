@@ -37,7 +37,9 @@ class CodeGenerationRouter:
     DEFAULT_TIMEOUT = 90.0
     DEFAULT_MAX_TOKENS = 4096
     DEFAULT_TEMPERATURE = 0.15
-    DEFAULT_MAX_INPUT_CHARS = 60_000
+    # Keep the default request small enough for low free-tier TPM limits.
+    # The router reserves output-token headroom separately.
+    DEFAULT_MAX_INPUT_CHARS = 12_000
 
     def __init__(
         self,
@@ -65,7 +67,7 @@ class CodeGenerationRouter:
                 os.getenv("ARIA_CODEGEN_MAX_INPUT_CHARS", str(self.DEFAULT_MAX_INPUT_CHARS)),
                 self.DEFAULT_MAX_INPUT_CHARS,
                 minimum=4_000,
-                maximum=120_000,
+                maximum=24_000,
             )
         )
         self.allow_fallback = self._bool(
@@ -190,13 +192,20 @@ class CodeGenerationRouter:
             result.append({"role": role, "content": content})
         return result
 
-    def _bounded_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    def _bounded_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_chars: int | None = None,
+    ) -> list[dict[str, str]]:
         normalized = self._normalize_messages(messages)
+        budget = max_chars if max_chars is not None else self.max_input_chars
+        budget = max(4_000, int(budget))
         total = sum(len(item["content"]) for item in normalized)
-        if total <= self.max_input_chars:
+        if total <= budget:
             return normalized
 
-        remaining = self.max_input_chars
+        remaining = budget
         bounded: list[dict[str, str]] = []
         for item in normalized:
             if remaining <= 0:
@@ -320,9 +329,22 @@ class CodeGenerationRouter:
         context: dict[str, Any] | None = None,
     ) -> str:
         """Generate code using only the dedicated coding provider route."""
-        bounded = self._bounded_messages(messages)
         temperature = max(0.0, min(1.0, float(temperature)))
         max_tokens = max(1024, min(8192, int(max_tokens)))
+
+        # Provider limits count input + output tokens.  Reserve output
+        # headroom before bounding the input so free/on-demand tiers do not
+        # reject otherwise valid coding requests with HTTP 413/429.
+        input_budget = self.max_input_chars
+        if self.provider == "groq":
+            # Groq free/on-demand coding tiers can have an 8k TPM ceiling.
+            # ~4 chars/token is a conservative estimate for mixed code/text.
+            reserved_output_tokens = min(max_tokens, 4096)
+            safe_tokens = max(1024, 8000 - reserved_output_tokens - 256)
+            provider_char_budget = safe_tokens * 4
+            input_budget = min(input_budget, provider_char_budget)
+
+        bounded = self._bounded_messages(messages, max_chars=input_budget)
 
         logger.info(
             "[Phase1][CodeGenerationRouter] coding request | provider=%s | model=%s | input_chars=%d | max_tokens=%d | task=%s",
