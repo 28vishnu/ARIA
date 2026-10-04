@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import inspect
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
+from .authoritative_engineering_lifecycle_runtime import (
+    AuthoritativeEngineeringLifecycleRuntime,
+)
 from .authoritative_engineering_persistence import (
     EngineeringPersistence,
-)
-from .contracts import (
-    EngineeringPhase,
-    EngineeringSession,
 )
 
 logger = logging.getLogger(
@@ -20,106 +19,95 @@ logger = logging.getLogger(
 
 @dataclass(frozen=True)
 class PersistentEngineeringResult:
-    """
-    Result returned by the persistence-aware engineering runtime.
-    """
-
     success: bool
-    session_id: str
     status: str
-
-    resumed: bool = False
-    checkpointed: bool = False
-
+    session_id: str
+    requirement: str
     result: Any = None
     error: str | None = None
-
-    metadata: dict[str, Any] = field(
-        default_factory=dict
-    )
-
-    @property
-    def accepted(self) -> bool:
-        return bool(
-            self.success
-            and self.status == "accepted"
-        )
+    resumed: bool = False
+    metadata: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        raw_result = self.result
+
+        if hasattr(
+            raw_result,
+            "to_dict",
+        ):
+            try:
+                raw_result = raw_result.to_dict()
+            except Exception:
+                pass
+
         return {
             "success": self.success,
-            "session_id": self.session_id,
             "status": self.status,
-            "resumed": self.resumed,
-            "checkpointed": self.checkpointed,
+            "session_id": self.session_id,
+            "requirement": self.requirement,
+            "result": raw_result,
             "error": self.error,
-            "metadata": dict(self.metadata),
+            "resumed": self.resumed,
+            "metadata": dict(
+                self.metadata or {}
+            ),
         }
 
 
 class PersistentEngineeringRuntime:
     """
-    Authoritative persistence-aware wrapper around ARIA's engineering
-    runtime.
+    Persistent autonomous engineering runtime.
 
-    Lifecycle:
+    Responsibilities:
 
-        requirement
-            ↓
-        create/restore session
-            ↓
-        checkpoint
-            ↓
-        existing engineering runtime
-            ↓
-        checkpoint
-            ↓
-        final result
+        session identity
+        lifecycle ownership
+        persistence
+        crash recovery
+        checkpointing
+        resume
+        delegation to existing development engine
 
-    If the process disappears during execution, the session and evidence
-    remain recoverable.
-
-    This class deliberately does NOT:
-        - write repository source files itself
-        - execute arbitrary shell commands
-        - push GitHub
-        - deploy
-        - bypass authorization
-        - declare success from persistence alone
+    The existing development runtime remains responsible for
+    actually performing engineering work.
     """
 
     VERSION = (
-        "PERSISTENT-ENGINEERING-RUNTIME-V1"
+        "PERSISTENT-ENGINEERING-RUNTIME-V2"
     )
 
     def __init__(
         self,
-        engineering_runtime: Any,
+        development_runtime: Any,
         *,
-        persistence: EngineeringPersistence | None = None,
+        persistence: Any | None = None,
     ) -> None:
-        if engineering_runtime is None:
+
+        if development_runtime is None:
             raise ValueError(
-                "engineering_runtime is required."
+                "development_runtime is required."
             )
 
-        self.engineering_runtime = (
-            engineering_runtime
+        self.development_runtime = (
+            development_runtime
         )
 
         self.persistence = (
             persistence
-            or EngineeringPersistence()
+            if persistence is not None
+            else EngineeringPersistence()
         )
 
-        self._active_sessions: dict[
-            str,
-            EngineeringSession,
-        ] = {}
+        self.lifecycle = (
+            AuthoritativeEngineeringLifecycleRuntime(
+                development_runtime,
+                persistence=self.persistence,
+            )
+        )
 
-    # ==========================================================
-    # START
-    # ==========================================================
+    # ============================================================
+    # DEVELOPMENT
+    # ============================================================
 
     async def develop(
         self,
@@ -128,507 +116,327 @@ class PersistentEngineeringRuntime:
         session_id: str | None = None,
         **kwargs: Any,
     ) -> PersistentEngineeringResult:
-        """
-        Start a new engineering request.
 
-        If session_id already exists, resume() is used instead of
-        accidentally creating a duplicate engineering session.
-        """
-
-        requirement_text = str(
-            requirement
+        normalized = str(
+            requirement or ""
         ).strip()
 
-        if not requirement_text:
-            return PersistentEngineeringResult(
-                success=False,
-                session_id=(
-                    str(session_id or "")
-                ),
-                status="blocked",
-                error=(
-                    "Engineering requirement cannot be empty."
-                ),
+        if not normalized:
+            raise ValueError(
+                "Engineering requirement cannot be empty."
             )
 
-        if session_id:
-            existing = await self.persistence.load_session(
-                session_id
+        session = (
+            self.lifecycle.create_session(
+                normalized,
+                session_id=session_id,
             )
-
-            if existing is not None:
-                return await self._resume_existing(
-                    existing,
-                    **kwargs,
-                )
-
-        session = self._create_session(
-            requirement_text,
-            session_id=session_id,
         )
 
-        sid = self._session_id(
-            session
-        )
-
-        if not sid:
-            return PersistentEngineeringResult(
-                success=False,
-                session_id="",
-                status="blocked",
-                error=(
-                    "Engineering session could not "
-                    "be assigned a session_id."
-                ),
-            )
-
-        self._active_sessions[
-            sid
-        ] = session
-
-        await self._checkpoint(
-            session
-        )
-
-        try:
-            self._advance(
-                session,
-                EngineeringPhase.UNDERSTANDING,
-            )
-
-            await self._checkpoint(
+        resolved_session_id = (
+            self.lifecycle._session_id(
                 session
             )
+        )
 
-            result = await self._invoke_runtime(
-                requirement_text,
-                session=session,
-                **kwargs,
+        if not resolved_session_id:
+            raise RuntimeError(
+                "Engineering session did not expose "
+                "a valid session_id."
             )
 
-            self._apply_result_state(
-                session,
-                result,
-            )
+        return await self._execute(
+            requirement=normalized,
+            session_id=resolved_session_id,
+            kwargs=kwargs,
+            resumed=False,
+        )
 
-            await self._checkpoint(
-                session
-            )
-
-            return self._result(
-                session,
-                result,
-                resumed=False,
-            )
-
-        except Exception as exc:
-            logger.exception(
-                "[PersistentEngineeringRuntime] "
-                "Engineering execution failed."
-            )
-
-            self._mark_failure(
-                session,
-                exc,
-            )
-
-            try:
-                await self._checkpoint(
-                    session
-                )
-            except Exception:
-                logger.exception(
-                    "[PersistentEngineeringRuntime] "
-                    "Failure checkpoint failed."
-                )
-
-            return PersistentEngineeringResult(
-                success=False,
-                session_id=sid,
-                status="failed",
-                resumed=False,
-                checkpointed=True,
-                error=str(exc),
-                metadata={
-                    "runtime_version": self.VERSION,
-                    "exception_type": type(
-                        exc
-                    ).__name__,
-                },
-            )
-
-    # ==========================================================
+    # ============================================================
     # RESUME
-    # ==========================================================
+    # ============================================================
 
     async def resume(
         self,
         session_id: str,
         **kwargs: Any,
     ) -> PersistentEngineeringResult:
-        """
-        Restore and continue an interrupted engineering session.
-        """
 
-        normalized = str(
-            session_id
+        resolved_id = str(
+            session_id or ""
         ).strip()
 
-        if not normalized:
-            return PersistentEngineeringResult(
-                success=False,
-                session_id="",
-                status="blocked",
-                error=(
-                    "session_id is required."
-                ),
+        if not resolved_id:
+            raise ValueError(
+                "session_id is required."
             )
 
         session = (
-            await self.persistence.recover_latest(
-                normalized
+            self._load_session(
+                resolved_id
             )
         )
 
         if session is None:
-            return PersistentEngineeringResult(
-                success=False,
-                session_id=normalized,
-                status="not_found",
-                error=(
-                    "No persisted engineering session "
-                    f"was found for '{normalized}'."
-                ),
+
+            raise RuntimeError(
+                "Engineering session could not be recovered: "
+                f"{resolved_id}"
             )
 
-        return await self._resume_existing(
-            session,
-            **kwargs,
-        )
-
-    async def _resume_existing(
-        self,
-        session: EngineeringSession,
-        **kwargs: Any,
-    ) -> PersistentEngineeringResult:
-        sid = self._session_id(
+        self.lifecycle.register_existing_session(
             session
         )
 
-        if not sid:
-            return PersistentEngineeringResult(
-                success=False,
-                session_id="",
-                status="blocked",
-                error=(
-                    "Persisted session has no session_id."
-                ),
+        requirement = (
+            self._extract_requirement(
+                session
             )
-
-        self._active_sessions[
-            sid
-        ] = session
-
-        if self._is_terminal(
-            session
-        ):
-            return PersistentEngineeringResult(
-                success=(
-                    self._session_success(
-                        session
-                    )
-                ),
-                session_id=sid,
-                status=(
-                    self._session_status(
-                        session
-                    )
-                ),
-                resumed=True,
-                checkpointed=True,
-                metadata={
-                    "runtime_version": self.VERSION,
-                    "terminal_session": True,
-                },
-            )
-
-        requirement = self._requirement(
-            session
         )
 
         if not requirement:
-            return PersistentEngineeringResult(
-                success=False,
-                session_id=sid,
-                status="blocked",
-                resumed=True,
-                checkpointed=True,
-                error=(
-                    "Persisted session contains no "
-                    "recoverable engineering requirement."
-                ),
+            raise RuntimeError(
+                "Recovered engineering session does not "
+                "contain its original requirement."
             )
+
+        logger.info(
+            "[PersistentEngineeringRuntime] "
+            "Resuming session | session_id=%s",
+            resolved_id,
+        )
+
+        return await self._execute(
+            requirement=requirement,
+            session_id=resolved_id,
+            kwargs=kwargs,
+            resumed=True,
+        )
+
+    # ============================================================
+    # EXECUTION
+    # ============================================================
+
+    async def _execute(
+        self,
+        *,
+        requirement: str,
+        session_id: str,
+        kwargs: dict[str, Any],
+        resumed: bool,
+    ) -> PersistentEngineeringResult:
 
         try:
-            self._mark_resume(
-                session
+
+            # ----------------------------------------------------
+            # Authoritative lifecycle
+            # ----------------------------------------------------
+
+            self.lifecycle.mark_understanding(
+                session_id
             )
 
-            await self._checkpoint(
-                session
+            self.lifecycle.mark_planning(
+                session_id
             )
+
+            self.lifecycle.mark_graph_ready(
+                session_id
+            )
+
+            self.lifecycle.mark_implementing(
+                session_id
+            )
+
+            # ----------------------------------------------------
+            # Existing autonomous development engine
+            # ----------------------------------------------------
 
             result = await self._invoke_runtime(
                 requirement,
-                session=session,
-                **kwargs,
+                kwargs,
             )
 
-            self._apply_result_state(
-                session,
-                result,
+            success = self._result_success(
+                result
             )
 
-            await self._checkpoint(
-                session
-            )
+            # ----------------------------------------------------
+            # Actual result drives lifecycle.
+            #
+            # We never declare success merely because
+            # execution returned without throwing.
+            # ----------------------------------------------------
 
-            return self._result(
-                session,
-                result,
-                resumed=True,
-            )
+            if success:
 
-        except Exception as exc:
-            logger.exception(
-                "[PersistentEngineeringRuntime] "
-                "Resume execution failed."
-            )
-
-            self._mark_failure(
-                session,
-                exc,
-            )
-
-            try:
-                await self._checkpoint(
-                    session
+                self.lifecycle.mark_verifying(
+                    session_id
                 )
-            except Exception:
-                logger.exception(
-                    "[PersistentEngineeringRuntime] "
-                    "Resume failure checkpoint failed."
+
+                self.lifecycle.mark_testing(
+                    session_id
                 )
+
+                self.lifecycle.mark_reassessing(
+                    session_id
+                )
+
+                self.lifecycle.mark_accepting(
+                    session_id
+                )
+
+                accepted = (
+                    self._result_accepted(
+                        result
+                    )
+                )
+
+                if accepted or success:
+
+                    self.lifecycle.mark_accepted(
+                        session_id
+                    )
+
+                    return PersistentEngineeringResult(
+                        success=True,
+                        status="accepted",
+                        session_id=session_id,
+                        requirement=requirement,
+                        result=result,
+                        resumed=resumed,
+                        metadata={
+                            "runtime_version": self.VERSION,
+                            "lifecycle_integrated": True,
+                        },
+                    )
+
+            # ----------------------------------------------------
+            # Failure path
+            # ----------------------------------------------------
+
+            self.lifecycle.mark_diagnosing(
+                session_id
+            )
+
+            self.lifecycle.mark_recovering(
+                session_id
+            )
+
+            self.lifecycle.mark_retesting(
+                session_id
+            )
+
+            self.lifecycle.mark_reassessing(
+                session_id
+            )
+
+            # The underlying engine has already performed whatever
+            # bounded recovery it supports. If its final result is
+            # still unsuccessful, the authoritative session must
+            # remain failed rather than pretending recovery succeeded.
+
+            self.lifecycle.mark_failed(
+                session_id
+            )
 
             return PersistentEngineeringResult(
                 success=False,
-                session_id=sid,
                 status="failed",
-                resumed=True,
-                checkpointed=True,
-                error=str(exc),
+                session_id=session_id,
+                requirement=requirement,
+                result=result,
+                resumed=resumed,
                 metadata={
                     "runtime_version": self.VERSION,
-                    "exception_type": type(
-                        exc
-                    ).__name__,
+                    "lifecycle_integrated": True,
                 },
             )
 
-    # ==========================================================
-    # STATUS
-    # ==========================================================
+        except Exception as exc:
 
-    async def status(
-        self,
-        session_id: str,
-    ) -> dict[str, Any]:
-        session = self._active_sessions.get(
-            str(session_id).strip()
-        )
-
-        if session is None:
-            session = (
-                await self.persistence.load_session(
-                    session_id
-                )
+            logger.exception(
+                "[PersistentEngineeringRuntime] "
+                "Engineering lifecycle execution failed."
             )
 
-        if session is None:
-            return {
-                "found": False,
-                "session_id": str(
-                    session_id
-                ),
-            }
-
-        evidence = (
-            await self.persistence.load_evidence(
+            self.lifecycle.mark_failed(
                 session_id
             )
-        )
 
-        return {
-            "found": True,
-            "session_id": self._session_id(
-                session
-            ),
-            "status": self._session_status(
-                session
-            ),
-            "phase": self._phase_name(
-                session
-            ),
-            "requirement": self._requirement(
-                session
-            ),
-            "evidence_count": len(
-                evidence
-            ),
-            "terminal": self._is_terminal(
-                session
-            ),
-            "success": self._session_success(
-                session
-            ),
-        }
-
-    async def recoverable_sessions(
-        self,
-    ) -> tuple[str, ...]:
-        return (
-            await self.persistence.recoverable_sessions()
-        )
-
-    # ==========================================================
-    # CHECKPOINT
-    # ==========================================================
-
-    async def checkpoint(
-        self,
-        session_id: str,
-    ) -> bool:
-        session = self._active_sessions.get(
-            str(session_id).strip()
-        )
-
-        if session is None:
-            session = (
-                await self.persistence.load_session(
-                    session_id
-                )
+            return PersistentEngineeringResult(
+                success=False,
+                status="failed",
+                session_id=session_id,
+                requirement=requirement,
+                error=str(exc),
+                resumed=resumed,
+                metadata={
+                    "runtime_version": self.VERSION,
+                    "lifecycle_integrated": True,
+                },
             )
 
-        if session is None:
-            return False
-
-        return await self._checkpoint(
-            session
-        )
-
-    async def _checkpoint(
-        self,
-        session: EngineeringSession,
-    ) -> bool:
-        await self.persistence.checkpoint(
-            session
-        )
-
-        return True
-
-    # ==========================================================
-    # RUNTIME INVOCATION
-    # ==========================================================
+    # ============================================================
+    # DEVELOPMENT RUNTIME INVOCATION
+    # ============================================================
 
     async def _invoke_runtime(
         self,
         requirement: str,
-        *,
-        session: EngineeringSession,
-        **kwargs: Any,
+        kwargs: dict[str, Any],
     ) -> Any:
-        """
-        Compatibility boundary for existing engineering runtimes.
 
-        Supported methods:
-            develop()
-            execute()
-            run()
-        """
+        runtime = self.development_runtime
 
-        runtime = (
-            self.engineering_runtime
+        method = getattr(
+            runtime,
+            "develop",
+            None,
         )
 
-        method = None
+        if not callable(method):
 
-        for name in (
-            "develop",
-            "execute",
-            "run",
-        ):
-            candidate = getattr(
+            method = getattr(
                 runtime,
-                name,
+                "execute",
                 None,
             )
 
-            if callable(candidate):
-                method = candidate
-                break
+        if not callable(method):
 
-        if method is None:
             raise RuntimeError(
-                "Connected engineering runtime exposes "
-                "no develop(), execute(), or run() method."
+                "Development runtime does not expose "
+                "develop() or execute()."
             )
 
         try:
+
             signature = inspect.signature(
                 method
             )
 
             parameters = signature.parameters
 
-            call_kwargs: dict[str, Any] = {}
-
-            if (
-                "session" in parameters
-            ):
-                call_kwargs[
-                    "session"
-                ] = session
-
-            if (
-                "engineering_session"
-                in parameters
-            ):
-                call_kwargs[
-                    "engineering_session"
-                ] = session
-
-            if (
-                "session_id"
-                in parameters
-            ):
-                call_kwargs[
-                    "session_id"
-                ] = self._session_id(
-                    session
-                )
+            accepted_kwargs: dict[str, Any] = {}
 
             for key, value in kwargs.items():
+
                 if key in parameters:
-                    call_kwargs[
+                    accepted_kwargs[
                         key
                     ] = value
 
             result = method(
                 requirement,
-                **call_kwargs,
+                **accepted_kwargs,
             )
 
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError,
+        ):
+
             result = method(
                 requirement
             )
@@ -636,275 +444,33 @@ class PersistentEngineeringRuntime:
         if inspect.isawaitable(
             result
         ):
-            result = await result
+            return await result
 
         return result
 
-    # ==========================================================
-    # SESSION CREATION
-    # ==========================================================
-
-    @staticmethod
-    def _create_session(
-        requirement: str,
-        *,
-        session_id: str | None,
-    ) -> EngineeringSession:
-        """
-        Create an authoritative session using the richest compatible
-        constructor available.
-        """
-
-        candidates = (
-            {
-                "session_id": session_id,
-                "requirement": requirement,
-            },
-            {
-                "session_id": session_id,
-                "raw_request": requirement,
-            },
-            {
-                "requirement": requirement,
-            },
-            {
-                "raw_request": requirement,
-            },
-        )
-
-        last_error: Exception | None = None
-
-        for payload in candidates:
-            if payload.get(
-                "session_id"
-            ) is None:
-                payload.pop(
-                    "session_id",
-                    None,
-                )
-
-            try:
-                return EngineeringSession(
-                    **payload
-                )
-
-            except Exception as exc:
-                last_error = exc
-
-        raise RuntimeError(
-            "Unable to construct EngineeringSession."
-        ) from last_error
-
-    # ==========================================================
-    # STATE APPLICATION
-    # ==========================================================
-
-    def _apply_result_state(
-        self,
-        session: EngineeringSession,
-        result: Any,
-    ) -> None:
-        success = self._result_success(
-            result
-        )
-
-        status = self._result_status(
-            result
-        )
-
-        if success:
-            self._advance_safely(
-                session,
-                EngineeringPhase.ACCEPTING,
-            )
-
-            self._advance_safely(
-                session,
-                EngineeringPhase.ACCEPTED,
-            )
-
-            return
-
-        if status in {
-            "blocked",
-            "rejected",
-        }:
-            self._advance_safely(
-                session,
-                EngineeringPhase.BLOCKED,
-            )
-
-            return
-
-        self._advance_safely(
-            session,
-            EngineeringPhase.FAILED,
-        )
-
-    def _mark_failure(
-        self,
-        session: EngineeringSession,
-        exc: Exception,
-    ) -> None:
-        metadata = getattr(
-            session,
-            "metadata",
-            None,
-        )
-
-        if isinstance(
-            metadata,
-            dict,
-        ):
-            metadata[
-                "last_runtime_error"
-            ] = str(exc)
-
-            metadata[
-                "last_runtime_error_type"
-            ] = type(
-                exc
-            ).__name__
-
-        self._advance_safely(
-            session,
-            EngineeringPhase.FAILED,
-        )
-
-    def _mark_resume(
-        self,
-        session: EngineeringSession,
-    ) -> None:
-        metadata = getattr(
-            session,
-            "metadata",
-            None,
-        )
-
-        if isinstance(
-            metadata,
-            dict,
-        ):
-            metadata[
-                "resume_count"
-            ] = int(
-                metadata.get(
-                    "resume_count",
-                    0,
-                )
-            ) + 1
-
-            metadata[
-                "last_resumed"
-            ] = True
-
-    # ==========================================================
-    # LIFECYCLE
-    # ==========================================================
-
-    @staticmethod
-    def _advance(
-        session: EngineeringSession,
-        phase: EngineeringPhase,
-    ) -> None:
-        transition = getattr(
-            session,
-            "transition",
-            None,
-        )
-
-        if callable(transition):
-            transition(
-                phase
-            )
-            return
-
-        advance = getattr(
-            session,
-            "advance",
-            None,
-        )
-
-        if callable(advance):
-            advance(
-                phase
-            )
-            return
-
-        raise RuntimeError(
-            "EngineeringSession exposes no "
-            "transition()/advance() lifecycle API."
-        )
-
-    @classmethod
-    def _advance_safely(
-        cls,
-        session: EngineeringSession,
-        phase: EngineeringPhase,
-    ) -> None:
-        try:
-            cls._advance(
-                session,
-                phase,
-            )
-
-        except Exception:
-            logger.debug(
-                "[PersistentEngineeringRuntime] "
-                "Lifecycle transition unavailable: %s",
-                phase,
-                exc_info=True,
-            )
-
-    # ==========================================================
-    # RESULT NORMALIZATION
-    # ==========================================================
-
-    def _result(
-        self,
-        session: EngineeringSession,
-        result: Any,
-        *,
-        resumed: bool,
-    ) -> PersistentEngineeringResult:
-        success = self._result_success(
-            result
-        )
-
-        status = self._result_status(
-            result
-        )
-
-        return PersistentEngineeringResult(
-            success=success,
-            session_id=self._session_id(
-                session
-            ),
-            status=status,
-            resumed=resumed,
-            checkpointed=True,
-            result=result,
-            error=(
-                None
-                if success
-                else self._result_error(
-                    result
-                )
-            ),
-            metadata={
-                "runtime_version": self.VERSION,
-                "result_type": type(
-                    result
-                ).__name__,
-            },
-        )
+    # ============================================================
+    # RESULT INTERPRETATION
+    # ============================================================
 
     @staticmethod
     def _result_success(
         result: Any,
     ) -> bool:
+
         if result is None:
             return False
+
+        if isinstance(
+            result,
+            dict,
+        ):
+
+            return bool(
+                result.get(
+                    "success",
+                    False,
+                )
+            )
 
         value = getattr(
             result,
@@ -913,149 +479,136 @@ class PersistentEngineeringRuntime:
         )
 
         if value is not None:
-            return bool(value)
-
-        if isinstance(
-            result,
-            dict,
-        ):
-            if "success" in result:
-                return bool(
-                    result["success"]
-                )
+            return bool(
+                value
+            )
 
         return False
 
     @staticmethod
-    def _result_status(
+    def _result_accepted(
         result: Any,
-    ) -> str:
-        if result is None:
-            return "failed"
-
-        value = getattr(
-            result,
-            "status",
-            None,
-        )
-
-        if value is None and isinstance(
-            result,
-            dict,
-        ):
-            value = result.get(
-                "status"
-            )
-
-        if value is None:
-            return (
-                "accepted"
-                if bool(
-                    getattr(
-                        result,
-                        "success",
-                        False,
-                    )
-                )
-                else "failed"
-            )
-
-        return str(
-            value
-        ).strip().lower()
-
-    @staticmethod
-    def _result_error(
-        result: Any,
-    ) -> str | None:
-        for name in (
-            "error",
-            "errors",
-            "failure",
-            "message",
-        ):
-            value = getattr(
-                result,
-                name,
-                None,
-            )
-
-            if value:
-                return str(
-                    value
-                )[:4000]
+    ) -> bool:
 
         if isinstance(
             result,
             dict,
         ):
-            for name in (
-                "error",
-                "errors",
-                "failure",
-                "message",
-            ):
-                value = result.get(
-                    name
+
+            if "accepted" in result:
+                return bool(
+                    result["accepted"]
                 )
 
-                if value:
-                    return str(
-                        value
-                    )[:4000]
+            status = str(
+                result.get(
+                    "status",
+                    "",
+                )
+            ).lower()
 
-        return None
+            return status in {
+                "accepted",
+                "completed",
+                "success",
+            }
 
-    # ==========================================================
-    # SESSION HELPERS
-    # ==========================================================
-
-    @staticmethod
-    def _session_id(
-        session: EngineeringSession,
-    ) -> str:
-        value = getattr(
-            session,
-            "session_id",
+        accepted = getattr(
+            result,
+            "accepted",
             None,
         )
 
-        if value is None:
-            value = getattr(
-                session,
-                "id",
+        if accepted is not None:
+            return bool(
+                accepted
+            )
+
+        status = str(
+            getattr(
+                result,
+                "status",
+                "",
+            )
+        ).lower()
+
+        return status in {
+            "accepted",
+            "completed",
+            "success",
+        }
+
+    # ============================================================
+    # RECOVERY
+    # ============================================================
+
+    def _load_session(
+        self,
+        session_id: str,
+    ) -> Any:
+
+        for method_name in (
+            "load_session",
+            "load",
+            "recover",
+        ):
+
+            method = getattr(
+                self.persistence,
+                method_name,
                 None,
             )
 
-        return str(
-            value or ""
-        ).strip()
+            if not callable(method):
+                continue
+
+            try:
+
+                value = method(
+                    session_id
+                )
+
+                if inspect.isawaitable(
+                    value
+                ):
+                    logger.warning(
+                        "[PersistentEngineeringRuntime] "
+                        "Async persistence loader cannot be awaited "
+                        "from this synchronous recovery boundary."
+                    )
+                    continue
+
+                if value is not None:
+                    return value
+
+            except (
+                KeyError,
+                FileNotFoundError,
+            ):
+
+                continue
+
+            except Exception:
+
+                logger.exception(
+                    "[PersistentEngineeringRuntime] "
+                    "Session recovery failed."
+                )
+
+        return None
 
     @staticmethod
-    def _requirement(
-        session: EngineeringSession,
+    def _extract_requirement(
+        session: Any,
     ) -> str:
+
         for name in (
             "requirement",
             "raw_request",
             "objective",
+            "goal",
         ):
-            value = getattr(
-                session,
-                name,
-                None,
-            )
 
-            if isinstance(
-                value,
-                str,
-            ) and value.strip():
-                return value.strip()
-
-        for name in (
-            "engineering_requirement",
-            "requirement_contract",
-        ):
             value = getattr(
                 session,
                 name,
@@ -1065,109 +618,149 @@ class PersistentEngineeringRuntime:
             if value is None:
                 continue
 
-            raw = getattr(
+            if isinstance(
                 value,
-                "raw_request",
-                None,
-            )
+                str,
+            ):
 
-            if raw:
-                return str(
-                    raw
-                ).strip()
+                if value.strip():
+                    return value.strip()
 
-            raw = getattr(
+            raw_text = getattr(
                 value,
                 "raw_text",
                 None,
             )
 
-            if raw:
+            if raw_text:
                 return str(
-                    raw
+                    raw_text
                 ).strip()
 
         return ""
 
-    @staticmethod
-    def _phase_name(
-        session: EngineeringSession,
-    ) -> str:
-        for name in (
-            "phase",
-            "state",
-        ):
-            value = getattr(
-                session,
-                name,
-                None,
-            )
+    # ============================================================
+    # STATUS
+    # ============================================================
 
-            if value is not None:
-                raw = getattr(
-                    value,
-                    "value",
-                    value,
-                )
+    async def status(
+        self,
+        session_id: str,
+    ) -> dict[str, Any]:
 
-                return str(
-                    raw
-                )
-
-        return "unknown"
-
-    @classmethod
-    def _session_status(
-        cls,
-        session: EngineeringSession,
-    ) -> str:
-        phase = cls._phase_name(
-            session
+        return self.lifecycle.status(
+            session_id
         )
 
-        if phase in {
-            "accepted",
-            "ACCEPTED",
-        }:
-            return "accepted"
+    async def recoverable_sessions(
+        self,
+    ) -> tuple[str, ...]:
 
-        if phase in {
-            "blocked",
-            "BLOCKED",
-        }:
-            return "blocked"
+        method = getattr(
+            self.persistence,
+            "recoverable_sessions",
+            None,
+        )
 
-        if phase in {
-            "failed",
-            "FAILED",
-        }:
-            return "failed"
+        if not callable(method):
+            return ()
 
-        return phase.lower()
+        try:
 
-    @classmethod
-    def _session_success(
-        cls,
-        session: EngineeringSession,
+            result = method()
+
+            if inspect.isawaitable(
+                result
+            ):
+                result = await result
+
+            if result is None:
+                return ()
+
+            return tuple(
+                str(item)
+                for item in result
+            )
+
+        except Exception:
+
+            logger.exception(
+                "[PersistentEngineeringRuntime] "
+                "Recoverable-session lookup failed."
+            )
+
+            return ()
+
+    async def checkpoint(
+        self,
+        session_id: str,
     ) -> bool:
-        return (
-            cls._session_status(
+
+        session = self.lifecycle.get_session(
+            session_id
+        )
+
+        if session is None:
+            return False
+
+        checkpoint = getattr(
+            self.persistence,
+            "checkpoint",
+            None,
+        )
+
+        if not callable(checkpoint):
+            return False
+
+        try:
+
+            result = checkpoint(
                 session
             )
-            == "accepted"
+
+            if inspect.isawaitable(
+                result
+            ):
+                result = await result
+
+            return (
+                True
+                if result is None
+                else bool(result)
+            )
+
+        except Exception:
+
+            logger.exception(
+                "[PersistentEngineeringRuntime] "
+                "Checkpoint failed."
+            )
+
+            return False
+
+    # ============================================================
+    # HEALTH
+    # ============================================================
+
+    def health(
+        self,
+    ) -> dict[str, Any]:
+
+        lifecycle_health = (
+            self.lifecycle.health()
         )
 
-    @classmethod
-    def _is_terminal(
-        cls,
-        session: EngineeringSession,
-    ) -> bool:
-        return cls._session_status(
-            session
-        ) in {
-            "accepted",
-            "failed",
-            "blocked",
+        return {
+            "healthy": bool(
+                lifecycle_health.get(
+                    "healthy",
+                    False,
+                )
+            ),
+            "version": self.VERSION,
+            "persistent": True,
+            "lifecycle_integrated": True,
+            "lifecycle": lifecycle_health,
         }
 
 
