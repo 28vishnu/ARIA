@@ -23,6 +23,7 @@ from .test_runner import DevelopmentTestRunner, TestResult
 from .validator import DevelopmentValidator, ValidationResult
 from .workspace import DevelopmentWorkspace, WorkspaceInfo
 from .engineering_reasoning import EngineeringReasoningCore
+from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
 
 
 logger = logging.getLogger("aria")
@@ -284,6 +285,9 @@ class DevelopmentAgent:
         )
         self.code_generator = code_generator
         self.engineering_reasoning = EngineeringReasoningCore()
+        self.deep_repository_reasoner = DeepRepositoryReasoner(
+            self.architecture_intelligence
+        )
 
         self.max_repair_attempts = max(
             1,
@@ -741,6 +745,7 @@ class DevelopmentAgent:
         plan: ChangePlan,
         repository_context: dict[str, Any],
         impact_analysis: ChangeImpactAnalysis | None = None,
+        repository_reasoning: RepositoryReasoning | None = None,
         *,
         failure: FailureAnalysis | None = None,
         previous_changes: list[GeneratedChange] | None = None,
@@ -782,9 +787,23 @@ class DevelopmentAgent:
             plan=plan,
             impact_analysis=impact_analysis,
             repository_context=repository_context,
+            repository_reasoning=getattr(
+                self,
+                "_active_repository_reasoning",
+                None,
+            ),
             generated_changes=previous_changes or (),
             failure=failure,
         )
+
+        repository_reasoning_section = ""
+        if repository_reasoning is not None:
+            repository_reasoning_section = (
+                "\n"
+                + self.deep_repository_reasoner.build_prompt_section(
+                    repository_reasoning
+                )
+            )
 
         return (
             "You are ARIA's software-development engine.\n"
@@ -846,6 +865,7 @@ class DevelopmentAgent:
             "CURRENT VERIFIED REPOSITORY CONTEXT:\n"
             f"{json.dumps(repository_context, ensure_ascii=False, indent=2)}"
             f"{reasoning_section}"
+            f"{repository_reasoning_section}"
             f"{failure_text}"
             f"{previous_text}"
         )
@@ -1873,6 +1893,7 @@ class DevelopmentAgent:
         )
 
         self._active_requirement_analysis = requirement_analysis
+        self._active_repository_reasoning: RepositoryReasoning | None = None
 
         requirement_analysis_metadata = {
             "requirement_analysis": requirement_analysis.to_dict(),
@@ -2210,6 +2231,49 @@ class DevelopmentAgent:
                     ),
                 },
             )
+
+        # ----------------------------------------------------
+        # Deep repository reasoning
+        # ----------------------------------------------------
+
+        try:
+            repository_reasoning = (
+                self.deep_repository_reasoner.analyze(
+                    workspace.source_root,
+                    requirement_text=requirement.raw_text,
+                )
+            )
+            self._active_repository_reasoning = repository_reasoning
+
+            logger.info(
+                "[DevelopmentAgent] Deep repository reasoning prepared | "
+                "confidence=%s | components=%s | relevant_files=%s | "
+                "warnings=%s | analysis_errors=%s",
+                repository_reasoning.confidence,
+                len(repository_reasoning.components),
+                len(repository_reasoning.relevant_files),
+                len(repository_reasoning.warnings),
+                len(repository_reasoning.analysis_errors),
+            )
+
+            requirement_analysis_metadata = {
+                **requirement_analysis_metadata,
+                "deep_repository_reasoning": repository_reasoning.to_dict(),
+            }
+
+        except Exception as exc:
+            logger.exception(
+                "[DevelopmentAgent] Deep repository reasoning failed; "
+                "continuing with verified repository context."
+            )
+            self._active_repository_reasoning = None
+            requirement_analysis_metadata = {
+                **requirement_analysis_metadata,
+                "deep_repository_reasoning": {
+                    "available": False,
+                    "error": str(exc),
+                },
+            }
 
         logger.info(
             "[DevelopmentAgent] Repository context prepared | "
