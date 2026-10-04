@@ -25,6 +25,7 @@ from .workspace import DevelopmentWorkspace, WorkspaceInfo
 from .engineering_reasoning import EngineeringReasoningCore
 from .intelligent_task_graph import IntelligentTaskGraph, TaskGraph
 from .task_graph_executor import TaskExecutionState, TaskGraphExecutor
+from .intelligent_verification import IntelligentVerification, VerificationDecision
 from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
 from .adaptive_engineering_plan import AdaptiveEngineeringPlan
 
@@ -290,6 +291,7 @@ class DevelopmentAgent:
         self.engineering_reasoning = EngineeringReasoningCore()
         self.intelligent_task_graph = IntelligentTaskGraph()
         self.task_graph_executor = TaskGraphExecutor()
+        self.intelligent_verification = IntelligentVerification()
         self._active_task_executor: TaskExecutionState | None = None
         self.deep_repository_reasoner = DeepRepositoryReasoner(
             self.architecture_intelligence
@@ -815,6 +817,11 @@ class DevelopmentAgent:
                 + self.adaptive_plan.build_prompt_section()
             )
 
+        verification_section = self.intelligent_verification.build_prompt_section(
+            requirement.raw_text,
+            previous_changes or (),
+        )
+
         task_graph_section = ""
         if task_graph is not None:
             task_graph_section = (
@@ -886,6 +893,8 @@ class DevelopmentAgent:
             f"{reasoning_section}"
             f"{repository_reasoning_section}"
             f"{adaptive_plan_section}"
+            f"{task_graph_section}"
+            f"{verification_section}"
             f"{failure_text}"
             f"{previous_text}"
         )
@@ -1764,7 +1773,11 @@ class DevelopmentAgent:
                 selected.append(safe_path)
 
         if selected:
-            return selected
+            return self.intelligent_verification.rank_test_paths(
+                selected,
+                generated_paths=[change.path for change in generated_changes],
+                requirement_text=getattr(getattr(self, "_active_requirement_analysis", None), "requirement", None).raw_text if getattr(getattr(self, "_active_requirement_analysis", None), "requirement", None) is not None else "",
+            )
 
         code_changed = any(
             Path(change.path).suffix.lower()
@@ -1914,6 +1927,7 @@ class DevelopmentAgent:
 
         self._active_requirement_analysis = requirement_analysis
         self._active_task_graph: TaskGraph | None = None
+        self._active_verification: VerificationDecision | None = None
         self._active_repository_reasoning: RepositoryReasoning | None = None
 
         requirement_analysis_metadata = {
@@ -2917,6 +2931,40 @@ class DevelopmentAgent:
                 )
             )
 
+            verification = self.intelligent_verification.evaluate(
+                requirement_text=requirement.raw_text,
+                generated_changes=generated_changes,
+                validation=validation,
+                test_result=initial_test,
+                acceptance_error=final_acceptance_error,
+                workspace_verified=True,
+                tests_selected=selected_tests,
+            )
+            self._active_verification = verification
+
+            if not verification.sufficient:
+                return DevelopmentReport(
+                    success=False,
+                    requirement=requirement,
+                    plan=plan,
+                    workspace=workspace,
+                    writes=tuple(write_results),
+                    validation=validation,
+                    tests=initial_test,
+                    generation=generation,
+                    failure=FailureAnalysis(
+                        failed=True,
+                        summary="Verification evidence is insufficient.",
+                        repairable=True,
+                    ),
+                    status="verification_insufficient",
+                    errors=verification.blocking_reasons,
+                    metadata={
+                        "intelligent_verification": verification.to_dict(),
+                        "tests_selected": selected_tests,
+                    },
+                )
+
             if final_acceptance_error:
                 return DevelopmentReport(
                     success=False,
@@ -2945,6 +2993,11 @@ class DevelopmentAgent:
                         "acceptance": "all applicable acceptance criteria passed",
                         "validation_passed": True,
                         "tests_passed": True,
+                        "verification_confidence": (
+                            self._active_verification.confidence
+                            if self._active_verification is not None
+                            else None
+                        ),
                     },
                 )
 
@@ -3212,10 +3265,22 @@ class DevelopmentAgent:
                 final_acceptance_error
             )
 
+        final_verification = self.intelligent_verification.evaluate(
+            requirement_text=requirement.raw_text,
+            generated_changes=generated_changes,
+            validation=final_validation,
+            test_result=initial_test,
+            acceptance_error=final_acceptance_error,
+            workspace_verified=True,
+            tests_selected=selected_tests,
+        )
+        self._active_verification = final_verification
+
         final_success = bool(
             repair_result.success
             and final_validation.valid
             and not final_acceptance_error
+            and final_verification.sufficient
         )
 
         failure = None
@@ -3276,6 +3341,7 @@ class DevelopmentAgent:
                     "final_validation_passed": (
                         final_validation.valid
                     ),
+                    "intelligent_verification": final_verification.to_dict(),
                     "repair_attempts": getattr(
                         repair_result,
                         "attempts",
