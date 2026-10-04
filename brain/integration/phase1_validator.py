@@ -113,7 +113,7 @@ class Phase1Validator:
             "brain/development/knowledge_architecture.py",
 
         "knowledge_ingestion":
-            "brain/knowledge/knowledge_ingestion.py",
+            "brain/development/knowledge_ingestion.py",
 
         "knowledge_retriever":
             "brain/memory/knowledge_retriever.py",
@@ -159,14 +159,14 @@ class Phase1Validator:
         ],
 
         "brain/development/code_generation_bridge.py": [
-            "CodeGenerationBridge",
+            "LLMCodeGenerationBridge",
         ],
 
         "brain/development/knowledge_architecture.py": [
             "KnowledgeArchitecture",
         ],
 
-        "brain/knowledge/knowledge_ingestion.py": [
+        "brain/development/knowledge_ingestion.py": [
             "KnowledgeIngestion",
         ],
 
@@ -269,7 +269,7 @@ class Phase1Validator:
             "generate",
         ],
 
-        "brain/knowledge/knowledge_ingestion.py": [
+        "brain/development/knowledge_ingestion.py": [
             "ingest",
         ],
 
