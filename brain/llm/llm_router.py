@@ -1,3 +1,4 @@
+import re
 import asyncio
 import json
 import logging
@@ -33,7 +34,7 @@ class LLMRouter:
         # from stale model settings left over from older deployments.
         self.groq_model = self._normalize_model(
             getattr(config, "groq_model", None),
-            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
             {"", "none", "null", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"},
         )
         self.gemini_model = self._normalize_model(
@@ -49,7 +50,7 @@ class LLMRouter:
         self.openrouter_model = self._normalize_model(
             getattr(config, "openrouter_model", None),
             "openrouter/free",
-            {"", "none", "null"},
+            {"", "none", "null", "openai/gpt-oss-20b:free", "openai/gpt-oss-20b"},
         )
         self.mistral_model = self._normalize_model(
             getattr(config, "mistral_model", None),
@@ -62,7 +63,7 @@ class LLMRouter:
         # Known-good fallbacks used if an existing deployment contains a
         # stale provider model and the API responds with HTTP 404.
         self._fallback_models = {
-            "Groq": "openai/gpt-oss-120b",
+            "Groq": "openai/gpt-oss-20b",
             "Gemini": "gemini-3.8-flash",
             "OpenRouter": "openrouter/free",
             "Mistral": "mistral-small-latest",
@@ -113,48 +114,6 @@ class LLMRouter:
             self.openrouter_model = model
         elif provider_name == "Mistral":
             self.mistral_model = model
-
-    def clear_provider_cooldowns(self) -> None:
-        """Clear transient provider circuit-breaker state.
-
-        Useful after a deployment/configuration change so stale in-memory
-        cooldowns cannot make every provider appear unavailable.
-        """
-        self._provider_cooldowns.clear()
-        logger.info("[LLMRouter] Provider cooldowns cleared.")
-
-    def provider_status(self) -> Dict[str, Any]:
-        """Return a safe diagnostic snapshot of provider health."""
-        now = time.monotonic()
-        status = {}
-
-        for provider_name, api_key in {
-            "Groq": self.groq_api_key,
-            "Gemini": self.gemini_api_key,
-            "OpenRouter": self.openrouter_api_key,
-            "Mistral": self.mistral_api_key,
-        }.items():
-            if not api_key:
-                status[provider_name] = {
-                    "configured": False,
-                    "cooldown_seconds": 0.0,
-                }
-                continue
-
-            cooldown_until = self._provider_cooldowns.get(
-                provider_name,
-                0.0,
-            )
-            status[provider_name] = {
-                "configured": True,
-                "cooldown_seconds": max(
-                    0.0,
-                    cooldown_until - now,
-                ),
-                "model": self._get_provider_model(provider_name),
-            }
-
-        return status
 
     def is_allowed_for_llm(self, context: dict | None = None) -> bool:
         """
@@ -301,9 +260,19 @@ class LLMRouter:
             else:
                 del self._cache[cache_key]
 
+        serialized_messages = json.dumps(
+            messages,
+            ensure_ascii=False,
+            default=str,
+        )
+
         logger.info(
-            "[LLMRouter] Messages being sent:\n%s",
-            json.dumps(messages, indent=2, ensure_ascii=False),
+            "[LLMRouter] Request prepared | task=%s | messages=%d | "
+            "payload_chars=%d | max_tokens=%d",
+            task,
+            len(messages),
+            len(serialized_messages),
+            max_tokens,
         )
 
         errors = []
@@ -374,15 +343,15 @@ class LLMRouter:
                 "Mistral",
             ],
             "coding": [
+                "OpenRouter",
                 "Groq",
                 "Gemini",
-                "OpenRouter",
                 "Mistral",
             ],
             "coding_response": [
+                "OpenRouter",
                 "Groq",
                 "Gemini",
-                "OpenRouter",
                 "Mistral",
             ],
             "compound_response": [
@@ -689,17 +658,12 @@ class LLMRouter:
                                     fallback_exc,
                                 )
 
-                        # The configured model and fallback both failed.
-                        # Do not trap the provider for five minutes: a model
-                        # configuration problem should not make ARIA appear
-                        # completely offline for an extended period.
+                        # Avoid retrying a known-bad model on every internal
+                        # request. This is long enough for the other providers
+                        # to take over without making ARIA appear stuck.
                         self._provider_cooldowns[
                             provider_name
-                        ] = time.monotonic() + 30.0
-
-                        errors.append(
-                            f"{provider_name}: HTTP 404/model unavailable"
-                        )
+                        ] = time.monotonic() + 300.0
 
                     # -----------------------------------------
                     # NON-TEMPORARY FAILURE
