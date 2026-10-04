@@ -130,6 +130,21 @@ from .engineering_verification import (
     VerificationStatus,
 )
 
+from .self_modification import (
+    SelfModificationAction,
+    SelfModificationConstraint,
+    SelfModificationDecision,
+    SelfModificationKind,
+    SelfModificationPlan,
+    SelfModificationRequest,
+    SelfModificationRisk,
+    SelfModificationRollback,
+    SelfModificationScope,
+    SelfModificationStatus,
+    SelfModificationTarget,
+    SelfModificationVerification,
+)
+
 
 __all__ = [
     # Acceptance
@@ -209,14 +224,12 @@ __all__ = [
     "EngineeringOutcome",
     "EngineeringResult",
 
-    # Repository model
+    # Repository
     "RepositoryComponent",
     "RepositoryComponentKind",
     "RepositoryModel",
     "RepositoryPath",
     "RepositoryPathKind",
-
-    # Repository scanning
     "RepositoryScanPolicy",
 
     # Session
@@ -245,4 +258,18 @@ __all__ = [
     "VerificationRequest",
     "VerificationResult",
     "VerificationStatus",
+
+    # Self-modification
+    "SelfModificationAction",
+    "SelfModificationConstraint",
+    "SelfModificationDecision",
+    "SelfModificationKind",
+    "SelfModificationPlan",
+    "SelfModificationRequest",
+    "SelfModificationRisk",
+    "SelfModificationRollback",
+    "SelfModificationScope",
+    "SelfModificationStatus",
+    "SelfModificationTarget",
+    "SelfModificationVerification",
 ]
