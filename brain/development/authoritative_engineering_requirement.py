@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -466,6 +467,10 @@ class AuthoritativeEngineeringRequirement:
 
         requirement = (
             EngineeringRequirement(
+                requirement_id=(
+                    "req-"
+                    + uuid.uuid4().hex[:16]
+                ),
                 raw_request=raw_request,
                 intent=intent,
                 goal=goal,
@@ -595,6 +600,10 @@ class AuthoritativeEngineeringRequirement:
         )
 
         return EngineeringRequirement(
+            requirement_id=(
+                "req-"
+                + uuid.uuid4().hex[:16]
+            ),
             raw_request=raw_request,
             intent=RequirementIntent.DEVELOP,
             goal=raw_request,
