@@ -241,6 +241,21 @@ class Phase1JarvisValidator:
 
         # Final validator
         "brain/integration/phase1_jarvis_validator.py",
+
+        # Phase 1 runtime integration and engineering extensions
+        "brain/integration/phase1_runtime.py",
+        "brain/development/phase_task_execution.py",
+        "brain/development/acceptance_staging_smoke.py",
+        "brain/development/research_service.py",
+        "brain/development/local_code_model.py",
+        "brain/development/github_sync.py",
+        "brain/development/git_branch_lifecycle.py",
+        "brain/development/github_pull_request.py",
+        "brain/development/github_project_creator.py",
+        "brain/development/telegram_approval_interface.py",
+        "brain/development/code_generation_router.py",
+        "brain/learning/experience_engine.py",
+        "brain/memory/experience_consolidator.py",
     )
 
     REQUIRED_CLASSES = {
@@ -835,7 +850,7 @@ class Phase1JarvisValidator:
 
             "code_generation":
                 "brain/development/"
-                "code_generation_bridge.py",
+                "code_generation_router.py",
 
             "workspace_management":
                 "brain/development/"
@@ -870,8 +885,8 @@ class Phase1JarvisValidator:
                 "autonomous_validation_loop.py",
 
             "experience_learning":
-                "brain/"
-                "experience.py",
+                "brain/learning/"
+                "experience_engine.py",
 
             "memory_consolidation":
                 "brain/memory/"
@@ -936,37 +951,6 @@ class Phase1JarvisValidator:
                     "capability": capability
                 },
             )
-
-        # Experience.py may be implemented elsewhere in ARIA.
-        # If it is not found, report it as a warning rather than
-        # pretending it does not exist.
-        if (
-            "experience_learning"
-            in missing
-        ):
-
-            experience_candidates = (
-                "brain/experience.py",
-                "brain/memory/experience.py",
-                "brain/learning/experience.py",
-            )
-
-            found = any(
-                (
-                    self.root / candidate
-                ).is_file()
-                for candidate in experience_candidates
-            )
-
-            if found:
-
-                missing.remove(
-                    "experience_learning"
-                )
-
-                available.append(
-                    "experience_learning"
-                )
 
         return (
             tuple(missing),
@@ -1046,6 +1030,36 @@ class Phase1JarvisValidator:
 
             "rollback":
                 "brain/development/rollback_manager.py",
+
+            "phase1_runtime":
+                "brain/integration/phase1_runtime.py",
+
+            "task_graph":
+                "brain/development/phase_task_execution.py",
+
+            "acceptance_gate":
+                "brain/development/acceptance_staging_smoke.py",
+
+            "real_time_research":
+                "brain/development/research_service.py",
+
+            "local_code_model":
+                "brain/development/local_code_model.py",
+
+            "github_sync":
+                "brain/development/github_sync.py",
+
+            "branch_lifecycle":
+                "brain/development/git_branch_lifecycle.py",
+
+            "pull_request_workflow":
+                "brain/development/github_pull_request.py",
+
+            "project_creator":
+                "brain/development/github_project_creator.py",
+
+            "telegram_approval":
+                "brain/development/telegram_approval_interface.py",
         }
 
         for stage, relative in (
