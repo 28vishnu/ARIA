@@ -9,6 +9,9 @@ Supported providers:
     groq, mistral, openrouter, gemini, ollama, openai_compatible_local
 
 The provider is selected by ARIA_CODEGEN_PROVIDER (default: groq).
+
+Groq model defaults are kept current with Groq's production catalog; legacy
+Llama model IDs are migrated automatically when encountered.
 Fallback is disabled by default and can be explicitly enabled with
 ARIA_CODEGEN_ALLOW_FALLBACK=true.
 """
@@ -128,7 +131,7 @@ class CodeGenerationRouter:
 
     def _model(self, provider: str) -> str:
         defaults = {
-            "groq": "llama-3.3-70b-versatile",
+            "groq": "openai/gpt-oss-120b",
             "mistral": "mistral-small-latest",
             "openrouter": "openai/gpt-oss-20b:free",
             "gemini": "gemini-2.0-flash",
@@ -139,7 +142,21 @@ class CodeGenerationRouter:
             "openrouter": "OPENROUTER_MODEL",
             "gemini": "GEMINI_MODEL",
         }
-        return self._get(env_names[provider], defaults[provider])
+        model = self._get(env_names[provider], defaults[provider])
+        if provider == "groq":
+            legacy_replacements = {
+                "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+                "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+            }
+            replacement = legacy_replacements.get(model.strip().lower())
+            if replacement:
+                logger.warning(
+                    "[Phase1][CodeGenerationRouter] Migrating deprecated Groq model | old=%s | new=%s",
+                    model,
+                    replacement,
+                )
+                return replacement
+        return model
 
     def _api_key(self, provider: str) -> str:
         names = {
