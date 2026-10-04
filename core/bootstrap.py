@@ -63,6 +63,7 @@ from brain.documents.repository.repository_memory import RepositoryMemory
 from brain.development.repository_manager import RepositoryManager
 from brain.development.source_analyzer import SourceAnalyzer
 from brain.development.dependency_analyzer import DependencyAnalyzer
+from brain.development.architecture_intelligence import ArchitectureIntelligence
 
 from brain.development.workspace import DevelopmentWorkspace
 from brain.development.filesystem_guard import FilesystemGuard
@@ -694,6 +695,18 @@ async def bootstrap_application() -> ServiceRegistry:
     source_analyzer = SourceAnalyzer()
     dependency_analyzer = DependencyAnalyzer()
 
+    architecture_intelligence = ArchitectureIntelligence(
+        repository_manager=repository_manager,
+        source_analyzer=source_analyzer,
+        dependency_analyzer=dependency_analyzer,
+        max_source_files=int(
+            os.getenv(
+                "ARIA_ARCHITECTURE_MAX_SOURCE_FILES",
+                "2000",
+            )
+        ),
+    )
+
     registry.register(
         "repository_manager",
         repository_manager,
@@ -707,6 +720,11 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "dependency_analyzer",
         dependency_analyzer,
+    )
+
+    registry.register(
+        "architecture_intelligence",
+        architecture_intelligence,
     )
 
     logger.info(
@@ -992,6 +1010,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "repository_manager": repository_manager,
             "source_analyzer": source_analyzer,
             "dependency_analyzer": dependency_analyzer,
+            "architecture_intelligence": architecture_intelligence,
             "development_workspace": development_workspace,
             "requirement_parser": requirement_parser,
             "change_planner": change_planner,
@@ -1692,6 +1711,50 @@ async def bootstrap_application() -> ServiceRegistry:
     logger.info(
         "[Phase11] Capability graph prepared | tools=%s",
         tool_manager.list_tools(),
+    )
+
+    # ---------------------------------------------------------
+    # Phase 1 Capability Registry
+    # ---------------------------------------------------------
+
+    registry.register(
+        "phase1_capability_registry",
+        {
+            "repository_manager": repository_manager,
+            "source_analyzer": source_analyzer,
+            "dependency_analyzer": dependency_analyzer,
+            "architecture_intelligence": architecture_intelligence,
+            "development_workspace": development_workspace,
+            "requirement_parser": requirement_parser,
+            "change_planner": change_planner,
+
+            # Workspace-scoped services are exposed as factories.
+            # They are instantiated only inside an isolated
+            # development workspace, never against production.
+            "filesystem_guard_factory": FilesystemGuard,
+            "development_sandbox_factory": DevelopmentSandbox,
+            "code_writer_factory": CodeWriter,
+            "validator_factory": DevelopmentValidator,
+            "test_runner_factory": DevelopmentTestRunner,
+            "build_manager_factory": BuildManager,
+
+            "failure_analyzer": failure_analyzer,
+            "repair_engine": repair_engine,
+            "development_agent": development_agent,
+            "development_controller": development_controller,
+            "git_manager": git_manager,
+            "github_manager": github_manager,
+            "deployment_manager": deployment_manager,
+            "health_monitor": health_monitor,
+            "rollback_manager": rollback_manager,
+            "approval_manager": approval_manager,
+            "deployment_policy": deployment_policy,
+        },
+    )
+
+    logger.info(
+        "[Phase1] Capability registry prepared | "
+        "self_engineering=True",
     )
 
     # ---------------------------------------------------------
