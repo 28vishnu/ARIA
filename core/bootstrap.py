@@ -87,6 +87,7 @@ from brain.development.git_manager import GitManager
 from brain.development.github_manager import GitHubManager
 from brain.development.github_sync import GitHubSync
 from brain.development.git_branch_lifecycle import GitBranchLifecycle
+from brain.development.github_project_creator import GitHubProjectCreator
 
 from brain.development.build_manager import BuildManager
 from brain.development.deployment_manager import DeploymentManager
@@ -943,6 +944,41 @@ async def bootstrap_application() -> ServiceRegistry:
 
 
     # ---------------------------------------------------------
+    # Phase 1 — New Project / Repository Creation
+    # ---------------------------------------------------------
+
+    project_workspace_root = os.getenv(
+        "ARIA_PROJECTS_ROOT",
+        os.path.join(
+            os.getcwd(),
+            "projects",
+        ),
+    )
+
+    github_project_creator = GitHubProjectCreator(
+        workspace_root=project_workspace_root,
+        api_timeout=float(
+            os.getenv(
+                "ARIA_GITHUB_PROJECT_TIMEOUT",
+                "60",
+            )
+        ),
+    )
+
+    registry.register(
+        "github_project_creator",
+        github_project_creator,
+    )
+
+    logger.info(
+        "[Phase1] Project creation capability registered | "
+        "workspace_root=%s | remote_authorization_required=%s",
+        project_workspace_root,
+        True,
+    )
+
+
+    # ---------------------------------------------------------
     # Phase 1 — Build / Deployment / Health / Rollback
     # ---------------------------------------------------------
 
@@ -1140,6 +1176,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_manager": github_manager,
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
+            "github_project_creator": github_project_creator,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
@@ -1870,6 +1907,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_manager": github_manager,
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
+            "github_project_creator": github_project_creator,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
