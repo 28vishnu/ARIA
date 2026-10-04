@@ -1220,7 +1220,6 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_sync": github_sync,
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
-            "real_time_research": real_time_research,
             "phase1_runtime": phase1_runtime,
             "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
             "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
