@@ -24,6 +24,7 @@ from .validator import DevelopmentValidator, ValidationResult
 from .workspace import DevelopmentWorkspace, WorkspaceInfo
 from .engineering_reasoning import EngineeringReasoningCore
 from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
+from .adaptive_engineering_plan import AdaptiveEngineeringPlan
 
 
 logger = logging.getLogger("aria")
@@ -288,6 +289,7 @@ class DevelopmentAgent:
         self.deep_repository_reasoner = DeepRepositoryReasoner(
             self.architecture_intelligence
         )
+        self.adaptive_plan: AdaptiveEngineeringPlan | None = None
 
         self.max_repair_attempts = max(
             1,
@@ -787,11 +789,6 @@ class DevelopmentAgent:
             plan=plan,
             impact_analysis=impact_analysis,
             repository_context=repository_context,
-            repository_reasoning=getattr(
-                self,
-                "_active_repository_reasoning",
-                None,
-            ),
             generated_changes=previous_changes or (),
             failure=failure,
         )
@@ -803,6 +800,13 @@ class DevelopmentAgent:
                 + self.deep_repository_reasoner.build_prompt_section(
                     repository_reasoning
                 )
+            )
+
+        adaptive_plan_section = ""
+        if self.adaptive_plan is not None:
+            adaptive_plan_section = (
+                "\n"
+                + self.adaptive_plan.build_prompt_section()
             )
 
         return (
@@ -866,6 +870,7 @@ class DevelopmentAgent:
             f"{json.dumps(repository_context, ensure_ascii=False, indent=2)}"
             f"{reasoning_section}"
             f"{repository_reasoning_section}"
+            f"{adaptive_plan_section}"
             f"{failure_text}"
             f"{previous_text}"
         )
@@ -1988,6 +1993,32 @@ class DevelopmentAgent:
             )
 
         # ----------------------------------------------------
+        # Adaptive engineering plan
+        # ----------------------------------------------------
+
+        try:
+            self.adaptive_plan = AdaptiveEngineeringPlan(
+                requirement=requirement.raw_text,
+            )
+            initial_revision = self.adaptive_plan.initialize(plan)
+            requirement_analysis_metadata = {
+                **requirement_analysis_metadata,
+                "adaptive_engineering_plan": self.adaptive_plan.snapshot(),
+            }
+            logger.info(
+                "[DevelopmentAgent] Adaptive engineering plan initialized | "
+                "revision=%s | state=%s",
+                initial_revision.revision,
+                initial_revision.state,
+            )
+        except Exception as exc:
+            logger.exception(
+                "[DevelopmentAgent] Adaptive plan initialization failed; "
+                "continuing with deterministic plan."
+            )
+            self.adaptive_plan = None
+
+        # ----------------------------------------------------
         # Change impact analysis
         # ----------------------------------------------------
 
@@ -2261,6 +2292,21 @@ class DevelopmentAgent:
                 "deep_repository_reasoning": repository_reasoning.to_dict(),
             }
 
+            if self.adaptive_plan is not None:
+                self.adaptive_plan.revise(
+                    trigger="repository_understanding",
+                    repository_summary={
+                        "file_count": len(workspace_repository_paths),
+                        "relevant_files": list(repository_reasoning.relevant_files),
+                        "confidence": repository_reasoning.confidence,
+                        "warnings": list(repository_reasoning.warnings),
+                    },
+                )
+                requirement_analysis_metadata = {
+                    **requirement_analysis_metadata,
+                    "adaptive_engineering_plan": self.adaptive_plan.snapshot(),
+                }
+
         except Exception as exc:
             logger.exception(
                 "[DevelopmentAgent] Deep repository reasoning failed; "
@@ -2321,6 +2367,11 @@ class DevelopmentAgent:
                     "requirement": requirement.to_dict(),
                     "plan": plan.to_dict(),
                     "change_impact": impact_analysis.to_dict(),
+                    "adaptive_plan": (
+                        self.adaptive_plan.snapshot()
+                        if self.adaptive_plan is not None
+                        else {}
+                    ),
                     "repository": repository_context,
                     "workspace": {
                         "id": workspace.workspace_id,
@@ -2724,6 +2775,14 @@ class DevelopmentAgent:
                     ),
                 )
 
+            if self.adaptive_plan is not None:
+                self.adaptive_plan.revise(
+                    trigger="initial_verification_passed",
+                    test_result=initial_test,
+                    validation=validation,
+                    changed_paths=[item.path for item in generated_changes],
+                )
+
             return DevelopmentReport(
                 success=True,
                 requirement=requirement,
@@ -2738,6 +2797,11 @@ class DevelopmentAgent:
                     generated_changes,
                     extra={
                         "tests_selected": selected_tests,
+                        "adaptive_engineering_plan": (
+                            self.adaptive_plan.snapshot()
+                            if self.adaptive_plan is not None
+                            else {}
+                        ),
                         "final_acceptance_passed": True,
                         "final_validation_passed": True,
                         "workspace_file_count": len(
@@ -2768,6 +2832,25 @@ class DevelopmentAgent:
                 )
             )
 
+            if self.adaptive_plan is not None:
+                revision = self.adaptive_plan.revise(
+                    trigger=f"repair_attempt_{attempt}",
+                    test_result=initial_test,
+                    failure=analysis,
+                    validation=validator.validate_repository(),
+                    repository_summary={
+                        "file_count": len(self._workspace_paths(workspace)),
+                    },
+                    changed_paths=[item.path for item in generated_changes],
+                )
+                logger.info(
+                    "[DevelopmentAgent] Adaptive plan revised | "
+                    "revision=%s | state=%s | confidence=%s",
+                    revision.revision,
+                    revision.state,
+                    revision.confidence,
+                )
+
             repair_prompt = (
                 self._build_generation_prompt(
                     requirement,
@@ -2787,6 +2870,11 @@ class DevelopmentAgent:
                         ),
                         "plan": plan.to_dict(),
                         "repository": current_context,
+                        "adaptive_plan": (
+                            self.adaptive_plan.snapshot()
+                            if self.adaptive_plan is not None
+                            else {}
+                        ),
                         "failure": analysis.to_dict(),
                         "attempt": attempt,
                     },
