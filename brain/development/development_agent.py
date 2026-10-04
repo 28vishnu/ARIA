@@ -24,6 +24,7 @@ from .validator import DevelopmentValidator, ValidationResult
 from .workspace import DevelopmentWorkspace, WorkspaceInfo
 from .engineering_reasoning import EngineeringReasoningCore
 from .intelligent_task_graph import IntelligentTaskGraph, TaskGraph
+from .task_graph_executor import TaskExecutionState, TaskGraphExecutor
 from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
 from .adaptive_engineering_plan import AdaptiveEngineeringPlan
 
@@ -288,6 +289,8 @@ class DevelopmentAgent:
         self.code_generator = code_generator
         self.engineering_reasoning = EngineeringReasoningCore()
         self.intelligent_task_graph = IntelligentTaskGraph()
+        self.task_graph_executor = TaskGraphExecutor()
+        self._active_task_executor: TaskExecutionState | None = None
         self.deep_repository_reasoner = DeepRepositoryReasoner(
             self.architecture_intelligence
         )
@@ -2377,6 +2380,11 @@ class DevelopmentAgent:
                 failure=None,
             )
             self._active_task_graph = task_graph
+            try:
+                self._active_task_executor = self.task_graph_executor.start(task_graph)
+            except Exception as exc:
+                logger.warning("[DevelopmentAgent] Task graph execution state unavailable: %s", exc)
+                self._active_task_executor = None
 
             requirement_analysis_metadata = {
                 **requirement_analysis_metadata,
@@ -2603,10 +2611,20 @@ class DevelopmentAgent:
                 failure=None,
                 validation=None,
             )
+            previous_completed = getattr(
+                getattr(self, "_active_task_executor", None),
+                "completed",
+                (),
+            )
             self._active_task_graph = task_graph
+            self._active_task_executor = self.task_graph_executor.start(
+                task_graph,
+                preserve_completed=previous_completed,
+            )
             requirement_analysis_metadata = {
                 **requirement_analysis_metadata,
                 "intelligent_task_graph": task_graph.to_dict(),
+                "task_execution_state": self._active_task_executor.to_dict(),
             }
         except Exception:
             logger.exception(
@@ -2625,6 +2643,28 @@ class DevelopmentAgent:
         )
 
         # ----------------------------------------------------
+        # Execute implementation task from the graph
+        # ----------------------------------------------------
+
+        if self._active_task_executor is not None:
+            try:
+                self._active_task_executor.require_ready("implement")
+            except Exception as exc:
+                return DevelopmentReport(
+                    success=False,
+                    requirement=requirement,
+                    plan=plan,
+                    workspace=workspace,
+                    generation=generation,
+                    status="task_graph_blocked",
+                    errors=(str(exc),),
+                    metadata={
+                        **requirement_analysis_metadata,
+                        "task_execution_state": self._active_task_executor.to_dict(),
+                    },
+                )
+
+        # ----------------------------------------------------
         # Apply inside workspace
         # ----------------------------------------------------
 
@@ -2635,6 +2675,14 @@ class DevelopmentAgent:
                     generated_changes,
                 )
             )
+            if self._active_task_executor is not None:
+                self._active_task_executor.complete(
+                    "implement",
+                    {
+                        "generated_change_count": len(generated_changes),
+                        "paths": [item.path for item in generated_changes],
+                    },
+                )
 
         except Exception as exc:
             logger.exception(
@@ -2688,6 +2736,12 @@ class DevelopmentAgent:
         # Static validation
         # ----------------------------------------------------
 
+        if self._active_task_executor is not None:
+            try:
+                self._active_task_executor.require_ready("validate")
+            except Exception as exc:
+                return DevelopmentReport(success=False, requirement=requirement, plan=plan, workspace=workspace, writes=tuple(write_results), generation=generation, status="task_graph_blocked", errors=(str(exc),), metadata={**requirement_analysis_metadata, "task_execution_state": self._active_task_executor.to_dict()})
+
         try:
             validation = (
                 validator.validate_repository()
@@ -2711,6 +2765,8 @@ class DevelopmentAgent:
             )
 
         if not validation.valid:
+            if self._active_task_executor is not None:
+                self._active_task_executor.fail("validate", {"validation": validation.to_dict()})
             failure = FailureAnalysis(
                 failed=True,
                 summary="Static validation failed.",
@@ -2741,6 +2797,13 @@ class DevelopmentAgent:
                 ),
             )
 
+        if self._active_task_executor is not None:
+            self._active_task_executor.complete("validate", {"validation": validation.to_dict()})
+            try:
+                self._active_task_executor.require_ready("test")
+            except Exception as exc:
+                return DevelopmentReport(success=False, requirement=requirement, plan=plan, workspace=workspace, writes=tuple(write_results), validation=validation, generation=generation, status="task_graph_blocked", errors=(str(exc),), metadata={**requirement_analysis_metadata, "task_execution_state": self._active_task_executor.to_dict()})
+
         # ----------------------------------------------------
         # Tests
         # ----------------------------------------------------
@@ -2760,6 +2823,16 @@ class DevelopmentAgent:
         )
 
         if not selected_tests:
+            if self._active_task_executor is not None:
+                self._active_task_executor.complete(
+                    "test",
+                    {"tests_selected": [], "reason": "no relevant tests discovered"},
+                )
+                self._active_task_executor.complete(
+                    "accept",
+                    {"acceptance": "deterministic acceptance and static validation passed"},
+                )
+
             return DevelopmentReport(
                 success=True,
                 requirement=requirement,
@@ -2814,6 +2887,9 @@ class DevelopmentAgent:
                 errors=(str(exc),),
             )
 
+        if self._active_task_executor is not None and not test_result.passed:
+            self._active_task_executor.fail("test", {"test_result": test_result.to_dict()})
+
         if not test_result.results:
             return DevelopmentReport(
                 success=False,
@@ -2832,6 +2908,8 @@ class DevelopmentAgent:
         initial_test = test_result.results[-1]
 
         if test_result.passed:
+            if self._active_task_executor is not None:
+                self._active_task_executor.complete("test", {"test_result": test_result.to_dict()})
             final_acceptance_error = (
                 self._check_exact_content_requirement(
                     requirement,
@@ -2858,6 +2936,16 @@ class DevelopmentAgent:
                     errors=(
                         final_acceptance_error,
                     ),
+                )
+
+            if self._active_task_executor is not None:
+                self._active_task_executor.complete(
+                    "accept",
+                    {
+                        "acceptance": "all applicable acceptance criteria passed",
+                        "validation_passed": True,
+                        "tests_passed": True,
+                    },
                 )
 
             if self.adaptive_plan is not None:
@@ -3138,6 +3226,22 @@ class DevelopmentAgent:
                     initial_test
                 )
             )
+
+        if final_success and self._active_task_executor is not None:
+            # A failed initial test will be handled by the later recovery steps.
+            # At this stage only permit acceptance when the graph has no failed
+            # verification node left blocking the acceptance gate.
+            if "test" not in self._active_task_executor.failed:
+                try:
+                    self._active_task_executor.complete(
+                        "accept",
+                        {
+                            "acceptance": "repair path passed final validation and acceptance",
+                            "final_validation_passed": True,
+                        },
+                    )
+                except RuntimeError:
+                    final_success = False
 
         if final_success:
             status = "repair_succeeded"
