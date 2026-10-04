@@ -86,6 +86,7 @@ from brain.development.development_controller import DevelopmentController
 from brain.development.git_manager import GitManager
 from brain.development.github_manager import GitHubManager
 from brain.development.github_sync import GitHubSync
+from brain.development.git_branch_lifecycle import GitBranchLifecycle
 
 from brain.development.build_manager import BuildManager
 from brain.development.deployment_manager import DeploymentManager
@@ -94,6 +95,8 @@ from brain.development.rollback_manager import RollbackManager
 
 from brain.development.approval_manager import ApprovalManager
 from brain.development.deployment_policy import DeploymentPolicy
+
+from brain.integration.phase1_runtime import create_phase1_runtime
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -127,7 +130,6 @@ from brain.reasoning.reasoning_engine import ReasoningEngine
 from brain.llm.llm_router import LLMRouter
 from brain.development.code_generation_router import CodeGenerationRouter
 from brain.development.code_generation_bridge import LLMCodeGenerationBridge
-from brain.integration.phase1_runtime import create_phase1_runtime
 
 from brain.events.event_bus import EventBus
 from brain.events.event import Event
@@ -907,7 +909,7 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
-    # Phase 1 — GitHub Synchronization
+    # Phase 1 — GitHub Synchronization / Branch Lifecycle
     # ---------------------------------------------------------
 
     github_sync = GitHubSync(
@@ -921,15 +923,24 @@ async def bootstrap_application() -> ServiceRegistry:
         ),
     )
 
+    git_branch_lifecycle = GitBranchLifecycle(
+        git_manager=git_manager,
+        prefix=os.getenv(
+            "ARIA_AUTONOMOUS_BRANCH_PREFIX",
+            "aria/auto",
+        ),
+    )
+
     registry.register(
         "github_sync",
         github_sync,
     )
 
-    logger.info(
-        "[Phase1] GitHub synchronization registered | "
-        "fetch=True | pull=True | clone=True"
+    registry.register(
+        "git_branch_lifecycle",
+        git_branch_lifecycle,
     )
+
 
     # ---------------------------------------------------------
     # Phase 1 — Build / Deployment / Health / Rollback
@@ -1128,41 +1139,21 @@ async def bootstrap_application() -> ServiceRegistry:
             "git_manager": git_manager,
             "github_manager": github_manager,
             "github_sync": github_sync,
+            "git_branch_lifecycle": git_branch_lifecycle,
+            "phase1_runtime": phase1_runtime,
+            "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
+            "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
+            "autonomous_validation_loop": phase1_runtime.get("autonomous_validation_loop"),
+            "autonomous_repair_loop": phase1_runtime.get("autonomous_repair_loop"),
+            "knowledge_coding_feedback": phase1_runtime.get("knowledge_coding_feedback"),
+            "permissioned_git_workflow": phase1_runtime.get("permissioned_git_workflow"),
+            "permissioned_deployment_workflow": phase1_runtime.get("permissioned_deployment_workflow"),
             "build_manager_factory": BuildManager,
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
             "deployment_policy": deployment_policy,
-            "phase1_runtime": phase1_runtime,
-            "autonomous_development_bridge":
-                phase1_runtime.get(
-                    "autonomous_development_bridge"
-                ),
-            "autonomous_coding_loop":
-                phase1_runtime.get(
-                    "autonomous_coding_loop"
-                ),
-            "autonomous_validation_loop":
-                phase1_runtime.get(
-                    "autonomous_validation_loop"
-                ),
-            "autonomous_repair_loop":
-                phase1_runtime.get(
-                    "autonomous_repair_loop"
-                ),
-            "knowledge_coding_feedback":
-                phase1_runtime.get(
-                    "knowledge_coding_feedback"
-                ),
-            "permissioned_git_workflow":
-                phase1_runtime.get(
-                    "permissioned_git_workflow"
-                ),
-            "permissioned_deployment_workflow":
-                phase1_runtime.get(
-                    "permissioned_deployment_workflow"
-                ),
         },
     )
 
@@ -1878,40 +1869,20 @@ async def bootstrap_application() -> ServiceRegistry:
             "git_manager": git_manager,
             "github_manager": github_manager,
             "github_sync": github_sync,
+            "git_branch_lifecycle": git_branch_lifecycle,
+            "phase1_runtime": phase1_runtime,
+            "autonomous_development_bridge": phase1_runtime.get("autonomous_development_bridge"),
+            "autonomous_coding_loop": phase1_runtime.get("autonomous_coding_loop"),
+            "autonomous_validation_loop": phase1_runtime.get("autonomous_validation_loop"),
+            "autonomous_repair_loop": phase1_runtime.get("autonomous_repair_loop"),
+            "knowledge_coding_feedback": phase1_runtime.get("knowledge_coding_feedback"),
+            "permissioned_git_workflow": phase1_runtime.get("permissioned_git_workflow"),
+            "permissioned_deployment_workflow": phase1_runtime.get("permissioned_deployment_workflow"),
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
             "deployment_policy": deployment_policy,
-            "phase1_runtime": phase1_runtime,
-            "autonomous_development_bridge":
-                phase1_runtime.get(
-                    "autonomous_development_bridge"
-                ),
-            "autonomous_coding_loop":
-                phase1_runtime.get(
-                    "autonomous_coding_loop"
-                ),
-            "autonomous_validation_loop":
-                phase1_runtime.get(
-                    "autonomous_validation_loop"
-                ),
-            "autonomous_repair_loop":
-                phase1_runtime.get(
-                    "autonomous_repair_loop"
-                ),
-            "knowledge_coding_feedback":
-                phase1_runtime.get(
-                    "knowledge_coding_feedback"
-                ),
-            "permissioned_git_workflow":
-                phase1_runtime.get(
-                    "permissioned_git_workflow"
-                ),
-            "permissioned_deployment_workflow":
-                phase1_runtime.get(
-                    "permissioned_deployment_workflow"
-                ),
         },
     )
 
