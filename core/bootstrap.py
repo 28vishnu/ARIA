@@ -90,6 +90,7 @@ from brain.development.git_branch_lifecycle import GitBranchLifecycle
 from brain.development.github_project_creator import GitHubProjectCreator
 from brain.development.research_service import RealTimeResearch
 from brain.development.phase_task_execution import PhaseTaskExecutionEngine
+from brain.development.acceptance_staging_smoke import AcceptanceStagingSmoke
 from brain.planning.phase_planner import PhasePlanner
 
 from brain.development.build_manager import BuildManager
@@ -1887,6 +1888,32 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Phase 1 — Acceptance / Staging / Smoke Verification
+    # ---------------------------------------------------------
+
+    acceptance_staging_smoke = AcceptanceStagingSmoke(
+        workspace_manager=development_workspace,
+        build_manager_factory=BuildManager,
+        validator_factory=DevelopmentValidator,
+        test_runner_factory=DevelopmentTestRunner,
+        sandbox_factory=DevelopmentSandbox,
+        deployment_manager=deployment_manager,
+        health_monitor=health_monitor,
+    )
+
+    registry.register(
+        "acceptance_staging_smoke",
+        acceptance_staging_smoke,
+    )
+
+    logger.info(
+        "[Phase1] Acceptance/staging/smoke capability registered | "
+        "staging=%s | smoke=%s",
+        acceptance_staging_smoke.health()["staging_available"],
+        acceptance_staging_smoke.health()["smoke_available"],
+    )
+
+    # ---------------------------------------------------------
     # Personality / Decision / Intent
     # ---------------------------------------------------------
 
@@ -2051,6 +2078,9 @@ async def bootstrap_application() -> ServiceRegistry:
             "rollback_manager": rollback_manager,
             "approval_manager": approval_manager,
             "deployment_policy": deployment_policy,
+            "phase_planner": phase_planner,
+            "phase_task_execution": phase_task_execution,
+            "acceptance_staging_smoke": acceptance_staging_smoke,
         },
     )
 
