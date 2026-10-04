@@ -6,7 +6,7 @@ It deliberately does not reuse the general LLMRouter so large development
 requests cannot enter the normal multi-provider reasoning/fallback chain.
 
 Supported providers:
-    groq, mistral, openrouter, gemini
+    groq, mistral, openrouter, gemini, ollama, openai_compatible_local
 
 The provider is selected by ARIA_CODEGEN_PROVIDER (default: groq).
 Fallback is disabled by default and can be explicitly enabled with
@@ -21,6 +21,8 @@ import os
 from typing import Any
 
 import httpx
+
+from .local_code_model import LocalCodeModel
 
 logger = logging.getLogger("aria.development.codegen_router")
 
@@ -68,6 +70,7 @@ class CodeGenerationRouter:
             os.getenv("ARIA_CODEGEN_ALLOW_FALLBACK", "false"),
         )
 
+        self.local_model = LocalCodeModel()
         self._providers = self._build_provider_order()
 
         logger.info(
@@ -85,7 +88,7 @@ class CodeGenerationRouter:
             "google": "gemini",
         }
         normalized = aliases.get(normalized, normalized)
-        if normalized not in {"groq", "mistral", "openrouter", "gemini"}:
+        if normalized not in {"groq", "mistral", "openrouter", "gemini", "ollama", "openai_compatible_local"}:
             return CodeGenerationRouter.DEFAULT_PROVIDER
         return normalized
 
@@ -150,7 +153,7 @@ class CodeGenerationRouter:
     def _build_provider_order(self) -> list[str]:
         if not self.allow_fallback:
             return [self.provider]
-        preferred = [self.provider, "groq", "mistral", "gemini", "openrouter"]
+        preferred = [self.provider, "ollama", "openai_compatible_local", "groq", "mistral", "gemini", "openrouter"]
         result: list[str] = []
         for item in preferred:
             if item not in result:
@@ -241,6 +244,18 @@ class CodeGenerationRouter:
                 raise RuntimeError(f"{provider} returned invalid JSON: {text}") from exc
             return self._extract_openai_content(data)
 
+    async def _chat_local(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        return await self.local_model.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
     async def _chat_gemini(
         self,
         messages: list[dict[str, str]],
@@ -304,7 +319,13 @@ class CodeGenerationRouter:
         errors: list[str] = []
         for provider in self._providers:
             try:
-                if provider == "gemini":
+                if provider in {"ollama", "openai_compatible_local"}:
+                    if provider == "openai_compatible_local":
+                        self.local_model.backend = "openai_compatible"
+                    else:
+                        self.local_model.backend = "ollama"
+                    result = await self._chat_local(bounded, temperature, max_tokens)
+                elif provider == "gemini":
                     result = await self._chat_gemini(bounded, temperature, max_tokens)
                 else:
                     result = await self._chat_openai_compatible(
