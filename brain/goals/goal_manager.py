@@ -18,6 +18,7 @@ Responsibilities
 - identify active goals
 - mark goals completed/failed/cancelled
 - provide planner-friendly goal context
+- integrate safely with ARIA WorkingMemory/bootstrap
 
 Design constraints
 ------------------
@@ -26,6 +27,7 @@ Design constraints
 - bounded memory
 - deterministic fallback classification
 - safe to use before the planning layer
+- backward compatible with existing bootstrap dependency injection
 """
 
 from __future__ import annotations
@@ -74,6 +76,7 @@ VALID_PRIORITIES = {
 # HELPERS
 # ============================================================================
 
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -121,9 +124,7 @@ def _bounded_list(
         return []
 
     if isinstance(values, str):
-        values = [
-            values
-        ]
+        values = [values]
 
     if not isinstance(
         values,
@@ -131,7 +132,7 @@ def _bounded_list(
     ):
         return []
 
-    result = []
+    result: List[str] = []
 
     for value in values:
 
@@ -146,9 +147,7 @@ def _bounded_list(
         if value in result:
             continue
 
-        result.append(
-            value
-        )
+        result.append(value)
 
         if len(result) >= limit:
             break
@@ -159,6 +158,7 @@ def _bounded_list(
 # ============================================================================
 # DATA MODEL
 # ============================================================================
+
 
 @dataclass
 class Goal:
@@ -238,9 +238,6 @@ class Goal:
             "tags": list(
                 self.tags
             ),
-            "success_criteria": list(
-                self.success_criteria
-            ),
             "context": dict(
                 self.context
             ),
@@ -272,12 +269,16 @@ class Goal:
 # GOAL MANAGER
 # ============================================================================
 
+
 class GoalManager:
     """
     Manages the lifecycle and structure of ARIA goals.
 
     This component intentionally does not execute goals.
-    It prepares structured objectives for the planning/orchestration layer.
+
+    It prepares structured objectives for the planning/orchestration
+    layer and can receive WorkingMemory from ARIA's dependency-injection
+    bootstrap without making WorkingMemory mandatory.
     """
 
     INTENT_KEYWORDS = {
@@ -388,13 +389,41 @@ class GoalManager:
         self,
         max_goals: int = MAX_GOALS,
         storage=None,
+        working_memory=None,
+        **kwargs: Any,
     ):
+        """
+        Initialize GoalManager.
+
+        `working_memory` is accepted because the existing ARIA
+        bootstrap injects it into GoalManager.
+
+        GoalManager does not require WorkingMemory for its core
+        deterministic goal lifecycle.
+
+        `**kwargs` is intentionally tolerated so future bootstrap
+        dependency injection can evolve without breaking startup.
+        Unknown optional dependencies are stored for diagnostics
+        but are never executed here.
+        """
+
         self.max_goals = max(
             10,
             int(max_goals),
         )
 
         self.storage = storage
+
+        # Existing ARIA bootstrap dependency.
+        self.working_memory = (
+            working_memory
+        )
+
+        # Preserve optional future integrations without coupling
+        # GoalManager to them.
+        self.dependencies = dict(
+            kwargs
+        )
 
         self._goals: Dict[
             str,
@@ -428,8 +457,8 @@ class GoalManager:
 
         This is intentionally lightweight.
 
-        A later LLM/router can provide a richer classification,
-        but the GoalManager always has a working fallback.
+        A later LLM/router can provide richer classification,
+        but GoalManager always has a working fallback.
         """
 
         request = _text(
@@ -468,7 +497,6 @@ class GoalManager:
         if not scores:
             return "general"
 
-        # Deterministic tie-breaking.
         priority_order = [
             "coding",
             "automation",
@@ -507,9 +535,6 @@ class GoalManager:
     ) -> str:
         """
         Produce a concise objective from the raw request.
-
-        This is deliberately conservative and does not attempt
-        semantic rewriting.
         """
 
         request = _text(
@@ -526,7 +551,6 @@ class GoalManager:
         if not request:
             return ""
 
-        # Remove common conversational prefixes.
         prefixes = (
             "please ",
             "can you ",
@@ -548,9 +572,6 @@ class GoalManager:
                 ].strip()
 
                 break
-
-        if not request:
-            return ""
 
         return request
 
@@ -583,9 +604,6 @@ class GoalManager:
             Dict[str, Any]
         ] = None,
     ) -> Goal:
-        """
-        Create and register a new goal.
-        """
 
         request = _text(
             request,
@@ -617,12 +635,10 @@ class GoalManager:
             )
         )
 
-        priority = (
-            _text(
-                priority,
-                50,
-            ).lower()
-        )
+        priority = _text(
+            priority,
+            50,
+        ).lower()
 
         if priority not in VALID_PRIORITIES:
             priority = "normal"
@@ -672,7 +688,6 @@ class GoalManager:
             "created"
         ] += 1
 
-        # Connect to parent.
         if parent_goal_id:
 
             parent = self._goals.get(
@@ -684,21 +699,19 @@ class GoalManager:
                 if (
                     goal_id
                     not in parent.child_goal_ids
+                    and len(
+                        parent.child_goal_ids
+                    )
+                    < MAX_CHILDREN
                 ):
 
-                    if (
-                        len(
-                            parent.child_goal_ids
-                        )
-                        < MAX_CHILDREN
-                    ):
-                        parent.child_goal_ids.append(
-                            goal_id
-                        )
+                    parent.child_goal_ids.append(
+                        goal_id
+                    )
 
-                        parent.updated_at = (
-                            _utc_now()
-                        )
+                    parent.updated_at = (
+                        _utc_now()
+                    )
 
         self._enforce_limit()
 
@@ -712,6 +725,7 @@ class GoalManager:
         self,
         goal_id: str,
     ) -> Optional[Goal]:
+
         return self._goals.get(
             _text(
                 goal_id,
@@ -719,9 +733,19 @@ class GoalManager:
             )
         )
 
+    # Bootstrap / integration compatibility.
+    def get_goal(
+        self,
+        goal_id: str,
+    ) -> Optional[Goal]:
+        return self.get(
+            goal_id
+        )
+
     def active_goal(
         self,
     ) -> Optional[Goal]:
+
         if not self._active_goal_id:
             return None
 
@@ -736,9 +760,6 @@ class GoalManager:
         ] = None,
         limit: int = 20,
     ) -> List[Goal]:
-        """
-        Return goals newest first.
-        """
 
         limit = max(
             1,
@@ -797,11 +818,6 @@ class GoalManager:
         self,
         goal_id: str,
     ) -> Goal:
-        """
-        Mark a goal active.
-
-        Only one goal is treated as the primary active goal.
-        """
 
         goal = self.get(
             goal_id
@@ -820,7 +836,6 @@ class GoalManager:
                 "Completed/cancelled goals cannot be activated."
             )
 
-        # Deactivate previous primary goal.
         if (
             self._active_goal_id
             and self._active_goal_id
@@ -835,7 +850,9 @@ class GoalManager:
                 previous is not None
                 and previous.status == "active"
             ):
+
                 previous.status = "pending"
+
                 previous.updated_at = (
                     _utc_now()
                 )
@@ -865,6 +882,7 @@ class GoalManager:
         goal_id: str,
         progress: float,
     ) -> Goal:
+
         goal = self.get(
             goal_id
         )
@@ -905,6 +923,7 @@ class GoalManager:
         self,
         goal_id: str,
     ) -> Goal:
+
         goal = self.get(
             goal_id
         )
@@ -943,6 +962,7 @@ class GoalManager:
         goal_id: str,
         reason: str = "",
     ) -> Goal:
+
         goal = self.get(
             goal_id
         )
@@ -980,6 +1000,7 @@ class GoalManager:
         goal_id: str,
         reason: str = "",
     ) -> Goal:
+
         goal = self.get(
             goal_id
         )
@@ -1013,6 +1034,7 @@ class GoalManager:
         self,
         goal_id: str,
     ) -> Goal:
+
         goal = self.get(
             goal_id
         )
@@ -1036,6 +1058,7 @@ class GoalManager:
         goal_id: str,
         reason: str = "",
     ) -> Goal:
+
         goal = self.get(
             goal_id
         )
@@ -1078,9 +1101,6 @@ class GoalManager:
         request: str,
         **kwargs: Any,
     ) -> Goal:
-        """
-        Create a child goal linked to a parent.
-        """
 
         parent = self.get(
             parent_goal_id
@@ -1112,6 +1132,7 @@ class GoalManager:
         self,
         goal_id: str,
     ) -> List[Goal]:
+
         goal = self.get(
             goal_id
         )
@@ -1146,9 +1167,6 @@ class GoalManager:
             str
         ] = None,
     ) -> Dict[str, Any]:
-        """
-        Return compact goal information suitable for the planner.
-        """
 
         goal = (
             self.get(goal_id)
@@ -1227,9 +1245,6 @@ class GoalManager:
             Dict[str, Any]
         ] = None,
     ) -> Goal:
-        """
-        Convert a raw user request into a structured goal.
-        """
 
         return self.create_goal(
             request=request,
@@ -1253,6 +1268,7 @@ class GoalManager:
     def _enforce_limit(
         self,
     ) -> None:
+
         if (
             len(self._goals)
             <= self.max_goals
@@ -1295,10 +1311,87 @@ class GoalManager:
             )
 
     # ========================================================================
+    # MEMORY CONTEXT
+    # ========================================================================
+
+    def working_memory_context(
+        self,
+        query: Optional[str] = None,
+        limit: int = 10,
+    ) -> Any:
+        """
+        Safely retrieve optional WorkingMemory context.
+
+        GoalManager does not require a specific WorkingMemory API.
+        If the application's WorkingMemory exposes one of the common
+        retrieval methods, use it.
+
+        Failure never breaks GoalManager.
+        """
+
+        memory = self.working_memory
+
+        if memory is None:
+            return []
+
+        methods = (
+            "search",
+            "retrieve",
+            "recall",
+            "query",
+            "get_relevant",
+        )
+
+        for method_name in methods:
+
+            method = getattr(
+                memory,
+                method_name,
+                None,
+            )
+
+            if not callable(method):
+                continue
+
+            try:
+
+                if query:
+                    result = method(
+                        query,
+                        limit=limit,
+                    )
+                else:
+                    result = method(
+                        limit=limit,
+                    )
+
+                return result
+
+            except TypeError:
+
+                try:
+
+                    if query:
+                        return method(
+                            query
+                        )
+
+                    return method()
+
+                except Exception:
+                    continue
+
+            except Exception:
+                continue
+
+        return []
+
+    # ========================================================================
     # HEALTH / DESCRIPTION
     # ========================================================================
 
     def health(self) -> Dict[str, Any]:
+
         return {
             "component": "goal_manager",
             "status": "healthy",
@@ -1308,12 +1401,17 @@ class GoalManager:
             "active_goal_id": (
                 self._active_goal_id
             ),
+            "working_memory_connected": (
+                self.working_memory
+                is not None
+            ),
             "statistics": dict(
                 self.statistics
             ),
         }
 
     def describe(self) -> Dict[str, Any]:
+
         return {
             "component": "GoalManager",
             "purpose": (
@@ -1323,6 +1421,7 @@ class GoalManager:
             "llm_required": False,
             "execution_side_effects": False,
             "max_goals": self.max_goals,
+            "working_memory_supported": True,
             "supported_statuses": sorted(
                 VALID_STATUSES
             ),
@@ -1341,6 +1440,16 @@ class GoalManager:
                 "goal blocking",
                 "parent-child goals",
                 "planner context",
+                "working memory compatibility",
                 "bounded goal storage",
             ],
         }
+
+
+__all__ = [
+    "Goal",
+    "GoalManager",
+    "MAX_GOALS",
+    "VALID_STATUSES",
+    "VALID_PRIORITIES",
+]
