@@ -145,6 +145,16 @@ from .self_modification import (
     SelfModificationVerification,
 )
 
+from .self_upgrade_gate import (
+    SelfUpgradeGateDecision,
+    SelfUpgradeGateRequest,
+    UpgradeAuthorization,
+    UpgradeAuthority,
+    UpgradeGateAction,
+    UpgradeGateFinding,
+    UpgradeGateStatus,
+)
+
 
 __all__ = [
     # Acceptance
@@ -272,4 +282,13 @@ __all__ = [
     "SelfModificationStatus",
     "SelfModificationTarget",
     "SelfModificationVerification",
+
+    # Self-upgrade gate
+    "SelfUpgradeGateDecision",
+    "SelfUpgradeGateRequest",
+    "UpgradeAuthorization",
+    "UpgradeAuthority",
+    "UpgradeGateAction",
+    "UpgradeGateFinding",
+    "UpgradeGateStatus",
 ]
