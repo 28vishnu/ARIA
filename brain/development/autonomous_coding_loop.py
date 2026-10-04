@@ -71,7 +71,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .autonomous_development_bridge import (
+from brain.integration.autonomous_development_bridge import (
     AutonomousDevelopmentBridge,
     AutonomousDevelopmentResult,
 )
