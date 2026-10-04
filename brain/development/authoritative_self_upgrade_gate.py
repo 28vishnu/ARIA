@@ -203,6 +203,7 @@ class AuthoritativeSelfUpgradeGate:
                         ),
                         blocking=True,
                     )
+                )
 
                 blockers.append(
                     "Authoritative acceptance must pass."
