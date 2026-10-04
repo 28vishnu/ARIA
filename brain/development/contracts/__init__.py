@@ -87,6 +87,16 @@ from .engineering_diagnosis import (
     confidence_level,
 )
 
+from .engineering_recovery import (
+    RecoveryAction,
+    RecoveryStatus,
+    RecoveryRequest,
+    RepairRequest,
+    RetestRequest,
+    RecoveryDecision,
+    RecoveryResult,
+)
+
 from .engineering_session import (
     SessionTransition,
     EngineeringSession,
@@ -109,33 +119,21 @@ from .engineering_result import (
 
 
 __all__ = [
-    # ==============================================================
     # State
-    # ==============================================================
-
     "EngineeringPhase",
     "EngineeringState",
 
-    # ==============================================================
     # Evidence
-    # ==============================================================
-
     "EvidenceKind",
     "EngineeringEvidence",
 
-    # ==============================================================
     # Requirement
-    # ==============================================================
-
     "RequirementIntent",
     "PermissionScope",
     "EngineeringPermission",
     "EngineeringRequirement",
 
-    # ==============================================================
     # Repository
-    # ==============================================================
-
     "RepositoryPathKind",
     "RepositoryComponentKind",
     "RepositoryPath",
@@ -143,49 +141,34 @@ __all__ = [
     "RepositoryModel",
     "RepositoryScanPolicy",
 
-    # ==============================================================
     # Knowledge
-    # ==============================================================
-
     "KnowledgeKind",
     "KnowledgeAuthority",
     "EngineeringKnowledgeItem",
     "EngineeringKnowledgeContext",
     "EngineeringKnowledgePolicy",
 
-    # ==============================================================
     # Planning
-    # ==============================================================
-
     "PlanStatus",
     "PlanChangeReason",
     "EngineeringPlanStep",
     "PlanRevision",
     "AdaptiveEngineeringPlan",
 
-    # ==============================================================
     # Task Graph
-    # ==============================================================
-
     "EngineeringTaskKind",
     "EngineeringTaskStatus",
     "EngineeringTask",
     "EngineeringTaskGraph",
 
-    # ==============================================================
     # Implementation
-    # ==============================================================
-
     "ImplementationStatus",
     "ImplementationRequest",
     "ImplementationChange",
     "ImplementationEvidence",
     "ImplementationResult",
 
-    # ==============================================================
     # Verification
-    # ==============================================================
-
     "VerificationDimension",
     "VerificationStatus",
     "VerificationAction",
@@ -195,10 +178,7 @@ __all__ = [
     "VerificationRequest",
     "VerificationResult",
 
-    # ==============================================================
     # Diagnosis
-    # ==============================================================
-
     "DiagnosisCategory",
     "DiagnosisConfidence",
     "DiagnosisAction",
@@ -209,31 +189,28 @@ __all__ = [
     "DiagnosisResult",
     "confidence_level",
 
-    # ==============================================================
-    # Session
-    # ==============================================================
+    # Recovery
+    "RecoveryAction",
+    "RecoveryStatus",
+    "RecoveryRequest",
+    "RepairRequest",
+    "RetestRequest",
+    "RecoveryDecision",
+    "RecoveryResult",
 
+    # Session
     "SessionTransition",
     "EngineeringSession",
     "AuthoritativeEngineeringSession",
 
-    # ==============================================================
     # Lifecycle
-    # ==============================================================
-
     "EngineeringLifecycle",
     "LifecycleExecutionRecord",
 
-    # ==============================================================
     # Persistence
-    # ==============================================================
-
     "EngineeringStore",
 
-    # ==============================================================
     # Result
-    # ==============================================================
-
     "EngineeringOutcome",
     "EngineeringResult",
 ]
