@@ -2,10 +2,6 @@
 
 This package contains the stable contracts shared by the autonomous
 engineering lifecycle.
-
-The contracts intentionally remain independent of legacy execution
-implementations. Existing ARIA services will be adapted to these
-contracts during the later integration steps.
 """
 
 from .engineering_state import (
@@ -60,6 +56,14 @@ from .engineering_task_graph import (
     EngineeringTaskGraph,
 )
 
+from .engineering_implementation import (
+    ImplementationStatus,
+    ImplementationRequest,
+    ImplementationChange,
+    ImplementationEvidence,
+    ImplementationResult,
+)
+
 from .engineering_session import (
     SessionTransition,
     EngineeringSession,
@@ -101,7 +105,6 @@ __all__ = [
     "RepositoryComponentKind",
     "RepositoryPath",
     "RepositoryComponent",
-    "RepositoryModel",
     "RepositoryScanPolicy",
 
     # Knowledge
@@ -123,6 +126,13 @@ __all__ = [
     "EngineeringTaskStatus",
     "EngineeringTask",
     "EngineeringTaskGraph",
+
+    # Implementation
+    "ImplementationStatus",
+    "ImplementationRequest",
+    "ImplementationChange",
+    "ImplementationEvidence",
+    "ImplementationResult",
 
     # Session
     "SessionTransition",
