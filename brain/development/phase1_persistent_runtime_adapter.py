@@ -25,6 +25,34 @@ from .persistent_engineering_runtime import (
     PersistentEngineeringResult,
 )
 
+from .authoritative_engineering_persistence import (
+    AuthoritativeEngineeringPersistence,
+)
+from .authoritative_engineering_requirement import (
+    AuthoritativeEngineeringRequirement,
+)
+from .authoritative_engineering_knowledge import (
+    AuthoritativeEngineeringKnowledge,
+)
+from .authoritative_implementation import (
+    AuthoritativeImplementationEngine,
+)
+from .authoritative_verification import (
+    AuthoritativeVerificationEngine,
+)
+from .authoritative_diagnosis import (
+    AuthoritativeDiagnosisEngine,
+)
+from .authoritative_recovery import (
+    AuthoritativeRecoveryEngine,
+)
+from .authoritative_acceptance import (
+    AuthoritativeAcceptanceEngine,
+)
+from .authoritative_experience import (
+    AuthoritativeExperienceEngine,
+)
+
 logger = logging.getLogger("aria")
 
 
@@ -50,6 +78,13 @@ class Phase1PersistentRuntimeAdapter:
 
         self.legacy_phase1_runtime = legacy_phase1_runtime
         self.development_controller = development_controller
+
+        # One persistent store is shared by the authoritative lifecycle
+        # and the persistent runtime.  This prevents the new engineering
+        # spine from creating an independent state store.
+        self.engineering_persistence = (
+            AuthoritativeEngineeringPersistence()
+        )
 
         self._persistent_runtime = (
             self._build_persistent_runtime()
@@ -110,6 +145,14 @@ class Phase1PersistentRuntimeAdapter:
                         self.development_controller
                     )
 
+                elif name in {
+                    "persistence",
+                    "engineering_persistence",
+                }:
+                    kwargs[name] = (
+                        self.engineering_persistence
+                    )
+
             if kwargs:
 
                 try:
@@ -136,96 +179,177 @@ class Phase1PersistentRuntimeAdapter:
 
     def _build_final_engineer(self) -> Any:
         """
-        Load the final autonomous-engineer facade without making bootstrap
-        depend on its exact constructor signature.
+        Build the final engineer with the REAL Phase 1 services.
+
+        This is the critical integration boundary.  The final engineer
+        must never be constructed as an empty facade with all engines
+        set to None.
         """
-
         try:
-
             from .final_autonomous_engineer import (
                 FinalAutonomousEngineer,
             )
 
-        except Exception as exc:
-
-            logger.warning(
-                "[Phase1][FinalRuntime] FinalAutonomousEngineer is "
-                "not available; legacy runtime retained | error=%s",
-                exc,
+            controller = self.development_controller
+            agent = getattr(
+                controller,
+                "agent",
+                None,
             )
 
-            return None
+            if agent is None:
+                raise RuntimeError(
+                    "DevelopmentController.agent is unavailable."
+                )
 
-        try:
-
-            signature = inspect.signature(
-                FinalAutonomousEngineer
-            )
-
-            parameters = signature.parameters
-
-            candidates = {
-                "legacy_runtime": (
-                    self.legacy_phase1_runtime
-                ),
-                "legacy_phase1_runtime": (
-                    self.legacy_phase1_runtime
-                ),
-                "persistent_runtime": (
-                    self._persistent_runtime
-                ),
-                "development_controller": (
-                    self.development_controller
-                ),
-            }
-
-            kwargs: dict[str, Any] = {}
-
-            for name, parameter in parameters.items():
-
-                if name in candidates:
-
-                    kwargs[name] = candidates[name]
-
-                elif (
-                    parameter.default
-                    is inspect.Parameter.empty
-                    and name != "self"
-                ):
-
-                    logger.warning(
-                        "[Phase1][FinalRuntime] Final engineer has "
-                        "an unresolved required constructor argument: %s",
-                        name,
+            requirement_engine = (
+                AuthoritativeEngineeringRequirement(
+                    requirement_intelligence=getattr(
+                        agent,
+                        "requirement_intelligence",
+                        None,
                     )
-
-            try:
-
-                engineer = FinalAutonomousEngineer(
-                    **kwargs
                 )
+            )
 
-            except TypeError:
+            runtime_components = getattr(
+                self.legacy_phase1_runtime,
+                "components",
+                {},
+            ) or {}
 
-                engineer = (
-                    FinalAutonomousEngineer()
+            knowledge_engine = (
+                AuthoritativeEngineeringKnowledge(
+                    knowledge_database=getattr(
+                        self.legacy_phase1_runtime,
+                        "knowledge_database",
+                        None,
+                    ),
+                    knowledge_graph=getattr(
+                        self.legacy_phase1_runtime,
+                        "knowledge_graph",
+                        None,
+                    ),
+                    knowledge_engine=runtime_components.get(
+                        "knowledge_retriever"
+                    ),
+                    search_engine=runtime_components.get(
+                        "knowledge_retriever"
+                    ),
+                    research_engine=runtime_components.get(
+                        "knowledge_retriever"
+                    ),
+                    memory_engine=getattr(
+                        self.legacy_phase1_runtime,
+                        "memory_engine",
+                        None,
+                    ),
                 )
+            )
+
+            implementation_engine = (
+                AuthoritativeImplementationEngine(
+                    development_controller=controller,
+                    development_agent=agent,
+                )
+            )
+
+            verification_engine = (
+                AuthoritativeVerificationEngine(
+                    verifier=getattr(
+                        agent,
+                        "intelligent_verification",
+                        None,
+                    )
+                )
+            )
+
+            diagnosis_engine = (
+                AuthoritativeDiagnosisEngine()
+            )
+
+            repair_loop = runtime_components.get(
+                "autonomous_repair_loop"
+            )
+
+            recovery_engine = (
+                AuthoritativeRecoveryEngine(
+                    repair_engine=repair_loop,
+                )
+            )
+
+            acceptance_engine = (
+                AuthoritativeAcceptanceEngine(
+                    judgment_engine=getattr(
+                        agent,
+                        "engineering_judgment",
+                        None,
+                    ),
+                    verification_engine=verification_engine,
+                )
+            )
+
+            experience_engine = (
+                AuthoritativeExperienceEngine(
+                    knowledge_engine=knowledge_engine,
+                )
+            )
+
+            # The orchestrator builds the authoritative plan/task graph
+            # itself when no independent planner/graph adapter is needed.
+            from .authoritative_engineering_orchestrator import (
+                AuthoritativeEngineeringOrchestrator,
+            )
+
+            orchestrator = (
+                AuthoritativeEngineeringOrchestrator(
+                    persistence=self.engineering_persistence,
+                    requirement_engine=requirement_engine,
+                    knowledge_engine=knowledge_engine,
+                    implementation_engine=implementation_engine,
+                    verification_engine=verification_engine,
+                    diagnosis_engine=diagnosis_engine,
+                    recovery_engine=recovery_engine,
+                    acceptance_engine=acceptance_engine,
+                    experience_engine=experience_engine,
+                    repository_engine=getattr(
+                        agent,
+                        "repository_manager",
+                        None,
+                    ),
+                )
+            )
+
+            engineer = FinalAutonomousEngineer(
+                orchestrator=orchestrator,
+                legacy_runtime=self._persistent_runtime,
+                session_runtime=None,
+            )
+
+            self._integrated_orchestrator = orchestrator
 
             logger.info(
                 "[Phase1][FinalRuntime] Final autonomous engineer "
-                "connected | class=%s",
-                type(engineer).__name__,
+                "fully integrated | requirement=%s | knowledge=%s | "
+                "implementation=%s | verification=%s | diagnosis=%s | "
+                "recovery=%s | acceptance=%s | experience=%s",
+                type(requirement_engine).__name__,
+                type(knowledge_engine).__name__,
+                type(implementation_engine).__name__,
+                type(verification_engine).__name__,
+                type(diagnosis_engine).__name__,
+                type(recovery_engine).__name__,
+                type(acceptance_engine).__name__,
+                type(experience_engine).__name__,
             )
 
             return engineer
 
         except Exception:
-
             logger.exception(
                 "[Phase1][FinalRuntime] Final autonomous engineer "
-                "could not be initialized; legacy runtime retained."
+                "could not be fully integrated."
             )
-
             return None
 
     # ------------------------------------------------------------------
