@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from .code_generation_router import CodeGenerationRouter
+from .coding_context_selector import CodingContextSelector
 
 logger = logging.getLogger("aria.development.codegen_bridge")
 
@@ -60,6 +62,10 @@ Rules:
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> None:
         self.code_generation_router = code_generation_router
+        self.context_selector = CodingContextSelector(
+            max_files=int(os.getenv("ARIA_CODING_CONTEXT_MAX_FILES", "12")),
+            max_chars=int(os.getenv("ARIA_CODING_CONTEXT_MAX_CHARS", "50000")),
+        )
         try:
             self.temperature = max(0.0, min(1.0, float(temperature)))
         except (TypeError, ValueError):
@@ -69,18 +75,20 @@ Rules:
         except (TypeError, ValueError):
             self.max_tokens = self.DEFAULT_MAX_TOKENS
 
-    @staticmethod
-    def _compact_context(context: dict[str, Any]) -> dict[str, Any]:
+    def _compact_context(self, context: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(context, dict):
             return {}
         result = dict(context)
         repository = result.get("repository")
         if isinstance(repository, dict):
-            files = repository.get("files")
-            if isinstance(files, list):
-                repository = dict(repository)
-                repository["files"] = files[:8]
-                result["repository"] = repository
+            selected_context = self.context_selector.select(result)
+            result["repository"] = selected_context
+            result["context_selection"] = {
+                "strategy": selected_context.get("selection"),
+                "available_files": selected_context.get("available_files", 0),
+                "selected_files": selected_context.get("selected_count", 0),
+                "context_chars": selected_context.get("context_chars", 0),
+            }
         return result
 
     async def __call__(
