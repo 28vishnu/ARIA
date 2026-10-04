@@ -31,24 +31,18 @@ class Phase1PersistentRuntimeAdapter:
             ↓
         AutonomousDevelopmentBridge
             ↓
+        AutonomousEngineerOrchestrator
+            ↓
         DevelopmentController
             ↓
         DevelopmentAgent
 
-    Important:
-
-    - Existing Phase 1 capabilities remain available.
-    - Existing dictionary-style `.get()` access remains available.
-    - Existing `.status()` / `.health()` remain compatible.
-    - Persistent engineering sessions become the recovery boundary.
-    - The adapter does NOT create a second development bridge when the
-      existing Phase 1 runtime already provides one.
-    - GitHub push and deployment remain controlled by their existing
-      permissioned systems.
+    The adapter preserves the existing Phase 1 capability graph while
+    making persistent engineering sessions the recovery boundary.
     """
 
     VERSION = (
-        "PHASE1-PERSISTENT-ADAPTER-V1"
+        "PHASE1-PERSISTENT-ADAPTER-20261004"
     )
 
     PERSISTENT_RUNTIME_KEY = (
@@ -57,6 +51,19 @@ class Phase1PersistentRuntimeAdapter:
 
     PERSISTENCE_KEY = (
         "engineering_persistence"
+    )
+
+    REQUIRED_LEGACY_CAPABILITIES = (
+        "autonomous_development_bridge",
+    )
+
+    OPTIONAL_LEGACY_CAPABILITIES = (
+        "autonomous_coding_loop",
+        "autonomous_validation_loop",
+        "autonomous_repair_loop",
+        "knowledge_coding_feedback",
+        "permissioned_git_workflow",
+        "permissioned_deployment_workflow",
     )
 
     def __init__(
@@ -73,10 +80,13 @@ class Phase1PersistentRuntimeAdapter:
             )
 
         self.legacy_runtime = legacy_runtime
+
         self.development_controller = (
             development_controller
         )
+
         self.persistence = persistence
+
         self.timeout_seconds = float(
             timeout_seconds
         )
@@ -92,9 +102,14 @@ class Phase1PersistentRuntimeAdapter:
             )
         )
 
+        self._integration_check = (
+            self._perform_integration_check()
+        )
+
         logger.info(
             "[Phase1PersistentAdapter] Initialized | "
-            "runtime=%s | development_runtime=%s",
+            "healthy=%s | runtime=%s | development_runtime=%s",
+            self._integration_check["healthy"],
             self.VERSION,
             type(
                 self._development_runtime
@@ -102,7 +117,7 @@ class Phase1PersistentRuntimeAdapter:
         )
 
     # ============================================================
-    # Runtime resolution
+    # DEVELOPMENT RUNTIME RESOLUTION
     # ============================================================
 
     def _resolve_development_runtime(
@@ -112,8 +127,8 @@ class Phase1PersistentRuntimeAdapter:
         Reuse the already-created Phase 1 autonomous development
         bridge whenever possible.
 
-        This is critical because creating another bridge would produce
-        duplicate autonomous-development infrastructure.
+        This prevents creation of duplicate autonomous-development
+        infrastructure.
         """
 
         bridge = self._legacy_get(
@@ -121,15 +136,41 @@ class Phase1PersistentRuntimeAdapter:
         )
 
         if bridge is not None:
-            logger.info(
+
+            if callable(
+                getattr(
+                    bridge,
+                    "develop",
+                    None,
+                )
+            ):
+                logger.info(
+                    "[Phase1PersistentAdapter] "
+                    "Reusing existing autonomous development bridge."
+                )
+
+                return bridge
+
+            if callable(
+                getattr(
+                    bridge,
+                    "execute",
+                    None,
+                )
+            ):
+                logger.info(
+                    "[Phase1PersistentAdapter] "
+                    "Reusing existing executable development runtime."
+                )
+
+                return bridge
+
+            logger.warning(
                 "[Phase1PersistentAdapter] "
-                "Reusing existing autonomous development bridge."
+                "Existing autonomous development bridge does not "
+                "expose develop()/execute()."
             )
 
-            return bridge
-
-        # Some older runtime bundles may expose the development
-        # controller directly instead of the bridge.
         controller = self._legacy_get(
             "development_controller"
         )
@@ -143,6 +184,7 @@ class Phase1PersistentRuntimeAdapter:
             return controller
 
         if self.development_controller is not None:
+
             logger.info(
                 "[Phase1PersistentAdapter] "
                 "Using supplied development controller."
@@ -150,34 +192,14 @@ class Phase1PersistentRuntimeAdapter:
 
             return self.development_controller
 
-        # Last-resort compatibility path.
-        #
-        # Import lazily so simply importing this adapter does not
-        # instantiate another bridge unless it is genuinely needed.
-        try:
-            from .autonomous_development_bridge import (
-                AutonomousDevelopmentBridge,
-            )
-
-            if self.development_controller is None:
-                raise RuntimeError(
-                    "No existing autonomous development bridge or "
-                    "development controller is available."
-                )
-
-            return AutonomousDevelopmentBridge(
-                self.development_controller,
-                timeout_seconds=self.timeout_seconds,
-            )
-
-        except Exception as exc:
-            raise RuntimeError(
-                "Unable to resolve the existing Phase 1 "
-                "development runtime."
-            ) from exc
+        raise RuntimeError(
+            "Unable to resolve a valid Phase 1 development runtime. "
+            "An autonomous_development_bridge or "
+            "development_controller is required."
+        )
 
     # ============================================================
-    # Legacy runtime compatibility
+    # LEGACY RUNTIME ACCESS
     # ============================================================
 
     def _legacy_get(
@@ -186,19 +208,21 @@ class Phase1PersistentRuntimeAdapter:
         default: Any = None,
     ) -> Any:
         """
-        Safely read a capability from the legacy runtime.
+        Safely retrieve a capability from the existing Phase 1
+        runtime bundle.
 
         Supports:
 
         - dict
-        - Mapping-like objects
-        - objects exposing get()
-        - objects exposing attributes
+        - mapping-like objects
+        - get()
+        - attributes
         """
 
         runtime = self.legacy_runtime
 
         try:
+
             getter = getattr(
                 runtime,
                 "get",
@@ -206,6 +230,7 @@ class Phase1PersistentRuntimeAdapter:
             )
 
             if callable(getter):
+
                 value = getter(
                     key,
                     default,
@@ -215,24 +240,28 @@ class Phase1PersistentRuntimeAdapter:
                     return value
 
         except Exception:
+
             logger.debug(
                 "[Phase1PersistentAdapter] "
-                "Legacy get failed | key=%s",
+                "Legacy get() failed | key=%s",
                 key,
                 exc_info=True,
             )
 
         try:
+
             if isinstance(
                 runtime,
                 dict,
             ):
+
                 return runtime.get(
                     key,
                     default,
                 )
 
         except Exception:
+
             logger.debug(
                 "[Phase1PersistentAdapter] "
                 "Dictionary lookup failed | key=%s",
@@ -241,14 +270,21 @@ class Phase1PersistentRuntimeAdapter:
             )
 
         try:
-            return getattr(
+
+            value = getattr(
                 runtime,
                 key,
                 default,
             )
 
+            if value is not None:
+                return value
+
         except Exception:
-            return default
+
+            pass
+
+        return default
 
     def get(
         self,
@@ -258,11 +294,11 @@ class Phase1PersistentRuntimeAdapter:
         """
         Preserve the existing Phase 1 `.get()` API.
 
-        This is required because bootstrap and the capability registry
-        already use:
+        Existing bootstrap code can continue doing:
 
-            phase1_runtime.get("...")
+            phase1_runtime.get("autonomous_development_bridge")
 
+        while new persistent capabilities are also exposed.
         """
 
         if key == self.PERSISTENT_RUNTIME_KEY:
@@ -309,10 +345,6 @@ class Phase1PersistentRuntimeAdapter:
         )
 
     def keys(self) -> list[str]:
-        """
-        Return known legacy and authoritative runtime keys.
-        """
-
         keys = [
             self.PERSISTENT_RUNTIME_KEY,
             self.PERSISTENCE_KEY,
@@ -321,25 +353,317 @@ class Phase1PersistentRuntimeAdapter:
         runtime = self.legacy_runtime
 
         try:
-            if hasattr(
+
+            runtime_keys = getattr(
                 runtime,
                 "keys",
-            ):
-                for key in runtime.keys():
+                None,
+            )
+
+            if callable(runtime_keys):
+
+                for key in runtime_keys():
+
                     if key not in keys:
                         keys.append(key)
 
         except Exception:
+
             logger.debug(
                 "[Phase1PersistentAdapter] "
-                "Could not enumerate legacy runtime keys.",
+                "Could not enumerate runtime keys.",
                 exc_info=True,
             )
 
         return keys
 
     # ============================================================
-    # Authoritative engineering operations
+    # STEP 28 — INTEGRATION VERIFICATION
+    # ============================================================
+
+    def _perform_integration_check(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Perform a non-destructive structural integration check.
+
+        This does NOT execute an engineering request.
+
+        It verifies that:
+
+        1. The legacy Phase 1 runtime exists.
+        2. The autonomous development bridge exists.
+        3. The bridge exposes an executable development API.
+        4. The persistent runtime exists.
+        5. The persistent runtime exposes develop().
+        6. Resume/status/recovery boundaries exist.
+        7. Existing capability access remains available.
+        """
+
+        checks: dict[str, bool] = {}
+
+        errors: list[str] = []
+
+        warnings: list[str] = []
+
+        # --------------------------------------------------------
+        # Legacy runtime
+        # --------------------------------------------------------
+
+        checks["legacy_runtime"] = (
+            self.legacy_runtime is not None
+        )
+
+        if not checks["legacy_runtime"]:
+            errors.append(
+                "Legacy Phase 1 runtime is unavailable."
+            )
+
+        # --------------------------------------------------------
+        # Development runtime
+        # --------------------------------------------------------
+
+        development_runtime = (
+            self._development_runtime
+        )
+
+        has_develop = callable(
+            getattr(
+                development_runtime,
+                "develop",
+                None,
+            )
+        )
+
+        has_execute = callable(
+            getattr(
+                development_runtime,
+                "execute",
+                None,
+            )
+        )
+
+        checks["development_runtime"] = (
+            has_develop
+            or has_execute
+        )
+
+        if not checks["development_runtime"]:
+
+            errors.append(
+                "Resolved development runtime does not expose "
+                "develop() or execute()."
+            )
+
+        # --------------------------------------------------------
+        # Persistent runtime
+        # --------------------------------------------------------
+
+        checks["persistent_runtime"] = (
+            self.runtime is not None
+        )
+
+        if not checks["persistent_runtime"]:
+
+            errors.append(
+                "PersistentEngineeringRuntime is unavailable."
+            )
+
+        # --------------------------------------------------------
+        # Persistent develop
+        # --------------------------------------------------------
+
+        checks["persistent_develop"] = callable(
+            getattr(
+                self.runtime,
+                "develop",
+                None,
+            )
+        )
+
+        if not checks["persistent_develop"]:
+
+            errors.append(
+                "PersistentEngineeringRuntime does not expose "
+                "develop()."
+            )
+
+        # --------------------------------------------------------
+        # Persistent resume
+        # --------------------------------------------------------
+
+        checks["persistent_resume"] = callable(
+            getattr(
+                self.runtime,
+                "resume",
+                None,
+            )
+        )
+
+        if not checks["persistent_resume"]:
+
+            errors.append(
+                "PersistentEngineeringRuntime does not expose "
+                "resume()."
+            )
+
+        # --------------------------------------------------------
+        # Persistent status
+        # --------------------------------------------------------
+
+        checks["persistent_status"] = callable(
+            getattr(
+                self.runtime,
+                "status",
+                None,
+            )
+        )
+
+        if not checks["persistent_status"]:
+
+            errors.append(
+                "PersistentEngineeringRuntime does not expose "
+                "status()."
+            )
+
+        # --------------------------------------------------------
+        # Recovery enumeration
+        # --------------------------------------------------------
+
+        checks["recoverable_sessions"] = callable(
+            getattr(
+                self.runtime,
+                "recoverable_sessions",
+                None,
+            )
+        )
+
+        if not checks["recoverable_sessions"]:
+
+            warnings.append(
+                "Persistent runtime does not expose "
+                "recoverable_sessions()."
+            )
+
+        # --------------------------------------------------------
+        # Checkpoint
+        # --------------------------------------------------------
+
+        checks["checkpoint"] = callable(
+            getattr(
+                self.runtime,
+                "checkpoint",
+                None,
+            )
+        )
+
+        if not checks["checkpoint"]:
+
+            warnings.append(
+                "Persistent runtime does not expose "
+                "checkpoint()."
+            )
+
+        # --------------------------------------------------------
+        # Existing capability graph
+        # --------------------------------------------------------
+
+        for capability in (
+            self.REQUIRED_LEGACY_CAPABILITIES
+        ):
+
+            available = (
+                self._legacy_get(
+                    capability
+                )
+                is not None
+            )
+
+            checks[
+                f"legacy_{capability}"
+            ] = available
+
+            if not available:
+
+                warnings.append(
+                    "Legacy Phase 1 capability is unavailable: "
+                    f"{capability}"
+                )
+
+        for capability in (
+            self.OPTIONAL_LEGACY_CAPABILITIES
+        ):
+
+            available = (
+                self._legacy_get(
+                    capability
+                )
+                is not None
+            )
+
+            checks[
+                f"legacy_{capability}"
+            ] = available
+
+        # --------------------------------------------------------
+        # Adapter compatibility
+        # --------------------------------------------------------
+
+        checks["get_compatibility"] = callable(
+            getattr(
+                self,
+                "get",
+                None,
+            )
+        )
+
+        checks["health_compatibility"] = callable(
+            getattr(
+                self,
+                "health",
+                None,
+            )
+        )
+
+        checks["status_compatibility"] = callable(
+            getattr(
+                self,
+                "status",
+                None,
+            )
+        )
+
+        healthy = (
+            len(errors) == 0
+        )
+
+        return {
+            "healthy": healthy,
+            "checks": checks,
+            "errors": errors,
+            "warnings": warnings,
+            "version": self.VERSION,
+        }
+
+    def verify_integration(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return the latest structural integration verification.
+
+        Safe to call repeatedly.
+        """
+
+        self._integration_check = (
+            self._perform_integration_check()
+        )
+
+        return dict(
+            self._integration_check
+        )
+
+    # ============================================================
+    # AUTHORITATIVE ENGINEERING OPERATIONS
     # ============================================================
 
     async def develop(
@@ -354,13 +678,28 @@ class Phase1PersistentRuntimeAdapter:
         if not str(
             requirement or ""
         ).strip():
+
             raise ValueError(
                 "Engineering requirement cannot be empty."
             )
 
+        verification = (
+            self.verify_integration()
+        )
+
+        if not verification["healthy"]:
+
+            raise RuntimeError(
+                "Phase 1 persistent engineering runtime "
+                "failed integration verification: "
+                + "; ".join(
+                    verification["errors"]
+                )
+            )
+
         logger.info(
             "[Phase1PersistentAdapter] "
-            "Starting persistent development | "
+            "Starting persistent autonomous development | "
             "requirement=%r",
             requirement,
         )
@@ -382,8 +721,23 @@ class Phase1PersistentRuntimeAdapter:
         if not str(
             session_id or ""
         ).strip():
+
             raise ValueError(
                 "session_id is required."
+            )
+
+        verification = (
+            self.verify_integration()
+        )
+
+        if not verification["healthy"]:
+
+            raise RuntimeError(
+                "Phase 1 persistent engineering runtime "
+                "failed integration verification: "
+                + "; ".join(
+                    verification["errors"]
+                )
             )
 
         logger.info(
@@ -402,9 +756,6 @@ class Phase1PersistentRuntimeAdapter:
         self,
         session_id: str,
     ) -> dict[str, Any]:
-        """
-        Return authoritative persisted engineering status.
-        """
 
         return await self.runtime.status(
             session_id
@@ -413,9 +764,6 @@ class Phase1PersistentRuntimeAdapter:
     async def recoverable_sessions(
         self,
     ) -> tuple[str, ...]:
-        """
-        Return persisted sessions that can be resumed.
-        """
 
         return await self.runtime.recoverable_sessions()
 
@@ -423,54 +771,45 @@ class Phase1PersistentRuntimeAdapter:
         self,
         session_id: str,
     ) -> bool:
-        """
-        Persist the current engineering state.
-        """
 
         return await self.runtime.checkpoint(
             session_id
         )
 
     # ============================================================
-    # Legacy-compatible status
+    # LEGACY STATUS
     # ============================================================
 
     def status(
         self,
     ) -> dict[str, Any]:
-        """
-        Preserve the existing synchronous Phase 1 status contract.
-
-        The persistent runtime itself exposes asynchronous session
-        status, so this method reports integration health without
-        falsely claiming that an individual engineering session has
-        completed.
-        """
-
         try:
+
             legacy_status: dict[str, Any] = {}
 
-            legacy_status_method = getattr(
+            method = getattr(
                 self.legacy_runtime,
                 "status",
                 None,
             )
 
-            if callable(
-                legacy_status_method
-            ):
+            if callable(method):
+
                 try:
-                    value = legacy_status_method()
+
+                    value = method()
 
                     if isinstance(
                         value,
                         dict,
                     ):
+
                         legacy_status = dict(
                             value
                         )
 
                 except Exception:
+
                     logger.exception(
                         "[Phase1PersistentAdapter] "
                         "Legacy status failed."
@@ -484,17 +823,24 @@ class Phase1PersistentRuntimeAdapter:
                 or 0
             )
 
-            return {
-                **legacy_status,
-                "healthy": bool(
+            verification = (
+                self.verify_integration()
+            )
+
+            healthy = (
+                bool(
                     legacy_status.get(
                         "healthy",
                         True,
                     )
-                ),
-                "runtime_version": (
-                    self.VERSION
-                ),
+                )
+                and verification["healthy"]
+            )
+
+            return {
+                **legacy_status,
+                "healthy": healthy,
+                "runtime_version": self.VERSION,
                 "component_count": (
                     legacy_component_count + 2
                 ),
@@ -511,9 +857,11 @@ class Phase1PersistentRuntimeAdapter:
                         self._development_runtime
                     ).__name__
                 ),
+                "integration": verification,
             }
 
         except Exception as exc:
+
             logger.exception(
                 "[Phase1PersistentAdapter] "
                 "Status failed."
@@ -528,44 +876,47 @@ class Phase1PersistentRuntimeAdapter:
             }
 
     # ============================================================
-    # Legacy-compatible health
+    # LEGACY HEALTH
     # ============================================================
 
     def health(
         self,
     ) -> dict[str, Any]:
-        """
-        Preserve the existing synchronous health contract.
-        """
-
         try:
+
             legacy_health: dict[str, Any] = {}
 
-            legacy_health_method = getattr(
+            method = getattr(
                 self.legacy_runtime,
                 "health",
                 None,
             )
 
-            if callable(
-                legacy_health_method
-            ):
+            if callable(method):
+
                 try:
-                    value = legacy_health_method()
+
+                    value = method()
 
                     if isinstance(
                         value,
                         dict,
                     ):
+
                         legacy_health = dict(
                             value
                         )
 
                 except Exception:
+
                     logger.exception(
                         "[Phase1PersistentAdapter] "
                         "Legacy health failed."
                     )
+
+            verification = (
+                self.verify_integration()
+            )
 
             legacy_healthy = bool(
                 legacy_health.get(
@@ -574,22 +925,16 @@ class Phase1PersistentRuntimeAdapter:
                 )
             )
 
-            persistent_runtime_available = (
-                self.runtime is not None
-            )
-
             healthy = (
                 legacy_healthy
-                and persistent_runtime_available
+                and verification["healthy"]
             )
 
             return {
                 **legacy_health,
                 "healthy": healthy,
                 "runtime_version": self.VERSION,
-                "persistent_engineering_runtime": (
-                    persistent_runtime_available
-                ),
+                "persistent_engineering_runtime": True,
                 "persistence_configured": (
                     self.persistence is not None
                 ),
@@ -598,9 +943,11 @@ class Phase1PersistentRuntimeAdapter:
                         self._development_runtime
                     ).__name__
                 ),
+                "integration": verification,
             }
 
         except Exception as exc:
+
             logger.exception(
                 "[Phase1PersistentAdapter] "
                 "Health failed."
@@ -614,23 +961,15 @@ class Phase1PersistentRuntimeAdapter:
             }
 
     # ============================================================
-    # Capability access helpers
+    # LEGACY RUNTIME INFORMATION
     # ============================================================
-
-    def capability(
-        self,
-        key: str,
-        default: Any = None,
-    ) -> Any:
-        return self.get(
-            key,
-            default,
-        )
 
     def legacy_runtime_status(
         self,
     ) -> dict[str, Any]:
+
         try:
+
             method = getattr(
                 self.legacy_runtime,
                 "status",
@@ -638,6 +977,7 @@ class Phase1PersistentRuntimeAdapter:
             )
 
             if callable(method):
+
                 result = method()
 
                 if isinstance(
@@ -647,110 +987,6 @@ class Phase1PersistentRuntimeAdapter:
                     return result
 
         except Exception as exc:
+
             return {
-                "healthy": False,
-                "error": str(exc),
-            }
-
-        return {}
-
-    def legacy_runtime_health(
-        self,
-    ) -> dict[str, Any]:
-        try:
-            method = getattr(
-                self.legacy_runtime,
-                "health",
-                None,
-            )
-
-            if callable(method):
-                result = method()
-
-                if isinstance(
-                    result,
-                    dict,
-                ):
-                    return result
-
-        except Exception as exc:
-            return {
-                "healthy": False,
-                "error": str(exc),
-            }
-
-        return {}
-
-    # ============================================================
-    # Diagnostics
-    # ============================================================
-
-    def describe(
-        self,
-    ) -> dict[str, Any]:
-        return {
-            "adapter_version": self.VERSION,
-            "persistent_runtime": True,
-            "persistence_configured": (
-                self.persistence is not None
-            ),
-            "legacy_runtime_type": (
-                type(
-                    self.legacy_runtime
-                ).__name__
-            ),
-            "development_runtime_type": (
-                type(
-                    self._development_runtime
-                ).__name__
-            ),
-            "capabilities": {
-                "develop": callable(
-                    getattr(
-                        self,
-                        "develop",
-                        None,
-                    )
-                ),
-                "resume": callable(
-                    getattr(
-                        self,
-                        "resume",
-                        None,
-                    )
-                ),
-                "status": callable(
-                    getattr(
-                        self,
-                        "status",
-                        None,
-                    )
-                ),
-                "health": callable(
-                    getattr(
-                        self,
-                        "health",
-                        None,
-                    )
-                ),
-                "checkpoint": callable(
-                    getattr(
-                        self,
-                        "checkpoint",
-                        None,
-                    )
-                ),
-                "recoverable_sessions": callable(
-                    getattr(
-                        self,
-                        "recoverable_sessions",
-                        None,
-                    )
-                ),
-            },
-        }
-
-
-__all__ = [
-    "Phase1PersistentRuntimeAdapter",
-]
+                "healthy":
