@@ -85,6 +85,7 @@ from brain.development.development_controller import DevelopmentController
 
 from brain.development.git_manager import GitManager
 from brain.development.github_manager import GitHubManager
+from brain.development.github_sync import GitHubSync
 
 from brain.development.build_manager import BuildManager
 from brain.development.deployment_manager import DeploymentManager
@@ -906,6 +907,31 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Phase 1 — GitHub Synchronization
+    # ---------------------------------------------------------
+
+    github_sync = GitHubSync(
+        git_manager=git_manager,
+        github_manager=github_manager,
+        command_timeout=float(
+            os.getenv(
+                "ARIA_GITHUB_SYNC_TIMEOUT",
+                "180",
+            )
+        ),
+    )
+
+    registry.register(
+        "github_sync",
+        github_sync,
+    )
+
+    logger.info(
+        "[Phase1] GitHub synchronization registered | "
+        "fetch=True | pull=True | clone=True"
+    )
+
+    # ---------------------------------------------------------
     # Phase 1 — Build / Deployment / Health / Rollback
     # ---------------------------------------------------------
 
@@ -1101,6 +1127,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "development_controller": development_controller,
             "git_manager": git_manager,
             "github_manager": github_manager,
+            "github_sync": github_sync,
             "build_manager_factory": BuildManager,
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
@@ -1850,6 +1877,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "development_controller": development_controller,
             "git_manager": git_manager,
             "github_manager": github_manager,
+            "github_sync": github_sync,
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
