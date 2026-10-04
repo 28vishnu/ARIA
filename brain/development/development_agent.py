@@ -26,6 +26,7 @@ from .engineering_reasoning import EngineeringReasoningCore
 from .intelligent_task_graph import IntelligentTaskGraph, TaskGraph
 from .task_graph_executor import TaskExecutionState, TaskGraphExecutor
 from .intelligent_verification import IntelligentVerification, VerificationDecision
+from .root_cause_engine import RootCauseAssessment, RootCauseEngine
 from .deep_repository_reasoning import DeepRepositoryReasoner, RepositoryReasoning
 from .adaptive_engineering_plan import AdaptiveEngineeringPlan
 
@@ -292,6 +293,8 @@ class DevelopmentAgent:
         self.intelligent_task_graph = IntelligentTaskGraph()
         self.task_graph_executor = TaskGraphExecutor()
         self.intelligent_verification = IntelligentVerification()
+        self.root_cause_engine = RootCauseEngine()
+        self._active_root_cause: RootCauseAssessment | None = None
         self._active_task_executor: TaskExecutionState | None = None
         self.deep_repository_reasoner = DeepRepositoryReasoner(
             self.architecture_intelligence
@@ -762,6 +765,10 @@ class DevelopmentAgent:
     ) -> str:
         failure_text = ""
 
+        root_cause_text = self.root_cause_engine.build_prompt_section(
+            getattr(self, "_active_root_cause", None)
+        )
+
         if failure is not None:
             failure_text = (
                 "\n\nPREVIOUS TEST FAILURE:\n"
@@ -896,6 +903,7 @@ class DevelopmentAgent:
             f"{task_graph_section}"
             f"{verification_section}"
             f"{failure_text}"
+            f"{root_cause_text}"
             f"{previous_text}"
         )
 
@@ -3049,6 +3057,33 @@ class DevelopmentAgent:
             analysis: FailureAnalysis,
             attempt: int,
         ) -> bool:
+            self._active_root_cause = self.root_cause_engine.assess(
+                test_result=initial_test,
+                validation=validation,
+                errors=(
+                    *errors,
+                    getattr(analysis, "summary", ""),
+                    getattr(analysis, "error", ""),
+                ),
+                changed_paths=[
+                    change.path
+                    for change in generated_changes
+                ],
+                requirement_text=requirement.raw_text,
+            )
+
+            logger.info(
+                "[DevelopmentAgent] Root-cause assessment | category=%s | confidence=%s | evidence_quality=%s | needs_more=%s",
+                self._active_root_cause.primary.category
+                if self._active_root_cause.primary
+                else "none",
+                self._active_root_cause.primary.confidence
+                if self._active_root_cause.primary
+                else 0.0,
+                self._active_root_cause.evidence_quality,
+                self._active_root_cause.needs_more_evidence,
+            )
+
             if self.code_generator is None:
                 return False
 
@@ -3102,6 +3137,11 @@ class DevelopmentAgent:
                             else {}
                         ),
                         "failure": analysis.to_dict(),
+                        "root_cause": (
+                            self._active_root_cause.to_dict()
+                            if self._active_root_cause is not None
+                            else None
+                        ),
                         "attempt": attempt,
                     },
                 )
@@ -3342,6 +3382,11 @@ class DevelopmentAgent:
                         final_validation.valid
                     ),
                     "intelligent_verification": final_verification.to_dict(),
+                    "root_cause": (
+                        self._active_root_cause.to_dict()
+                        if self._active_root_cause is not None
+                        else None
+                    ),
                     "repair_attempts": getattr(
                         repair_result,
                         "attempts",
