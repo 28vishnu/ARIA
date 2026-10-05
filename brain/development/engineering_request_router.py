@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 """
-ARIA canonical engineering request router.
+Canonical Phase 1 engineering request router.
 
-This module is intentionally small and deterministic.
+This module is a routing boundary only. It does not implement a second
+engineering lifecycle.
 
-Responsibilities:
-    1. Detect whether a request is an engineering request.
-    2. Detect explicit read-only restrictions.
-    3. Route executable engineering requests only to the canonical
-       Phase 1 persistent runtime.
-    4. Never perform GitHub push or deployment itself.
-    5. Never bypass the authoritative engineering runtime.
+Canonical executable path:
 
-This is a routing boundary, not another engineering lifecycle.
+    CognitiveCore
+        -> EngineeringRequestRouter
+        -> Phase1PersistentRuntimeAdapter
+        -> FinalAutonomousEngineer
+        -> AuthoritativeEngineeringOrchestrator
 """
 
 from dataclasses import dataclass
@@ -37,13 +36,7 @@ class EngineeringRequestClassification:
 
 
 class EngineeringRequestRouter:
-    """
-    Canonical gateway between CognitiveCore and Phase 1 engineering.
-
-    Exactly one runtime is accepted:
-
-        Phase1PersistentRuntimeAdapter
-    """
+    """Route software-engineering requests to the canonical Phase 1 runtime."""
 
     ENGINEERING_TERMS = (
         "code",
@@ -157,10 +150,32 @@ class EngineeringRequestRouter:
 
         intent_name = self._intent_name(intent)
 
-        if intent_name in self.SOFTWARE_INTENTS:
+        if not intent_name:
+            intent_name = self._intent_name(
+                self._decision_value(decision, "intent")
+            )
+
+        route_name = str(
+            self._decision_value(decision, "route", "") or ""
+        ).strip().lower()
+
+        action_name = str(
+            self._decision_value(decision, "action", "") or ""
+        ).strip().lower()
+
+        if (
+            intent_name in self.SOFTWARE_INTENTS
+            or route_name in self.SOFTWARE_INTENTS
+            or action_name in {
+                "coding",
+                "development",
+                "software_development",
+                "engineering",
+            }
+        ):
             engineering = True
-            confidence = 0.98
-            reason = "software_development_intent"
+            confidence = 0.99
+            reason = "software_development_decision"
         else:
             matches = [
                 term
@@ -216,16 +231,6 @@ class EngineeringRequestRouter:
         decision: Any = None,
         **kwargs: Any,
     ) -> Any:
-        """
-        Route an executable engineering request to the canonical runtime.
-
-        Read-only engineering requests are deliberately not sent to
-        `develop()` because the authoritative development lifecycle may
-        perform implementation work.
-
-        Step 3 will provide the dedicated read-only readiness path.
-        """
-
         classification = self.classify(
             query,
             intent=intent,
@@ -243,11 +248,8 @@ class EngineeringRequestRouter:
                 "requires_readiness_gateway": True,
                 "classification": classification.to_dict(),
                 "message": (
-                    "This is an engineering inspection request. "
-                    "The request was safely prevented from entering "
-                    "the implementation lifecycle. The dedicated "
-                    "read-only Phase 1 readiness gateway will handle "
-                    "this request."
+                    "This engineering request is read-only. "
+                    "No implementation lifecycle was started."
                 ),
             }
 
@@ -258,31 +260,16 @@ class EngineeringRequestRouter:
                 "Canonical Phase 1 runtime is not available."
             )
 
-        develop = getattr(
-            runtime,
-            "develop",
-            None,
-        )
+        develop = getattr(runtime, "develop", None)
 
         if not callable(develop):
             raise RuntimeError(
                 "Canonical Phase 1 runtime does not expose develop()."
             )
 
-        request_metadata = dict(
-            metadata or {}
-        )
-
-        request_metadata.setdefault(
-            "source",
-            "cognitive_core",
-        )
-
-        request_metadata.setdefault(
-            "engineering_router",
-            "canonical",
-        )
-
+        request_metadata = dict(metadata or {})
+        request_metadata.setdefault("source", "cognitive_core")
+        request_metadata.setdefault("engineering_router", "canonical")
         request_metadata.setdefault(
             "engineering_classification",
             classification.to_dict(),
@@ -305,30 +292,35 @@ class EngineeringRequestRouter:
         }
 
     @staticmethod
-    def _intent_name(intent: Any) -> str:
-        if intent is None:
-            return ""
-
-        if isinstance(intent, str):
-            return intent.strip().lower()
-
-        value = getattr(
-            intent,
-            "name",
-            None,
-        )
-
-        if value is None:
-            value = getattr(
-                intent,
-                "intent",
-                None,
-            )
-
+    def _intent_name(value: Any) -> str:
         if value is None:
             return ""
 
-        return str(value).strip().lower()
+        if isinstance(value, str):
+            return value.strip().lower()
+
+        name = getattr(value, "name", None)
+        if name is None:
+            name = getattr(value, "intent", None)
+
+        if name is None:
+            return ""
+
+        return str(name).strip().lower()
+
+    @staticmethod
+    def _decision_value(
+        decision: Any,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        if decision is None:
+            return default
+
+        if isinstance(decision, dict):
+            return decision.get(key, default)
+
+        return getattr(decision, key, default)
 
 
 __all__ = [
