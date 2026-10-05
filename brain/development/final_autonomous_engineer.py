@@ -18,15 +18,6 @@ logger = logging.getLogger("aria")
 class FinalEngineeringResult:
     """
     Final Phase 1 public engineering result.
-
-    success:
-        The engineering operation completed successfully.
-
-    accepted:
-        The requirement was explicitly accepted by the acceptance
-        boundary.
-
-    These are intentionally separate.
     """
 
     success: bool
@@ -136,13 +127,7 @@ class FinalAutonomousEngineer:
     """
     Final Phase 1 autonomous software engineer.
 
-    This is ARIA's canonical high-level engineering interface.
-
-    User intent:
-
-        "Implement Phase 2 completely according to this specification."
-
-    becomes:
+    Canonical engineering lifecycle:
 
         requirement
             ↓
@@ -168,17 +153,8 @@ class FinalAutonomousEngineer:
             ↓
         acceptance
 
-    The class deliberately does not directly perform:
-
-        - arbitrary shell execution
-        - GitHub push
-        - deployment
-        - production modification
-        - credential creation
-        - security-policy bypass
-
-    Those operations remain behind their existing explicit
-    authorization boundaries.
+    GitHub push and deployment remain behind their
+    existing explicit authorization boundaries.
     """
 
     VERSION = (
@@ -190,6 +166,8 @@ class FinalAutonomousEngineer:
         *,
         orchestrator: Any | None = None,
         legacy_runtime: Any | None = None,
+        persistent_runtime: Any | None = None,
+        development_controller: Any | None = None,
         requirement_engine: Any | None = None,
         knowledge_engine: Any | None = None,
         planning_engine: Any | None = None,
@@ -203,8 +181,27 @@ class FinalAutonomousEngineer:
         evidence_recorder: Any | None = None,
         session_runtime: Any | None = None,
     ) -> None:
+
         self.legacy_runtime = (
             legacy_runtime
+        )
+
+        # IMPORTANT:
+        # This must be the canonical persistent runtime supplied
+        # by Phase1PersistentRuntimeAdapter.
+        #
+        # Never create another PersistentEngineeringRuntime here.
+        self.persistent_runtime = (
+            persistent_runtime
+        )
+
+        self.development_controller = (
+            development_controller
+            or getattr(
+                legacy_runtime,
+                "development_controller",
+                None,
+            )
         )
 
         self.orchestrator = (
@@ -245,6 +242,13 @@ class FinalAutonomousEngineer:
                 ),
                 session_runtime=(
                     session_runtime
+                    or persistent_runtime
+                ),
+                persistent_runtime=(
+                    persistent_runtime
+                ),
+                development_controller=(
+                    self.development_controller
                 ),
             )
         )
@@ -264,12 +268,6 @@ class FinalAutonomousEngineer:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> FinalEngineeringResult:
-        """
-        Canonical autonomous development entry point.
-
-        A high-level user requirement is sufficient. The engineering
-        system determines the implementation workflow itself.
-        """
 
         request = str(
             request or ""
@@ -330,9 +328,6 @@ class FinalAutonomousEngineer:
         request: str,
         **kwargs: Any,
     ) -> FinalEngineeringResult:
-        """
-        Compatibility alias for existing execution runtimes.
-        """
 
         return await self.develop(
             request,
@@ -344,9 +339,6 @@ class FinalAutonomousEngineer:
         request: str,
         **kwargs: Any,
     ) -> FinalEngineeringResult:
-        """
-        Compatibility alias for autonomous execution callers.
-        """
 
         return await self.develop(
             request,
@@ -363,12 +355,6 @@ class FinalAutonomousEngineer:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> FinalEngineeringResult:
-        """
-        Resume an existing engineering session when the connected
-        session runtime supports resume.
-
-        Resume never silently starts a different request.
-        """
 
         normalized_id = str(
             session_id or ""
@@ -396,13 +382,16 @@ class FinalAutonomousEngineer:
                 "resume_session",
                 "continue_session",
             ):
+
                 method = getattr(
                     runtime,
                     method_name,
                     None,
                 )
 
-                if not callable(method):
+                if not callable(
+                    method
+                ):
                     continue
 
                 try:
@@ -482,9 +471,6 @@ class FinalAutonomousEngineer:
         self,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Return the authoritative engineering status when available.
-        """
 
         runtime = (
             self._session_runtime()
@@ -496,21 +482,26 @@ class FinalAutonomousEngineer:
         )
 
         if runtime is not None:
+
             for method_name in (
                 "engineering_status",
                 "status",
                 "get_status",
             ):
+
                 method = getattr(
                     runtime,
                     method_name,
                     None,
                 )
 
-                if not callable(method):
+                if not callable(
+                    method
+                ):
                     continue
 
                 try:
+
                     if target:
                         try:
                             value = method(
@@ -518,7 +509,6 @@ class FinalAutonomousEngineer:
                             )
                         except TypeError:
                             value = method()
-
                     else:
                         value = method()
 
@@ -529,9 +519,12 @@ class FinalAutonomousEngineer:
                             "[FinalAutonomousEngineer] "
                             "Async status method requires await."
                         )
+
                         return {
                             "healthy": True,
-                            "status": "async_status_available",
+                            "status": (
+                                "async_status_available"
+                            ),
                             "session_id": target,
                         }
 
@@ -560,6 +553,7 @@ class FinalAutonomousEngineer:
     def health(
         self,
     ) -> dict[str, Any]:
+
         orchestrator_health = {}
 
         health_method = getattr(
@@ -577,6 +571,7 @@ class FinalAutonomousEngineer:
                         health_method()
                     )
                 )
+
             except Exception as exc:
                 orchestrator_health = {
                     "healthy": False,
@@ -611,6 +606,7 @@ class FinalAutonomousEngineer:
         session_id: str | None,
         metadata: dict[str, Any] | None,
     ) -> Any:
+
         orchestrator = (
             self.orchestrator
         )
@@ -626,6 +622,7 @@ class FinalAutonomousEngineer:
             "execute",
             "run",
         ):
+
             method = getattr(
                 orchestrator,
                 method_name,
@@ -653,6 +650,7 @@ class FinalAutonomousEngineer:
             )
 
             for attempt in attempts:
+
                 try:
                     result = attempt()
 
@@ -672,7 +670,7 @@ class FinalAutonomousEngineer:
         )
 
     # ============================================================
-    # ORCHESTRATOR CONSTRUCTION
+    # AUTHORITATIVE ORCHESTRATOR CONSTRUCTION
     # ============================================================
 
     def _build_orchestrator(
@@ -682,233 +680,527 @@ class FinalAutonomousEngineer:
         """
         Construct the authoritative Phase 1 execution spine.
 
-        The final engineer is created during bootstrap, before an active
-        EngineeringSession exists. Therefore session-bound evidence
-        recording is intentionally left to the orchestrator's session
-        lifecycle. All other authoritative engines are bound here to the
-        existing Phase 1 services instead of creating duplicate runtime
-        subsystems.
+        All authoritative engines are bound to existing Phase 1
+        services.
+
+        IMPORTANT:
+        No second persistent runtime is created here.
         """
 
         legacy = self.legacy_runtime
 
-        def component(name: str, default: Any = None) -> Any:
-            """Return one existing Phase 1 runtime component safely."""
+        def component(
+            name: str,
+            default: Any = None,
+        ) -> Any:
+            """
+            Return an existing Phase 1 runtime component safely.
+            """
 
             if legacy is None:
                 return default
 
-            getter = getattr(legacy, "get", None)
-            if callable(getter):
+            getter = getattr(
+                legacy,
+                "get",
+                None,
+            )
+
+            if callable(
+                getter
+            ):
                 try:
-                    return getter(name)
-                except (KeyError, TypeError, AttributeError):
+                    return getter(
+                        name
+                    )
+
+                except (
+                    KeyError,
+                    TypeError,
+                    AttributeError,
+                ):
                     pass
+
                 except Exception:
                     logger.debug(
-                        "[FinalAutonomousEngineer] Component lookup failed: %s",
+                        "[FinalAutonomousEngineer] "
+                        "Component lookup failed: %s",
                         name,
                         exc_info=True,
                     )
 
-            components = getattr(legacy, "components", None)
-            if isinstance(components, dict):
-                return components.get(name, default)
+            components = getattr(
+                legacy,
+                "components",
+                None,
+            )
 
-            return getattr(legacy, name, default)
+            if isinstance(
+                components,
+                dict,
+            ):
+                return components.get(
+                    name,
+                    default,
+                )
+
+            return getattr(
+                legacy,
+                name,
+                default,
+            )
+
+        # --------------------------------------------------------
+        # DEVELOPMENT CONTROLLER
+        # --------------------------------------------------------
 
         development_controller = (
-            services.get("development_controller")
-            or getattr(legacy, "development_controller", None)
+            services.get(
+                "development_controller"
+            )
+            or getattr(
+                legacy,
+                "development_controller",
+                None,
+            )
         )
 
+        # --------------------------------------------------------
+        # DEVELOPMENT AGENT
+        # --------------------------------------------------------
+
         development_agent = (
-            getattr(development_controller, "agent", None)
+            getattr(
+                development_controller,
+                "agent",
+                None,
+            )
             if development_controller is not None
             else None
         )
 
         if development_agent is None:
-            development_agent = services.get("development_agent")
+            development_agent = services.get(
+                "development_agent"
+            )
+
+        # --------------------------------------------------------
+        # REQUIREMENT INTELLIGENCE
+        # --------------------------------------------------------
 
         requirement_intelligence = (
-            services.get("requirement_intelligence")
-            or getattr(development_agent, "requirement_intelligence", None)
+            services.get(
+                "requirement_intelligence"
+            )
+            or getattr(
+                development_agent,
+                "requirement_intelligence",
+                None,
+            )
         )
+
+        # --------------------------------------------------------
+        # KNOWLEDGE RETRIEVER
+        # --------------------------------------------------------
 
         knowledge_retriever = (
-            services.get("knowledge_retriever")
-            or component("knowledge_retriever")
+            services.get(
+                "knowledge_retriever"
+            )
+            or component(
+                "knowledge_retriever"
+            )
         )
+
+        # --------------------------------------------------------
+        # VERIFICATION SERVICE
+        # --------------------------------------------------------
 
         verification_service = (
-            services.get("verification_service")
-            or getattr(development_agent, "intelligent_verification", None)
+            services.get(
+                "verification_service"
+            )
+            or getattr(
+                development_agent,
+                "intelligent_verification",
+                None,
+            )
         )
+
+        # --------------------------------------------------------
+        # REPAIR SERVICE
+        # --------------------------------------------------------
 
         repair_service = (
-            services.get("repair_service")
-            or component("autonomous_repair_loop")
+            services.get(
+                "repair_service"
+            )
+            or component(
+                "autonomous_repair_loop"
+            )
         )
+
+        # --------------------------------------------------------
+        # ENGINEERING JUDGMENT
+        # --------------------------------------------------------
 
         judgment_engine = (
-            services.get("judgment_engine")
-            or getattr(development_agent, "engineering_judgment", None)
+            services.get(
+                "judgment_engine"
+            )
+            or getattr(
+                development_agent,
+                "engineering_judgment",
+                None,
+            )
         )
 
-        knowledge_engine = services.get("knowledge_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE KNOWLEDGE ENGINE
+        # --------------------------------------------------------
+
+        knowledge_engine = services.get(
+            "knowledge_engine"
+        )
+
         if knowledge_engine is None:
+
             from .authoritative_engineering_knowledge import (
                 AuthoritativeEngineeringKnowledge,
             )
 
-            knowledge_engine = AuthoritativeEngineeringKnowledge(
-                knowledge_database=getattr(
-                    legacy,
-                    "knowledge_database",
-                    None,
-                ),
-                knowledge_graph=getattr(
-                    legacy,
-                    "knowledge_graph",
-                    None,
-                ),
-                knowledge_engine=knowledge_retriever,
-                search_engine=component("search_tool"),
-                research_engine=component("research_service"),
-                memory_engine=getattr(
-                    legacy,
-                    "memory_engine",
-                    None,
-                ),
+            knowledge_engine = (
+                AuthoritativeEngineeringKnowledge(
+                    knowledge_database=getattr(
+                        legacy,
+                        "knowledge_database",
+                        None,
+                    ),
+                    knowledge_graph=getattr(
+                        legacy,
+                        "knowledge_graph",
+                        None,
+                    ),
+                    knowledge_engine=(
+                        knowledge_retriever
+                    ),
+                    search_engine=component(
+                        "search_tool"
+                    ),
+                    research_engine=component(
+                        "research_service"
+                    ),
+                    memory_engine=getattr(
+                        legacy,
+                        "memory_engine",
+                        None,
+                    ),
+                )
             )
 
-        requirement_engine = services.get("requirement_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE REQUIREMENT ENGINE
+        # --------------------------------------------------------
+
+        requirement_engine = services.get(
+            "requirement_engine"
+        )
+
         if requirement_engine is None:
+
             from .authoritative_engineering_requirement import (
                 AuthoritativeEngineeringRequirement,
             )
 
-            requirement_engine = AuthoritativeEngineeringRequirement(
-                requirement_intelligence=requirement_intelligence,
+            requirement_engine = (
+                AuthoritativeEngineeringRequirement(
+                    requirement_intelligence=(
+                        requirement_intelligence
+                    ),
+                )
             )
 
-        implementation_engine = services.get("implementation_engine")
-        if implementation_engine is None and development_controller is not None:
+        # --------------------------------------------------------
+        # AUTHORITATIVE IMPLEMENTATION ENGINE
+        # --------------------------------------------------------
+
+        implementation_engine = services.get(
+            "implementation_engine"
+        )
+
+        if (
+            implementation_engine is None
+            and development_controller is not None
+        ):
+
             from .authoritative_implementation import (
                 AuthoritativeImplementationEngine,
             )
 
-            implementation_engine = AuthoritativeImplementationEngine(
-                development_controller,
-                development_agent=development_agent,
+            implementation_engine = (
+                AuthoritativeImplementationEngine(
+                    development_controller,
+                    development_agent=(
+                        development_agent
+                    ),
+                )
             )
 
-        verification_engine = services.get("verification_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE VERIFICATION ENGINE
+        # --------------------------------------------------------
+
+        verification_engine = services.get(
+            "verification_engine"
+        )
+
         if verification_engine is None:
+
             from .authoritative_verification import (
                 AuthoritativeVerificationEngine,
             )
 
-            verification_engine = AuthoritativeVerificationEngine(
-                verifier=verification_service,
+            verification_engine = (
+                AuthoritativeVerificationEngine(
+                    verifier=(
+                        verification_service
+                    ),
+                )
             )
 
-        diagnosis_engine = services.get("diagnosis_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE DIAGNOSIS ENGINE
+        # --------------------------------------------------------
+
+        diagnosis_engine = services.get(
+            "diagnosis_engine"
+        )
+
         if diagnosis_engine is None:
+
             from .authoritative_diagnosis import (
                 AuthoritativeDiagnosisEngine,
             )
 
-            diagnosis_engine = AuthoritativeDiagnosisEngine()
+            diagnosis_engine = (
+                AuthoritativeDiagnosisEngine()
+            )
 
-        recovery_engine = services.get("recovery_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE RECOVERY ENGINE
+        # --------------------------------------------------------
+
+        recovery_engine = services.get(
+            "recovery_engine"
+        )
+
         if recovery_engine is None:
+
             from .authoritative_recovery import (
                 AuthoritativeRecoveryEngine,
             )
 
-            recovery_engine = AuthoritativeRecoveryEngine(
-                repair_engine=repair_service,
+            recovery_engine = (
+                AuthoritativeRecoveryEngine(
+                    repair_engine=(
+                        repair_service
+                    ),
+                )
             )
 
-        acceptance_engine = services.get("acceptance_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE ACCEPTANCE ENGINE
+        # --------------------------------------------------------
+
+        acceptance_engine = services.get(
+            "acceptance_engine"
+        )
+
         if acceptance_engine is None:
+
             from .authoritative_acceptance import (
                 AuthoritativeAcceptanceEngine,
             )
 
-            acceptance_engine = AuthoritativeAcceptanceEngine(
-                judgment_engine=judgment_engine,
-                verification_engine=verification_engine,
+            acceptance_engine = (
+                AuthoritativeAcceptanceEngine(
+                    judgment_engine=(
+                        judgment_engine
+                    ),
+                    verification_engine=(
+                        verification_engine
+                    ),
+                )
             )
 
-        experience_engine = services.get("experience_engine")
+        # --------------------------------------------------------
+        # AUTHORITATIVE EXPERIENCE ENGINE
+        # --------------------------------------------------------
+
+        experience_engine = services.get(
+            "experience_engine"
+        )
+
         if experience_engine is None:
+
             from .authoritative_experience import (
                 AuthoritativeExperienceEngine,
             )
 
-            experience_engine = AuthoritativeExperienceEngine(
-                knowledge_engine=knowledge_engine,
+            experience_engine = (
+                AuthoritativeExperienceEngine(
+                    knowledge_engine=(
+                        knowledge_engine
+                    ),
+                )
             )
 
+        # --------------------------------------------------------
+        # CANONICAL PERSISTENT RUNTIME
+        # --------------------------------------------------------
+
         persistent_runtime = (
-            services.get("persistent_runtime")
-            or services.get("session_runtime")
+            services.get(
+                "persistent_runtime"
+            )
+            or services.get(
+                "session_runtime"
+            )
+            or self.persistent_runtime
         )
 
-        if persistent_runtime is None:
-            try:
-                from .persistent_engineering_runtime import (
-                    PersistentEngineeringRuntime,
-                )
-
-                persistent_runtime = PersistentEngineeringRuntime(
-                    legacy_runtime=legacy,
-                )
-            except Exception:
-                logger.debug(
-                    "[FinalAutonomousEngineer] Persistent runtime could not be constructed.",
-                    exc_info=True,
-                )
+        # IMPORTANT:
+        #
+        # The Phase1PersistentRuntimeAdapter already owns the
+        # canonical PersistentEngineeringRuntime.
+        #
+        # NEVER instantiate another PersistentEngineeringRuntime
+        # here.
+        #
+        # Creating another instance would split:
+        #
+        #   session state
+        #   persistence state
+        #   lifecycle state
+        #   recovery state
+        #
+        # between two independent runtime objects.
 
         persistence = (
-            services.get("persistence")
-            or getattr(persistent_runtime, "persistence", None)
+            services.get(
+                "persistence"
+            )
+            or getattr(
+                persistent_runtime,
+                "persistence",
+                None,
+            )
         )
+
+        # --------------------------------------------------------
+        # REPOSITORY ENGINE
+        # --------------------------------------------------------
 
         repository_engine = (
-            services.get("repository_engine")
-            or getattr(development_agent, "repository_manager", None)
+            services.get(
+                "repository_engine"
+            )
+            or getattr(
+                development_agent,
+                "repository_manager",
+                None,
+            )
         )
 
-        # EvidenceRecorder is deliberately NOT instantiated here. Its
-        # authoritative constructor requires an active EngineeringSession.
-        # AuthoritativeEngineeringOrchestrator attaches the session's
-        # evidence registry when develop() creates the session.
-        evidence_recorder = services.get("evidence_recorder")
+        # --------------------------------------------------------
+        # EVIDENCE RECORDER
+        # --------------------------------------------------------
+
+        # DO NOT construct EngineeringEvidenceRecorder during
+        # bootstrap.
+        #
+        # Its authoritative constructor requires an active
+        # EngineeringSession.
+        #
+        # The authoritative orchestrator attaches the session
+        # evidence registry after the session is created.
+
+        evidence_recorder = services.get(
+            "evidence_recorder"
+        )
+
+        # --------------------------------------------------------
+        # FINAL ORCHESTRATOR SERVICES
+        # --------------------------------------------------------
 
         orchestrator_services = {
             **services,
-            "session_runtime": persistent_runtime,
-            "persistence": persistence,
-            "requirement_engine": requirement_engine,
-            "knowledge_engine": knowledge_engine,
-            "planning_engine": services.get("planning_engine"),
-            "task_graph_engine": services.get("task_graph_engine"),
-            "implementation_engine": implementation_engine,
-            "verification_engine": verification_engine,
-            "diagnosis_engine": diagnosis_engine,
-            "recovery_engine": recovery_engine,
-            "acceptance_engine": acceptance_engine,
-            "repository_engine": repository_engine,
-            "experience_engine": experience_engine,
-            "evidence_recorder": evidence_recorder,
+
+            "session_runtime": (
+                persistent_runtime
+            ),
+
+            "persistence": (
+                persistence
+            ),
+
+            "requirement_engine": (
+                requirement_engine
+            ),
+
+            "knowledge_engine": (
+                knowledge_engine
+            ),
+
+            "planning_engine": (
+                services.get(
+                    "planning_engine"
+                )
+            ),
+
+            "task_graph_engine": (
+                services.get(
+                    "task_graph_engine"
+                )
+            ),
+
+            "implementation_engine": (
+                implementation_engine
+            ),
+
+            "verification_engine": (
+                verification_engine
+            ),
+
+            "diagnosis_engine": (
+                diagnosis_engine
+            ),
+
+            "recovery_engine": (
+                recovery_engine
+            ),
+
+            "acceptance_engine": (
+                acceptance_engine
+            ),
+
+            "repository_engine": (
+                repository_engine
+            ),
+
+            "experience_engine": (
+                experience_engine
+            ),
+
+            "evidence_recorder": (
+                evidence_recorder
+            ),
         }
 
-        return AuthoritativeEngineeringOrchestrator(
-            **orchestrator_services
+        return (
+            AuthoritativeEngineeringOrchestrator(
+                **orchestrator_services
+            )
         )
 
     # ============================================================
@@ -918,11 +1210,25 @@ class FinalAutonomousEngineer:
     def _session_runtime(
         self,
     ) -> Any | None:
-        # The authoritative orchestrator owns the canonical session state.
-        # The legacy persistent runtime is a compatibility fallback only.
+
+        # The authoritative orchestrator owns canonical
+        # engineering session state.
+
         if self.orchestrator is not None and (
-            callable(getattr(self.orchestrator, "status", None))
-            or callable(getattr(self.orchestrator, "resume", None))
+            callable(
+                getattr(
+                    self.orchestrator,
+                    "status",
+                    None,
+                )
+            )
+            or callable(
+                getattr(
+                    self.orchestrator,
+                    "resume",
+                    None,
+                )
+            )
         ):
             return self.orchestrator
 
@@ -950,6 +1256,7 @@ class FinalAutonomousEngineer:
         *,
         session_id: str | None,
     ) -> FinalEngineeringResult:
+
         if isinstance(
             result,
             FinalEngineeringResult,
@@ -969,6 +1276,7 @@ class FinalAutonomousEngineer:
             result,
             dict,
         ):
+
             return FinalEngineeringResult(
                 success=bool(
                     result.get(
@@ -976,6 +1284,7 @@ class FinalAutonomousEngineer:
                         False,
                     )
                 ),
+
                 accepted=bool(
                     result.get(
                         "accepted",
@@ -985,6 +1294,7 @@ class FinalAutonomousEngineer:
                         ),
                     )
                 ),
+
                 session_id=str(
                     result.get(
                         "session_id",
@@ -992,23 +1302,28 @@ class FinalAutonomousEngineer:
                         or "",
                     )
                 ),
+
                 status=str(
                     result.get(
                         "status",
-                        "completed"
-                        if result.get(
-                            "success",
-                            False,
-                        )
-                        else "failed",
+                        (
+                            "completed"
+                            if result.get(
+                                "success",
+                                False,
+                            )
+                            else "failed"
+                        ),
                     )
                 ),
+
                 phase=str(
                     result.get(
                         "phase",
                         "unknown",
                     )
                 ),
+
                 error=(
                     result.get(
                         "error"
@@ -1017,24 +1332,31 @@ class FinalAutonomousEngineer:
                         "reason"
                     )
                 ),
+
                 requirement=result.get(
                     "requirement"
                 ),
+
                 knowledge=result.get(
                     "knowledge"
                 ),
+
                 plan=result.get(
                     "plan"
                 ),
+
                 task_graph=result.get(
                     "task_graph"
                 ),
+
                 implementation=result.get(
                     "implementation"
                 ),
+
                 verification=result.get(
                     "verification"
                 ),
+
                 metadata=dict(
                     result.get(
                         "metadata",
@@ -1066,7 +1388,9 @@ class FinalAutonomousEngineer:
 
         return FinalEngineeringResult(
             success=success,
+
             accepted=accepted,
+
             session_id=str(
                 getattr(
                     result,
@@ -1075,15 +1399,19 @@ class FinalAutonomousEngineer:
                     or "",
                 )
             ),
+
             status=str(
                 getattr(
                     result,
                     "status",
-                    "completed"
-                    if success
-                    else "failed",
+                    (
+                        "completed"
+                        if success
+                        else "failed"
+                    ),
                 )
             ),
+
             phase=str(
                 getattr(
                     result,
@@ -1091,6 +1419,7 @@ class FinalAutonomousEngineer:
                     "unknown",
                 )
             ),
+
             error=(
                 getattr(
                     result,
@@ -1103,36 +1432,43 @@ class FinalAutonomousEngineer:
                     None,
                 )
             ),
+
             requirement=getattr(
                 result,
                 "requirement",
                 None,
             ),
+
             knowledge=getattr(
                 result,
                 "knowledge",
                 None,
             ),
+
             plan=getattr(
                 result,
                 "plan",
                 None,
             ),
+
             task_graph=getattr(
                 result,
                 "task_graph",
                 None,
             ),
+
             implementation=getattr(
                 result,
                 "implementation",
                 None,
             ),
+
             verification=getattr(
                 result,
                 "verification",
                 None,
             ),
+
             metadata=dict(
                 getattr(
                     result,
@@ -1149,23 +1485,36 @@ class FinalAutonomousEngineer:
         *,
         session_id: str | None,
     ) -> FinalEngineeringResult:
+
         return FinalEngineeringResult(
             success=result.success,
+
             accepted=result.accepted,
+
             session_id=(
                 result.session_id
                 or session_id
                 or ""
             ),
+
             status=result.status,
+
             phase=result.phase,
+
             error=result.error,
+
             requirement=result.requirement,
+
             knowledge=result.knowledge,
+
             plan=result.plan,
+
             task_graph=result.task_graph,
+
             implementation=result.implementation,
+
             verification=result.verification,
+
             metadata=dict(
                 result.metadata
             ),
@@ -1180,21 +1529,20 @@ class FinalAutonomousEngineer:
         key: str,
         default: Any = None,
     ) -> Any:
-        """
-        Compatibility accessor for ARIA's capability registry.
-        """
 
         if key in {
             "final_autonomous_engineer",
             "autonomous_engineer",
             "engineering_orchestrator",
         }:
+
             if key == "engineering_orchestrator":
                 return self.orchestrator
 
             return self
 
         if self.legacy_runtime is not None:
+
             getter = getattr(
                 self.legacy_runtime,
                 "get",
@@ -1204,16 +1552,20 @@ class FinalAutonomousEngineer:
             if callable(
                 getter
             ):
+
                 try:
                     return getter(
                         key,
                         default,
                     )
+
                 except TypeError:
+
                     try:
                         return getter(
                             key
                         )
+
                     except Exception:
                         pass
 
@@ -1223,10 +1575,6 @@ class FinalAutonomousEngineer:
         self,
         name: str,
     ) -> Any:
-        """
-        Preserve access to legacy runtime capabilities without
-        replacing their authorization boundaries.
-        """
 
         legacy = object.__getattribute__(
             self,
@@ -1234,11 +1582,13 @@ class FinalAutonomousEngineer:
         )
 
         if legacy is not None:
+
             try:
                 return getattr(
                     legacy,
                     name,
                 )
+
             except AttributeError:
                 pass
 
