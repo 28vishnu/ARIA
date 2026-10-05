@@ -9,7 +9,7 @@ Phase 1 runtime and the final autonomous-engineer facade.
 Design goals:
 - preserve the existing bootstrap contract;
 - expose the final autonomous engineer to Telegram;
-- keep the legacy runtime available as a compatibility/fallback path;
+- keep the legacy runtime available only as a compatibility service container;
 - never bypass GitHub/deployment permission boundaries;
 - normalize object/dict results safely;
 - fail closed on incompatible final-engineer responses;
@@ -58,6 +58,17 @@ class Phase1PersistentRuntimeAdapter:
         self.final_engineer = (
             self._build_final_engineer()
         )
+
+        # Close the legacy development entry point. The legacy runtime remains
+        # available as a service container for existing adapters, but direct
+        # engineering execution is routed back through this adapter.
+        bind = getattr(
+            self.legacy_phase1_runtime,
+            "bind_authoritative_runtime",
+            None,
+        )
+        if callable(bind):
+            bind(self)
 
         logger.info(
             "[Phase1][FinalRuntime] Adapter initialized | "
@@ -639,87 +650,27 @@ class Phase1PersistentRuntimeAdapter:
         )
 
     # ------------------------------------------------------------------
-    # Persistent fallback
+    # Legacy execution guard
     # ------------------------------------------------------------------
 
-    async def _fallback_to_persistent_runtime(
+    async def _legacy_execution_guard(
         self,
         requirement: str,
         *,
-        session_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
         original_error: BaseException | None = None,
-        **kwargs: Any,
+        **_: Any,
     ) -> Any:
-
-        logger.warning(
-            "[Phase1][FinalRuntime] Falling back to established "
-            "persistent Phase 1 runtime | reason=%s",
-            original_error,
+        """Fail closed instead of entering a legacy engineering lifecycle."""
+        reason = (
+            str(original_error)
+            if original_error is not None
+            else "the authoritative engineer is unavailable"
         )
-
-        try:
-
-            result = await self._invoke(
-                self._persistent_runtime,
-                "develop",
-                requirement,
-                session_id=session_id,
-                metadata=metadata,
-                **kwargs,
-            )
-
-            normalized = self._normalize_result(
-                result
-            )
-
-            logger.info(
-                "[Phase1][FinalRuntime] Persistent fallback completed | "
-                "success=%s | accepted=%s | status=%s",
-                self._result_success(
-                    normalized
-                ),
-                self._result_accepted(
-                    normalized
-                ),
-                self._result_status(
-                    normalized
-                ),
-            )
-
-            return normalized
-
-        except TypeError:
-
-            try:
-
-                result = await self._invoke(
-                    self._persistent_runtime,
-                    "develop",
-                    requirement,
-                )
-
-                return self._normalize_result(
-                    result
-                )
-
-            except Exception:
-
-                logger.exception(
-                    "[Phase1][FinalRuntime] Persistent fallback "
-                    "also failed."
-                )
-
-                raise
-
-        except Exception:
-
-            logger.exception(
-                "[Phase1][FinalRuntime] Persistent fallback "
-                "failed."
-            )
-
-            raise
+        raise RuntimeError(
+            "Canonical Phase 1 engineering execution failed before completion; "
+            "legacy execution fallback is disabled. "
+            f"Reason: {reason}"
+        )
 
     # ------------------------------------------------------------------
     # Canonical engineering API
@@ -733,136 +684,61 @@ class Phase1PersistentRuntimeAdapter:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """
-        Run the final autonomous engineering pipeline.
+        """Run only the authoritative FinalAutonomousEngineer lifecycle."""
 
-        If the final facade encounters a result-contract compatibility
-        problem, fall back to the established persistent Phase 1 runtime
-        instead of returning an internal implementation error to Telegram.
-        """
+        if self.final_engineer is None:
+            raise RuntimeError(
+                "FinalAutonomousEngineer is unavailable; "
+                "legacy engineering fallback is disabled."
+            )
 
-        if self.final_engineer is not None:
+        logger.info(
+            "[Phase1][FinalRuntime] Starting canonical autonomous engineering | session=%s",
+            session_id or "new",
+        )
 
+        try:
+            result = await self._invoke(
+                self.final_engineer,
+                "develop",
+                requirement,
+                session_id=session_id,
+                metadata=metadata,
+                **kwargs,
+            )
+
+            normalized = self._normalize_result(result)
+
+            logger.info(
+                "[Phase1][FinalRuntime] Canonical autonomous engineering finished | "
+                "success=%s | accepted=%s | status=%s",
+                self._result_success(normalized),
+                self._result_accepted(normalized),
+                self._result_status(normalized),
+            )
+            return normalized
+
+        except TypeError as exc:
+            # A TypeError can indicate an argument-contract mismatch. Retry
+            # the same authoritative object with the minimal request only.
             try:
-
-                logger.info(
-                    "[Phase1][FinalRuntime] Starting final autonomous "
-                    "engineering | session=%s",
-                    session_id or "new",
-                )
-
                 result = await self._invoke(
                     self.final_engineer,
                     "develop",
                     requirement,
-                    session_id=session_id,
-                    metadata=metadata,
-                    **kwargs,
                 )
+                return self._normalize_result(result)
+            except Exception as retry_exc:
+                raise RuntimeError(
+                    "Canonical FinalAutonomousEngineer execution failed after "
+                    f"compatibility retry: {retry_exc}"
+                ) from retry_exc
 
-                normalized = self._normalize_result(
-                    result
-                )
-
-                logger.info(
-                    "[Phase1][FinalRuntime] Final autonomous engineering "
-                    "finished | success=%s | accepted=%s | status=%s",
-                    self._result_success(
-                        normalized
-                    ),
-                    self._result_accepted(
-                        normalized
-                    ),
-                    self._result_status(
-                        normalized
-                    ),
-                )
-
-                return normalized
-
-            except TypeError as exc:
-
-                logger.warning(
-                    "[Phase1][FinalRuntime] Final engineer argument "
-                    "compatibility fallback: %s",
-                    exc,
-                )
-
-                try:
-
-                    result = await self._invoke(
-                        self.final_engineer,
-                        "develop",
-                        requirement,
-                    )
-
-                    return self._normalize_result(
-                        result
-                    )
-
-                except Exception as retry_exc:
-
-                    if self._is_result_contract_error(
-                        retry_exc
-                    ):
-
-                        return await (
-                            self._fallback_to_persistent_runtime(
-                                requirement,
-                                session_id=session_id,
-                                metadata=metadata,
-                                original_error=retry_exc,
-                                **kwargs,
-                            )
-                        )
-
-                    logger.exception(
-                        "[Phase1][FinalRuntime] Final engineer execution "
-                        "failed after compatibility retry."
-                    )
-
-                    raise
-
-            except Exception as exc:
-
-                if self._is_result_contract_error(
-                    exc
-                ):
-
-                    logger.warning(
-                        "[Phase1][FinalRuntime] Final engineer encountered "
-                        "a result-contract compatibility error. "
-                        "Using persistent Phase 1 fallback."
-                    )
-
-                    return await (
-                        self._fallback_to_persistent_runtime(
-                            requirement,
-                            session_id=session_id,
-                            metadata=metadata,
-                            original_error=exc,
-                            **kwargs,
-                        )
-                    )
-
-                logger.exception(
-                    "[Phase1][FinalRuntime] Final autonomous engineer "
-                    "execution failed."
-                )
-
-                raise
-
-        logger.info(
-            "[Phase1][FinalRuntime] Final engineer unavailable; "
-            "using established persistent Phase 1 runtime."
-        )
-
-        return await self._fallback_to_persistent_runtime(
-            requirement,
-            session_id=session_id,
-            metadata=metadata,
-            **kwargs,
-        )
+        except Exception as exc:
+            logger.exception(
+                "[Phase1][FinalRuntime] Canonical autonomous engineer execution failed."
+            )
+            raise
 
     async def execute(
         self,
