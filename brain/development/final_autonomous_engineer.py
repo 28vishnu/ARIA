@@ -680,15 +680,235 @@ class FinalAutonomousEngineer:
         **services: Any,
     ) -> AuthoritativeEngineeringOrchestrator:
         """
-        Construct the authoritative orchestrator.
+        Construct the authoritative Phase 1 execution spine.
 
-        Existing runtime services are passed through unchanged.
+        The final engineer is created during bootstrap, before an active
+        EngineeringSession exists. Therefore session-bound evidence
+        recording is intentionally left to the orchestrator's session
+        lifecycle. All other authoritative engines are bound here to the
+        existing Phase 1 services instead of creating duplicate runtime
+        subsystems.
         """
 
-        return (
-            AuthoritativeEngineeringOrchestrator(
-                **services
+        legacy = self.legacy_runtime
+
+        def component(name: str, default: Any = None) -> Any:
+            """Return one existing Phase 1 runtime component safely."""
+
+            if legacy is None:
+                return default
+
+            getter = getattr(legacy, "get", None)
+            if callable(getter):
+                try:
+                    return getter(name)
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                except Exception:
+                    logger.debug(
+                        "[FinalAutonomousEngineer] Component lookup failed: %s",
+                        name,
+                        exc_info=True,
+                    )
+
+            components = getattr(legacy, "components", None)
+            if isinstance(components, dict):
+                return components.get(name, default)
+
+            return getattr(legacy, name, default)
+
+        development_controller = (
+            services.get("development_controller")
+            or getattr(legacy, "development_controller", None)
+        )
+
+        development_agent = (
+            getattr(development_controller, "agent", None)
+            if development_controller is not None
+            else None
+        )
+
+        if development_agent is None:
+            development_agent = services.get("development_agent")
+
+        requirement_intelligence = (
+            services.get("requirement_intelligence")
+            or getattr(development_agent, "requirement_intelligence", None)
+        )
+
+        knowledge_retriever = (
+            services.get("knowledge_retriever")
+            or component("knowledge_retriever")
+        )
+
+        verification_service = (
+            services.get("verification_service")
+            or getattr(development_agent, "intelligent_verification", None)
+        )
+
+        repair_service = (
+            services.get("repair_service")
+            or component("autonomous_repair_loop")
+        )
+
+        judgment_engine = (
+            services.get("judgment_engine")
+            or getattr(development_agent, "engineering_judgment", None)
+        )
+
+        knowledge_engine = services.get("knowledge_engine")
+        if knowledge_engine is None:
+            from .authoritative_engineering_knowledge import (
+                AuthoritativeEngineeringKnowledge,
             )
+
+            knowledge_engine = AuthoritativeEngineeringKnowledge(
+                knowledge_database=getattr(
+                    legacy,
+                    "knowledge_database",
+                    None,
+                ),
+                knowledge_graph=getattr(
+                    legacy,
+                    "knowledge_graph",
+                    None,
+                ),
+                knowledge_engine=knowledge_retriever,
+                search_engine=component("search_tool"),
+                research_engine=component("research_service"),
+                memory_engine=getattr(
+                    legacy,
+                    "memory_engine",
+                    None,
+                ),
+            )
+
+        requirement_engine = services.get("requirement_engine")
+        if requirement_engine is None:
+            from .authoritative_engineering_requirement import (
+                AuthoritativeEngineeringRequirement,
+            )
+
+            requirement_engine = AuthoritativeEngineeringRequirement(
+                requirement_intelligence=requirement_intelligence,
+            )
+
+        implementation_engine = services.get("implementation_engine")
+        if implementation_engine is None and development_controller is not None:
+            from .authoritative_implementation import (
+                AuthoritativeImplementationEngine,
+            )
+
+            implementation_engine = AuthoritativeImplementationEngine(
+                development_controller,
+                development_agent=development_agent,
+            )
+
+        verification_engine = services.get("verification_engine")
+        if verification_engine is None:
+            from .authoritative_verification import (
+                AuthoritativeVerificationEngine,
+            )
+
+            verification_engine = AuthoritativeVerificationEngine(
+                verifier=verification_service,
+            )
+
+        diagnosis_engine = services.get("diagnosis_engine")
+        if diagnosis_engine is None:
+            from .authoritative_diagnosis import (
+                AuthoritativeDiagnosisEngine,
+            )
+
+            diagnosis_engine = AuthoritativeDiagnosisEngine()
+
+        recovery_engine = services.get("recovery_engine")
+        if recovery_engine is None:
+            from .authoritative_recovery import (
+                AuthoritativeRecoveryEngine,
+            )
+
+            recovery_engine = AuthoritativeRecoveryEngine(
+                repair_engine=repair_service,
+            )
+
+        acceptance_engine = services.get("acceptance_engine")
+        if acceptance_engine is None:
+            from .authoritative_acceptance import (
+                AuthoritativeAcceptanceEngine,
+            )
+
+            acceptance_engine = AuthoritativeAcceptanceEngine(
+                judgment_engine=judgment_engine,
+                verification_engine=verification_engine,
+            )
+
+        experience_engine = services.get("experience_engine")
+        if experience_engine is None:
+            from .authoritative_experience import (
+                AuthoritativeExperienceEngine,
+            )
+
+            experience_engine = AuthoritativeExperienceEngine(
+                knowledge_engine=knowledge_engine,
+            )
+
+        persistent_runtime = (
+            services.get("persistent_runtime")
+            or services.get("session_runtime")
+        )
+
+        if persistent_runtime is None:
+            try:
+                from .persistent_engineering_runtime import (
+                    PersistentEngineeringRuntime,
+                )
+
+                persistent_runtime = PersistentEngineeringRuntime(
+                    legacy_runtime=legacy,
+                )
+            except Exception:
+                logger.debug(
+                    "[FinalAutonomousEngineer] Persistent runtime could not be constructed.",
+                    exc_info=True,
+                )
+
+        persistence = (
+            services.get("persistence")
+            or getattr(persistent_runtime, "persistence", None)
+        )
+
+        repository_engine = (
+            services.get("repository_engine")
+            or getattr(development_agent, "repository_manager", None)
+        )
+
+        # EvidenceRecorder is deliberately NOT instantiated here. Its
+        # authoritative constructor requires an active EngineeringSession.
+        # AuthoritativeEngineeringOrchestrator attaches the session's
+        # evidence registry when develop() creates the session.
+        evidence_recorder = services.get("evidence_recorder")
+
+        orchestrator_services = {
+            **services,
+            "session_runtime": persistent_runtime,
+            "persistence": persistence,
+            "requirement_engine": requirement_engine,
+            "knowledge_engine": knowledge_engine,
+            "planning_engine": services.get("planning_engine"),
+            "task_graph_engine": services.get("task_graph_engine"),
+            "implementation_engine": implementation_engine,
+            "verification_engine": verification_engine,
+            "diagnosis_engine": diagnosis_engine,
+            "recovery_engine": recovery_engine,
+            "acceptance_engine": acceptance_engine,
+            "repository_engine": repository_engine,
+            "experience_engine": experience_engine,
+            "evidence_recorder": evidence_recorder,
+        }
+
+        return AuthoritativeEngineeringOrchestrator(
+            **orchestrator_services
         )
 
     # ============================================================
