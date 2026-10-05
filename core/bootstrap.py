@@ -105,6 +105,9 @@ from brain.integration.phase1_runtime import create_phase1_runtime
 from brain.development.phase1_persistent_runtime_adapter import (
     Phase1PersistentRuntimeAdapter,
 )
+from brain.development.phase1_readiness_gateway import (
+    Phase1ReadinessGateway,
+)
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -1180,6 +1183,15 @@ async def bootstrap_application() -> ServiceRegistry:
         development_controller=development_controller,
     )
 
+    phase1_readiness_gateway = Phase1ReadinessGateway(
+        runtime=phase1_runtime,
+    )
+
+    registry.register(
+        "phase1_readiness_gateway",
+        phase1_readiness_gateway,
+    )
+
     registry.register(
         "phase1_runtime",
         phase1_runtime,
@@ -1226,6 +1238,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
             "phase1_runtime": phase1_runtime,
+            "phase1_readiness_gateway": phase1_readiness_gateway,
             "autonomous_development_bridge": phase1_runtime.get(
                 "autonomous_development_bridge"
             ),
