@@ -551,22 +551,14 @@ class Phase1Runtime:
         requirement=None,
     ):
         """
-        Run the autonomous validation layer.
+        Compatibility guard: verification is owned by the authoritative
+        engineering orchestrator and cannot be executed independently.
         """
 
-        validator = self.components.get(
-            "autonomous_validation_loop"
-        )
-
-        if validator is None:
-            raise RuntimeError(
-                "Autonomous validation loop is unavailable."
-            )
-
-        return await validator.validate(
-            workspace_id=workspace_id,
-            test_paths=test_paths,
-            requirement=requirement,
+        raise RuntimeError(
+            "Direct Phase1Runtime validation is disabled. "
+            "Verification must execute through "
+            "AuthoritativeEngineeringOrchestrator."
         )
 
     # ==========================================================
@@ -584,25 +576,15 @@ class Phase1Runtime:
         metadata=None,
     ):
         """
-        Run the bounded error → repair → retest lifecycle.
+        Compatibility guard: diagnosis/recovery/retest is owned by the
+        authoritative engineering orchestrator and cannot be executed
+        independently.
         """
 
-        repair_loop = self.components.get(
-            "autonomous_repair_loop"
-        )
-
-        if repair_loop is None:
-            raise RuntimeError(
-                "Autonomous repair loop is unavailable."
-            )
-
-        return await repair_loop.run(
-            requirement,
-            changes=changes,
-            test_paths=test_paths,
-            workspace_id=workspace_id,
-            max_cycles=max_cycles,
-            metadata=metadata,
+        raise RuntimeError(
+            "Direct Phase1Runtime repair is disabled. "
+            "Diagnosis, recovery, and retest must execute through "
+            "AuthoritativeEngineeringOrchestrator."
         )
 
     # ==========================================================
