@@ -1,46 +1,54 @@
 """
 ARIA Phase 1 — Runtime Integration
 
-Connects the Phase 1 autonomous-engineering components to the
-already-running ServiceRegistry.
+Compatibility service container for the Phase 1 autonomous-engineering
+foundation.
 
-This module does NOT create a second development system.
+IMPORTANT ARCHITECTURAL RULE
+-----------------------------
 
-Existing authoritative services remain:
+This module is NOT the owner of autonomous engineering execution.
 
-    DevelopmentController
-    GitManager
-    GitHubManager
-    DeploymentManager
-    KnowledgeRetriever
-
-This module only creates the orchestration adapters around them.
-
-Runtime flow:
+The single authoritative execution path is:
 
     Telegram / application
             ↓
-    AutonomousCodingLoop
+    Phase1PersistentRuntimeAdapter
             ↓
-    AutonomousDevelopmentBridge
+    FinalAutonomousEngineer
             ↓
-    DevelopmentController
+    AuthoritativeEngineeringOrchestrator
             ↓
-    DevelopmentAgent
+    Requirement
+            ↓
+    Knowledge / Repository
+            ↓
+    Planning
+            ↓
+    Task Graph
+            ↓
+    Implementation
+            ↓
+    Verification
+            ↓
+    Diagnosis
+            ↓
+    Recovery
+            ↓
+    Fresh Verification
+            ↓
+    Acceptance
+            ↓
+    Experience
 
-Additional capabilities:
+The objects exposed by this module exist only as compatibility services
+used internally by the authoritative engines where appropriate.
 
-    KnowledgeRetriever
-            ↓
-    KnowledgeCodingFeedback
+Legacy engineering adapters MUST NEVER become an alternative execution
+owner.
 
-    GitManager + GitHubManager
-            ↓
-    PermissionedGitWorkflow
-
-    DeploymentManager
-            ↓
-    PermissionedDeploymentWorkflow
+Legacy imports are intentionally lazy so that an obsolete compatibility
+module cannot prevent the canonical runtime from starting.
 """
 
 from __future__ import annotations
@@ -49,37 +57,28 @@ import logging
 import os
 from typing import Any
 
-from brain.development.autonomous_coding_loop import (
-    AutonomousCodingLoop,
-)
 
-from brain.development.autonomous_validation_loop import (
-    AutonomousValidationLoop,
-)
+# ==========================================================
+# OPTIONAL COMPATIBILITY SERVICES
+# ==========================================================
 
-from brain.development.autonomous_repair_loop import (
-    AutonomousRepairLoop,
-)
+# These are intentionally initialized to None.
 
-from brain.development.knowledge_coding_feedback import (
-    KnowledgeCodingFeedback,
-)
+# A legacy compatibility module may have been removed, renamed, or
+# consolidated into the authoritative Phase 1 architecture.
+#
+# Therefore these imports MUST NOT happen at module import time.
+#
+# A broken compatibility adapter must never prevent ARIA bootstrap.
 
-from brain.integration.autonomous_development_bridge import (
-    AutonomousDevelopmentBridge,
-)
-
-from brain.integration.permissioned_git_workflow import (
-    PermissionedGitWorkflow,
-)
-
-from brain.integration.permissioned_deployment_workflow import (
-    PermissionedDeploymentWorkflow,
-)
-
-from brain.memory.knowledge_retriever import (
-    KnowledgeRetriever,
-)
+AutonomousCodingLoop = None
+AutonomousValidationLoop = None
+AutonomousRepairLoop = None
+KnowledgeCodingFeedback = None
+AutonomousDevelopmentBridge = None
+PermissionedGitWorkflow = None
+PermissionedDeploymentWorkflow = None
+KnowledgeRetriever = None
 
 
 logger = logging.getLogger("aria")
@@ -87,12 +86,15 @@ logger = logging.getLogger("aria")
 
 class Phase1Runtime:
     """
-    Runtime-owned Phase 1 integration container.
+    Runtime-owned Phase 1 compatibility service container.
 
-    All underlying authoritative services are supplied by bootstrap.
+    The authoritative engineering runtime is supplied by
+    Phase1PersistentRuntimeAdapter.
+
+    This object does not own autonomous engineering execution.
     """
 
-    VERSION = "phase1-runtime-20261004"
+    VERSION = "phase1-runtime-20261005-COMPAT-SAFE"
 
     def __init__(
         self,
@@ -121,10 +123,15 @@ class Phase1Runtime:
         self.deployment_manager = deployment_manager
 
         self.memory_engine = memory_engine
+
         self.knowledge_database = (
             knowledge_database
         )
-        self.knowledge_graph = knowledge_graph
+
+        self.knowledge_graph = (
+            knowledge_graph
+        )
+
         self.document_ai = document_ai
 
         self.components: dict[str, Any] = {}
@@ -133,10 +140,10 @@ class Phase1Runtime:
 
         self.initialized = False
 
-        # Canonical Phase 1 runtime is bound by
-        # Phase1PersistentRuntimeAdapter after construction.
-        # This prevents the legacy runtime from becoming a competing
-        # engineering execution entry point.
+        # The canonical runtime is bound by
+        # Phase1PersistentRuntimeAdapter.
+        #
+        # The legacy runtime NEVER becomes the execution owner.
         self._authoritative_runtime = None
 
     # ==========================================================
@@ -145,258 +152,510 @@ class Phase1Runtime:
 
     def initialize(self) -> dict[str, Any]:
         """
-        Build the runtime Phase 1 integration graph.
+        Build the compatibility service graph.
 
-        Each adapter is isolated so one optional subsystem failure
-        does not prevent ARIA itself from starting.
+        Legacy/optional subsystem failures are isolated.
+
+        Most importantly, an obsolete legacy engineering module must
+        never prevent the authoritative runtime from booting.
         """
 
         self.components.clear()
         self.errors.clear()
 
         # ------------------------------------------------------
-        # Development bridge
+        # Resolve compatibility services lazily
+        # ------------------------------------------------------
+
+        global AutonomousCodingLoop
+        global AutonomousValidationLoop
+        global AutonomousRepairLoop
+        global KnowledgeCodingFeedback
+        global AutonomousDevelopmentBridge
+        global PermissionedGitWorkflow
+        global PermissionedDeploymentWorkflow
+        global KnowledgeRetriever
+
+        # ------------------------------------------------------
+        # Autonomous Coding Loop
         # ------------------------------------------------------
 
         try:
 
-            bridge = (
-                AutonomousDevelopmentBridge(
-                    self.development_controller,
-                    timeout_seconds=float(
-                        os.getenv(
-                            "ARIA_AUTONOMOUS_DEV_TIMEOUT",
-                            "3600",
-                        )
-                    ),
-                )
+            from brain.development.autonomous_coding_loop import (
+                AutonomousCodingLoop as _AutonomousCodingLoop,
             )
 
-            self.components[
-                "autonomous_development_bridge"
-            ] = bridge
+            AutonomousCodingLoop = (
+                _AutonomousCodingLoop
+            )
 
         except Exception as exc:
 
             self.errors.append(
-                "AutonomousDevelopmentBridge: "
+                "AutonomousCodingLoop compatibility import disabled: "
                 f"{exc}"
             )
 
+            logger.warning(
+                "[Phase1] Legacy AutonomousCodingLoop unavailable; "
+                "authoritative runtime remains active | error=%s",
+                exc,
+            )
+
         # ------------------------------------------------------
-        # Autonomous coding loop
+        # Autonomous Validation Loop
         # ------------------------------------------------------
 
         try:
 
-            bridge = self.components.get(
-                "autonomous_development_bridge"
+            from brain.development.autonomous_validation_loop import (
+                AutonomousValidationLoop as _AutonomousValidationLoop,
             )
 
-            if bridge is not None:
+            AutonomousValidationLoop = (
+                _AutonomousValidationLoop
+            )
 
-                coding_loop = (
-                    AutonomousCodingLoop(
-                        bridge,
-                        max_attempts=int(
+        except Exception as exc:
+
+            self.errors.append(
+                "AutonomousValidationLoop compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] Legacy AutonomousValidationLoop unavailable; "
+                "authoritative verification remains active | error=%s",
+                exc,
+            )
+
+        # ------------------------------------------------------
+        # Autonomous Repair Loop
+        # ------------------------------------------------------
+
+        try:
+
+            from brain.development.autonomous_repair_loop import (
+                AutonomousRepairLoop as _AutonomousRepairLoop,
+            )
+
+            AutonomousRepairLoop = (
+                _AutonomousRepairLoop
+            )
+
+        except Exception as exc:
+
+            self.errors.append(
+                "AutonomousRepairLoop compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] Legacy AutonomousRepairLoop unavailable; "
+                "authoritative recovery remains active | error=%s",
+                exc,
+            )
+
+        # ------------------------------------------------------
+        # Knowledge Coding Feedback
+        # ------------------------------------------------------
+
+        try:
+
+            from brain.development.knowledge_coding_feedback import (
+                KnowledgeCodingFeedback as _KnowledgeCodingFeedback,
+            )
+
+            KnowledgeCodingFeedback = (
+                _KnowledgeCodingFeedback
+            )
+
+        except Exception as exc:
+
+            self.errors.append(
+                "KnowledgeCodingFeedback compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] KnowledgeCodingFeedback compatibility "
+                "service unavailable | error=%s",
+                exc,
+            )
+
+        # ------------------------------------------------------
+        # Legacy Autonomous Development Bridge
+        # ------------------------------------------------------
+
+        try:
+
+            from brain.integration.autonomous_development_bridge import (
+                AutonomousDevelopmentBridge as _AutonomousDevelopmentBridge,
+            )
+
+            AutonomousDevelopmentBridge = (
+                _AutonomousDevelopmentBridge
+            )
+
+        except Exception as exc:
+
+            self.errors.append(
+                "AutonomousDevelopmentBridge compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] Legacy AutonomousDevelopmentBridge unavailable. "
+                "This does NOT affect the authoritative orchestrator | "
+                "error=%s",
+                exc,
+            )
+
+        # ------------------------------------------------------
+        # Permissioned Git Workflow
+        # ------------------------------------------------------
+
+        try:
+
+            from brain.integration.permissioned_git_workflow import (
+                PermissionedGitWorkflow as _PermissionedGitWorkflow,
+            )
+
+            PermissionedGitWorkflow = (
+                _PermissionedGitWorkflow
+            )
+
+        except Exception as exc:
+
+            self.errors.append(
+                "PermissionedGitWorkflow compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] PermissionedGitWorkflow unavailable | error=%s",
+                exc,
+            )
+
+        # ------------------------------------------------------
+        # Permissioned Deployment Workflow
+        # ------------------------------------------------------
+
+        try:
+
+            from brain.integration.permissioned_deployment_workflow import (
+                PermissionedDeploymentWorkflow
+                as _PermissionedDeploymentWorkflow,
+            )
+
+            PermissionedDeploymentWorkflow = (
+                _PermissionedDeploymentWorkflow
+            )
+
+        except Exception as exc:
+
+            self.errors.append(
+                "PermissionedDeploymentWorkflow "
+                "compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] PermissionedDeploymentWorkflow unavailable | "
+                "error=%s",
+                exc,
+            )
+
+        # ------------------------------------------------------
+        # Knowledge Retriever
+        # ------------------------------------------------------
+
+        try:
+
+            from brain.memory.knowledge_retriever import (
+                KnowledgeRetriever as _KnowledgeRetriever,
+            )
+
+            KnowledgeRetriever = (
+                _KnowledgeRetriever
+            )
+
+        except Exception as exc:
+
+            self.errors.append(
+                "KnowledgeRetriever compatibility import disabled: "
+                f"{exc}"
+            )
+
+            logger.warning(
+                "[Phase1] KnowledgeRetriever unavailable | error=%s",
+                exc,
+            )
+
+        # ======================================================
+        # DEVELOPMENT BRIDGE
+        # ======================================================
+
+        if AutonomousDevelopmentBridge is not None:
+
+            try:
+
+                bridge = (
+                    AutonomousDevelopmentBridge(
+                        self.development_controller,
+                        timeout_seconds=float(
                             os.getenv(
-                                "ARIA_AUTONOMOUS_CODING_ATTEMPTS",
-                                "3",
+                                "ARIA_AUTONOMOUS_DEV_TIMEOUT",
+                                "3600",
                             )
                         ),
                     )
                 )
 
                 self.components[
-                    "autonomous_coding_loop"
-                ] = coding_loop
+                    "autonomous_development_bridge"
+                ] = bridge
 
-        except Exception as exc:
+            except Exception as exc:
 
-            self.errors.append(
-                "AutonomousCodingLoop: "
-                f"{exc}"
-            )
-
-        # ------------------------------------------------------
-        # Validation loop
-        # ------------------------------------------------------
-
-        try:
-
-            validation_loop = (
-                AutonomousValidationLoop(
-                    self.development_controller
+                self.errors.append(
+                    "AutonomousDevelopmentBridge: "
+                    f"{exc}"
                 )
-            )
 
-            self.components[
-                "autonomous_validation_loop"
-            ] = validation_loop
+        # ======================================================
+        # AUTONOMOUS CODING LOOP
+        # ======================================================
 
-        except Exception as exc:
+        if AutonomousCodingLoop is not None:
 
-            self.errors.append(
-                "AutonomousValidationLoop: "
-                f"{exc}"
-            )
+            try:
 
-        # ------------------------------------------------------
-        # Repair loop
-        # ------------------------------------------------------
+                bridge = self.components.get(
+                    "autonomous_development_bridge"
+                )
 
-        try:
+                if bridge is not None:
 
-            repair_loop = (
-                AutonomousRepairLoop(
-                    self.development_controller,
-                    max_cycles=int(
-                        os.getenv(
-                            "ARIA_AUTONOMOUS_REPAIR_CYCLES",
-                            "2",
+                    coding_loop = (
+                        AutonomousCodingLoop(
+                            bridge,
+                            max_attempts=int(
+                                os.getenv(
+                                    "ARIA_AUTONOMOUS_CODING_ATTEMPTS",
+                                    "3",
+                                )
+                            ),
                         )
-                    ),
+                    )
+
+                    self.components[
+                        "autonomous_coding_loop"
+                    ] = coding_loop
+
+            except Exception as exc:
+
+                self.errors.append(
+                    "AutonomousCodingLoop: "
+                    f"{exc}"
                 )
-            )
 
-            self.components[
-                "autonomous_repair_loop"
-            ] = repair_loop
+        # ======================================================
+        # AUTONOMOUS VALIDATION LOOP
+        # ======================================================
 
-        except Exception as exc:
+        if AutonomousValidationLoop is not None:
 
-            self.errors.append(
-                "AutonomousRepairLoop: "
-                f"{exc}"
-            )
+            try:
 
-        # ------------------------------------------------------
-        # Knowledge retriever
-        # ------------------------------------------------------
-
-        try:
-
-            retriever = KnowledgeRetriever(
-                memory_engine=(
-                    self.memory_engine
-                ),
-                document_ai=(
-                    self.document_ai
-                ),
-                knowledge_database=(
-                    self.knowledge_database
-                ),
-                knowledge_graph=(
-                    self.knowledge_graph
-                ),
-            )
-
-            self.components[
-                "knowledge_retriever"
-            ] = retriever
-
-        except Exception as exc:
-
-            self.errors.append(
-                "KnowledgeRetriever: "
-                f"{exc}"
-            )
-
-        # ------------------------------------------------------
-        # Knowledge → coding feedback
-        # ------------------------------------------------------
-
-        try:
-
-            retriever = self.components.get(
-                "knowledge_retriever"
-            )
-
-            if retriever is not None:
-
-                knowledge_feedback = (
-                    KnowledgeCodingFeedback(
-                        retriever
+                validation_loop = (
+                    AutonomousValidationLoop(
+                        self.development_controller
                     )
                 )
 
                 self.components[
-                    "knowledge_coding_feedback"
-                ] = knowledge_feedback
+                    "autonomous_validation_loop"
+                ] = validation_loop
 
-        except Exception as exc:
+            except Exception as exc:
 
-            self.errors.append(
-                "KnowledgeCodingFeedback: "
-                f"{exc}"
-            )
-
-        # ------------------------------------------------------
-        # Permissioned Git / GitHub
-        # ------------------------------------------------------
-
-        try:
-
-            git_workflow = (
-                PermissionedGitWorkflow(
-                    git_service=self.git_manager,
-                    github_service=self.github_manager,
+                self.errors.append(
+                    "AutonomousValidationLoop: "
+                    f"{exc}"
                 )
-            )
 
-            self.components[
-                "permissioned_git_workflow"
-            ] = git_workflow
+        # ======================================================
+        # AUTONOMOUS REPAIR LOOP
+        # ======================================================
 
-        except Exception as exc:
+        if AutonomousRepairLoop is not None:
 
-            self.errors.append(
-                "PermissionedGitWorkflow: "
-                f"{exc}"
-            )
+            try:
 
-        # ------------------------------------------------------
-        # Permissioned deployment
-        # ------------------------------------------------------
+                repair_loop = (
+                    AutonomousRepairLoop(
+                        self.development_controller,
+                        max_cycles=int(
+                            os.getenv(
+                                "ARIA_AUTONOMOUS_REPAIR_CYCLES",
+                                "2",
+                            )
+                        ),
+                    )
+                )
 
-        try:
+                self.components[
+                    "autonomous_repair_loop"
+                ] = repair_loop
 
-            deployment_workflow = (
-                PermissionedDeploymentWorkflow(
-                    deployment_service=(
-                        self.deployment_manager
+            except Exception as exc:
+
+                self.errors.append(
+                    "AutonomousRepairLoop: "
+                    f"{exc}"
+                )
+
+        # ======================================================
+        # KNOWLEDGE RETRIEVER
+        # ======================================================
+
+        if KnowledgeRetriever is not None:
+
+            try:
+
+                retriever = KnowledgeRetriever(
+                    memory_engine=(
+                        self.memory_engine
                     ),
-                    health_timeout_seconds=float(
-                        os.getenv(
-                            "ARIA_DEPLOYMENT_HEALTH_TIMEOUT",
-                            "60",
-                        )
+                    document_ai=(
+                        self.document_ai
                     ),
-                    health_interval_seconds=float(
-                        os.getenv(
-                            "ARIA_DEPLOYMENT_HEALTH_INTERVAL",
-                            "5",
-                        )
+                    knowledge_database=(
+                        self.knowledge_database
+                    ),
+                    knowledge_graph=(
+                        self.knowledge_graph
                     ),
                 )
-            )
 
-            self.components[
-                "permissioned_deployment_workflow"
-            ] = deployment_workflow
+                self.components[
+                    "knowledge_retriever"
+                ] = retriever
 
-        except Exception as exc:
+            except Exception as exc:
 
-            self.errors.append(
-                "PermissionedDeploymentWorkflow: "
-                f"{exc}"
-            )
+                self.errors.append(
+                    "KnowledgeRetriever: "
+                    f"{exc}"
+                )
+
+        # ======================================================
+        # KNOWLEDGE → CODING FEEDBACK
+        # ======================================================
+
+        if KnowledgeCodingFeedback is not None:
+
+            try:
+
+                retriever = self.components.get(
+                    "knowledge_retriever"
+                )
+
+                if retriever is not None:
+
+                    knowledge_feedback = (
+                        KnowledgeCodingFeedback(
+                            retriever
+                        )
+                    )
+
+                    self.components[
+                        "knowledge_coding_feedback"
+                    ] = knowledge_feedback
+
+            except Exception as exc:
+
+                self.errors.append(
+                    "KnowledgeCodingFeedback: "
+                    f"{exc}"
+                )
+
+        # ======================================================
+        # PERMISSIONED GIT / GITHUB
+        # ======================================================
+
+        if PermissionedGitWorkflow is not None:
+
+            try:
+
+                git_workflow = (
+                    PermissionedGitWorkflow(
+                        git_service=self.git_manager,
+                        github_service=self.github_manager,
+                    )
+                )
+
+                self.components[
+                    "permissioned_git_workflow"
+                ] = git_workflow
+
+            except Exception as exc:
+
+                self.errors.append(
+                    "PermissionedGitWorkflow: "
+                    f"{exc}"
+                )
+
+        # ======================================================
+        # PERMISSIONED DEPLOYMENT
+        # ======================================================
+
+        if PermissionedDeploymentWorkflow is not None:
+
+            try:
+
+                deployment_workflow = (
+                    PermissionedDeploymentWorkflow(
+                        deployment_service=(
+                            self.deployment_manager
+                        ),
+                        health_timeout_seconds=float(
+                            os.getenv(
+                                "ARIA_DEPLOYMENT_HEALTH_TIMEOUT",
+                                "60",
+                            )
+                        ),
+                        health_interval_seconds=float(
+                            os.getenv(
+                                "ARIA_DEPLOYMENT_HEALTH_INTERVAL",
+                                "5",
+                            )
+                        ),
+                    )
+                )
+
+                self.components[
+                    "permissioned_deployment_workflow"
+                ] = deployment_workflow
+
+            except Exception as exc:
+
+                self.errors.append(
+                    "PermissionedDeploymentWorkflow: "
+                    f"{exc}"
+                )
+
+        # ======================================================
+        # INITIALIZATION COMPLETE
+        # ======================================================
 
         self.initialized = True
 
         logger.info(
-            "[Phase1] Runtime integration initialized | "
-            "components=%s | errors=%s",
+            "[Phase1] Runtime compatibility integration initialized | "
+            "components=%s | compatibility_warnings=%s",
             len(
                 self.components
             ),
@@ -408,7 +667,7 @@ class Phase1Runtime:
         if self.errors:
 
             logger.warning(
-                "[Phase1] Runtime integration warnings: %s",
+                "[Phase1] Compatibility services unavailable: %s",
                 self.errors,
             )
 
@@ -423,40 +682,61 @@ class Phase1Runtime:
     def get(
         self,
         name: str,
+        default: Any = None,
     ) -> Any:
         """
-        Retrieve one Phase 1 runtime component.
+        Retrieve one Phase 1 compatibility component safely.
+
+        Missing compatibility services return ``default``.
+
+        This is intentional: the authoritative engineering runtime
+        must never depend on obsolete legacy components being present.
         """
 
-        if name not in self.components:
-            raise KeyError(
-                f"Phase 1 runtime component "
-                f"'{name}' is not available."
-            )
-
-        return self.components[
-            name
-        ]
+        return self.components.get(
+            name,
+            default,
+        )
 
     def has(
         self,
         name: str,
     ) -> bool:
-        return name in self.components
+
+        return (
+            name in self.components
+        )
 
     # ==========================================================
     # CANONICAL RUNTIME BINDING
     # ==========================================================
 
-    def bind_authoritative_runtime(self, runtime: Any) -> None:
-        """Bind the single authoritative Phase 1 engineering runtime."""
+    def bind_authoritative_runtime(
+        self,
+        runtime: Any,
+    ) -> None:
+        """
+        Bind the single authoritative Phase 1 engineering runtime.
+        """
+
         if runtime is None:
-            raise ValueError("authoritative runtime is required.")
-        self._authoritative_runtime = runtime
+
+            raise ValueError(
+                "authoritative runtime is required."
+            )
+
+        self._authoritative_runtime = (
+            runtime
+        )
 
     @property
-    def authoritative_runtime(self) -> Any:
-        return self._authoritative_runtime
+    def authoritative_runtime(
+        self,
+    ) -> Any:
+
+        return (
+            self._authoritative_runtime
+        )
 
     # ==========================================================
     # MAIN DEVELOPMENT ENTRY POINT
@@ -473,26 +753,38 @@ class Phase1Runtime:
         metadata=None,
     ):
         """
-        Main autonomous development entry point.
+        Compatibility development entry point.
 
-        Telegram and future orchestration layers should use this
-        component rather than directly rebuilding the lower-level
-        development graph.
+        ALL engineering execution is delegated to the canonical
+        Phase1PersistentRuntimeAdapter.
+
+        The legacy coding loop is never used as an execution owner.
         """
 
-        # Compatibility callers must enter the canonical runtime.
-        # The legacy AutonomousCodingLoop remains available as an internal
-        # implementation component, but it is no longer an execution owner.
-        runtime = self._authoritative_runtime
+        runtime = (
+            self._authoritative_runtime
+        )
+
         if runtime is None:
+
             raise RuntimeError(
-                "Canonical Phase 1 engineering runtime is not bound."
+                "Canonical Phase 1 engineering runtime "
+                "is not bound."
             )
 
-        develop = getattr(runtime, "develop", None)
-        if not callable(develop):
+        develop = getattr(
+            runtime,
+            "develop",
+            None,
+        )
+
+        if not callable(
+            develop
+        ):
+
             raise RuntimeError(
-                "Canonical Phase 1 engineering runtime has no develop entry point."
+                "Canonical Phase 1 engineering runtime "
+                "has no develop entry point."
             )
 
         return await develop(
@@ -527,6 +819,7 @@ class Phase1Runtime:
         )
 
         if feedback is None:
+
             raise RuntimeError(
                 "Knowledge coding feedback is unavailable."
             )
@@ -551,8 +844,10 @@ class Phase1Runtime:
         requirement=None,
     ):
         """
-        Compatibility guard: verification is owned by the authoritative
-        engineering orchestrator and cannot be executed independently.
+        Compatibility guard.
+
+        Verification is owned by the authoritative engineering
+        orchestrator and cannot be executed independently.
         """
 
         raise RuntimeError(
@@ -576,8 +871,10 @@ class Phase1Runtime:
         metadata=None,
     ):
         """
-        Compatibility guard: diagnosis/recovery/retest is owned by the
-        authoritative engineering orchestrator and cannot be executed
+        Compatibility guard.
+
+        Diagnosis, recovery, and retest are owned by the
+        authoritative engineering orchestrator and cannot execute
         independently.
         """
 
@@ -591,8 +888,11 @@ class Phase1Runtime:
     # STATUS
     # ==========================================================
 
-    def status(self) -> dict[str, Any]:
-        result = {
+    def status(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
             "version": self.VERSION,
             "initialized": self.initialized,
             "component_count": len(
@@ -613,19 +913,25 @@ class Phase1Runtime:
             "legacy_execution_owner": False,
         }
 
-        return result
-
     # ==========================================================
     # HEALTH
     # ==========================================================
 
-    def health(self) -> dict[str, Any]:
+    def health(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Compatibility-container health.
+
+        Legacy coding/validation/repair components are deliberately
+        NOT required for health because the authoritative runtime
+        owns those stages.
+
+        Only permissioned delivery compatibility services are treated
+        as required here.
+        """
+
         required = (
-            "autonomous_development_bridge",
-            "autonomous_coding_loop",
-            "autonomous_validation_loop",
-            "autonomous_repair_loop",
-            "knowledge_coding_feedback",
             "permissioned_git_workflow",
             "permissioned_deployment_workflow",
         )
@@ -662,13 +968,17 @@ class Phase1Runtime:
     # DESCRIPTION
     # ==========================================================
 
-    def describe(self) -> dict[str, Any]:
+    def describe(
+        self,
+    ) -> dict[str, Any]:
+
         return {
             "name": "phase1_runtime",
             "version": self.VERSION,
             "purpose": (
-                "Runtime integration for ARIA's autonomous "
-                "software-engineering foundation."
+                "Compatibility service container for ARIA's "
+                "authoritative autonomous software-engineering "
+                "foundation."
             ),
             "autonomous_development": (
                 self.has(
@@ -712,6 +1022,10 @@ class Phase1Runtime:
             ),
         }
 
+
+# ==========================================================
+# FACTORY
+# ==========================================================
 
 def create_phase1_runtime(
     *,
