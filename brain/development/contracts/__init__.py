@@ -50,21 +50,6 @@ from .engineering_task_graph import (
     EngineeringTaskGraph,
 )
 
-from .engineering_session import (
-    EngineeringSession,
-    SessionTransition,
-    AuthoritativeEngineeringSession,
-)
-
-from .engineering_lifecycle import (
-    EngineeringLifecycle,
-    LifecycleExecutionRecord,
-)
-
-from .engineering_store import (
-    EngineeringStore,
-)
-
 from .engineering_result import (
     EngineeringOutcome,
     EngineeringResult,
@@ -395,3 +380,29 @@ __all__ = [
     "TelegramEngineeringRequest",
     "TelegramEngineeringResponse",
 ]
+
+# Session/lifecycle/store are loaded lazily to avoid circular imports with
+# the authoritative session implementation in brain.development.
+_LAZY_EXPORTS = {
+    "EngineeringSession": ("brain.development.engineering_session", "EngineeringSession"),
+    "AuthoritativeEngineeringSession": ("brain.development.engineering_session", "AuthoritativeEngineeringSession"),
+    "SessionTransition": ("brain.development.engineering_session", "SessionTransition"),
+    "EngineeringLifecycle": ("brain.development.contracts.engineering_lifecycle", "EngineeringLifecycle"),
+    "LifecycleExecutionRecord": ("brain.development.contracts.engineering_lifecycle", "LifecycleExecutionRecord"),
+    "EngineeringStore": ("brain.development.contracts.engineering_store", "EngineeringStore"),
+}
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}"
+        )
+
+    import importlib
+
+    module = importlib.import_module(target[0])
+    value = getattr(module, target[1])
+    globals()[name] = value
+    return value
