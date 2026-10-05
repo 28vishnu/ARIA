@@ -109,6 +109,7 @@ from brain.development.phase1_readiness_gateway import (
     Phase1ReadinessGateway,
 )
 from brain.integration.phase1_capability_hub import Phase1CapabilityHub
+from brain.integration.phase1_delivery_gateway import Phase1DeliveryGateway
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -1660,6 +1661,27 @@ async def bootstrap_application() -> ServiceRegistry:
     logger.info(
         "[Phase1] Capability hub ready | %s",
         capability_hub.health(),
+    )
+
+
+    # ---------------------------------------------------------
+    # Canonical Git / GitHub / deployment delivery boundary
+    # ---------------------------------------------------------
+
+    delivery_gateway = Phase1DeliveryGateway(
+        git_service=phase1_runtime.git_manager,
+        github_service=phase1_runtime.github_manager,
+        deployment_service=phase1_runtime.deployment_manager,
+    )
+
+    registry.register(
+        "phase1_delivery_gateway",
+        delivery_gateway,
+    )
+
+    logger.info(
+        "[Phase1] Delivery gateway ready | %s",
+        delivery_gateway.health(),
     )
 
     # ---------------------------------------------------------
