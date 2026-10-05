@@ -16,6 +16,7 @@ from brain.core.fast_router import should_fast_route
 from brain.core.execution_router import decide, Route
 from brain.core.coding_engine import CodingEngine
 from brain.core.engine_manager import EngineManager
+from brain.development.engineering_request_router import EngineeringRequestRouter
 
 logger = logging.getLogger("aria")
 
@@ -108,6 +109,7 @@ class CognitiveCore:
         study_engine=None,
         repository_memory=None,
         tool_manager=None,
+        phase1_runtime=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -144,6 +146,10 @@ class CognitiveCore:
         self.document_pipeline = document_pipeline
         self.study_engine = study_engine
         self.repository_memory = repository_memory
+        self.phase1_runtime = phase1_runtime
+        self.engineering_request_router = EngineeringRequestRouter(
+            runtime=phase1_runtime,
+        )
         self.cognitive_controller = CognitiveController()
         self.prompt_builder = PromptBuilder()
         self.coding_engine = CodingEngine(self.llm_router)
@@ -6219,6 +6225,130 @@ usable evidence is present. Do not invent details absent from the evidence.
 
             pre_ctx["decision"] = decision
             context["decision"] = decision
+
+            # =========================================================
+            # CANONICAL PHASE 1 ENGINEERING GATEWAY
+            # =========================================================
+            # Engineering requests must enter the single authoritative
+            # Phase 1 runtime instead of falling through to the legacy
+            # coding/agent pipeline.
+            #
+            # Read-only engineering requests are intercepted safely and
+            # are intentionally NOT sent to develop(). Step 3 will add
+            # the dedicated read-only readiness gateway.
+            # =========================================================
+            if (
+                self.phase1_runtime is not None
+                and self.engineering_request_router is not None
+            ):
+                try:
+                    engineering_route = await self.engineering_request_router.route(
+                        query,
+                        session_id=session_id,
+                        user_id=user_id,
+                        metadata={
+                            "execution_id": execution_id,
+                            "source": "cognitive_core",
+                        },
+                        intent=intent,
+                        decision=decision,
+                    )
+
+                    if engineering_route is not None:
+                        context["canonical_engineering_route"] = engineering_route
+
+                        if engineering_route.get("handled"):
+                            engineering_result = engineering_route.get("result")
+
+                            if isinstance(engineering_result, SystemResponse):
+                                return engineering_result
+
+                            if isinstance(engineering_result, dict):
+                                response_message = (
+                                    engineering_result.get("message")
+                                    or engineering_result.get("response")
+                                    or engineering_result.get("summary")
+                                    or "The canonical Phase 1 engineering lifecycle completed."
+                                )
+                                engineering_success = bool(
+                                    engineering_result.get(
+                                        "success",
+                                        engineering_result.get(
+                                            "accepted",
+                                            engineering_result.get("ok", True),
+                                        ),
+                                    )
+                                )
+                            else:
+                                response_message = str(engineering_result)
+                                engineering_success = True
+
+                            logger.info(
+                                "[CognitiveCore] Canonical Phase 1 engineering route completed | success=%s",
+                                engineering_success,
+                            )
+
+                            return SystemResponse(
+                                success=engineering_success,
+                                confidence=1.0 if engineering_success else 0.0,
+                                source="phase1_authoritative_engineering",
+                                data={
+                                    "response": response_message,
+                                    "message": response_message,
+                                    "engineering_result": engineering_result,
+                                },
+                            )
+
+                        if engineering_route.get("requires_readiness_gateway"):
+                            message = engineering_route.get("message") or (
+                                "This engineering request is read-only. "
+                                "It was safely prevented from entering the "
+                                "implementation lifecycle. The dedicated "
+                                "readiness gateway will handle it in Step 3."
+                            )
+
+                            logger.info(
+                                "[CognitiveCore] Read-only engineering request intercepted before implementation."
+                            )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=1.0,
+                                source="phase1_read_only_guard",
+                                data={
+                                    "response": message,
+                                    "message": message,
+                                    "engineering_route": engineering_route,
+                                },
+                            )
+
+                except Exception as exc:
+                    # Fail closed. Never fall back to the legacy coding
+                    # pipeline after the canonical engineering gateway has
+                    # been selected.
+                    logger.exception(
+                        "[CognitiveCore] Canonical engineering routing failed: %s",
+                        exc,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="phase1_authoritative_engineering",
+                        data={
+                            "response": (
+                                "The canonical Phase 1 engineering gateway "
+                                "failed before execution. No legacy engineering "
+                                "fallback was used."
+                            ),
+                            "message": (
+                                "The canonical Phase 1 engineering gateway "
+                                "failed before execution. No legacy engineering "
+                                "fallback was used."
+                            ),
+                            "error": str(exc),
+                        },
+                    )
 
             context["phase1"] = {
                 "active": True,
