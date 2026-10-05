@@ -11,29 +11,10 @@ from typing import Any
 
 logger = logging.getLogger("aria")
 
-
-class EngineeringPhase(str, Enum):
-    """
-    Canonical engineering lifecycle phases.
-
-    The session owns the authoritative phase state.
-    """
-
-    CREATED = "created"
-    UNDERSTANDING = "understanding"
-    PLANNING = "planning"
-    GRAPH_READY = "graph_ready"
-    IMPLEMENTING = "implementing"
-    VERIFYING = "verifying"
-    TESTING = "testing"
-    DIAGNOSING = "diagnosing"
-    RECOVERING = "recovering"
-    RETESTING = "retesting"
-    REASSESSING = "reassessing"
-    ACCEPTING = "accepting"
-    ACCEPTED = "accepted"
-    BLOCKED = "blocked"
-    FAILED = "failed"
+from .contracts.engineering_state import EngineeringPhase
+from .contracts.engineering_evidence import EngineeringEvidence
+from .contracts.engineering_requirement import EngineeringRequirement
+from .contracts.engineering_result import EngineeringResult
 
 
 @dataclass(frozen=True)
