@@ -133,6 +133,12 @@ class Phase1Runtime:
 
         self.initialized = False
 
+        # Canonical Phase 1 runtime is bound by
+        # Phase1PersistentRuntimeAdapter after construction.
+        # This prevents the legacy runtime from becoming a competing
+        # engineering execution entry point.
+        self._authoritative_runtime = None
+
     # ==========================================================
     # INITIALIZATION
     # ==========================================================
@@ -439,6 +445,20 @@ class Phase1Runtime:
         return name in self.components
 
     # ==========================================================
+    # CANONICAL RUNTIME BINDING
+    # ==========================================================
+
+    def bind_authoritative_runtime(self, runtime: Any) -> None:
+        """Bind the single authoritative Phase 1 engineering runtime."""
+        if runtime is None:
+            raise ValueError("authoritative runtime is required.")
+        self._authoritative_runtime = runtime
+
+    @property
+    def authoritative_runtime(self) -> Any:
+        return self._authoritative_runtime
+
+    # ==========================================================
     # MAIN DEVELOPMENT ENTRY POINT
     # ==========================================================
 
@@ -460,22 +480,28 @@ class Phase1Runtime:
         development graph.
         """
 
-        loop = self.components.get(
-            "autonomous_coding_loop"
-        )
-
-        if loop is None:
+        # Compatibility callers must enter the canonical runtime.
+        # The legacy AutonomousCodingLoop remains available as an internal
+        # implementation component, but it is no longer an execution owner.
+        runtime = self._authoritative_runtime
+        if runtime is None:
             raise RuntimeError(
-                "Autonomous coding loop is unavailable."
+                "Canonical Phase 1 engineering runtime is not bound."
             )
 
-        return await loop.run(
+        develop = getattr(runtime, "develop", None)
+        if not callable(develop):
+            raise RuntimeError(
+                "Canonical Phase 1 engineering runtime has no develop entry point."
+            )
+
+        return await develop(
             requirement,
             changes=changes,
             test_paths=test_paths,
             workspace_id=workspace_id,
             max_attempts=max_attempts,
-            context=metadata,
+            metadata=metadata,
         )
 
     # ==========================================================
@@ -596,6 +622,13 @@ class Phase1Runtime:
             "errors": list(
                 self.errors
             ),
+            "authoritative": True,
+            "execution_owner": (
+                "Phase1PersistentRuntimeAdapter"
+                if self._authoritative_runtime is not None
+                else "unbound"
+            ),
+            "legacy_execution_owner": False,
         }
 
         return result
@@ -631,6 +664,13 @@ class Phase1Runtime:
             "errors": list(
                 self.errors
             ),
+            "authoritative": True,
+            "execution_owner": (
+                "Phase1PersistentRuntimeAdapter"
+                if self._authoritative_runtime is not None
+                else "unbound"
+            ),
+            "legacy_execution_owner": False,
             "component_count": len(
                 self.components
             ),
@@ -680,6 +720,14 @@ class Phase1Runtime:
             ),
             "github_push_requires_authorization": True,
             "deployment_requires_authorization": True,
+            "authoritative_execution_owner": (
+                "Phase1PersistentRuntimeAdapter"
+                if self._authoritative_runtime is not None
+                else None
+            ),
+            "legacy_execution_entrypoint_disabled": (
+                self._authoritative_runtime is not None
+            ),
         }
 
 
