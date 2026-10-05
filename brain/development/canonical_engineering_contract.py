@@ -107,6 +107,11 @@ class CanonicalEngineeringRuntimeContract:
             ),
         }
 
+    @property
+    def legacy_execution_fallback_disabled(self) -> bool:
+        """Legacy engineering runtimes may provide services, never execution ownership."""
+        return True
+
     def validate_runtime(
         self,
         runtime: Any,
