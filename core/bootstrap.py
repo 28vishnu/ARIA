@@ -2112,6 +2112,7 @@ async def bootstrap_application() -> ServiceRegistry:
         document_pipeline=pipeline,
         study_engine=study_engine,
         repository_memory=repository_memory,
+        phase1_runtime=phase1_runtime,
     )
 
     registry.register(
