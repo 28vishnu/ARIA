@@ -108,6 +108,7 @@ from brain.development.phase1_persistent_runtime_adapter import (
 from brain.development.phase1_readiness_gateway import (
     Phase1ReadinessGateway,
 )
+from brain.integration.phase1_capability_hub import Phase1CapabilityHub
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -126,6 +127,7 @@ from actions.actions.weather import WeatherAction
 
 from brain.tools.search_tool import SearchTool
 from brain.tools.tool_manager import ToolManager
+from brain.tools.calculator_tool import CalculatorTool
 from autonomy.scheduler import BackgroundScheduler
 from automation_watchers import AutomationWatchers
 
@@ -1633,6 +1635,33 @@ async def bootstrap_application() -> ServiceRegistry:
         tool_manager.list_tools(),
     )
 
+    # Register safe built-in calculator capability.
+    try:
+        tool_manager.register(CalculatorTool(), aliases=["calc", "math"])
+    except Exception:
+        logger.exception("[Phase11] Failed to register CalculatorTool.")
+
+    # ---------------------------------------------------------
+    # Unified capability hub: skills/tools/plugins/voice/vision/docs
+    # ---------------------------------------------------------
+
+    capability_hub = Phase1CapabilityHub(
+        skill_manager=skill_manager,
+        tool_manager=tool_manager,
+        action_manager=action_manager,
+        document_pipeline=pipeline,
+    )
+
+    registry.register(
+        "phase1_capability_hub",
+        capability_hub,
+    )
+
+    logger.info(
+        "[Phase1] Capability hub ready | %s",
+        capability_hub.health(),
+    )
+
     # ---------------------------------------------------------
     # Shared Web Search Action
     # ---------------------------------------------------------
@@ -1857,7 +1886,14 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     planner = Planner(
+        memory_router=memory_router,
         llm_router=llm_router,
+        skill_manager=skill_manager,
+        action_manager=action_manager,
+        knowledge_manager=knowledge_manager,
+        world_model=world_model,
+        knowledge_graph=knowledge_graph,
+        event_bus=event_bus,
     )
 
     executor = Executor(
@@ -1868,6 +1904,7 @@ async def bootstrap_application() -> ServiceRegistry:
         mongodb=db_inst if mongo_client else None,
         agent_manager=agent_manager,
         agent_coordinator=agent_coordinator,
+        tool_manager=tool_manager,
     )
 
     # ---------------------------------------------------------
