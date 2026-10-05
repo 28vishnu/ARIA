@@ -211,10 +211,23 @@ class Phase1PersistentRuntimeAdapter:
                     FinalAutonomousEngineer()
                 )
 
+            # Enforce one canonical persistent runtime.  The adapter owns
+            # the runtime; the final engineer must reference this exact
+            # object rather than constructing or retaining another runtime.
+            if hasattr(engineer, "persistent_runtime"):
+                engineer.persistent_runtime = self._persistent_runtime
+
+            if hasattr(engineer, "development_controller"):
+                if engineer.development_controller is None:
+                    engineer.development_controller = (
+                        self.development_controller
+                    )
+
             logger.info(
                 "[Phase1][FinalRuntime] Final autonomous engineer "
-                "connected | class=%s",
+                "connected | class=%s | canonical_runtime=%s",
                 type(engineer).__name__,
+                type(self._persistent_runtime).__name__,
             )
 
             return engineer
