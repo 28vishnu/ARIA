@@ -986,6 +986,11 @@ class PersistentEngineeringRuntime:
                 if inspect.isawaitable(
                     result
                 ):
+                    # This compatibility method is synchronous. Close the
+                    # coroutine so bootstrap never leaks an un-awaited task.
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
                     return []
 
                 if result is None:
