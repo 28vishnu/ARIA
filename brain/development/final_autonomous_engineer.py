@@ -1009,6 +1009,48 @@ class FinalAutonomousEngineer:
             )
 
         # --------------------------------------------------------
+        # AUTHORITATIVE REPOSITORY / PLANNING / TASK GRAPH
+        # --------------------------------------------------------
+        # Reuse the DevelopmentAgent's existing read-only repository
+        # manager, conservative ChangePlanner, and IntelligentTaskGraph.
+        # These are wrapped so the authoritative orchestrator remains the
+        # only lifecycle owner and no competing planning state machine is
+        # introduced.
+        repository_engine = (
+            services.get("repository_engine")
+            or getattr(development_agent, "repository_manager", None)
+        )
+
+        planning_engine = services.get("planning_engine")
+        task_graph_engine = services.get("task_graph_engine")
+
+        if planning_engine is None or task_graph_engine is None:
+            from .authoritative_engineering_planning import (
+                AuthoritativeRepositoryContext,
+                AuthoritativePlanningAdapter,
+                AuthoritativeTaskGraphAdapter,
+            )
+
+            repository_context = AuthoritativeRepositoryContext(
+                repository_engine
+            )
+
+            if planning_engine is None:
+                planning_engine = AuthoritativePlanningAdapter(
+                    change_planner=getattr(
+                        development_agent, "change_planner", None
+                    ),
+                    repository_context=repository_context,
+                )
+
+            if task_graph_engine is None:
+                task_graph_engine = AuthoritativeTaskGraphAdapter(
+                    task_graph_engine=getattr(
+                        development_agent, "intelligent_task_graph", None
+                    ),
+                )
+
+        # --------------------------------------------------------
         # AUTHORITATIVE ACCEPTANCE ENGINE
         # --------------------------------------------------------
 
@@ -1152,17 +1194,9 @@ class FinalAutonomousEngineer:
                 knowledge_engine
             ),
 
-            "planning_engine": (
-                services.get(
-                    "planning_engine"
-                )
-            ),
+            "planning_engine": planning_engine,
 
-            "task_graph_engine": (
-                services.get(
-                    "task_graph_engine"
-                )
-            ),
+            "task_graph_engine": task_graph_engine,
 
             "implementation_engine": (
                 implementation_engine
