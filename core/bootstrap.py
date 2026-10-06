@@ -63,7 +63,7 @@ from brain.documents.repository.repository_memory import RepositoryMemory
 # =========================================================
 
 from brain.development.repository_manager import RepositoryManager
-from brain.development.repository_intelligence import RepositoryIntelligenceService
+from brain.development.repository_intelligence import RepositoryIntelligence
 from brain.development.source_analyzer import SourceAnalyzer
 from brain.development.dependency_analyzer import DependencyAnalyzer
 from brain.development.architecture_intelligence import ArchitectureIntelligence
@@ -971,7 +971,7 @@ async def bootstrap_application() -> ServiceRegistry:
     # Step 2 — Canonical Repository Intelligence
     # ---------------------------------------------------------
 
-    repository_intelligence = RepositoryIntelligenceService(
+    repository_intelligence = RepositoryIntelligence(
         repository_manager=repository_manager,
         architecture_intelligence=architecture_intelligence,
         git_manager=git_manager,
