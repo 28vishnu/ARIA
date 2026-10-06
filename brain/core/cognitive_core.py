@@ -17,6 +17,7 @@ from brain.core.execution_router import decide, Route
 from brain.core.coding_engine import CodingEngine
 from brain.core.engine_manager import EngineManager
 from brain.development.engineering_request_router import EngineeringRequestRouter
+from brain.core.jarvis_request_kernel import JarvisRequestKernel
 
 logger = logging.getLogger("aria")
 
@@ -147,6 +148,7 @@ class CognitiveCore:
         self.study_engine = study_engine
         self.repository_memory = repository_memory
         self.phase1_runtime = phase1_runtime
+        self.jarvis_request_kernel = JarvisRequestKernel()
         self.engineering_request_router = EngineeringRequestRouter(
             runtime=phase1_runtime,
         )
@@ -5104,6 +5106,16 @@ usable evidence is present. Do not invent details absent from the evidence.
         # construction block below, so those branches must never reference
         # an uninitialized local `context` variable.
         context: Dict[str, Any] = dict(base_context or {})
+        jarvis_request = self.jarvis_request_kernel.understand(
+            query,
+            request_id=execution_id,
+            metadata={
+                "session_id": session_id,
+                "user_id": user_id,
+                "source": "cognitive_core",
+            },
+        )
+
         context.update({
             "query": query,
             "session_id": session_id,
@@ -5119,6 +5131,10 @@ usable evidence is present. Do not invent details absent from the evidence.
             "executor": self.executor,
             "reasoning": self.reasoning_engine,
             "working_memory": self.working_memory,
+            "jarvis_request": jarvis_request.to_dict(),
+            "jarvis_request_mode": jarvis_request.mode,
+            "jarvis_request_requires_execution": jarvis_request.requires_execution,
+            "jarvis_request_read_only": jarvis_request.read_only,
         })
 
         try:
