@@ -177,7 +177,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "config",
-        config
+        config,
     )
 
     # ---------------------------------------------------------
@@ -209,17 +209,17 @@ async def bootstrap_application() -> ServiceRegistry:
 
         registry.register(
             "mongo_client",
-            mongo_client
+            mongo_client,
         )
 
         registry.register(
             "memory_engine",
-            memory_engine
+            memory_engine,
         )
 
         registry.register(
             "document_repository",
-            document_repository
+            document_repository,
         )
 
         logger.info(
@@ -246,7 +246,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
         registry.register(
             "memory_conversation_manager",
-            memory_conversation_manager
+            memory_conversation_manager,
         )
 
         logger.info(
@@ -282,12 +282,12 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "vector_db",
-        vector_store
+        vector_store,
     )
 
     registry.register(
         "knowledge_vector_db",
-        knowledge_vector_store
+        knowledge_vector_store,
     )
 
     logger.info(
@@ -307,7 +307,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "http_client",
-        http_client
+        http_client,
     )
 
     logger.info(
@@ -324,7 +324,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "llm_router",
-        llm_router
+        llm_router,
     )
 
     if memory_engine is not None:
@@ -356,12 +356,12 @@ async def bootstrap_application() -> ServiceRegistry:
         memory_engine=memory_engine,
         llm_router=llm_router,
         vector_db=vector_store,
-        document_repository=document_repository
+        document_repository=document_repository,
     )
 
     registry.register(
         "document_intelligence",
-        doc_intelligence
+        doc_intelligence,
     )
 
     state_manager = StateManager()
@@ -473,7 +473,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "memory_router",
-        memory_router
+        memory_router,
     )
 
     # ---------------------------------------------------------
@@ -507,57 +507,57 @@ async def bootstrap_application() -> ServiceRegistry:
 
         event_bus.register_listener(
             event_types.RESPONSE_GENERATED,
-            autonomous_learning
+            autonomous_learning,
         )
 
         event_bus.register_listener(
             event_types.RESPONSE_GENERATED,
-            self_reflection
+            self_reflection,
         )
 
         event_bus.register_listener(
             event_types.DOCUMENT_UPLOADED,
-            autonomous_learning
+            autonomous_learning,
         )
 
         event_bus.register_listener(
             event_types.DOCUMENT_SUMMARIZED,
-            autonomous_learning
+            autonomous_learning,
         )
 
         event_bus.register_listener(
             event_types.PLAN_COMPLETED,
-            autonomous_learning
+            autonomous_learning,
         )
 
         event_bus.register_listener(
             event_types.WORKFLOW_COMPLETED,
-            self_reflection
+            self_reflection,
         )
 
         event_bus.register_listener(
             event_types.TASK_FAILED,
-            self_reflection
+            self_reflection,
         )
 
         event_bus.register_listener(
             event_types.TASK_COMPLETED,
-            autonomous_learning
+            autonomous_learning,
         )
 
         event_bus.register_listener(
             event_types.WORKFLOW_COMPLETED,
-            autonomous_learning
+            autonomous_learning,
         )
 
         event_bus.register_listener(
             event_types.KNOWLEDGE_ADDED,
-            knowledge_graph
+            knowledge_graph,
         )
 
         event_bus.register_listener(
             event_types.KNOWLEDGE_ADDED,
-            world_model
+            world_model,
         )
 
     register_event_listeners()
@@ -572,7 +572,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "conversation_manager",
-        conversation_manager
+        conversation_manager,
     )
 
     logger.info(
@@ -587,7 +587,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "goal_manager",
-        goal_manager
+        goal_manager,
     )
 
     registry.register(
@@ -610,27 +610,27 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "knowledge_database",
-        knowledge_database
+        knowledge_database,
     )
 
     registry.register(
         "knowledge_graph",
-        knowledge_graph
+        knowledge_graph,
     )
 
     registry.register(
         "world_model",
-        world_model
+        world_model,
     )
 
     registry.register(
         "graph_builder",
-        graph_builder
+        graph_builder,
     )
 
     registry.register(
         "knowledge_manager",
-        knowledge_manager
+        knowledge_manager,
     )
 
     # ---------------------------------------------------------
@@ -639,27 +639,27 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "learning_engine",
-        learning_engine
+        learning_engine,
     )
 
     registry.register(
         "self_reflection",
-        self_reflection
+        self_reflection,
     )
 
     registry.register(
         "autonomous_learning",
-        autonomous_learning
+        autonomous_learning,
     )
 
     registry.register(
         "event_bus",
-        event_bus
+        event_bus,
     )
 
     registry.register(
         "context_builder",
-        context_builder
+        context_builder,
     )
 
     logger.info(
@@ -758,10 +758,6 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Phase 1 — Development Workspace
     # ---------------------------------------------------------
-    #
-    # DevelopmentWorkspace is the only component that creates
-    # per-job workspaces. Each workspace is a copy of the
-    # repository and is never the production checkout.
 
     workspace_root = os.getenv(
         "ARIA_DEVELOPMENT_WORKSPACE_ROOT",
@@ -831,7 +827,10 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
 
     requirement_parser = RequirementParser()
-    requirement_intelligence = RequirementIntelligence(requirement_parser)
+    requirement_intelligence = RequirementIntelligence(
+        requirement_parser
+    )
+
     change_planner = ChangePlanner()
 
     change_impact_planner = ChangeImpactPlanner(
@@ -880,7 +879,7 @@ async def bootstrap_application() -> ServiceRegistry:
         max_attempts=int(
             os.getenv(
                 "ARIA_REPAIR_MAX_ATTEMPTS",
-                "3"
+                "3",
             )
         ),
     )
@@ -1030,9 +1029,6 @@ async def bootstrap_application() -> ServiceRegistry:
 
     deployment_policy = DeploymentPolicy()
 
-    # Telegram approval interface uses the same authoritative
-    # ApprovalManager. It never executes the gated operation
-    # directly; it only approves/rejects an existing request.
     telegram_approval_interface = TelegramApprovalInterface(
         approval_manager=approval_manager,
     )
@@ -1299,102 +1295,102 @@ async def bootstrap_application() -> ServiceRegistry:
 
     document_manager.register_parser(
         ".pdf",
-        PDFParser()
+        PDFParser(),
     )
 
     document_manager.register_parser(
         ".docx",
-        DOCXParser()
+        DOCXParser(),
     )
 
     document_manager.register_parser(
         ".jpg",
-        ImageParser()
+        ImageParser(),
     )
 
     document_manager.register_parser(
         ".jpeg",
-        ImageParser()
+        ImageParser(),
     )
 
     document_manager.register_parser(
         ".png",
-        ImageParser()
+        ImageParser(),
     )
 
     document_manager.register_parser(
         ".zip",
-        ZIPParser()
+        ZIPParser(),
     )
 
     registry.register(
         "document_manager",
-        document_manager
+        document_manager,
     )
 
     registry.register(
         "document_pipeline",
-        pipeline
+        pipeline,
     )
 
     registry.register(
         "chunker",
-        chunker
+        chunker,
     )
 
     registry.register(
         "concept_extractor",
-        concept_extractor
+        concept_extractor,
     )
 
     registry.register(
         "document_memory",
-        document_memory
+        document_memory,
     )
 
     registry.register(
         "semantic_search",
-        semantic_search
+        semantic_search,
     )
 
     registry.register(
         "study_engine",
-        study_engine
+        study_engine,
     )
 
     registry.register(
         "flashcard_generator",
-        flashcard_generator
+        flashcard_generator,
     )
 
     registry.register(
         "mcq_generator",
-        mcq_generator
+        mcq_generator,
     )
 
     registry.register(
         "revision_engine",
-        revision_engine
+        revision_engine,
     )
 
     registry.register(
         "repo_analyzer",
-        repo_analyzer
+        repo_analyzer,
     )
 
     registry.register(
         "code_parser",
-        code_parser
+        code_parser,
     )
 
     registry.register(
         "dependency_graph",
-        dependency_graph
+        dependency_graph,
     )
 
     registry.register(
         "repository_memory",
-        repository_memory
+        repository_memory,
     )
 
     # ---------------------------------------------------------
@@ -1435,22 +1431,22 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "agent_manager",
-        agent_manager
+        agent_manager,
     )
 
     registry.register(
         "agent_coordinator",
-        agent_coordinator
+        agent_coordinator,
     )
 
     registry.register(
         "lead_agent",
-        lead_agent
+        lead_agent,
     )
 
     logger.info(
         "[BOOT TEST] Registered %d specialist agents",
-        len(agent_manager.agents)
+        len(agent_manager.agents),
     )
 
     # ---------------------------------------------------------
@@ -1523,7 +1519,7 @@ async def bootstrap_application() -> ServiceRegistry:
                 float(
                     os.getenv(
                         "ARIA_TOOL_SELECTION_THRESHOLD",
-                        "0.25"
+                        "0.25",
                     )
                 ),
             ),
@@ -1533,7 +1529,7 @@ async def bootstrap_application() -> ServiceRegistry:
             float(
                 os.getenv(
                     "ARIA_TOOL_EXECUTION_TIMEOUT",
-                    "60"
+                    "60",
                 )
             ),
         ),
@@ -1563,7 +1559,7 @@ async def bootstrap_application() -> ServiceRegistry:
                 getattr(
                     config,
                     "timeout_seconds",
-                    20.0
+                    20.0,
                 )
             ),
         ),
@@ -1638,12 +1634,23 @@ async def bootstrap_application() -> ServiceRegistry:
 
     # Register safe built-in calculator capability.
     try:
-        tool_manager.register(CalculatorTool(), aliases=["calc", "math"])
+
+        tool_manager.register(
+            CalculatorTool(),
+            aliases=[
+                "calc",
+                "math",
+            ],
+        )
+
     except Exception:
-        logger.exception("[Phase11] Failed to register CalculatorTool.")
+
+        logger.exception(
+            "[Phase11] Failed to register CalculatorTool."
+        )
 
     # ---------------------------------------------------------
-    # Unified capability hub: skills/tools/plugins/voice/vision/docs
+    # Unified capability hub
     # ---------------------------------------------------------
 
     capability_hub = Phase1CapabilityHub(
@@ -1663,9 +1670,8 @@ async def bootstrap_application() -> ServiceRegistry:
         capability_hub.health(),
     )
 
-
     # ---------------------------------------------------------
-    # Canonical Git / GitHub / deployment delivery boundary
+    # Canonical Git / GitHub / Deployment Delivery Boundary
     # ---------------------------------------------------------
 
     delivery_gateway = Phase1DeliveryGateway(
@@ -1718,13 +1724,13 @@ async def bootstrap_application() -> ServiceRegistry:
         max_concurrent_jobs=int(
             os.getenv(
                 "ARIA_MAX_CONCURRENT_JOBS",
-                "5"
+                "5",
             )
         ),
         default_timeout_seconds=float(
             os.getenv(
                 "ARIA_JOB_TIMEOUT_SECONDS",
-                "300"
+                "300",
             )
         ),
     )
@@ -1749,7 +1755,7 @@ async def bootstrap_application() -> ServiceRegistry:
         telegram_token=getattr(
             config,
             "telegram_token",
-            None
+            None,
         ),
         admin_chat_id=os.getenv(
             "ADMIN_CHAT_ID"
@@ -1761,7 +1767,7 @@ async def bootstrap_application() -> ServiceRegistry:
                 getattr(
                     config,
                     "timeout_seconds",
-                    20.0
+                    20.0,
                 )
             ),
         ),
@@ -1769,7 +1775,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "automation_watchers",
-        automation_watchers
+        automation_watchers,
     )
 
     logger.info(
@@ -1828,7 +1834,7 @@ async def bootstrap_application() -> ServiceRegistry:
         float(
             os.getenv(
                 "ARIA_LEARNING_CONSOLIDATION_INTERVAL",
-                "21600"
+                "21600",
             )
         ),
     )
@@ -1838,7 +1844,7 @@ async def bootstrap_application() -> ServiceRegistry:
         float(
             os.getenv(
                 "ARIA_DAILY_REFLECTION_INTERVAL",
-                "86400"
+                "86400",
             )
         ),
     )
@@ -1848,7 +1854,7 @@ async def bootstrap_application() -> ServiceRegistry:
         float(
             os.getenv(
                 "ARIA_WEEKLY_REFLECTION_INTERVAL",
-                "604800"
+                "604800",
             )
         ),
     )
@@ -1906,16 +1912,23 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Planner / Executor
     # ---------------------------------------------------------
+    #
+    # IMPORTANT:
+    # Planner's deployed constructor accepts the LLM router.
+    # Do NOT pass memory_router or the other legacy keyword
+    # dependencies into Planner(...).
+    #
+    # Those services are connected after construction below.
+    # This prevents:
+    #
+    # TypeError:
+    # Planner.__init__() got an unexpected keyword argument
+    # 'memory_router'
+    #
+    # ---------------------------------------------------------
 
     planner = Planner(
-        memory_router=memory_router,
         llm_router=llm_router,
-        skill_manager=skill_manager,
-        action_manager=action_manager,
-        knowledge_manager=knowledge_manager,
-        world_model=world_model,
-        knowledge_graph=knowledge_graph,
-        event_bus=event_bus,
     )
 
     executor = Executor(
@@ -1970,52 +1983,52 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "session_manager",
-        session_manager
+        session_manager,
     )
 
     registry.register(
         "state_manager",
-        state_manager
+        state_manager,
     )
 
     registry.register(
         "skill_manager",
-        skill_manager
+        skill_manager,
     )
 
     registry.register(
         "action_manager",
-        action_manager
+        action_manager,
     )
 
     registry.register(
         "planner",
-        planner
+        planner,
     )
 
     registry.register(
         "executor",
-        executor
+        executor,
     )
 
     registry.register(
         "personality_engine",
-        personality_engine
+        personality_engine,
     )
 
     registry.register(
         "decision_engine",
-        decision_engine
+        decision_engine,
     )
 
     registry.register(
         "intent_analyzer",
-        intent_analyzer
+        intent_analyzer,
     )
 
     registry.register(
         "reasoning_engine",
-        reasoning_engine
+        reasoning_engine,
     )
 
     # ---------------------------------------------------------
@@ -2061,9 +2074,6 @@ async def bootstrap_application() -> ServiceRegistry:
             "change_planner": change_planner,
             "change_impact_planner": change_impact_planner,
 
-            # Workspace-scoped services are exposed as factories.
-            # They are instantiated only inside an isolated
-            # development workspace, never against production.
             "filesystem_guard_factory": FilesystemGuard,
             "development_sandbox_factory": DevelopmentSandbox,
             "code_writer_factory": CodeWriter,
@@ -2082,27 +2092,35 @@ async def bootstrap_application() -> ServiceRegistry:
             "github_project_creator": github_project_creator,
             "real_time_research": real_time_research,
             "phase1_runtime": phase1_runtime,
+
             "autonomous_development_bridge": phase1_runtime.get(
                 "autonomous_development_bridge"
             ),
+
             "autonomous_coding_loop": phase1_runtime.get(
                 "autonomous_coding_loop"
             ),
+
             "autonomous_validation_loop": phase1_runtime.get(
                 "autonomous_validation_loop"
             ),
+
             "autonomous_repair_loop": phase1_runtime.get(
                 "autonomous_repair_loop"
             ),
+
             "knowledge_coding_feedback": phase1_runtime.get(
                 "knowledge_coding_feedback"
             ),
+
             "permissioned_git_workflow": phase1_runtime.get(
                 "permissioned_git_workflow"
             ),
+
             "permissioned_deployment_workflow": phase1_runtime.get(
                 "permissioned_deployment_workflow"
             ),
+
             "deployment_manager": deployment_manager,
             "health_monitor": health_monitor,
             "rollback_manager": rollback_manager,
@@ -2120,10 +2138,25 @@ async def bootstrap_application() -> ServiceRegistry:
     # ---------------------------------------------------------
     # Cross Wiring
     # ---------------------------------------------------------
+    #
+    # Planner is intentionally constructed with only the
+    # constructor-supported dependency.
+    #
+    # Runtime services are attached after construction so
+    # older/newer Planner implementations remain compatible.
+    #
+    # ---------------------------------------------------------
 
     planner.executor = executor
     planner.memory_engine = memory_engine
+    planner.memory_router = memory_router
     planner.reasoning_engine = reasoning_engine
+    planner.skill_manager = skill_manager
+    planner.action_manager = action_manager
+    planner.knowledge_manager = knowledge_manager
+    planner.knowledge_graph = knowledge_graph
+    planner.world_model = world_model
+    planner.event_bus = event_bus
 
     executor.planner = planner
     executor.memory_engine = memory_engine
@@ -2189,7 +2222,7 @@ async def bootstrap_application() -> ServiceRegistry:
 
     registry.register(
         "cognitive_core",
-        cognitive_core
+        cognitive_core,
     )
 
     registry.register(
