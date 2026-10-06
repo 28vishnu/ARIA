@@ -1688,12 +1688,20 @@ async def bootstrap_application() -> ServiceRegistry:
         skill_manager=skill_manager,
         tool_manager=tool_manager,
         action_manager=action_manager,
+        agent_manager=agent_manager,
         document_pipeline=pipeline,
     )
+
+    capability_selector = capability_hub.capability_selector
 
     registry.register(
         "phase1_capability_hub",
         capability_hub,
+    )
+
+    registry.register(
+        "unified_capability_selector",
+        capability_selector,
     )
 
     logger.info(
@@ -2249,6 +2257,7 @@ async def bootstrap_application() -> ServiceRegistry:
         study_engine=study_engine,
         repository_memory=repository_memory,
         phase1_runtime=phase1_runtime,
+        capability_selector=capability_selector,
     )
 
     registry.register(
