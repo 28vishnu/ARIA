@@ -114,6 +114,8 @@ from brain.development.phase1_readiness_gateway import (
 from brain.integration.phase1_capability_hub import Phase1CapabilityHub
 from brain.integration.phase1_delivery_gateway import Phase1DeliveryGateway
 from brain.development.engineering_execution_mode import EngineeringExecutionMode
+from brain.development.autonomous_engineering_lifecycle import AutonomousEngineeringLifecycle
+from brain.development.master_delivery_authorization import MasterDeliveryAuthorization
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -1742,6 +1744,30 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Step 7 — Canonical autonomous engineering lifecycle
+    # ---------------------------------------------------------
+
+    autonomous_engineering_lifecycle = AutonomousEngineeringLifecycle(
+        final_engineer=getattr(
+            phase1_runtime,
+            "final_engineer",
+            None,
+        ),
+        execution_mode=engineering_execution_mode,
+        readiness_gateway=phase1_readiness_gateway,
+    )
+
+    registry.register(
+        "autonomous_engineering_lifecycle",
+        autonomous_engineering_lifecycle,
+    )
+
+    logger.info(
+        "[Phase7] Autonomous engineering lifecycle ready | %s",
+        autonomous_engineering_lifecycle.health(),
+    )
+
+    # ---------------------------------------------------------
     # Unified capability hub
     # ---------------------------------------------------------
 
@@ -1788,6 +1814,26 @@ async def bootstrap_application() -> ServiceRegistry:
     logger.info(
         "[Phase1] Delivery gateway ready | %s",
         delivery_gateway.health(),
+    )
+
+
+    # ---------------------------------------------------------
+    # Step 8 — Explicit Master delivery authorization boundary
+    # ---------------------------------------------------------
+
+    master_delivery_authorization = MasterDeliveryAuthorization(
+        approval_manager=approval_manager,
+        delivery_gateway=delivery_gateway,
+    )
+
+    registry.register(
+        "master_delivery_authorization",
+        master_delivery_authorization,
+    )
+
+    logger.info(
+        "[Phase8] Master delivery authorization ready | %s",
+        master_delivery_authorization.health(),
     )
 
     # ---------------------------------------------------------
