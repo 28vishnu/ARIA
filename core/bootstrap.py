@@ -116,6 +116,7 @@ from brain.integration.phase1_delivery_gateway import Phase1DeliveryGateway
 from brain.development.engineering_execution_mode import EngineeringExecutionMode
 from brain.development.autonomous_engineering_lifecycle import AutonomousEngineeringLifecycle
 from brain.development.master_delivery_authorization import MasterDeliveryAuthorization
+from brain.integration.multimodal_capability_gateway import MultimodalCapabilityGateway
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -1834,6 +1835,50 @@ async def bootstrap_application() -> ServiceRegistry:
     logger.info(
         "[Phase8] Master delivery authorization ready | %s",
         master_delivery_authorization.health(),
+    )
+
+    # ---------------------------------------------------------
+    # Step 9 — Canonical multimodal capability gateway
+    # ---------------------------------------------------------
+
+    # Optional providers are loaded lazily. A missing vision/voice backend
+    # must never prevent ARIA from booting. Document processing remains
+    # available through the already-initialized DocumentPipeline.
+    vision_engine = None
+    try:
+        from vision_engine import VisionEngine
+        vision_engine = VisionEngine()
+    except Exception as exc:
+        logger.warning(
+            "[Phase9] Vision provider unavailable; continuing safely: %s",
+            exc,
+        )
+
+    computer_tool = None
+    try:
+        from brain.tools.computer_control_tool import ComputerControlTool
+        computer_tool = ComputerControlTool()
+    except Exception as exc:
+        logger.warning(
+            "[Phase9] Computer-control tool unavailable; continuing safely: %s",
+            exc,
+        )
+
+    multimodal_gateway = MultimodalCapabilityGateway(
+        document_pipeline=pipeline,
+        vision_engine=vision_engine,
+        voice_manager=None,
+        computer_tool=computer_tool,
+    )
+
+    registry.register(
+        "multimodal_capability_gateway",
+        multimodal_gateway,
+    )
+
+    logger.info(
+        "[Phase9] Multimodal capability gateway ready | %s",
+        multimodal_gateway.health(),
     )
 
     # ---------------------------------------------------------
