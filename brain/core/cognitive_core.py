@@ -6268,24 +6268,56 @@ usable evidence is present. Do not invent details absent from the evidence.
                                     engineering_result.get("message")
                                     or engineering_result.get("response")
                                     or engineering_result.get("summary")
-                                    or "The canonical Phase 1 engineering lifecycle completed."
+                                    or "The canonical Phase 1 engineering inspection completed."
                                 )
-                                engineering_success = bool(
-                                    engineering_result.get(
-                                        "success",
+
+                                is_read_only = bool(
+                                    engineering_route.get(
+                                        "read_only",
                                         engineering_result.get(
-                                            "accepted",
-                                            engineering_result.get("ok", True),
+                                            "read_only",
+                                            False,
                                         ),
                                     )
                                 )
+
+                                # A read-only readiness inspection can complete
+                                # successfully while reporting ready=False.
+                                # That means the inspection itself succeeded;
+                                # the repository/runtime readiness state is what
+                                # failed. Do not hide that diagnostic report.
+                                if is_read_only:
+                                    engineering_success = True
+                                else:
+                                    engineering_success = bool(
+                                        engineering_result.get(
+                                            "success",
+                                            engineering_result.get(
+                                                "accepted",
+                                                engineering_result.get(
+                                                    "ok",
+                                                    True,
+                                                ),
+                                            ),
+                                        )
+                                    )
                             else:
                                 response_message = str(engineering_result)
                                 engineering_success = True
+                                is_read_only = bool(
+                                    engineering_route.get("read_only", False)
+                                )
 
                             logger.info(
-                                "[CognitiveCore] Canonical Phase 1 engineering route completed | success=%s",
+                                "[CognitiveCore] Canonical Phase 1 engineering "
+                                "route completed | success=%s | read_only=%s",
                                 engineering_success,
+                                bool(
+                                    engineering_route.get(
+                                        "read_only",
+                                        False,
+                                    )
+                                ),
                             )
 
                             return SystemResponse(
@@ -6296,6 +6328,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                                     "response": response_message,
                                     "message": response_message,
                                     "engineering_result": engineering_result,
+                                    "engineering_route": engineering_route,
                                 },
                             )
 
