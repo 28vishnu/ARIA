@@ -13,7 +13,10 @@ Design goals:
 - never bypass GitHub/deployment permission boundaries;
 - normalize object/dict results safely;
 - fail closed on incompatible final-engineer responses;
-- keep `.get()` compatibility for the Phase 1 capability registry.
+- keep `.get()` compatibility for the Phase 1 capability registry;
+- never silently hide FinalAutonomousEngineer construction failures;
+- require the authoritative engineering orchestrator to exist before
+  declaring the final engineer available.
 """
 
 import inspect
@@ -48,8 +51,13 @@ class Phase1PersistentRuntimeAdapter:
                 "legacy_phase1_runtime is required."
             )
 
-        self.legacy_phase1_runtime = legacy_phase1_runtime
-        self.development_controller = development_controller
+        self.legacy_phase1_runtime = (
+            legacy_phase1_runtime
+        )
+
+        self.development_controller = (
+            development_controller
+        )
 
         self._persistent_runtime = (
             self._build_persistent_runtime()
@@ -59,22 +67,36 @@ class Phase1PersistentRuntimeAdapter:
             self._build_final_engineer()
         )
 
-        # Close the legacy development entry point. The legacy runtime remains
-        # available as a service container for existing adapters, but direct
-        # engineering execution is routed back through this adapter.
+        # Close the legacy development entry point.
+        #
+        # The legacy runtime remains available as a compatibility
+        # service container, but direct engineering execution must
+        # return through this adapter.
         bind = getattr(
             self.legacy_phase1_runtime,
             "bind_authoritative_runtime",
             None,
         )
+
         if callable(bind):
-            bind(self)
+
+            try:
+                bind(self)
+
+            except Exception:
+
+                logger.exception(
+                    "[Phase1][FinalRuntime] "
+                    "Failed to bind authoritative runtime."
+                )
 
         logger.info(
             "[Phase1][FinalRuntime] Adapter initialized | "
             "final_engineer=%s | persistent_runtime=%s",
             self.final_engineer is not None,
-            type(self._persistent_runtime).__name__,
+            type(
+                self._persistent_runtime
+            ).__name__,
         )
 
     # ------------------------------------------------------------------
@@ -96,6 +118,7 @@ class Phase1PersistentRuntimeAdapter:
             return self.legacy_phase1_runtime
 
         try:
+
             signature = inspect.signature(
                 PersistentEngineeringRuntime
             )
@@ -104,19 +127,25 @@ class Phase1PersistentRuntimeAdapter:
 
             kwargs: dict[str, Any] = {}
 
-            for name in parameters:
+            for name, parameter in parameters.items():
+
+                if name == "self":
+                    continue
 
                 if name == "legacy_runtime":
+
                     kwargs[name] = (
                         self.legacy_phase1_runtime
                     )
 
                 elif name == "legacy_phase1_runtime":
+
                     kwargs[name] = (
                         self.legacy_phase1_runtime
                     )
 
                 elif name == "development_controller":
+
                     kwargs[name] = (
                         self.development_controller
                     )
@@ -124,6 +153,7 @@ class Phase1PersistentRuntimeAdapter:
             if kwargs:
 
                 try:
+
                     return PersistentEngineeringRuntime(
                         **kwargs
                     )
@@ -131,25 +161,43 @@ class Phase1PersistentRuntimeAdapter:
                 except Exception:
 
                     logger.exception(
-                        "[Phase1][FinalRuntime] Could not construct "
-                        "a secondary persistent runtime; preserving "
+                        "[Phase1][FinalRuntime] "
+                        "Could not construct a secondary "
+                        "persistent runtime; preserving "
                         "legacy runtime."
                     )
 
         except Exception:
 
             logger.exception(
-                "[Phase1][FinalRuntime] Persistent runtime inspection "
-                "failed."
+                "[Phase1][FinalRuntime] "
+                "Persistent runtime inspection failed."
             )
 
         return self.legacy_phase1_runtime
 
     def _build_final_engineer(self) -> Any:
         """
-        Load the final autonomous-engineer facade without making bootstrap
-        depend on its exact constructor signature.
+        Build and validate the canonical FinalAutonomousEngineer.
+
+        The adapter must never silently hide construction failures.
+
+        The readiness gateway depends on a live final_engineer object
+        exposing:
+            - develop()
+            - resume()
+            - status()
+            - health()
+            - orchestrator
+
+        Existing Phase 1 services are passed explicitly where available
+        so the final engineer can construct the authoritative orchestration
+        spine without creating duplicate runtime infrastructure.
         """
+
+        # --------------------------------------------------------------
+        # Import the canonical final engineer.
+        # --------------------------------------------------------------
 
         try:
 
@@ -159,13 +207,330 @@ class Phase1PersistentRuntimeAdapter:
 
         except Exception as exc:
 
-            logger.warning(
-                "[Phase1][FinalRuntime] FinalAutonomousEngineer is "
-                "not available; legacy runtime retained | error=%s",
+            logger.exception(
+                "[Phase1][FinalRuntime] "
+                "FinalAutonomousEngineer import failed | error=%s",
                 exc,
             )
 
             return None
+
+        legacy = (
+            self.legacy_phase1_runtime
+        )
+
+        # --------------------------------------------------------------
+        # Compatibility component lookup.
+        # --------------------------------------------------------------
+
+        def component(
+            name: str,
+            default: Any = None,
+        ) -> Any:
+            """
+            Resolve an existing Phase 1 service.
+
+            Resolution order:
+            1. legacy runtime .get()
+            2. legacy runtime .components
+            3. direct attribute
+            """
+
+            getter = getattr(
+                legacy,
+                "get",
+                None,
+            )
+
+            if callable(getter):
+
+                try:
+
+                    value = getter(
+                        name,
+                        default,
+                    )
+
+                    if value is not None:
+                        return value
+
+                except TypeError:
+
+                    try:
+
+                        value = getter(
+                            name
+                        )
+
+                        if value is not None:
+                            return value
+
+                    except Exception:
+
+                        logger.debug(
+                            "[Phase1][FinalRuntime] "
+                            "Component lookup failed | "
+                            "name=%s",
+                            name,
+                            exc_info=True,
+                        )
+
+                except Exception:
+
+                    logger.debug(
+                        "[Phase1][FinalRuntime] "
+                        "Component lookup failed | "
+                        "name=%s",
+                        name,
+                        exc_info=True,
+                    )
+
+            components = getattr(
+                legacy,
+                "components",
+                None,
+            )
+
+            if isinstance(
+                components,
+                dict,
+            ):
+
+                value = components.get(
+                    name,
+                    default,
+                )
+
+                if value is not None:
+                    return value
+
+            return getattr(
+                legacy,
+                name,
+                default,
+            )
+
+        # --------------------------------------------------------------
+        # Existing Phase 1 services.
+        # --------------------------------------------------------------
+
+        development_controller = (
+            self.development_controller
+            or component(
+                "development_controller"
+            )
+        )
+
+        development_agent = component(
+            "development_agent"
+        )
+
+        if development_agent is None:
+
+            development_agent = getattr(
+                development_controller,
+                "agent",
+                None,
+            )
+
+        requirement_intelligence = (
+            component(
+                "requirement_intelligence"
+            )
+        )
+
+        if requirement_intelligence is None:
+
+            requirement_intelligence = getattr(
+                development_agent,
+                "requirement_intelligence",
+                None,
+            )
+
+        knowledge_retriever = component(
+            "knowledge_retriever"
+        )
+
+        verification_service = component(
+            "verification_service"
+        )
+
+        if verification_service is None:
+
+            verification_service = getattr(
+                development_agent,
+                "intelligent_verification",
+                None,
+            )
+
+        repair_service = component(
+            "autonomous_repair_loop"
+        )
+
+        judgment_engine = component(
+            "engineering_judgment"
+        )
+
+        if judgment_engine is None:
+
+            judgment_engine = getattr(
+                development_agent,
+                "engineering_judgment",
+                None,
+            )
+
+        repository_engine = component(
+            "repository_manager"
+        )
+
+        # --------------------------------------------------------------
+        # Existing authoritative engines, when already registered.
+        #
+        # These are optional because FinalAutonomousEngineer itself
+        # can construct authoritative wrappers around existing services.
+        # --------------------------------------------------------------
+
+        requirement_engine = component(
+            "requirement_engine"
+        )
+
+        knowledge_engine = component(
+            "knowledge_engine"
+        )
+
+        planning_engine = component(
+            "planning_engine"
+        )
+
+        task_graph_engine = component(
+            "task_graph_engine"
+        )
+
+        implementation_engine = component(
+            "implementation_engine"
+        )
+
+        verification_engine = component(
+            "verification_engine"
+        )
+
+        diagnosis_engine = component(
+            "diagnosis_engine"
+        )
+
+        recovery_engine = component(
+            "recovery_engine"
+        )
+
+        acceptance_engine = component(
+            "acceptance_engine"
+        )
+
+        experience_engine = component(
+            "experience_engine"
+        )
+
+        # --------------------------------------------------------------
+        # Build the complete constructor candidate map.
+        # --------------------------------------------------------------
+
+        candidates: dict[str, Any] = {
+            "legacy_runtime": legacy,
+            "legacy_phase1_runtime": legacy,
+
+            "persistent_runtime": (
+                self._persistent_runtime
+            ),
+
+            "session_runtime": (
+                self._persistent_runtime
+            ),
+
+            "development_controller": (
+                development_controller
+            ),
+
+            "development_agent": (
+                development_agent
+            ),
+
+            "requirement_intelligence": (
+                requirement_intelligence
+            ),
+
+            "knowledge_retriever": (
+                knowledge_retriever
+            ),
+
+            "verification_service": (
+                verification_service
+            ),
+
+            "repair_service": (
+                repair_service
+            ),
+
+            "judgment_engine": (
+                judgment_engine
+            ),
+
+            "repository_engine": (
+                repository_engine
+            ),
+
+            "requirement_engine": (
+                requirement_engine
+            ),
+
+            "knowledge_engine": (
+                knowledge_engine
+            ),
+
+            "planning_engine": (
+                planning_engine
+            ),
+
+            "task_graph_engine": (
+                task_graph_engine
+            ),
+
+            "implementation_engine": (
+                implementation_engine
+            ),
+
+            "verification_engine": (
+                verification_engine
+            ),
+
+            "diagnosis_engine": (
+                diagnosis_engine
+            ),
+
+            "recovery_engine": (
+                recovery_engine
+            ),
+
+            "acceptance_engine": (
+                acceptance_engine
+            ),
+
+            "experience_engine": (
+                experience_engine
+            ),
+
+            "persistence": getattr(
+                self._persistent_runtime,
+                "persistence",
+                None,
+            ),
+        }
+
+        # --------------------------------------------------------------
+        # Inspect the exact deployed constructor.
+        #
+        # This avoids hard-coding a constructor contract while still
+        # refusing to silently ignore genuinely required arguments.
+        # --------------------------------------------------------------
 
         try:
 
@@ -175,82 +540,328 @@ class Phase1PersistentRuntimeAdapter:
 
             parameters = signature.parameters
 
-            candidates = {
-                "legacy_runtime": (
-                    self.legacy_phase1_runtime
-                ),
-                "legacy_phase1_runtime": (
-                    self.legacy_phase1_runtime
-                ),
-                "persistent_runtime": (
-                    self._persistent_runtime
-                ),
-                "development_controller": (
-                    self.development_controller
-                ),
-            }
+        except Exception as exc:
 
-            kwargs: dict[str, Any] = {}
+            logger.exception(
+                "[Phase1][FinalRuntime] "
+                "Could not inspect FinalAutonomousEngineer "
+                "constructor | error=%s",
+                exc,
+            )
 
-            for name, parameter in parameters.items():
+            return None
 
-                if name in candidates:
+        kwargs: dict[str, Any] = {}
 
-                    kwargs[name] = candidates[name]
+        unresolved_required: list[str] = []
+
+        accepts_var_kwargs = any(
+            parameter.kind
+            == inspect.Parameter.VAR_KEYWORD
+            for parameter
+            in parameters.values()
+        )
+
+        for name, parameter in parameters.items():
+
+            if name == "self":
+                continue
+
+            if parameter.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+
+            if name in candidates:
+
+                value = candidates[name]
+
+                if value is not None:
+
+                    kwargs[name] = value
 
                 elif (
                     parameter.default
                     is inspect.Parameter.empty
-                    and name != "self"
                 ):
 
-                    logger.warning(
-                        "[Phase1][FinalRuntime] Final engineer has "
-                        "an unresolved required constructor argument: %s",
-                        name,
+                    unresolved_required.append(
+                        name
                     )
 
-            try:
+                continue
+
+            if (
+                parameter.default
+                is inspect.Parameter.empty
+            ):
+
+                unresolved_required.append(
+                    name
+                )
+
+        if unresolved_required:
+
+            logger.error(
+                "[Phase1][FinalRuntime] "
+                "FinalAutonomousEngineer has unresolved "
+                "required constructor arguments: %s",
+                unresolved_required,
+            )
+
+            return None
+
+        # --------------------------------------------------------------
+        # Construct the final engineer.
+        # --------------------------------------------------------------
+
+        try:
+
+            if accepts_var_kwargs:
+
+                # The constructor accepts **kwargs, but we still pass
+                # only known canonical service names. This prevents
+                # accidental legacy-object leakage.
 
                 engineer = FinalAutonomousEngineer(
                     **kwargs
                 )
 
-            except TypeError:
+            else:
 
-                engineer = (
-                    FinalAutonomousEngineer()
+                engineer = FinalAutonomousEngineer(
+                    **kwargs
                 )
 
-            # Enforce one canonical persistent runtime.  The adapter owns
-            # the runtime; the final engineer must reference this exact
-            # object rather than constructing or retaining another runtime.
-            if hasattr(engineer, "persistent_runtime"):
-                engineer.persistent_runtime = self._persistent_runtime
-
-            if hasattr(engineer, "development_controller"):
-                if engineer.development_controller is None:
-                    engineer.development_controller = (
-                        self.development_controller
-                    )
-
-            logger.info(
-                "[Phase1][FinalRuntime] Final autonomous engineer "
-                "connected | class=%s | canonical_runtime=%s",
-                type(engineer).__name__,
-                type(self._persistent_runtime).__name__,
-            )
-
-            return engineer
-
-        except Exception:
+        except Exception as exc:
 
             logger.exception(
-                "[Phase1][FinalRuntime] Final autonomous engineer "
-                "could not be initialized; legacy runtime retained."
+                "[Phase1][FinalRuntime] "
+                "FinalAutonomousEngineer construction failed | "
+                "error=%s",
+                exc,
             )
 
             return None
+
+        if engineer is None:
+
+            logger.error(
+                "[Phase1][FinalRuntime] "
+                "FinalAutonomousEngineer constructor returned None."
+            )
+
+            return None
+
+        # --------------------------------------------------------------
+        # Enforce canonical runtime identity.
+        # --------------------------------------------------------------
+
+        if hasattr(
+            engineer,
+            "persistent_runtime",
+        ):
+
+            engineer.persistent_runtime = (
+                self._persistent_runtime
+            )
+
+        if hasattr(
+            engineer,
+            "development_controller",
+        ):
+
+            if (
+                engineer.development_controller
+                is None
+            ):
+
+                engineer.development_controller = (
+                    development_controller
+                )
+
+        # --------------------------------------------------------------
+        # Validate the public final-engineer contract.
+        # --------------------------------------------------------------
+
+        required_methods = (
+            "develop",
+            "resume",
+            "status",
+            "health",
+        )
+
+        missing_methods = [
+            name
+            for name in required_methods
+            if not callable(
+                getattr(
+                    engineer,
+                    name,
+                    None,
+                )
+            )
+        ]
+
+        if missing_methods:
+
+            logger.error(
+                "[Phase1][FinalRuntime] "
+                "FinalAutonomousEngineer contract incomplete | "
+                "missing=%s",
+                missing_methods,
+            )
+
+            return None
+
+        orchestrator = getattr(
+            engineer,
+            "orchestrator",
+            None,
+        )
+
+        if orchestrator is None:
+
+            logger.error(
+                "[Phase1][FinalRuntime] "
+                "FinalAutonomousEngineer has no authoritative "
+                "engineering orchestrator."
+            )
+
+            return None
+
+        # --------------------------------------------------------------
+        # Validate authoritative orchestrator contract.
+        # --------------------------------------------------------------
+
+        orchestrator_health = getattr(
+            orchestrator,
+            "health",
+            None,
+        )
+
+        if not callable(
+            orchestrator_health
+        ):
+
+            logger.error(
+                "[Phase1][FinalRuntime] "
+                "Authoritative engineering orchestrator "
+                "has no health() method."
+            )
+
+            return None
+
+        # --------------------------------------------------------------
+        # Validate final-engineer health.
+        #
+        # Health validation is read-only. It does not execute engineering.
+        # --------------------------------------------------------------
+
+        try:
+
+            health_method = getattr(
+                engineer,
+                "health",
+            )
+
+            health = health_method()
+
+            if not isinstance(
+                health,
+                dict,
+            ):
+
+                logger.error(
+                    "[Phase1][FinalRuntime] "
+                    "FinalAutonomousEngineer health() "
+                    "returned non-dict result."
+                )
+
+                return None
+
+            logger.info(
+                "[Phase1][FinalRuntime] "
+                "Final autonomous engineer connected | "
+                "class=%s | canonical_runtime=%s | "
+                "health=%s",
+                type(
+                    engineer
+                ).__name__,
+                type(
+                    self._persistent_runtime
+                ).__name__,
+                health,
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "[Phase1][FinalRuntime] "
+                "Final autonomous engineer health validation "
+                "failed | error=%s",
+                exc,
+            )
+
+            return None
+
+        # --------------------------------------------------------------
+        # Validate orchestrator health.
+        # --------------------------------------------------------------
+
+        try:
+
+            orchestrator_report = (
+                orchestrator_health()
+            )
+
+            if not isinstance(
+                orchestrator_report,
+                dict,
+            ):
+
+                logger.error(
+                    "[Phase1][FinalRuntime] "
+                    "Authoritative orchestrator health() "
+                    "returned non-dict result."
+                )
+
+                return None
+
+            if not bool(
+                orchestrator_report.get(
+                    "healthy",
+                    False,
+                )
+            ):
+
+                logger.error(
+                    "[Phase1][FinalRuntime] "
+                    "Authoritative engineering orchestrator "
+                    "is unhealthy | health=%s",
+                    orchestrator_report,
+                )
+
+                return None
+
+        except Exception as exc:
+
+            logger.exception(
+                "[Phase1][FinalRuntime] "
+                "Authoritative orchestrator health validation "
+                "failed | error=%s",
+                exc,
+            )
+
+            return None
+
+        logger.info(
+            "[Phase1][FinalRuntime] "
+            "Canonical FinalAutonomousEngineer validation PASSED."
+        )
+
+        return engineer
 
     # ------------------------------------------------------------------
     # Generic invocation
@@ -282,7 +893,9 @@ class Phase1PersistentRuntimeAdapter:
             **kwargs,
         )
 
-        if inspect.isawaitable(result):
+        if inspect.isawaitable(
+            result
+        ):
 
             return await result
 
@@ -300,7 +913,11 @@ class Phase1PersistentRuntimeAdapter:
         if value is None:
             return {}
 
-        if isinstance(value, dict):
+        if isinstance(
+            value,
+            dict,
+        ):
+
             return dict(value)
 
         method = getattr(
@@ -319,13 +936,14 @@ class Phase1PersistentRuntimeAdapter:
                     converted,
                     dict,
                 ):
+
                     return converted
 
             except Exception:
 
                 logger.debug(
-                    "[Phase1][FinalRuntime] Object to_dict() "
-                    "conversion failed.",
+                    "[Phase1][FinalRuntime] "
+                    "Object to_dict() conversion failed.",
                     exc_info=True,
                 )
 
@@ -340,7 +958,9 @@ class Phase1PersistentRuntimeAdapter:
                     str(key): item
                     for key, item
                     in vars(value).items()
-                    if not str(key).startswith("_")
+                    if not str(
+                        key
+                    ).startswith("_")
                 }
 
             except Exception:
@@ -360,6 +980,7 @@ class Phase1PersistentRuntimeAdapter:
             result,
             bool,
         ):
+
             return result
 
         if isinstance(
@@ -544,7 +1165,10 @@ class Phase1PersistentRuntimeAdapter:
             value,
             str,
         ):
-            return (value,)
+
+            return (
+                value,
+            )
 
         try:
 
@@ -660,15 +1284,22 @@ class Phase1PersistentRuntimeAdapter:
         original_error: BaseException | None = None,
         **_: Any,
     ) -> Any:
-        """Fail closed instead of entering a legacy engineering lifecycle."""
+        """
+        Fail closed instead of entering a legacy engineering lifecycle.
+        """
+
         reason = (
             str(original_error)
             if original_error is not None
-            else "the authoritative engineer is unavailable"
+            else (
+                "the authoritative engineer is unavailable"
+            )
         )
+
         raise RuntimeError(
-            "Canonical Phase 1 engineering execution failed before completion; "
-            "legacy execution fallback is disabled. "
+            "Canonical Phase 1 engineering execution failed "
+            "before completion; legacy execution fallback is "
+            "disabled. "
             f"Reason: {reason}"
         )
 
@@ -684,20 +1315,26 @@ class Phase1PersistentRuntimeAdapter:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Run only the authoritative FinalAutonomousEngineer lifecycle."""
+        """
+        Run only the authoritative FinalAutonomousEngineer lifecycle.
+        """
 
         if self.final_engineer is None:
+
             raise RuntimeError(
                 "FinalAutonomousEngineer is unavailable; "
                 "legacy engineering fallback is disabled."
             )
 
         logger.info(
-            "[Phase1][FinalRuntime] Starting canonical autonomous engineering | session=%s",
+            "[Phase1][FinalRuntime] "
+            "Starting canonical autonomous engineering | "
+            "session=%s",
             session_id or "new",
         )
 
         try:
+
             result = await self._invoke(
                 self.final_engineer,
                 "develop",
@@ -707,37 +1344,61 @@ class Phase1PersistentRuntimeAdapter:
                 **kwargs,
             )
 
-            normalized = self._normalize_result(result)
+            normalized = (
+                self._normalize_result(
+                    result
+                )
+            )
 
             logger.info(
-                "[Phase1][FinalRuntime] Canonical autonomous engineering finished | "
+                "[Phase1][FinalRuntime] "
+                "Canonical autonomous engineering finished | "
                 "success=%s | accepted=%s | status=%s",
-                self._result_success(normalized),
-                self._result_accepted(normalized),
-                self._result_status(normalized),
+                self._result_success(
+                    normalized
+                ),
+                self._result_accepted(
+                    normalized
+                ),
+                self._result_status(
+                    normalized
+                ),
             )
+
             return normalized
 
         except TypeError as exc:
-            # A TypeError can indicate an argument-contract mismatch. Retry
-            # the same authoritative object with the minimal request only.
+
+            # A TypeError can indicate an argument-contract mismatch.
+            # Retry the same authoritative object with only the required
+            # engineering request.
             try:
+
                 result = await self._invoke(
                     self.final_engineer,
                     "develop",
                     requirement,
                 )
-                return self._normalize_result(result)
+
+                return self._normalize_result(
+                    result
+                )
+
             except Exception as retry_exc:
+
                 raise RuntimeError(
-                    "Canonical FinalAutonomousEngineer execution failed after "
-                    f"compatibility retry: {retry_exc}"
+                    "Canonical FinalAutonomousEngineer "
+                    "execution failed after compatibility "
+                    f"retry: {retry_exc}"
                 ) from retry_exc
 
-        except Exception as exc:
+        except Exception:
+
             logger.exception(
-                "[Phase1][FinalRuntime] Canonical autonomous engineer execution failed."
+                "[Phase1][FinalRuntime] "
+                "Canonical autonomous engineer execution failed."
             )
+
             raise
 
     async def execute(
@@ -793,9 +1454,14 @@ class Phase1PersistentRuntimeAdapter:
 
                 except Exception as exc:
 
+                    # Resume is still kept authoritative first.
+                    # The persistent runtime is used only as a state
+                    # continuation compatibility path, not as a second
+                    # engineering lifecycle.
                     logger.warning(
-                        "[Phase1][FinalRuntime] Final engineer resume "
-                        "failed; delegating to persistent runtime | "
+                        "[Phase1][FinalRuntime] "
+                        "Final engineer resume failed; "
+                        "delegating to persistent runtime | "
                         "error=%s",
                         exc,
                     )
@@ -844,25 +1510,33 @@ class Phase1PersistentRuntimeAdapter:
                         value,
                         dict,
                     ):
-                        value = dict(value)
+
+                        value = dict(
+                            value
+                        )
+
                         value.setdefault(
                             "component_count",
                             self._component_count(),
                         )
+
                         value.setdefault(
                             "authoritative",
-                            self.final_engineer is not None,
+                            True,
                         )
+
                         value.setdefault(
                             "integrated",
                             True,
                         )
+
                         return value
 
                 except Exception:
 
                     logger.debug(
-                        "[Phase1][FinalRuntime] Final status unavailable; "
+                        "[Phase1][FinalRuntime] "
+                        "Final status unavailable; "
                         "using persistent status.",
                         exc_info=True,
                     )
@@ -894,19 +1568,26 @@ class Phase1PersistentRuntimeAdapter:
                     value,
                     dict,
                 ):
-                    value = dict(value)
+
+                    value = dict(
+                        value
+                    )
+
                     value.setdefault(
                         "component_count",
                         self._component_count(),
                     )
+
                     value.setdefault(
                         "authoritative",
                         True,
                     )
+
                     value.setdefault(
                         "integrated",
                         True,
                     )
+
                     return value
 
         return {
@@ -919,21 +1600,35 @@ class Phase1PersistentRuntimeAdapter:
         }
 
     def _component_count(self) -> int:
-        """Return a bootstrap-compatible count of integrated components."""
+        """
+        Return a bootstrap-compatible count of integrated components.
+        """
+
         components = getattr(
             self.legacy_phase1_runtime,
             "components",
             None,
         )
-        if isinstance(components, dict):
-            return len(components)
+
+        if isinstance(
+            components,
+            dict,
+        ):
+
+            return len(
+                components
+            )
 
         getter = getattr(
             self.legacy_phase1_runtime,
             "get",
             None,
         )
-        if callable(getter):
+
+        if callable(
+            getter
+        ):
+
             known = (
                 "autonomous_development_bridge",
                 "autonomous_coding_loop",
@@ -943,13 +1638,23 @@ class Phase1PersistentRuntimeAdapter:
                 "permissioned_git_workflow",
                 "permissioned_deployment_workflow",
             )
+
             count = 0
+
             for key in known:
+
                 try:
-                    if getter(key) is not None:
+
+                    if getter(
+                        key
+                    ) is not None:
+
                         count += 1
+
                 except Exception:
+
                     continue
+
             if count:
                 return count
 
@@ -1025,6 +1730,9 @@ class Phase1PersistentRuntimeAdapter:
         )
 
     def health(self) -> dict[str, Any]:
+        """
+        Return adapter health without executing engineering work.
+        """
 
         base_health: dict[str, Any] = {}
 
@@ -1052,15 +1760,60 @@ class Phase1PersistentRuntimeAdapter:
             except Exception:
 
                 logger.debug(
-                    "[Phase1][FinalRuntime] Persistent health "
-                    "check failed.",
+                    "[Phase1][FinalRuntime] "
+                    "Persistent health check failed.",
                     exc_info=True,
                 )
+
+        final_engineer_health: dict[str, Any] = {}
+
+        if self.final_engineer is not None:
+
+            method = getattr(
+                self.final_engineer,
+                "health",
+                None,
+            )
+
+            if callable(
+                method
+            ):
+
+                try:
+
+                    value = method()
+
+                    if isinstance(
+                        value,
+                        dict,
+                    ):
+
+                        final_engineer_health = dict(
+                            value
+                        )
+
+                except Exception:
+
+                    logger.debug(
+                        "[Phase1][FinalRuntime] "
+                        "Final engineer health check failed.",
+                        exc_info=True,
+                    )
 
         base_health.update(
             {
                 "final_autonomous_engineer": (
                     self.final_engineer is not None
+                ),
+                "final_engineer_healthy": (
+                    bool(
+                        final_engineer_health.get(
+                            "healthy",
+                            False,
+                        )
+                    )
+                    if self.final_engineer is not None
+                    else False
                 ),
                 "adapter": True,
                 "runtime_type": type(
@@ -1068,6 +1821,12 @@ class Phase1PersistentRuntimeAdapter:
                 ).__name__,
             }
         )
+
+        if final_engineer_health:
+
+            base_health[
+                "final_engineer_health"
+            ] = final_engineer_health
 
         return base_health
 
@@ -1083,6 +1842,26 @@ class Phase1PersistentRuntimeAdapter:
         """
         Preserve the legacy capability-registry contract.
         """
+
+        # The adapter itself is the canonical source for the final
+        # autonomous engineer and canonical persistent runtime.
+        if name in (
+            "final_engineer",
+            "final_autonomous_engineer",
+        ):
+
+            return (
+                self.final_engineer
+                if self.final_engineer is not None
+                else default
+            )
+
+        if name in (
+            "persistent_runtime",
+            "session_runtime",
+        ):
+
+            return self._persistent_runtime
 
         for source in (
             self._persistent_runtime,
@@ -1148,7 +1927,8 @@ class Phase1PersistentRuntimeAdapter:
                 continue
 
         raise AttributeError(
-            f"{type(self).__name__!s} has no attribute {name!r}"
+            f"{type(self).__name__!s} "
+            f"has no attribute {name!r}"
         )
 
 
