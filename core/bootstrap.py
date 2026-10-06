@@ -61,6 +61,7 @@ from brain.documents.repository.repository_memory import RepositoryMemory
 # =========================================================
 
 from brain.development.repository_manager import RepositoryManager
+from brain.development.repository_intelligence import RepositoryIntelligenceService
 from brain.development.source_analyzer import SourceAnalyzer
 from brain.development.dependency_analyzer import DependencyAnalyzer
 from brain.development.architecture_intelligence import ArchitectureIntelligence
@@ -918,6 +919,28 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Step 2 — Canonical Repository Intelligence
+    # ---------------------------------------------------------
+
+    repository_intelligence = RepositoryIntelligenceService(
+        repository_manager=repository_manager,
+        architecture_intelligence=architecture_intelligence,
+        git_manager=git_manager,
+        github_manager=github_manager,
+    )
+
+    registry.register(
+        "repository_intelligence",
+        repository_intelligence,
+    )
+
+    logger.info(
+        "[Phase2] Repository intelligence ready | version=%s | root=%s",
+        repository_intelligence.VERSION,
+        repository_intelligence.repository_root,
+    )
+
+    # ---------------------------------------------------------
     # Phase 1 — GitHub Synchronization / Branch Lifecycle
     # ---------------------------------------------------------
 
@@ -1177,6 +1200,13 @@ async def bootstrap_application() -> ServiceRegistry:
         document_ai=doc_intelligence,
     )
 
+    # Expose the canonical repository-understanding service to the
+    # Phase1PersistentRuntimeAdapter. The adapter then injects it into
+    # FinalAutonomousEngineer as repository_engine.
+    legacy_phase1_runtime.components[
+        "repository_engine"
+    ] = repository_intelligence
+
     phase1_runtime = Phase1PersistentRuntimeAdapter(
         legacy_phase1_runtime,
         development_controller=development_controller,
@@ -1234,6 +1264,7 @@ async def bootstrap_application() -> ServiceRegistry:
             "git_manager": git_manager,
             "github_manager": github_manager,
             "github_sync": github_sync,
+            "repository_intelligence": repository_intelligence,
             "git_branch_lifecycle": git_branch_lifecycle,
             "github_project_creator": github_project_creator,
             "phase1_runtime": phase1_runtime,
