@@ -488,6 +488,10 @@ async def bootstrap_application() -> ServiceRegistry:
     # Step 5 — Canonical JARVIS Memory / Project Memory
     # ---------------------------------------------------------
 
+    # RepositoryMemory is required by the canonical JARVIS memory system.
+    # It must be created before JarvisMemorySystem is constructed.
+    repository_memory = RepositoryMemory()
+
     experience_engine = ExperienceEngine(
         mongo_db=db_inst,
         learning_engine=learning_engine,
@@ -746,7 +750,6 @@ async def bootstrap_application() -> ServiceRegistry:
     repo_analyzer = RepositoryAnalyzer()
     code_parser = CodeParser()
     dependency_graph = DependencyGraph()
-    repository_memory = RepositoryMemory()
 
     # ---------------------------------------------------------
     # Phase 1 — Repository Intelligence
