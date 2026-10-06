@@ -19,6 +19,8 @@ from brain.knowledge.knowledge_graph import KnowledgeGraph
 from brain.knowledge.graph_builder import GraphBuilder
 from brain.knowledge.learning_engine import LearningEngine
 from brain.learning.autonomous_learning import AutonomousLearning
+from brain.learning.experience_engine import ExperienceEngine
+from brain.memory.jarvis_memory_system import JarvisMemorySystem
 from brain.self_reflection.self_reflection import SelfReflection
 from brain.world.world_model import WorldModel
 from brain.world.context_builder import ContextBuilder as WorldContextBuilder
@@ -475,6 +477,45 @@ async def bootstrap_application() -> ServiceRegistry:
     registry.register(
         "memory_router",
         memory_router,
+    )
+
+    # ---------------------------------------------------------
+    # Step 5 — Canonical JARVIS Memory / Project Memory
+    # ---------------------------------------------------------
+
+    experience_engine = ExperienceEngine(
+        mongo_db=db_inst,
+        learning_engine=learning_engine,
+        knowledge_database=knowledge_database,
+    )
+
+    registry.register(
+        "experience_engine",
+        experience_engine,
+    )
+
+    jarvis_memory_system = JarvisMemorySystem(
+        working_memory=working_memory,
+        memory_engine=memory_engine,
+        memory_router=memory_router,
+        repository_memory=repository_memory,
+        experience_engine=experience_engine,
+        knowledge_database=knowledge_database,
+        knowledge_graph=knowledge_graph,
+    )
+
+    registry.register(
+        "jarvis_memory_system",
+        jarvis_memory_system,
+    )
+
+    logger.info(
+        "[Phase5] JARVIS memory system ready | healthy=%s | "
+        "personal=%s | project=%s | experience=%s",
+        jarvis_memory_system.health().get("healthy"),
+        memory_engine is not None,
+        repository_memory is not None,
+        experience_engine is not None,
     )
 
     # ---------------------------------------------------------
