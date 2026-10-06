@@ -17,7 +17,6 @@ from brain.core.execution_router import decide, Route
 from brain.core.coding_engine import CodingEngine
 from brain.core.engine_manager import EngineManager
 from brain.development.engineering_request_router import EngineeringRequestRouter
-from brain.integration.unified_capability_selector import UnifiedCapabilitySelector
 from brain.core.jarvis_request_kernel import JarvisRequestKernel
 from brain.core.jarvis_final_integration import JarvisFinalIntegration
 
@@ -113,8 +112,6 @@ class CognitiveCore:
         repository_memory=None,
         tool_manager=None,
         phase1_runtime=None,
-        capability_selector=None,
-        jarvis_final_integration=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -152,16 +149,85 @@ class CognitiveCore:
         self.study_engine = study_engine
         self.repository_memory = repository_memory
         self.phase1_runtime = phase1_runtime
-        self.capability_selector = capability_selector or UnifiedCapabilitySelector(
-            skill_manager=skill_manager,
-            tool_manager=tool_manager,
-            action_manager=action_manager,
-            agent_manager=agent_manager,
-        )
+
+        # =============================================================
+        # FINAL JARVIS INTEGRATION
+        # =============================================================
+        # Resolve Phase-1 services from the canonical runtime adapter.
+        # CognitiveCore remains the compatibility owner for legacy services,
+        # while the JARVIS layer becomes the deterministic request gate.
         self.jarvis_request_kernel = JarvisRequestKernel()
-        self.jarvis_final_integration = jarvis_final_integration
+
+        self.execution_mode = self._phase1_component(
+            "engineering_execution_mode"
+        ) or self._phase1_component(
+            "execution_mode"
+        )
+        self.repository_intelligence = self._phase1_component(
+            "repository_intelligence"
+        )
+        self.jarvis_memory_system = self._phase1_component(
+            "jarvis_memory_system"
+        ) or self._phase1_component(
+            "jarvis_memory"
+        )
+        self.capability_selector = self._phase1_component(
+            "unified_capability_selector"
+        ) or self._phase1_component(
+            "capability_selector"
+        )
+        self.delivery_authorization = self._phase1_component(
+            "master_delivery_authorization"
+        ) or self._phase1_component(
+            "delivery_authorization"
+        )
+        self.autonomous_engineering_lifecycle = self._phase1_component(
+            "autonomous_engineering_lifecycle"
+        ) or self._phase1_component(
+            "autonomous_engineering"
+        )
+        self.multimodal_gateway = self._phase1_component(
+            "multimodal_gateway"
+        ) or self._phase1_component(
+            "multimodal_capability_gateway"
+        )
+        self.phase1_readiness_gateway = self._phase1_component(
+            "phase1_readiness_gateway"
+        ) or self._phase1_component(
+            "readiness_gateway"
+        )
+
+        self.jarvis_final_integration = JarvisFinalIntegration(
+            memory=self.jarvis_memory_system,
+            execution_mode=self.execution_mode,
+            autonomous_engineering=self.autonomous_engineering_lifecycle,
+            delivery_authorization=self.delivery_authorization,
+            multimodal_gateway=self.multimodal_gateway,
+            repository_intelligence=self.repository_intelligence,
+            readiness_gateway=self.phase1_readiness_gateway,
+            capability_selector=self.capability_selector,
+            large_request_context=self._phase1_component(
+                "large_request_context"
+            ),
+            planner=self.planner,
+            phase1_runtime=phase1_runtime,
+            conversation_manager=self.conversation_manager,
+            knowledge_manager=self.knowledge_manager,
+            knowledge_engine=self._phase1_component(
+                "knowledge_engine"
+            ),
+        )
+
         self.engineering_request_router = EngineeringRequestRouter(
             runtime=phase1_runtime,
+            lifecycle=self.autonomous_engineering_lifecycle,
+            autonomous_engineering_lifecycle=self.autonomous_engineering_lifecycle,
+            readiness_gateway=self.phase1_readiness_gateway,
+            delivery_authorization=self.delivery_authorization,
+            master_delivery_authorization=self.delivery_authorization,
+            execution_mode=self.execution_mode,
+            repository_intelligence=self.repository_intelligence,
+            capability_selector=self.capability_selector,
         )
         self.cognitive_controller = CognitiveController()
         self.prompt_builder = PromptBuilder()
@@ -182,6 +248,30 @@ class CognitiveCore:
         self.response_formatter = ResponseFormatter()
         self.response_fusion = ResponseFusion()
 
+    def _phase1_component(self, name: str) -> Any:
+        """Resolve a component from the canonical Phase-1 runtime safely."""
+        runtime = getattr(self, "phase1_runtime", None)
+        if runtime is None:
+            return None
+
+        getter = getattr(runtime, "get", None)
+        if callable(getter):
+            try:
+                value = getter(name)
+                if value is not None:
+                    return value
+            except Exception:
+                logger.debug(
+                    "[CognitiveCore] Phase-1 component lookup failed: %s",
+                    name,
+                    exc_info=True,
+                )
+
+        try:
+            return getattr(runtime, name, None)
+        except Exception:
+            return None
+
     def _create_execution_id(self) -> str:
         """
         Create a unique identifier for one cognitive execution.
@@ -190,6 +280,62 @@ class CognitiveCore:
         one another when state is persisted or recovered.
         """
         return f"exec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+
+    @staticmethod
+    def _engineering_route_response(
+        route: Dict[str, Any],
+        default_message: str = (
+            "The canonical Phase 1 engineering lifecycle completed."
+        ),
+    ) -> SystemResponse:
+        """Convert canonical engineering-router output into SystemResponse."""
+        result = route.get("result") if isinstance(route, dict) else route
+
+        if isinstance(result, SystemResponse):
+            return result
+
+        if isinstance(result, dict):
+            message = (
+                result.get("message")
+                or result.get("response")
+                or result.get("summary")
+            )
+            success = bool(
+                result.get(
+                    "success",
+                    result.get(
+                        "accepted",
+                        result.get("ok", True),
+                    ),
+                )
+            )
+        else:
+            message = None
+            success = True
+
+        if not message and isinstance(route, dict):
+            message = (
+                route.get("message")
+                or route.get("response")
+                or route.get("summary")
+            )
+
+        message = str(
+            message
+            or default_message
+        )
+
+        return SystemResponse(
+            success=success,
+            confidence=1.0 if success else 0.0,
+            source="phase1_authoritative_engineering",
+            data={
+                "response": message,
+                "message": message,
+                "engineering_route": route,
+                "engineering_result": result,
+            },
+        )
 
     def _normalize_execution_result(
         self,
@@ -3881,7 +4027,7 @@ usable evidence is present. Do not invent details absent from the evidence.
         q = str(query or "").strip().lower()
 
         identifier_terms = (
-            "[Aadhaar Redacted]",
+            "aadhaar",
             "aadhar",
             "pan number",
             "passport number",
@@ -5099,88 +5245,6 @@ usable evidence is present. Do not invent details absent from the evidence.
         user_id: str = "",
         base_context: Optional[Dict[str, Any]] = None,
     ) -> SystemResponse:
-        """Final JARVIS entry point with lossless context and safety gates."""
-        integration = self.jarvis_final_integration
-
-        if integration is None:
-            return await self._process_internal(
-                query,
-                session_id=session_id,
-                user_id=user_id,
-                base_context=base_context,
-            )
-
-        enriched_context = await integration.prepare(
-            query,
-            execution_id=self._create_execution_id(),
-            session_id=session_id,
-            user_id=user_id,
-            base_context=base_context,
-        )
-
-        try:
-            read_only_response = await integration.maybe_handle_engineering_read_only(
-                query,
-                session_id=session_id,
-                user_id=user_id,
-                context=enriched_context,
-                engineering_router=self.engineering_request_router,
-                planner=self.planner,
-            )
-            if read_only_response is not None:
-                await integration.finalize(
-                    query,
-                    read_only_response,
-                    session_id=session_id,
-                    user_id=user_id,
-                    context=enriched_context,
-                )
-                return read_only_response
-
-            result = await self._process_internal(
-                query,
-                session_id=session_id,
-                user_id=user_id,
-                base_context=enriched_context,
-            )
-
-            await integration.finalize(
-                query,
-                result,
-                session_id=session_id,
-                user_id=user_id,
-                context=enriched_context,
-            )
-            return result
-
-        except Exception as exc:
-            logger.exception("[CognitiveCore] Final JARVIS integration failed")
-            failure = SystemResponse(
-                success=False,
-                confidence=0.0,
-                source="jarvis_final_integration",
-                data={},
-                error=str(exc),
-            )
-            try:
-                await integration.finalize(
-                    query,
-                    failure,
-                    session_id=session_id,
-                    user_id=user_id,
-                    context=enriched_context,
-                )
-            except Exception:
-                logger.exception("[CognitiveCore] Final integration failure persistence failed")
-            return failure
-
-    async def _process_internal(
-        self,
-        query: str,
-        session_id: str = "",
-        user_id: str = "",
-        base_context: Optional[Dict[str, Any]] = None,
-    ) -> SystemResponse:
         """
         Main cognitive orchestration pipeline guided by ReasoningEngine.
         """
@@ -5199,16 +5263,6 @@ usable evidence is present. Do not invent details absent from the evidence.
         # construction block below, so those branches must never reference
         # an uninitialized local `context` variable.
         context: Dict[str, Any] = dict(base_context or {})
-        jarvis_request = self.jarvis_request_kernel.understand(
-            query,
-            request_id=execution_id,
-            metadata={
-                "session_id": session_id,
-                "user_id": user_id,
-                "source": "cognitive_core",
-            },
-        )
-
         context.update({
             "query": query,
             "session_id": session_id,
@@ -5224,11 +5278,135 @@ usable evidence is present. Do not invent details absent from the evidence.
             "executor": self.executor,
             "reasoning": self.reasoning_engine,
             "working_memory": self.working_memory,
-            "jarvis_request": jarvis_request.to_dict(),
-            "jarvis_request_mode": jarvis_request.mode,
-            "jarvis_request_requires_execution": jarvis_request.requires_execution,
-            "jarvis_request_read_only": jarvis_request.read_only,
         })
+
+        # =============================================================
+        # CANONICAL JARVIS REQUEST KERNEL + FINAL INTEGRATION GATE
+        # =============================================================
+        # This gate runs before memory-first, FastRouter, generic LLM,
+        # coding, planner, or agent fallbacks. It guarantees that delivery
+        # requests and explicit engineering requests cannot accidentally fall
+        # through to a conversational path.
+        try:
+            jarvis_request = self.jarvis_request_kernel.understand(
+                query,
+                request_id=execution_id,
+                metadata={
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "source": "cognitive_core",
+                },
+            )
+
+            context["jarvis_request"] = (
+                jarvis_request.to_dict()
+                if hasattr(jarvis_request, "to_dict")
+                else jarvis_request
+            )
+            context["jarvis_request_mode"] = getattr(
+                jarvis_request,
+                "mode",
+                None,
+            )
+            context["jarvis_request_requires_execution"] = bool(
+                getattr(
+                    jarvis_request,
+                    "requires_execution",
+                    False,
+                )
+            )
+            context["jarvis_request_read_only"] = bool(
+                getattr(
+                    jarvis_request,
+                    "read_only",
+                    False,
+                )
+            )
+
+            prepared = await self.jarvis_final_integration.prepare(
+                query,
+                session_id=session_id,
+                user_id=user_id,
+                context=context,
+                request_id=execution_id,
+            )
+
+            if isinstance(prepared, dict):
+                prepared_context = prepared.get("context")
+                if isinstance(prepared_context, dict):
+                    context.update(prepared_context)
+
+                context["jarvis_final_preparation"] = prepared
+
+            # Delivery and engineering routing happen BEFORE any generic
+            # memory/LLM path. This is the critical anti-fallback boundary.
+            engineering_route = await self.engineering_request_router.route(
+                query,
+                session_id=session_id,
+                user_id=user_id,
+                metadata={
+                    "execution_id": execution_id,
+                    "source": "cognitive_core_jarvis_kernel",
+                    "jarvis_request": context.get("jarvis_request"),
+                    "jarvis_context": context,
+                },
+            )
+
+            if engineering_route is not None:
+                context["canonical_engineering_route"] = engineering_route
+
+                if engineering_route.get("handled"):
+                    return self._engineering_route_response(
+                        engineering_route
+                    )
+
+                if engineering_route.get(
+                    "requires_readiness_gateway"
+                ):
+                    return self._engineering_route_response(
+                        engineering_route,
+                        default_message=(
+                            "This engineering request is read-only and was "
+                            "kept outside the implementation lifecycle."
+                        ),
+                    )
+
+        except Exception as exc:
+            # Fail closed ONLY for requests that the JARVIS kernel identified
+            # as engineering/delivery. Generic conversation remains available
+            # when the optional integration layer itself is unavailable.
+            logger.exception(
+                "[CognitiveCore] JARVIS final integration gate failed: %s",
+                exc,
+            )
+
+            request_mode = context.get(
+                "jarvis_request_mode"
+            )
+
+            if request_mode in {
+                "engineering",
+                "tool",
+                "automation",
+            }:
+                return SystemResponse(
+                    success=False,
+                    confidence=0.0,
+                    source="jarvis_final_integration",
+                    data={
+                        "response": (
+                            "The canonical JARVIS request gate failed before "
+                            "execution. No legacy engineering or delivery "
+                            "fallback was used."
+                        ),
+                        "message": (
+                            "The canonical JARVIS request gate failed before "
+                            "execution. No legacy engineering or delivery "
+                            "fallback was used."
+                        ),
+                    },
+                    error=str(exc),
+                )
 
         try:
             if self.state_manager:
@@ -6112,40 +6290,6 @@ usable evidence is present. Do not invent details absent from the evidence.
 
             context["decision_contract"] = decision_contract
 
-            # Step 3: one side-effect-free capability selection pass.
-            # This selects among existing tools/skills/actions/agents/plugins
-            # but never executes them. Existing managers remain the only
-            # execution owners.
-            try:
-                capability_selection = await self.capability_selector.select(
-                    query=query,
-                    context={
-                        **context,
-                        "decision": controller_decision,
-                        "read_only": bool(
-                            context.get("jarvis_request_read_only", False)
-                        ),
-                    },
-                )
-                context["capability_selection"] = capability_selection.to_dict()
-                if capability_selection.primary is not None:
-                    context["selected_capability"] = capability_selection.primary.to_dict()
-                logger.info(
-                    "[CapabilitySelector] primary=%s/%s score=%.2f",
-                    getattr(capability_selection.primary, "kind", None),
-                    getattr(capability_selection.primary, "name", None),
-                    getattr(capability_selection.primary, "score", 0.0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[CapabilitySelector] Selection skipped safely: %s",
-                    exc,
-                )
-                context["capability_selection"] = {
-                    "success": False,
-                    "error": str(exc),
-                }
-
             logger.info(
                 "[CognitiveDecision] Normalized decision: %s",
                 decision_contract,
@@ -6411,56 +6555,24 @@ usable evidence is present. Do not invent details absent from the evidence.
                                     engineering_result.get("message")
                                     or engineering_result.get("response")
                                     or engineering_result.get("summary")
-                                    or "The canonical Phase 1 engineering inspection completed."
+                                    or "The canonical Phase 1 engineering lifecycle completed."
                                 )
-
-                                is_read_only = bool(
-                                    engineering_route.get(
-                                        "read_only",
+                                engineering_success = bool(
+                                    engineering_result.get(
+                                        "success",
                                         engineering_result.get(
-                                            "read_only",
-                                            False,
+                                            "accepted",
+                                            engineering_result.get("ok", True),
                                         ),
                                     )
                                 )
-
-                                # A read-only readiness inspection can complete
-                                # successfully while reporting ready=False.
-                                # That means the inspection itself succeeded;
-                                # the repository/runtime readiness state is what
-                                # failed. Do not hide that diagnostic report.
-                                if is_read_only:
-                                    engineering_success = True
-                                else:
-                                    engineering_success = bool(
-                                        engineering_result.get(
-                                            "success",
-                                            engineering_result.get(
-                                                "accepted",
-                                                engineering_result.get(
-                                                    "ok",
-                                                    True,
-                                                ),
-                                            ),
-                                        )
-                                    )
                             else:
                                 response_message = str(engineering_result)
                                 engineering_success = True
-                                is_read_only = bool(
-                                    engineering_route.get("read_only", False)
-                                )
 
                             logger.info(
-                                "[CognitiveCore] Canonical Phase 1 engineering "
-                                "route completed | success=%s | read_only=%s",
+                                "[CognitiveCore] Canonical Phase 1 engineering route completed | success=%s",
                                 engineering_success,
-                                bool(
-                                    engineering_route.get(
-                                        "read_only",
-                                        False,
-                                    )
-                                ),
                             )
 
                             return SystemResponse(
@@ -6471,7 +6583,6 @@ usable evidence is present. Do not invent details absent from the evidence.
                                     "response": response_message,
                                     "message": response_message,
                                     "engineering_result": engineering_result,
-                                    "engineering_route": engineering_route,
                                 },
                             )
 
