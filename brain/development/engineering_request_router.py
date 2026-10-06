@@ -1,22 +1,11 @@
 from __future__ import annotations
 
-"""
-Canonical Phase 1 engineering request router.
-
-This module is a routing boundary only. It does not implement a second
-engineering lifecycle.
-
-Canonical executable path:
-
-    CognitiveCore
-        -> EngineeringRequestRouter
-        -> Phase1PersistentRuntimeAdapter
-        -> FinalAutonomousEngineer
-        -> AuthoritativeEngineeringOrchestrator
-"""
+"""Canonical Phase 1 engineering request router."""
 
 from dataclasses import dataclass
 from typing import Any
+
+from .phase1_readiness_gateway import Phase1ReadinessGateway
 
 
 @dataclass(frozen=True)
@@ -36,7 +25,7 @@ class EngineeringRequestClassification:
 
 
 class EngineeringRequestRouter:
-    """Route software-engineering requests to the canonical Phase 1 runtime."""
+    """Route engineering requests to readiness inspection or canonical execution."""
 
     ENGINEERING_TERMS = (
         "code",
@@ -131,6 +120,12 @@ class EngineeringRequestRouter:
     def __init__(self, runtime: Any = None) -> None:
         self.runtime = runtime
 
+        # The readiness gateway is READ-ONLY.
+        # It must never start the engineering implementation lifecycle.
+        self.readiness_gateway = Phase1ReadinessGateway(
+            runtime=runtime,
+        )
+
     def classify(
         self,
         query: str,
@@ -138,35 +133,54 @@ class EngineeringRequestRouter:
         intent: Any = None,
         decision: Any = None,
     ) -> EngineeringRequestClassification:
+
         text = str(query or "").strip().lower()
 
         if not text:
             return EngineeringRequestClassification(
-                is_engineering=False,
-                is_read_only=False,
-                confidence=0.0,
-                reason="empty_request",
+                False,
+                False,
+                0.0,
+                "empty_request",
             )
 
-        intent_name = self._intent_name(intent)
-
-        if not intent_name:
-            intent_name = self._intent_name(
-                self._decision_value(decision, "intent")
+        intent_name = (
+            self._intent_name(intent)
+            or self._intent_name(
+                self._decision_value(
+                    decision,
+                    "intent",
+                )
             )
+        )
 
         route_name = str(
-            self._decision_value(decision, "route", "") or ""
+            self._decision_value(
+                decision,
+                "route",
+                "",
+            )
+            or ""
         ).strip().lower()
 
         action_name = str(
-            self._decision_value(decision, "action", "") or ""
+            self._decision_value(
+                decision,
+                "action",
+                "",
+            )
+            or ""
         ).strip().lower()
+
+        # ---------------------------------------------------------
+        # Deterministic engineering classification
+        # ---------------------------------------------------------
 
         if (
             intent_name in self.SOFTWARE_INTENTS
             or route_name in self.SOFTWARE_INTENTS
-            or action_name in {
+            or action_name
+            in {
                 "coding",
                 "development",
                 "software_development",
@@ -176,6 +190,7 @@ class EngineeringRequestRouter:
             engineering = True
             confidence = 0.99
             reason = "software_development_decision"
+
         else:
             matches = [
                 term
@@ -200,24 +215,26 @@ class EngineeringRequestRouter:
                 else "non_engineering_request"
             )
 
-        read_only_matches = [
-            term
-            for term in self.READ_ONLY_TERMS
-            if term in text
-        ]
+        # ---------------------------------------------------------
+        # Read-only detection
+        # ---------------------------------------------------------
 
-        is_read_only = bool(
-            engineering and read_only_matches
+        read_only = (
+            engineering
+            and any(
+                term in text
+                for term in self.READ_ONLY_TERMS
+            )
         )
 
-        if is_read_only:
+        if read_only:
             reason = "explicit_read_only_constraint"
 
         return EngineeringRequestClassification(
-            is_engineering=engineering,
-            is_read_only=is_read_only,
-            confidence=confidence,
-            reason=reason,
+            engineering,
+            read_only,
+            confidence,
+            reason,
         )
 
     async def route(
@@ -231,27 +248,69 @@ class EngineeringRequestRouter:
         decision: Any = None,
         **kwargs: Any,
     ) -> Any:
+
         classification = self.classify(
             query,
             intent=intent,
             decision=decision,
         )
 
+        # ---------------------------------------------------------
+        # Non-engineering request
+        # ---------------------------------------------------------
+
         if not classification.is_engineering:
             return None
 
+        # ---------------------------------------------------------
+        # READ-ONLY ENGINEERING REQUEST
+        #
+        # This is the critical Phase 1 Step 3 path.
+        #
+        # It MUST call the readiness gateway.
+        #
+        # It MUST NOT call:
+        #   runtime.develop()
+        #   execute()
+        #   implementation
+        #   repair
+        #   git
+        #   GitHub
+        #   deployment
+        # ---------------------------------------------------------
+
         if classification.is_read_only:
+
+            report = self.readiness_gateway.inspect(
+                session_id=session_id or None,
+            )
+
+            report["classification"] = (
+                classification.to_dict()
+            )
+
             return {
-                "success": True,
-                "handled": False,
+                "success": bool(
+                    report.get("success")
+                ),
+                "handled": True,
                 "read_only": True,
-                "requires_readiness_gateway": True,
-                "classification": classification.to_dict(),
-                "message": (
-                    "This engineering request is read-only. "
-                    "No implementation lifecycle was started."
+                "requires_readiness_gateway": False,
+                "classification": (
+                    classification.to_dict()
+                ),
+                "result": report,
+                "message": report.get(
+                    "message"
                 ),
             }
+
+        # ---------------------------------------------------------
+        # EXECUTABLE ENGINEERING REQUEST
+        #
+        # Only non-read-only engineering requests reach here.
+        # They enter the canonical persistent runtime.
+        # ---------------------------------------------------------
 
         runtime = self.runtime
 
@@ -260,16 +319,31 @@ class EngineeringRequestRouter:
                 "Canonical Phase 1 runtime is not available."
             )
 
-        develop = getattr(runtime, "develop", None)
+        develop = getattr(
+            runtime,
+            "develop",
+            None,
+        )
 
         if not callable(develop):
             raise RuntimeError(
                 "Canonical Phase 1 runtime does not expose develop()."
             )
 
-        request_metadata = dict(metadata or {})
-        request_metadata.setdefault("source", "cognitive_core")
-        request_metadata.setdefault("engineering_router", "canonical")
+        request_metadata = dict(
+            metadata or {}
+        )
+
+        request_metadata.setdefault(
+            "source",
+            "cognitive_core",
+        )
+
+        request_metadata.setdefault(
+            "engineering_router",
+            "canonical",
+        )
+
         request_metadata.setdefault(
             "engineering_classification",
             classification.to_dict(),
@@ -287,26 +361,41 @@ class EngineeringRequestRouter:
             "success": True,
             "handled": True,
             "read_only": False,
-            "classification": classification.to_dict(),
+            "classification": (
+                classification.to_dict()
+            ),
             "result": result,
         }
 
     @staticmethod
-    def _intent_name(value: Any) -> str:
+    def _intent_name(
+        value: Any,
+    ) -> str:
+
         if value is None:
             return ""
 
         if isinstance(value, str):
             return value.strip().lower()
 
-        name = getattr(value, "name", None)
-        if name is None:
-            name = getattr(value, "intent", None)
+        name = getattr(
+            value,
+            "name",
+            None,
+        )
 
         if name is None:
-            return ""
+            name = getattr(
+                value,
+                "intent",
+                None,
+            )
 
-        return str(name).strip().lower()
+        return (
+            str(name).strip().lower()
+            if name is not None
+            else ""
+        )
 
     @staticmethod
     def _decision_value(
@@ -314,13 +403,21 @@ class EngineeringRequestRouter:
         key: str,
         default: Any = None,
     ) -> Any:
+
         if decision is None:
             return default
 
         if isinstance(decision, dict):
-            return decision.get(key, default)
+            return decision.get(
+                key,
+                default,
+            )
 
-        return getattr(decision, key, default)
+        return getattr(
+            decision,
+            key,
+            default,
+        )
 
 
 __all__ = [
