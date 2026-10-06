@@ -117,6 +117,7 @@ from brain.development.engineering_execution_mode import EngineeringExecutionMod
 from brain.development.autonomous_engineering_lifecycle import AutonomousEngineeringLifecycle
 from brain.development.master_delivery_authorization import MasterDeliveryAuthorization
 from brain.integration.multimodal_capability_gateway import MultimodalCapabilityGateway
+from brain.core.jarvis_final_integration import JarvisFinalIntegration
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -1882,6 +1883,30 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Step 10 — Final JARVIS integration boundary
+    # ---------------------------------------------------------
+
+    jarvis_final_integration = JarvisFinalIntegration(
+        memory_system=jarvis_memory_system,
+        execution_mode=engineering_execution_mode,
+        autonomous_engineering_lifecycle=autonomous_engineering_lifecycle,
+        master_delivery_authorization=master_delivery_authorization,
+        multimodal_gateway=multimodal_gateway,
+        repository_intelligence=repository_intelligence,
+        readiness_gateway=phase1_readiness_gateway,
+    )
+
+    registry.register(
+        "jarvis_final_integration",
+        jarvis_final_integration,
+    )
+
+    logger.info(
+        "[Phase10] Final JARVIS integration ready | %s",
+        jarvis_final_integration.health(),
+    )
+
+    # ---------------------------------------------------------
     # Shared Web Search Action
     # ---------------------------------------------------------
 
@@ -2410,6 +2435,7 @@ async def bootstrap_application() -> ServiceRegistry:
         repository_memory=repository_memory,
         phase1_runtime=phase1_runtime,
         capability_selector=capability_selector,
+        jarvis_final_integration=jarvis_final_integration,
     )
 
     registry.register(
