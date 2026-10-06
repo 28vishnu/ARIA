@@ -113,6 +113,7 @@ from brain.development.phase1_readiness_gateway import (
 )
 from brain.integration.phase1_capability_hub import Phase1CapabilityHub
 from brain.integration.phase1_delivery_gateway import Phase1DeliveryGateway
+from brain.development.engineering_execution_mode import EngineeringExecutionMode
 
 from skills.manager import SkillManager
 from skills.chat import ChatSkill
@@ -1720,6 +1721,25 @@ async def bootstrap_application() -> ServiceRegistry:
         logger.exception(
             "[Phase11] Failed to register CalculatorTool."
         )
+
+    # ---------------------------------------------------------
+    # Step 6 — Explicit planning / phase-only execution boundary
+    # ---------------------------------------------------------
+
+    engineering_execution_mode = EngineeringExecutionMode(
+        repository_engine=repository_intelligence,
+        readiness_gateway=phase1_readiness_gateway,
+    )
+
+    registry.register(
+        "engineering_execution_mode",
+        engineering_execution_mode,
+    )
+
+    logger.info(
+        "[Phase6] Engineering execution mode ready | %s",
+        engineering_execution_mode.health(),
+    )
 
     # ---------------------------------------------------------
     # Unified capability hub
