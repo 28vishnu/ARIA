@@ -35,6 +35,14 @@ class ResponseSource:
     LOCAL_KNOWLEDGE = "local_knowledge"
     KNOWLEDGE_MANAGER = "knowledge_manager"
 
+    # ---------------------------------------------------------
+    # PHASE 1 AUTHORITATIVE ENGINEERING
+    # ---------------------------------------------------------
+
+    PHASE1_AUTHORITATIVE_ENGINEERING = (
+        "phase1_authoritative_engineering"
+    )
+
 
 GLOBAL_ARIA_STYLE = """
 You are ARIA's final communication layer.
@@ -218,17 +226,9 @@ class PersonalityEngine:
         if depth > 5:
             return False
 
-        # ---------------------------------------------------------
-        # Direct source string
-        # ---------------------------------------------------------
-
         if isinstance(obj, str):
 
             return cls._value_is_local_source(obj)
-
-        # ---------------------------------------------------------
-        # Boolean helpers
-        # ---------------------------------------------------------
 
         local_boolean_keys = {
             "local_knowledge",
@@ -238,15 +238,7 @@ class PersonalityEngine:
             "knowledge_database",
         }
 
-        # ---------------------------------------------------------
-        # Dictionaries
-        # ---------------------------------------------------------
-
         if isinstance(obj, dict):
-
-            # -----------------------------------------------------
-            # Explicit source / ownership fields
-            # -----------------------------------------------------
 
             source_keys = {
                 "source",
@@ -268,25 +260,13 @@ class PersonalityEngine:
                 if cls._value_is_local_source(obj.get(key)):
                     return True
 
-            # -----------------------------------------------------
-            # Explicit local booleans
-            # -----------------------------------------------------
-
             for key in local_boolean_keys:
 
                 if obj.get(key) is True:
                     return True
 
-            # -----------------------------------------------------
-            # Explicit local-answer metadata
-            # -----------------------------------------------------
-
             if obj.get("local_answer") is True:
                 return True
-
-            # -----------------------------------------------------
-            # Explicit KnowledgeManager ownership
-            # -----------------------------------------------------
 
             if (
                 str(
@@ -295,13 +275,6 @@ class PersonalityEngine:
                 == "knowledge_manager"
             ):
                 return True
-
-            # -----------------------------------------------------
-            # External synthesis explicitly disabled
-            #
-            # This is accepted only when the object also carries
-            # explicit knowledge-related metadata.
-            # -----------------------------------------------------
 
             if obj.get("external_llm_synthesis") is False:
 
@@ -321,10 +294,6 @@ class PersonalityEngine:
                     for key in knowledge_markers
                 ):
                     return True
-
-            # -----------------------------------------------------
-            # Nested metadata containers
-            # -----------------------------------------------------
 
             nested_keys = (
                 "metadata",
@@ -355,10 +324,6 @@ class PersonalityEngine:
 
             return False
 
-        # ---------------------------------------------------------
-        # Lists / tuples
-        # ---------------------------------------------------------
-
         if isinstance(obj, (list, tuple)):
 
             for item in obj:
@@ -370,10 +335,6 @@ class PersonalityEngine:
                     return True
 
             return False
-
-        # ---------------------------------------------------------
-        # Arbitrary objects such as SystemResponse
-        # ---------------------------------------------------------
 
         attributes = (
             "source",
@@ -423,10 +384,6 @@ class PersonalityEngine:
 
                 continue
 
-            # -----------------------------------------------------
-            # Explicit booleans
-            # -----------------------------------------------------
-
             if attribute in local_boolean_keys:
 
                 if value is True:
@@ -434,20 +391,12 @@ class PersonalityEngine:
 
                 continue
 
-            # -----------------------------------------------------
-            # External synthesis disabled
-            # -----------------------------------------------------
-
             if attribute == "external_llm_synthesis":
 
                 if value is False:
                     return True
 
                 continue
-
-            # -----------------------------------------------------
-            # Source / ownership fields
-            # -----------------------------------------------------
 
             if attribute in {
                 "source",
@@ -473,10 +422,6 @@ class PersonalityEngine:
 
                 continue
 
-            # -----------------------------------------------------
-            # Nested containers
-            # -----------------------------------------------------
-
             if cls._object_contains_local_metadata(
                 value,
                 depth + 1,
@@ -492,36 +437,12 @@ class PersonalityEngine:
         data: Any,
         response: Any = None,
     ) -> bool:
-        """
-        Final authoritative local-knowledge detector.
-
-        Checks:
-            1. Explicit source passed to PersonalityEngine.
-            2. response.data.
-            3. Complete SystemResponse.
-            4. Explicit KnowledgeManager ownership metadata.
-
-        If ANY explicit local-knowledge marker exists, the answer
-        must bypass the external LLM completely.
-        """
-
-        # ---------------------------------------------------------
-        # LEVEL 1 — explicit source
-        # ---------------------------------------------------------
 
         if cls._value_is_local_source(source):
             return True
 
-        # ---------------------------------------------------------
-        # LEVEL 2 — response data
-        # ---------------------------------------------------------
-
         if cls._object_contains_local_metadata(data):
             return True
-
-        # ---------------------------------------------------------
-        # LEVEL 3 — complete response object
-        # ---------------------------------------------------------
 
         if response is not None:
 
@@ -536,10 +457,6 @@ class PersonalityEngine:
         data: Any,
         response: Any,
     ) -> str:
-        """
-        Extract the already-generated local answer without invoking
-        any language model.
-        """
 
         reply = cls._extract_response(data)
 
@@ -567,6 +484,588 @@ class PersonalityEngine:
                     return reply
 
         return ""
+
+    # =========================================================
+    # PHASE 1 AUTHORITATIVE ENGINEERING
+    # =========================================================
+
+    @staticmethod
+    def _engineering_value(
+        value: Any,
+        default: Any = None,
+    ) -> Any:
+        """
+        Safely return a value from an authoritative engineering
+        diagnostic structure.
+        """
+
+        if value is None:
+            return default
+
+        return value
+
+    @classmethod
+    def _format_phase1_engineering(
+        cls,
+        data: Any,
+    ) -> str:
+        """
+        Deterministically format the authoritative Phase 1 engineering
+        response.
+
+        IMPORTANT:
+        This method must never call the LLM.
+
+        The engineering runtime owns the facts. PersonalityEngine only
+        presents those facts to the user without semantic rewriting.
+        """
+
+        if not isinstance(data, dict):
+
+            return (
+                "Phase 1 autonomous-engineering inspection "
+                "completed, Sir.\n\n"
+                f"Result: {data}"
+            )
+
+        engineering_result = data.get(
+            "engineering_result"
+        )
+
+        if not isinstance(
+            engineering_result,
+            dict,
+        ):
+
+            engineering_result = data
+
+        report = engineering_result
+
+        # ---------------------------------------------------------
+        # Top-level status
+        # ---------------------------------------------------------
+
+        ready = report.get(
+            "ready",
+            None,
+        )
+
+        status = report.get(
+            "status",
+            None,
+        )
+
+        message = report.get(
+            "message",
+            None,
+        )
+
+        if ready is True:
+
+            heading = (
+                "Phase 1 autonomous-engineering lifecycle "
+                "is READY for execution, Sir."
+            )
+
+        elif ready is False:
+
+            heading = (
+                "Phase 1 autonomous-engineering lifecycle "
+                "is NOT READY for execution, Sir."
+            )
+
+        elif status:
+
+            heading = (
+                f"Phase 1 autonomous-engineering status: "
+                f"{status}, Sir."
+            )
+
+        else:
+
+            heading = (
+                "Phase 1 autonomous-engineering inspection "
+                "completed, Sir."
+            )
+
+        lines = [
+            heading,
+        ]
+
+        # ---------------------------------------------------------
+        # Gateway information
+        # ---------------------------------------------------------
+
+        gateway = report.get(
+            "gateway"
+        )
+
+        if gateway:
+
+            lines.append(
+                f"Gateway: {gateway}"
+            )
+
+        read_only = report.get(
+            "read_only"
+        )
+
+        if read_only is not None:
+
+            lines.append(
+                f"Read-only inspection: "
+                f"{'YES' if read_only else 'NO'}"
+            )
+
+        execution_started = report.get(
+            "execution_started"
+        )
+
+        if execution_started is not None:
+
+            lines.append(
+                f"Execution started: "
+                f"{'YES' if execution_started else 'NO'}"
+            )
+
+        # ---------------------------------------------------------
+        # Overall checks
+        # ---------------------------------------------------------
+
+        checks = report.get(
+            "checks"
+        )
+
+        if isinstance(checks, dict):
+
+            lines.append("")
+            lines.append("Readiness checks:")
+
+            for key, value in checks.items():
+
+                label = str(
+                    key
+                ).replace(
+                    "_",
+                    " ",
+                ).capitalize()
+
+                if isinstance(
+                    value,
+                    bool,
+                ):
+
+                    result = (
+                        "PASS"
+                        if value
+                        else "FAIL"
+                    )
+
+                else:
+
+                    result = str(value)
+
+                lines.append(
+                    f"• {label}: {result}"
+                )
+
+        # ---------------------------------------------------------
+        # Repository diagnostic
+        # ---------------------------------------------------------
+
+        repository = report.get(
+            "repository"
+        )
+
+        if isinstance(repository, dict):
+
+            lines.append("")
+            lines.append(
+                "Repository validation:"
+            )
+
+            repository_success = repository.get(
+                "success"
+            )
+
+            if repository_success is not None:
+
+                lines.append(
+                    "• Status: "
+                    + (
+                        "PASS"
+                        if repository_success
+                        else "FAIL"
+                    )
+                )
+
+            repository_status = repository.get(
+                "status"
+            )
+
+            if repository_status:
+
+                lines.append(
+                    f"• Repository status: "
+                    f"{repository_status}"
+                )
+
+            repository_checks = repository.get(
+                "checks"
+            )
+
+            if isinstance(
+                repository_checks,
+                dict,
+            ):
+
+                for key, value in repository_checks.items():
+
+                    label = str(
+                        key
+                    ).replace(
+                        "_",
+                        " ",
+                    ).capitalize()
+
+                    if isinstance(
+                        value,
+                        bool,
+                    ):
+
+                        result = (
+                            "PASS"
+                            if value
+                            else "FAIL"
+                        )
+
+                    else:
+
+                        result = str(value)
+
+                    lines.append(
+                        f"• {label}: {result}"
+                    )
+
+            repository_errors = repository.get(
+                "errors"
+            )
+
+            if isinstance(
+                repository_errors,
+                (list, tuple),
+            ):
+
+                for error in repository_errors:
+
+                    lines.append(
+                        f"• Error: {error}"
+                    )
+
+            elif repository_errors:
+
+                lines.append(
+                    f"• Error: {repository_errors}"
+                )
+
+            repository_warnings = repository.get(
+                "warnings"
+            )
+
+            if isinstance(
+                repository_warnings,
+                (list, tuple),
+            ):
+
+                for warning in repository_warnings:
+
+                    lines.append(
+                        f"• Warning: {warning}"
+                    )
+
+            elif repository_warnings:
+
+                lines.append(
+                    f"• Warning: {repository_warnings}"
+                )
+
+        # ---------------------------------------------------------
+        # Runtime diagnostic
+        # ---------------------------------------------------------
+
+        runtime = report.get(
+            "runtime"
+        )
+
+        if isinstance(runtime, dict):
+
+            lines.append("")
+            lines.append(
+                "Authoritative runtime:"
+            )
+
+            runtime_success = runtime.get(
+                "success"
+            )
+
+            if runtime_success is not None:
+
+                lines.append(
+                    "• Status: "
+                    + (
+                        "PASS"
+                        if runtime_success
+                        else "FAIL"
+                    )
+                )
+
+            runtime_status = runtime.get(
+                "status"
+            )
+
+            if runtime_status:
+
+                lines.append(
+                    f"• Runtime status: "
+                    f"{runtime_status}"
+                )
+
+            runtime_health = runtime.get(
+                "health"
+            )
+
+            if isinstance(
+                runtime_health,
+                dict,
+            ):
+
+                healthy = runtime_health.get(
+                    "healthy"
+                )
+
+                if healthy is not None:
+
+                    lines.append(
+                        "• Runtime health: "
+                        + (
+                            "HEALTHY"
+                            if healthy
+                            else "UNHEALTHY"
+                        )
+                    )
+
+            runtime_checks = runtime.get(
+                "checks"
+            )
+
+            if isinstance(
+                runtime_checks,
+                dict,
+            ):
+
+                for key, value in runtime_checks.items():
+
+                    label = str(
+                        key
+                    ).replace(
+                        "_",
+                        " ",
+                    ).capitalize()
+
+                    if isinstance(
+                        value,
+                        bool,
+                    ):
+
+                        result = (
+                            "PASS"
+                            if value
+                            else "FAIL"
+                        )
+
+                    else:
+
+                        result = str(value)
+
+                    lines.append(
+                        f"• {label}: {result}"
+                    )
+
+            runtime_errors = runtime.get(
+                "errors"
+            )
+
+            if isinstance(
+                runtime_errors,
+                (list, tuple),
+            ):
+
+                for error in runtime_errors:
+
+                    lines.append(
+                        f"• Error: {error}"
+                    )
+
+            elif runtime_errors:
+
+                lines.append(
+                    f"• Error: {runtime_errors}"
+                )
+
+            runtime_warnings = runtime.get(
+                "warnings"
+            )
+
+            if isinstance(
+                runtime_warnings,
+                (list, tuple),
+            ):
+
+                for warning in runtime_warnings:
+
+                    lines.append(
+                        f"• Warning: {warning}"
+                    )
+
+            elif runtime_warnings:
+
+                lines.append(
+                    f"• Warning: {runtime_warnings}"
+                )
+
+        # ---------------------------------------------------------
+        # Safety diagnostic
+        # ---------------------------------------------------------
+
+        safety = report.get(
+            "safety"
+        )
+
+        if isinstance(safety, dict):
+
+            lines.append("")
+            lines.append(
+                "Safety boundaries:"
+            )
+
+            safety_success = safety.get(
+                "success"
+            )
+
+            if safety_success is not None:
+
+                lines.append(
+                    "• Status: "
+                    + (
+                        "PASS"
+                        if safety_success
+                        else "FAIL"
+                    )
+                )
+
+            for key, value in safety.items():
+
+                if key in {
+                    "success",
+                    "status",
+                    "message",
+                    "errors",
+                    "warnings",
+                }:
+                    continue
+
+                label = str(
+                    key
+                ).replace(
+                    "_",
+                    " ",
+                ).capitalize()
+
+                if isinstance(
+                    value,
+                    bool,
+                ):
+
+                    result = (
+                        "YES"
+                        if value
+                        else "NO"
+                    )
+
+                else:
+
+                    result = str(value)
+
+                lines.append(
+                    f"• {label}: {result}"
+                )
+
+            safety_errors = safety.get(
+                "errors"
+            )
+
+            if isinstance(
+                safety_errors,
+                (list, tuple),
+            ):
+
+                for error in safety_errors:
+
+                    lines.append(
+                        f"• Error: {error}"
+                    )
+
+            elif safety_errors:
+
+                lines.append(
+                    f"• Error: {safety_errors}"
+                )
+
+            safety_warnings = safety.get(
+                "warnings"
+            )
+
+            if isinstance(
+                safety_warnings,
+                (list, tuple),
+            ):
+
+                for warning in safety_warnings:
+
+                    lines.append(
+                        f"• Warning: {warning}"
+                    )
+
+            elif safety_warnings:
+
+                lines.append(
+                    f"• Warning: {safety_warnings}"
+                )
+
+        # ---------------------------------------------------------
+        # Preserve gateway message as a concise summary.
+        # ---------------------------------------------------------
+
+        if message:
+
+            lines.append("")
+            lines.append(
+                f"Gateway message: {message}"
+            )
+
+        # ---------------------------------------------------------
+        # If no structured fields were present, preserve the
+        # original response rather than inventing diagnostics.
+        # ---------------------------------------------------------
+
+        if len(lines) == 1 and message:
+
+            return (
+                f"{heading}\n\n"
+                f"{message}"
+            )
+
+        return "\n".join(lines)
 
     # =========================================================
     # MAIN PERSONALITY PIPELINE
@@ -603,19 +1102,6 @@ class PersonalityEngine:
             # =====================================================
             # ABSOLUTE LOCAL KNOWLEDGE HARD GATE
             # =====================================================
-            #
-            # THIS MUST REMAIN BEFORE ALL OTHER FORMATTING.
-            #
-            # Once KnowledgeManager/local knowledge owns an answer:
-            #
-            #   NO ConversationStyle
-            #   NO follow-up generation
-            #   NO ARIA voice LLM
-            #   NO LLMRouter
-            #   NO external provider
-            #
-            # The answer is already generated and is returned directly.
-            # =====================================================
 
             is_local_knowledge = (
                 self._is_local_knowledge_response(
@@ -649,6 +1135,48 @@ class PersonalityEngine:
                 logger.info(
                     "[Personality] LOCAL KNOWLEDGE RETURN "
                     "DIRECT | no LLMRouter call"
+                )
+
+                return self._post_process(
+                    reply
+                )
+
+            # =====================================================
+            # PHASE 1 AUTHORITATIVE ENGINEERING HARD GATE
+            # =====================================================
+            #
+            # This response contains operational engineering facts.
+            #
+            # NEVER send it through:
+            #   - ConversationStyle
+            #   - follow-up generation
+            #   - _apply_aria_voice
+            #   - LLMRouter
+            #   - external providers
+            #
+            # The readiness gateway/orchestrator is authoritative.
+            # PersonalityEngine only renders its structured result.
+            # =====================================================
+
+            if (
+                source
+                == ResponseSource.PHASE1_AUTHORITATIVE_ENGINEERING
+            ):
+
+                logger.info(
+                    "[Personality] PHASE 1 ENGINEERING "
+                    "HARD GATE ACTIVE | "
+                    "deterministic engineering report | "
+                    "external LLM skipped"
+                )
+
+                reply = self._format_phase1_engineering(
+                    data
+                )
+
+                logger.info(
+                    "[Personality] PHASE 1 ENGINEERING "
+                    "RETURN DIRECT | no LLMRouter call"
                 )
 
                 return self._post_process(
@@ -824,6 +1352,8 @@ class PersonalityEngine:
 
                 "knowledge_database",
                 "local_foundational_knowledge",
+
+                ResponseSource.PHASE1_AUTHORITATIVE_ENGINEERING,
             }:
 
                 reply = ConversationStyle.apply(
@@ -872,6 +1402,8 @@ class PersonalityEngine:
                 "coding_engine",
                 "agent",
                 "action_manager",
+
+                ResponseSource.PHASE1_AUTHORITATIVE_ENGINEERING,
             }
 
             if source in protected_sources:
@@ -882,13 +1414,6 @@ class PersonalityEngine:
 
             # =====================================================
             # UNIVERSAL ARIA PERSONALITY PASS
-            # =====================================================
-            #
-            # Only non-protected responses can reach here.
-            #
-            # Local knowledge has already returned above, so there
-            # is no possible normal local-knowledge path into this
-            # LLM call.
             # =====================================================
 
             reply = await self._apply_aria_voice(
@@ -926,12 +1451,6 @@ class PersonalityEngine:
     def _extract_response(
         data: Any,
     ) -> str:
-        """
-        Extract an already-generated user-facing answer.
-
-        Supports dictionaries, strings, SystemResponse objects,
-        and nested response/data objects.
-        """
 
         if isinstance(
             data,
@@ -968,7 +1487,6 @@ class PersonalityEngine:
 
                     return value.strip()
 
-            # Nested common answer containers.
             for key in (
                 "local_answer",
                 "knowledge_result",
@@ -987,10 +1505,6 @@ class PersonalityEngine:
                         return result
 
             return ""
-
-        # ---------------------------------------------------------
-        # Arbitrary response object
-        # ---------------------------------------------------------
 
         for key in (
             "response",
@@ -1023,16 +1537,12 @@ class PersonalityEngine:
 
                 return value.strip()
 
-        # ---------------------------------------------------------
-        # SystemResponse.data fallback
-        # ---------------------------------------------------------
-
         try:
 
             nested_data = getattr(
                 data,
                 "data",
-                None,
+                None
             )
 
         except Exception:
