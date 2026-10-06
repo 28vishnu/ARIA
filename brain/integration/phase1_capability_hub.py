@@ -31,11 +31,13 @@ class Phase1CapabilityHub:
         skill_manager: Any = None,
         tool_manager: Any = None,
         action_manager: Any = None,
+        agent_manager: Any = None,
         document_pipeline: Any = None,
         plugin_manager: Any = None,
         voice_engine: Any = None,
         vision_engine: Any = None,
         multimodal_router: Any = None,
+        capability_selector: Any = None,
     ) -> None:
         self.skill_manager = skill_manager
         self.tool_manager = tool_manager
@@ -46,6 +48,20 @@ class Phase1CapabilityHub:
         self.voice_engine = voice_engine or self._safe_voice_engine()
         self.vision_engine = vision_engine or self._safe_vision_engine()
         self.multimodal_router = multimodal_router or self._safe_multimodal_router()
+
+        if capability_selector is None:
+            try:
+                from brain.integration.unified_capability_selector import UnifiedCapabilitySelector
+                capability_selector = UnifiedCapabilitySelector(
+                    skill_manager=skill_manager,
+                    tool_manager=tool_manager,
+                    action_manager=action_manager,
+                    agent_manager=agent_manager,
+                    plugin_manager=self.plugin_manager,
+                )
+            except Exception as exc:
+                logger.warning("[CapabilityHub] Unified selector unavailable: %s", exc)
+        self.capability_selector = capability_selector
 
         self._wire_multimodal_router()
 
@@ -154,6 +170,12 @@ class Phase1CapabilityHub:
             "multimodal": self.multimodal_router is not None,
         }
 
+    async def select_capability(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if self.capability_selector is None:
+            return {"success": False, "error": "Unified capability selector unavailable."}
+        selection = await self.capability_selector.select(query, context or {})
+        return {"success": True, "selection": selection.to_dict()}
+
     def health(self) -> Dict[str, Any]:
         capabilities = self.capabilities()
         return {
@@ -170,6 +192,7 @@ class Phase1CapabilityHub:
             "voice": capabilities["voice"],
             "vision": capabilities["vision"],
             "multimodal": capabilities["multimodal"],
+            "selector": self.capability_selector is not None,
         }
 
     def status(self) -> Dict[str, Any]:
