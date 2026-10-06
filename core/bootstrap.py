@@ -2441,6 +2441,91 @@ async def bootstrap_application() -> ServiceRegistry:
         jarvis_final_integration=jarvis_final_integration,
     )
 
+    # ---------------------------------------------------------
+    # Canonical JARVIS integration contract
+    # ---------------------------------------------------------
+    #
+    # Bootstrap owns construction and dependency wiring only.  The actual
+    # request-routing/execution policy is implemented by the integration
+    # files themselves.  These explicit references make every canonical
+    # Phase 1-10 owner available from the same CognitiveCore boundary and
+    # allow later integration layers to consume the exact instances created
+    # here instead of constructing competing copies.
+    #
+    cognitive_core.jarvis_final_integration = jarvis_final_integration
+    cognitive_core.jarvis_request_kernel = getattr(
+        cognitive_core,
+        "jarvis_request_kernel",
+        None,
+    )
+    cognitive_core.unified_capability_selector = capability_selector
+    cognitive_core.engineering_execution_mode = engineering_execution_mode
+    cognitive_core.autonomous_engineering_lifecycle = (
+        autonomous_engineering_lifecycle
+    )
+    cognitive_core.master_delivery_authorization = (
+        master_delivery_authorization
+    )
+    cognitive_core.multimodal_capability_gateway = multimodal_gateway
+    cognitive_core.repository_intelligence = repository_intelligence
+    cognitive_core.phase1_readiness_gateway = phase1_readiness_gateway
+
+    # Give the final integration boundary references to the canonical
+    # capability and delivery owners.  These are references only; no work is
+    # executed during bootstrap.
+    jarvis_final_integration.capability_selector = capability_selector
+    jarvis_final_integration.cognitive_core = cognitive_core
+    jarvis_final_integration.phase1_runtime = phase1_runtime
+    jarvis_final_integration.delivery_gateway = delivery_gateway
+
+    # Keep the autonomous lifecycle connected to the same execution and
+    # authorization boundaries used by the rest of the system.
+    autonomous_engineering_lifecycle.master_delivery_authorization = (
+        master_delivery_authorization
+    )
+    autonomous_engineering_lifecycle.delivery_gateway = delivery_gateway
+
+    canonical_integration_contract = {
+        "request_kernel": getattr(
+            cognitive_core,
+            "jarvis_request_kernel",
+            None,
+        ),
+        "final_integration": jarvis_final_integration,
+        "capability_selector": capability_selector,
+        "execution_mode": engineering_execution_mode,
+        "autonomous_engineering": autonomous_engineering_lifecycle,
+        "delivery_authorization": master_delivery_authorization,
+        "multimodal_gateway": multimodal_gateway,
+        "repository_intelligence": repository_intelligence,
+        "readiness_gateway": phase1_readiness_gateway,
+        "phase1_runtime": phase1_runtime,
+        "cognitive_core": cognitive_core,
+    }
+
+    missing_contract_components = [
+        name
+        for name, component in canonical_integration_contract.items()
+        if component is None
+    ]
+
+    if missing_contract_components:
+        raise RuntimeError(
+            "Canonical JARVIS integration contract is incomplete: "
+            + ", ".join(missing_contract_components)
+        )
+
+    registry.register(
+        "canonical_jarvis_integration",
+        canonical_integration_contract,
+    )
+
+    logger.info(
+        "[Bootstrap] Canonical JARVIS integration contract validated | "
+        "components=%s",
+        sorted(canonical_integration_contract.keys()),
+    )
+
     registry.register(
         "cognitive_core",
         cognitive_core,
