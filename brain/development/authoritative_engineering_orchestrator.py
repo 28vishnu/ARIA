@@ -495,17 +495,74 @@ class AuthoritativeEngineeringOrchestrator:
         requirement: Any,
         metadata: dict[str, Any] | None,
     ) -> Any:
+        # Repository understanding is mandatory evidence before planning.
+        # The repository engine is read-only and is expected to combine the
+        # local repository model with Git/GitHub state and relevant file
+        # evidence.  A missing repository engine is reported explicitly
+        # rather than silently pretending that repository context exists.
+        repository_context: Any = None
+        repository_engine = self.repository_engine
+
+        if repository_engine is not None:
+            try:
+                repository_context = await self._call(
+                    repository_engine,
+                    ("understand", "inspect_for_request", "analyze_request"),
+                    request,
+                    requirement=requirement,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[AuthoritativeEngineeringOrchestrator] Repository understanding failed"
+                )
+                repository_context = {
+                    "success": False,
+                    "error": f"Repository understanding failed: {exc}",
+                }
+        else:
+            repository_context = {
+                "success": False,
+                "error": "Canonical repository intelligence service is not connected.",
+            }
+
         engine = self.knowledge_engine
         if engine is None:
-            return {"success": True, "items": [], "source": "no_optional_knowledge_service"}
+            return {
+                "success": bool(repository_context.get("success", False))
+                if isinstance(repository_context, dict)
+                else True,
+                "items": [],
+                "source": "repository_intelligence_only",
+                "repository_context": repository_context,
+            }
 
-        return await self._call(
+        knowledge = await self._call(
             engine,
             ("gather", "retrieve", "research"),
             request,
             requirement=requirement,
+            repository_context=repository_context,
             metadata=metadata,
         )
+
+        if isinstance(knowledge, dict):
+            knowledge.setdefault("repository_context", repository_context)
+            return knowledge
+
+        if hasattr(knowledge, "to_dict"):
+            try:
+                payload = knowledge.to_dict()
+                payload["repository_context"] = repository_context
+                return payload
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "knowledge": knowledge,
+            "repository_context": repository_context,
+        }
 
     # ------------------------------------------------------------------
     # Planning
