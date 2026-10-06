@@ -17,7 +17,9 @@ from brain.core.execution_router import decide, Route
 from brain.core.coding_engine import CodingEngine
 from brain.core.engine_manager import EngineManager
 from brain.development.engineering_request_router import EngineeringRequestRouter
+from brain.integration.unified_capability_selector import UnifiedCapabilitySelector
 from brain.core.jarvis_request_kernel import JarvisRequestKernel
+from brain.core.jarvis_final_integration import JarvisFinalIntegration
 
 logger = logging.getLogger("aria")
 
@@ -111,6 +113,8 @@ class CognitiveCore:
         repository_memory=None,
         tool_manager=None,
         phase1_runtime=None,
+        capability_selector=None,
+        jarvis_final_integration=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -148,7 +152,14 @@ class CognitiveCore:
         self.study_engine = study_engine
         self.repository_memory = repository_memory
         self.phase1_runtime = phase1_runtime
+        self.capability_selector = capability_selector or UnifiedCapabilitySelector(
+            skill_manager=skill_manager,
+            tool_manager=tool_manager,
+            action_manager=action_manager,
+            agent_manager=agent_manager,
+        )
         self.jarvis_request_kernel = JarvisRequestKernel()
+        self.jarvis_final_integration = jarvis_final_integration
         self.engineering_request_router = EngineeringRequestRouter(
             runtime=phase1_runtime,
         )
@@ -5088,6 +5099,88 @@ usable evidence is present. Do not invent details absent from the evidence.
         user_id: str = "",
         base_context: Optional[Dict[str, Any]] = None,
     ) -> SystemResponse:
+        """Final JARVIS entry point with lossless context and safety gates."""
+        integration = self.jarvis_final_integration
+
+        if integration is None:
+            return await self._process_internal(
+                query,
+                session_id=session_id,
+                user_id=user_id,
+                base_context=base_context,
+            )
+
+        enriched_context = await integration.prepare(
+            query,
+            execution_id=self._create_execution_id(),
+            session_id=session_id,
+            user_id=user_id,
+            base_context=base_context,
+        )
+
+        try:
+            read_only_response = await integration.maybe_handle_engineering_read_only(
+                query,
+                session_id=session_id,
+                user_id=user_id,
+                context=enriched_context,
+                engineering_router=self.engineering_request_router,
+                planner=self.planner,
+            )
+            if read_only_response is not None:
+                await integration.finalize(
+                    query,
+                    read_only_response,
+                    session_id=session_id,
+                    user_id=user_id,
+                    context=enriched_context,
+                )
+                return read_only_response
+
+            result = await self._process_internal(
+                query,
+                session_id=session_id,
+                user_id=user_id,
+                base_context=enriched_context,
+            )
+
+            await integration.finalize(
+                query,
+                result,
+                session_id=session_id,
+                user_id=user_id,
+                context=enriched_context,
+            )
+            return result
+
+        except Exception as exc:
+            logger.exception("[CognitiveCore] Final JARVIS integration failed")
+            failure = SystemResponse(
+                success=False,
+                confidence=0.0,
+                source="jarvis_final_integration",
+                data={},
+                error=str(exc),
+            )
+            try:
+                await integration.finalize(
+                    query,
+                    failure,
+                    session_id=session_id,
+                    user_id=user_id,
+                    context=enriched_context,
+                )
+            except Exception:
+                logger.exception("[CognitiveCore] Final integration failure persistence failed")
+            return failure
+
+    async def _process_internal(
+        self,
+        query: str,
+        session_id: str = "",
+        user_id: str = "",
+        base_context: Optional[Dict[str, Any]] = None,
+    ) -> SystemResponse:
         """
         Main cognitive orchestration pipeline guided by ReasoningEngine.
         """
@@ -6018,6 +6111,40 @@ usable evidence is present. Do not invent details absent from the evidence.
             }
 
             context["decision_contract"] = decision_contract
+
+            # Step 3: one side-effect-free capability selection pass.
+            # This selects among existing tools/skills/actions/agents/plugins
+            # but never executes them. Existing managers remain the only
+            # execution owners.
+            try:
+                capability_selection = await self.capability_selector.select(
+                    query=query,
+                    context={
+                        **context,
+                        "decision": controller_decision,
+                        "read_only": bool(
+                            context.get("jarvis_request_read_only", False)
+                        ),
+                    },
+                )
+                context["capability_selection"] = capability_selection.to_dict()
+                if capability_selection.primary is not None:
+                    context["selected_capability"] = capability_selection.primary.to_dict()
+                logger.info(
+                    "[CapabilitySelector] primary=%s/%s score=%.2f",
+                    getattr(capability_selection.primary, "kind", None),
+                    getattr(capability_selection.primary, "name", None),
+                    getattr(capability_selection.primary, "score", 0.0),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[CapabilitySelector] Selection skipped safely: %s",
+                    exc,
+                )
+                context["capability_selection"] = {
+                    "success": False,
+                    "error": str(exc),
+                }
 
             logger.info(
                 "[CognitiveDecision] Normalized decision: %s",
