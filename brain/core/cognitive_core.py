@@ -198,33 +198,20 @@ class CognitiveCore:
         )
 
         self.jarvis_final_integration = JarvisFinalIntegration(
-            memory=self.jarvis_memory_system,
+            memory_system=self.jarvis_memory_system,
             execution_mode=self.execution_mode,
-            autonomous_engineering=self.autonomous_engineering_lifecycle,
-            delivery_authorization=self.delivery_authorization,
+            autonomous_engineering_lifecycle=self.autonomous_engineering_lifecycle,
+            master_delivery_authorization=self.delivery_authorization,
             multimodal_gateway=self.multimodal_gateway,
             repository_intelligence=self.repository_intelligence,
             readiness_gateway=self.phase1_readiness_gateway,
-            capability_selector=self.capability_selector,
-            large_request_context=self._phase1_component(
-                "large_request_context"
-            ),
-            planner=self.planner,
-            phase1_runtime=phase1_runtime,
-            conversation_manager=self.conversation_manager,
-            knowledge_manager=self.knowledge_manager,
-            knowledge_engine=self._phase1_component(
-                "knowledge_engine"
-            ),
         )
 
         self.engineering_request_router = EngineeringRequestRouter(
             runtime=phase1_runtime,
             lifecycle=self.autonomous_engineering_lifecycle,
-            autonomous_engineering_lifecycle=self.autonomous_engineering_lifecycle,
             readiness_gateway=self.phase1_readiness_gateway,
             delivery_authorization=self.delivery_authorization,
-            master_delivery_authorization=self.delivery_authorization,
             execution_mode=self.execution_mode,
             repository_intelligence=self.repository_intelligence,
             capability_selector=self.capability_selector,
@@ -4027,7 +4014,7 @@ usable evidence is present. Do not invent details absent from the evidence.
         q = str(query or "").strip().lower()
 
         identifier_terms = (
-            "aadhaar",
+            "[Aadhaar Redacted]",
             "aadhar",
             "pan number",
             "passport number",
@@ -5325,18 +5312,18 @@ usable evidence is present. Do not invent details absent from the evidence.
 
             prepared = await self.jarvis_final_integration.prepare(
                 query,
+                execution_id=execution_id,
                 session_id=session_id,
                 user_id=user_id,
-                context=context,
-                request_id=execution_id,
+                base_context=context,
             )
 
             if isinstance(prepared, dict):
-                prepared_context = prepared.get("context")
-                if isinstance(prepared_context, dict):
-                    context.update(prepared_context)
-
-                context["jarvis_final_preparation"] = prepared
+                context.update(prepared)
+                context["jarvis_final_preparation"] = {
+                    "success": True,
+                    "version": prepared.get("jarvis_final_integration"),
+                }
 
             # Delivery and engineering routing happen BEFORE any generic
             # memory/LLM path. This is the critical anti-fallback boundary.
