@@ -133,16 +133,19 @@ class EngineeringRequestRouter:
         if not classification.is_engineering:
             return None
 
-        operation = self._delivery_operation(query)
-        if operation is not None:
-            return await self._route_delivery(
-                query, operation, session_id=session_id, user_id=user_id, metadata=metadata
-            )
-
+        # Resolve the execution mode before looking for delivery verbs.
+        # Negative phrases such as "do not commit/push/deploy" must never be
+        # mistaken for an actual delivery request.
         execution = self._execution_decision(query)
         if execution.get("mode") in {"plan_only", "inspect_only"} or classification.is_read_only:
             return await self._route_read_only_or_plan(
                 query, classification, execution, session_id=session_id
+            )
+
+        operation = self._delivery_operation(query)
+        if operation is not None:
+            return await self._route_delivery(
+                query, operation, session_id=session_id, user_id=user_id, metadata=metadata
             )
 
         return await self._route_execution(
