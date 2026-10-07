@@ -348,7 +348,7 @@ class JarvisFinalIntegration:
         # --------------------------------------------------------------
 
         try:
-            selection = self._select_capability(
+            selection = await self._select_capability(
                 request_text,
                 context=base_context,
             )
@@ -1096,7 +1096,7 @@ class JarvisFinalIntegration:
     # CAPABILITY SELECTION
     # ==================================================================
 
-    def _select_capability(
+    async def _select_capability(
         self,
         request: str,
         *,
@@ -1124,18 +1124,24 @@ class JarvisFinalIntegration:
                 continue
 
             try:
-                return method(
+                value = method(
                     request,
                     context=dict(
                         context
                     ),
                 )
+                if inspect.isawaitable(value):
+                    value = await value
+                return value
 
             except TypeError:
                 try:
-                    return method(
+                    value = method(
                         request
                     )
+                    if inspect.isawaitable(value):
+                        value = await value
+                    return value
                 except Exception:
                     continue
 
