@@ -112,6 +112,8 @@ class CognitiveCore:
         repository_memory=None,
         tool_manager=None,
         phase1_runtime=None,
+        capability_selector=None,
+        jarvis_final_integration=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -149,6 +151,8 @@ class CognitiveCore:
         self.study_engine = study_engine
         self.repository_memory = repository_memory
         self.phase1_runtime = phase1_runtime
+        self.capability_selector = capability_selector
+        self.jarvis_final_integration = jarvis_final_integration
 
         # =============================================================
         # FINAL JARVIS INTEGRATION
@@ -171,11 +175,12 @@ class CognitiveCore:
         ) or self._phase1_component(
             "jarvis_memory"
         )
-        self.capability_selector = self._phase1_component(
-            "unified_capability_selector"
-        ) or self._phase1_component(
-            "capability_selector"
-        )
+        if self.capability_selector is None:
+            self.capability_selector = self._phase1_component(
+                "unified_capability_selector"
+            ) or self._phase1_component(
+                "capability_selector"
+            )
         self.delivery_authorization = self._phase1_component(
             "master_delivery_authorization"
         ) or self._phase1_component(
@@ -197,15 +202,16 @@ class CognitiveCore:
             "readiness_gateway"
         )
 
-        self.jarvis_final_integration = JarvisFinalIntegration(
-            memory_system=self.jarvis_memory_system,
-            execution_mode=self.execution_mode,
-            autonomous_engineering_lifecycle=self.autonomous_engineering_lifecycle,
-            master_delivery_authorization=self.delivery_authorization,
-            multimodal_gateway=self.multimodal_gateway,
-            repository_intelligence=self.repository_intelligence,
-            readiness_gateway=self.phase1_readiness_gateway,
-        )
+        if self.jarvis_final_integration is None:
+            self.jarvis_final_integration = JarvisFinalIntegration(
+                memory_system=self.jarvis_memory_system,
+                execution_mode=self.execution_mode,
+                autonomous_engineering_lifecycle=self.autonomous_engineering_lifecycle,
+                master_delivery_authorization=self.delivery_authorization,
+                multimodal_gateway=self.multimodal_gateway,
+                repository_intelligence=self.repository_intelligence,
+                readiness_gateway=self.phase1_readiness_gateway,
+            )
 
         self.engineering_request_router = EngineeringRequestRouter(
             runtime=phase1_runtime,
