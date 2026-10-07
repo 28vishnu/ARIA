@@ -2439,6 +2439,11 @@ async def bootstrap_application() -> ServiceRegistry:
         phase1_runtime=phase1_runtime,
         capability_selector=capability_selector,
         jarvis_final_integration=jarvis_final_integration,
+        delivery_authorization=master_delivery_authorization,
+        readiness_gateway=phase1_readiness_gateway,
+        execution_mode=engineering_execution_mode,
+        repository_intelligence=repository_intelligence,
+        autonomous_engineering_lifecycle=autonomous_engineering_lifecycle,
     )
 
     # ---------------------------------------------------------
