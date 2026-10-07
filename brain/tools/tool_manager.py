@@ -432,7 +432,26 @@ class ToolManager:
             return True
 
         try:
-            result = checker(context)
+            # Availability hooks in ARIA support both signatures:
+            #   is_available()
+            #   is_available(context)
+            # Inspect the bound callable before invoking it so a valid
+            # zero-argument checker is not incorrectly marked unavailable.
+            try:
+                signature = inspect.signature(checker)
+                accepts_context = any(
+                    parameter.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.VAR_POSITIONAL,
+                    )
+                    for parameter in signature.parameters.values()
+                )
+            except (TypeError, ValueError):
+                accepts_context = True
+
+            result = checker(context) if accepts_context else checker()
 
             # Support both sync and async availability checks.
             if inspect.isawaitable(result):
@@ -468,7 +487,24 @@ class ToolManager:
             return True
 
         try:
-            result = checker(context)
+            # Availability hooks in ARIA support both signatures:
+            #   is_available()
+            #   is_available(context)
+            try:
+                signature = inspect.signature(checker)
+                accepts_context = any(
+                    parameter.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.VAR_POSITIONAL,
+                    )
+                    for parameter in signature.parameters.values()
+                )
+            except (TypeError, ValueError):
+                accepts_context = True
+
+            result = checker(context) if accepts_context else checker()
 
             if inspect.isawaitable(result):
                 result = await result
