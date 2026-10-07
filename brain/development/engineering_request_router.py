@@ -212,9 +212,70 @@ class EngineeringRequestRouter:
             }
 
         if execution.get("mode") == "inspect_only" or classification.is_read_only:
+            # Read-only repository/code analysis is a real inspection task,
+            # not merely a readiness/health check. Prefer the canonical
+            # RepositoryIntelligence service so ARIA can return repository
+            # evidence and an actual finding without entering mutation or
+            # delivery paths.
+            repository = self.repository_intelligence
+            if repository is not None:
+                for method_name in (
+                    "inspect",
+                    "analyze_repository",
+                    "analyze",
+                    "get_snapshot",
+                ):
+                    method = getattr(repository, method_name, None)
+                    if not callable(method):
+                        continue
+                    try:
+                        result = method(query)
+                    except TypeError:
+                        try:
+                            result = method(request=query)
+                        except TypeError:
+                            continue
+                    if hasattr(result, "__await__"):
+                        result = await result
+                    if isinstance(result, dict):
+                        success = bool(result.get("success", True))
+                        message = (
+                            result.get("message")
+                            or result.get("summary")
+                            or "Read-only repository inspection completed."
+                        )
+                        return {
+                            "success": success,
+                            "handled": True,
+                            "read_only": True,
+                            "requires_readiness_gateway": False,
+                            "repository_inspection": True,
+                            "classification": classification.to_dict(),
+                            "result": result,
+                            "message": message,
+                        }
+                    return {
+                        "success": True,
+                        "handled": True,
+                        "read_only": True,
+                        "requires_readiness_gateway": False,
+                        "repository_inspection": True,
+                        "classification": classification.to_dict(),
+                        "result": result,
+                        "message": "Read-only repository inspection completed.",
+                    }
+
+            # Fallback: if RepositoryIntelligence is unavailable, retain the
+            # readiness gateway as a health-only diagnostic rather than
+            # pretending it performed repository analysis.
             gateway = self.readiness_gateway
             if gateway is None:
-                return {"success": False, "handled": True, "read_only": True, "message": "The read-only readiness gateway is unavailable."}
+                return {
+                    "success": False,
+                    "handled": True,
+                    "read_only": True,
+                    "message": "The repository inspection service is unavailable.",
+                }
             report = gateway.inspect(session_id=session_id or None)
             if hasattr(report, "__await__"):
                 report = await report
@@ -224,10 +285,10 @@ class EngineeringRequestRouter:
                 "success": bool(report.get("success", True)),
                 "handled": True,
                 "read_only": True,
-                "requires_readiness_gateway": False,
+                "requires_readiness_gateway": True,
                 "classification": classification.to_dict(),
                 "result": report,
-                "message": report.get("message") or report.get("summary") or "Read-only engineering inspection completed.",
+                "message": report.get("message") or report.get("summary") or "Read-only readiness inspection completed.",
             }
 
     async def _route_execution(self, query: str, classification: EngineeringRequestClassification, *, session_id: str, user_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
