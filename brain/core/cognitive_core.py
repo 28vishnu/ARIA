@@ -114,6 +114,11 @@ class CognitiveCore:
         phase1_runtime=None,
         capability_selector=None,
         jarvis_final_integration=None,
+        delivery_authorization=None,
+        readiness_gateway=None,
+        execution_mode=None,
+        repository_intelligence=None,
+        autonomous_engineering_lifecycle=None,
     ):
         self.planner = planner
         self.executor = executor
@@ -153,6 +158,11 @@ class CognitiveCore:
         self.phase1_runtime = phase1_runtime
         self.capability_selector = capability_selector
         self.jarvis_final_integration = jarvis_final_integration
+        self._canonical_delivery_authorization = delivery_authorization
+        self._canonical_readiness_gateway = readiness_gateway
+        self._canonical_execution_mode = execution_mode
+        self._canonical_repository_intelligence = repository_intelligence
+        self._canonical_autonomous_engineering_lifecycle = autonomous_engineering_lifecycle
 
         # =============================================================
         # FINAL JARVIS INTEGRATION
@@ -162,13 +172,14 @@ class CognitiveCore:
         # while the JARVIS layer becomes the deterministic request gate.
         self.jarvis_request_kernel = JarvisRequestKernel()
 
-        self.execution_mode = self._phase1_component(
-            "engineering_execution_mode"
-        ) or self._phase1_component(
-            "execution_mode"
+        self.execution_mode = (
+            self._canonical_execution_mode
+            or self._phase1_component("engineering_execution_mode")
+            or self._phase1_component("execution_mode")
         )
-        self.repository_intelligence = self._phase1_component(
-            "repository_intelligence"
+        self.repository_intelligence = (
+            self._canonical_repository_intelligence
+            or self._phase1_component("repository_intelligence")
         )
         self.jarvis_memory_system = self._phase1_component(
             "jarvis_memory_system"
@@ -181,25 +192,25 @@ class CognitiveCore:
             ) or self._phase1_component(
                 "capability_selector"
             )
-        self.delivery_authorization = self._phase1_component(
-            "master_delivery_authorization"
-        ) or self._phase1_component(
-            "delivery_authorization"
+        self.delivery_authorization = (
+            self._canonical_delivery_authorization
+            or self._phase1_component("master_delivery_authorization")
+            or self._phase1_component("delivery_authorization")
         )
-        self.autonomous_engineering_lifecycle = self._phase1_component(
-            "autonomous_engineering_lifecycle"
-        ) or self._phase1_component(
-            "autonomous_engineering"
+        self.autonomous_engineering_lifecycle = (
+            self._canonical_autonomous_engineering_lifecycle
+            or self._phase1_component("autonomous_engineering_lifecycle")
+            or self._phase1_component("autonomous_engineering")
         )
         self.multimodal_gateway = self._phase1_component(
             "multimodal_gateway"
         ) or self._phase1_component(
             "multimodal_capability_gateway"
         )
-        self.phase1_readiness_gateway = self._phase1_component(
-            "phase1_readiness_gateway"
-        ) or self._phase1_component(
-            "readiness_gateway"
+        self.phase1_readiness_gateway = (
+            self._canonical_readiness_gateway
+            or self._phase1_component("phase1_readiness_gateway")
+            or self._phase1_component("readiness_gateway")
         )
 
         if self.jarvis_final_integration is None:
@@ -4020,7 +4031,7 @@ usable evidence is present. Do not invent details absent from the evidence.
         q = str(query or "").strip().lower()
 
         identifier_terms = (
-            "[Aadhaar Redacted]",
+            "aadhaar",
             "aadhar",
             "pan number",
             "passport number",
