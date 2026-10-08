@@ -673,9 +673,22 @@ class PersonalityEngine:
         # Repository diagnostic
         # ---------------------------------------------------------
 
+        # Read-only RepositoryIntelligence results may arrive either as
+        # the canonical `repository` field or as the legacy/nested `result`
+        # field. Normalize both forms so a successful inspection cannot be
+        # rendered as an empty generic completion message.
         repository = report.get(
             "repository"
         )
+        if not isinstance(repository, dict):
+            nested_result = report.get("result")
+            if isinstance(nested_result, dict) and (
+                "repository_root" in nested_result
+                or "relevant_files" in nested_result
+                or "source_evidence" in nested_result
+                or "inventory" in nested_result
+            ):
+                repository = nested_result
 
         if isinstance(repository, dict):
 
@@ -767,6 +780,14 @@ class PersonalityEngine:
                 lines.append(
                     f"• Error: {repository_errors}"
                 )
+
+            relevant_files = repository.get("relevant_files")
+            if isinstance(relevant_files, (list, tuple)) and relevant_files:
+                lines.append("• Relevant files: " + ", ".join(map(str, relevant_files[:20])))
+
+            source_evidence = repository.get("source_evidence")
+            if isinstance(source_evidence, (list, tuple)) and source_evidence:
+                lines.append("• Source evidence items: " + str(len(source_evidence)))
 
             repository_warnings = repository.get(
                 "warnings"
