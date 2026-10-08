@@ -251,6 +251,13 @@ class EngineeringRequestRouter:
                             "requires_readiness_gateway": False,
                             "repository_inspection": True,
                             "classification": classification.to_dict(),
+                            # Promote the authoritative snapshot to the
+                            # Phase 1 response contract.  The personality
+                            # formatter consumes structured engineering
+                            # fields directly; hiding the snapshot under
+                            # `result` caused successful inspections to
+                            # render only the generic completion sentence.
+                            "repository": result,
                             "result": result,
                             "message": message,
                         }
