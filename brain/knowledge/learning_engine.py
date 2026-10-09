@@ -50,6 +50,23 @@ class LearningEngine:
 
     ############################################################
 
+    @staticmethod
+    def _is_untrusted_failure_or_wrapper(text: str) -> bool:
+        value = str(text or "").strip().lower()
+        failure_starts = (
+            "i'm temporarily unable to reach",
+            "i’m temporarily unable to reach",
+            "i am temporarily unable to reach",
+            "all available llm providers failed",
+            "language models are unavailable",
+            "please try again in a few seconds",
+            "service unavailable",
+            "internal server error",
+        )
+        return value.startswith(failure_starts) or (
+            value.startswith("query:") and "answer:" in value
+        )
+
     async def learn(
         self,
         text: str,
@@ -60,6 +77,14 @@ class LearningEngine:
             return
 
         text = text.strip()
+
+        if self._is_untrusted_failure_or_wrapper(text):
+            self.statistics["rejected"] += 1
+            logger.warning(
+                "[LearningEngine] Rejected provider failure/chat wrapper from source=%s",
+                source,
+            )
+            return None
 
         if not self._should_learn(text):
             return
