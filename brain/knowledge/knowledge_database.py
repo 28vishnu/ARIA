@@ -158,6 +158,29 @@ class KnowledgeDatabase:
         source = self._safe_text(source, 200)
         metadata = self._safe_metadata(metadata)
 
+        # Never store provider failures or generated error wrappers as facts.
+        # This guard sits at the database boundary so every caller benefits.
+        rejected_markers = (
+            "temporarily unable to reach my language models",
+            "unable to reach my language models",
+            "all available llm providers failed",
+            "no available language model",
+            "please try again in a few seconds",
+            "please try again later",
+            "rate limited",
+            "service unavailable",
+            "internal server error",
+        )
+        candidate_text = f"{title}\n{content}".lower()
+        if not title or not content or any(
+            marker in candidate_text for marker in rejected_markers
+        ):
+            logger.warning(
+                "[KnowledgeDB] Rejected empty or provider-failure payload; source=%s",
+                source,
+            )
+            return None
+
         # 2. Duplicate Detection
         existing = await self.detect_duplicate(title, content)
         if existing:
