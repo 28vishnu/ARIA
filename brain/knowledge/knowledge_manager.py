@@ -673,116 +673,170 @@ class KnowledgeManager:
         db_path: str,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search the optional SQLite open-knowledge corpus.
+        """Search either the current documents schema or legacy open_knowledge schema.
 
-        This method is deliberately read-only with respect to the corpus:
-        it never creates a missing database or modifies imported records.
+        The importer in brain.knowledge.open_knowledge creates:
+          documents(id, source, source_id, title, content, url, language)
+          documents_fts(rowid, title, content, source, source_id)
+        Older development databases may use open_knowledge/source_url instead.
+        This adapter intentionally supports both, without modifying the corpus.
         """
         question = str(question or "").strip()
         path = Path(db_path).expanduser()
-
         if not question or not path.is_file():
             return []
 
         tokens = re.findall(r"[\w'-]+", question, flags=re.UNICODE)
-        tokens = [token for token in tokens if len(token) > 1][:10]
-
+        stop_words = {
+            "what", "is", "are", "the", "a", "an", "of", "to", "and",
+            "or", "in", "on", "for", "using", "only", "aria", "local",
+            "knowledge", "database", "stored", "provide", "source", "url",
+            "explain", "please", "give", "me", "your", "from", "do", "not",
+            "call", "any", "external", "language", "model",
+        }
+        tokens = [t for t in tokens if len(t) > 1 and t.lower() not in stop_words][:12]
         if not tokens:
+            # If the query is an instruction, the caller should resolve its topic
+            # first. Do not run a broad empty query against the corpus.
             return []
 
         limit = max(1, min(int(limit), 20))
         conn = None
-
         try:
             conn = sqlite3.connect(
                 path.resolve().as_uri() + "?mode=ro",
                 uri=True,
-                timeout=5.0,
+                timeout=10.0,
             )
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=10000")
 
-            # FTS5 is substantially faster for large corpora. The fallback
-            # supports databases created without the optional FTS5 module.
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+                ).fetchall()
+            }
+
+            if "documents" in tables:
+                table = "documents"
+                url_column = "url"
+                fts_table = "documents_fts"
+            elif "open_knowledge" in tables:
+                table = "open_knowledge"
+                url_column = "source_url"
+                fts_table = "open_knowledge_fts"
+            else:
+                logger.warning(
+                    "[KnowledgeManager] Open-knowledge DB has no recognized corpus table: %s",
+                    path,
+                )
+                return []
+
+            columns = {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            required = {"id", "source", "source_id", "title", "content", url_column}
+            if not required.issubset(columns):
+                logger.error(
+                    "[KnowledgeManager] Corpus schema mismatch for %s; table=%s columns=%s",
+                    path, table, sorted(columns),
+                )
+                return []
+
             match_query = " OR ".join(
                 '"' + token.replace('"', '""') + '"'
                 for token in tokens
             )
+            rows = []
+            if fts_table in tables:
+                try:
+                    rows = conn.execute(
+                        f"""
+                        SELECT d.source, d.source_id, d.title, d.content,
+                               d.{url_column} AS url,
+                               bm25({fts_table}) AS score
+                        FROM {fts_table}
+                        JOIN {table} d ON d.id = {fts_table}.rowid
+                        WHERE {fts_table} MATCH ?
+                        ORDER BY score
+                        LIMIT ?
+                        """,
+                        (match_query, limit),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    # An FTS table may exist but be out of sync or unavailable.
+                    logger.warning(
+                        "[KnowledgeManager] FTS query failed for %s; using LIKE fallback",
+                        table,
+                    )
 
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT d.source, d.source_id, d.title, d.content,
-                           d.source_url AS url,
-                           bm25(open_knowledge_fts) AS score
-                    FROM open_knowledge_fts
-                    JOIN open_knowledge d
-                        ON d.id = open_knowledge_fts.rowid
-                    WHERE open_knowledge_fts MATCH ?
-                    ORDER BY score
-                    LIMIT ?
-                    """,
-                    (match_query, limit),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                # FTS table absent or unsupported: use a bounded LIKE query.
-                conditions = " AND ".join(
+            if not rows:
+                # Search by informative tokens. OR semantics avoids requiring every
+                # token from a natural-language question to occur in the document.
+                like_tokens = tokens[:8]
+                conditions = " OR ".join(
                     "(title LIKE ? OR content LIKE ?)"
-                    for _ in tokens[:6]
+                    for _ in like_tokens
                 )
                 params = []
-                for token in tokens[:6]:
-                    escaped = (
-                        token.replace("\\\\", "\\\\\\\\")
-                        .replace("%", "\\%")
-                        .replace("_", "\\_")
-                    )
-                    params.extend((f"%{escaped}%", f"%{escaped}%"))
-
+                for token in like_tokens:
+                    params.extend((f"%{token}%", f"%{token}%"))
                 rows = conn.execute(
                     f"""
                     SELECT source, source_id, title, content,
-                           source_url AS url
-                    FROM open_knowledge
+                           {url_column} AS url
+                    FROM {table}
                     WHERE {conditions}
+                    ORDER BY CASE WHEN lower(title) LIKE lower(?) THEN 0 ELSE 1 END
                     LIMIT ?
                     """,
-                    (*params, limit),
+                    (*params, f"%{tokens[0]}%", limit),
                 ).fetchall()
 
-            results = []
+            results: List[Dict[str, Any]] = []
             for row in rows:
                 content = str(row["content"] or "").strip()
-                if not content:
-                    continue
-
-                source = str(row["source"] or "open_knowledge")
                 title = str(row["title"] or "").strip()
                 url = str(row["url"] or "").strip()
-
-                # Keep source text and metadata separate so ARIA can cite it.
+                source = str(row["source"] or "open_knowledge").strip().lower()
+                if not content or not url:
+                    continue
+                if KnowledgeManager._is_bad_knowledge_content(content):
+                    continue
                 results.append({
                     "source": source,
                     "source_id": str(row["source_id"] or ""),
                     "title": title,
-                    "content": content,
+                    "content": content[:3500],
                     "url": url,
                     "language": "en",
-                    "confidence": 0.82,
-                    "importance": 65,
-                    "relevance": 0.82,
+                    "confidence": 0.88,
+                    "importance": 70,
+                    "relevance": 0.88,
                     "freshness": 0.65,
                     "verified": False,
                     "evidence_type": "open_dataset",
-                    "provenance": url or source,
+                    "provenance": url,
                     "local_knowledge": True,
                     "external_llm_synthesis": False,
                 })
-
+            # Prefer readable encyclopedia prose over terse Wikidata entity
+            # descriptions for ordinary explanatory questions.
+            results.sort(
+                key=lambda item: (
+                    0 if item.get("source") == "wikipedia" else
+                    1 if item.get("source") == "wikidata" else 2,
+                    -len(str(item.get("content") or "")),
+                )
+            )
             return results
 
-        except (sqlite3.Error, OSError, ValueError):
+        except (sqlite3.Error, OSError, ValueError) as exc:
             logger.exception(
-                "[KnowledgeManager] Open-knowledge SQLite search failed"
+                "[KnowledgeManager] Open-knowledge SQLite search failed: %s",
+                exc,
             )
             return []
         finally:
@@ -811,6 +865,48 @@ class KnowledgeManager:
                 "[KnowledgeManager] Open-knowledge retrieval failed"
             )
             return []
+
+        # If local retrieval misses an ordinary factual topic, bootstrap it from
+        # Wikimedia's public APIs (never from an LLM), persist both source records,
+        # and retry against SQLite. Subsequent requests are local-only hits.
+        if not results and self._is_ordinary_knowledge_query(question):
+            topic = re.sub(
+                r"^\s*(?:what is|who is|where is|when is|define|explain|describe|tell me about|what are|who are)\s+",
+                "",
+                str(question or ""),
+                flags=re.IGNORECASE,
+            ).strip(" \t.,;:!?")
+            topic = re.sub(
+                r"\s+(?:and give|and provide|provide the source|give the source|with source).*?$",
+                "",
+                topic,
+                flags=re.IGNORECASE,
+            ).strip(" \t.,;:!?")
+            if topic and len(topic) <= 180:
+                try:
+                    from .open_knowledge import fetch_and_store_topic
+
+                    fetched = await asyncio.to_thread(
+                        fetch_and_store_topic,
+                        db_path,
+                        topic,
+                    )
+                    logger.info(
+                        "[LocalKnowledge] Wikimedia bootstrap for %r: %s",
+                        topic,
+                        fetched.get("sources", fetched.get("reason", "completed")),
+                    )
+                    results = await asyncio.to_thread(
+                        self._search_open_knowledge_sync,
+                        question,
+                        db_path,
+                        5,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[LocalKnowledge] Wikimedia bootstrap failed for %r",
+                        topic,
+                    )
 
         if results:
             logger.info(
