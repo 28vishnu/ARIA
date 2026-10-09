@@ -645,7 +645,7 @@ class CognitiveCore:
     @staticmethod
     def _is_local_knowledge_instruction(query: str) -> bool:
         """Recognize explicit requests to answer from ARIA's local corpus."""
-        text = re.sub(r"\\s+", " ", str(query or "").strip().lower())
+        text = re.sub(r"\s+", " ", str(query or "").strip().lower())
         phrases = (
             "answer using your locally stored knowledge",
             "answer using locally stored knowledge",
@@ -667,7 +667,7 @@ class CognitiveCore:
         context: Any = None,
     ) -> str:
         """Resolve a local-knowledge follow-up to the active conversation topic."""
-        instruction = re.sub(r"\\s+", " ", str(query or "").strip().lower())
+        instruction = re.sub(r"\s+", " ", str(query or "").strip().lower())
         if not CognitiveCore._is_local_knowledge_instruction(instruction):
             return str(query or "").strip()
 
@@ -5453,6 +5453,10 @@ usable evidence is present. Do not invent details absent from the evidence.
         Main cognitive orchestration pipeline guided by ReasoningEngine.
         """
 
+        # Preserve the exact incoming user request before topic resolution
+        # mutates `query`; this is required for source-URL directives and logs.
+        incoming_user_query = str(query or "").strip()
+
         execution_id = self._create_execution_id()
 
         # Always initialize the unified decision before any early
@@ -5499,8 +5503,14 @@ usable evidence is present. Do not invent details absent from the evidence.
         except Exception:
             early_compound_memory_request = False
 
+        explicit_local_knowledge_instruction = (
+            self._is_local_knowledge_instruction(incoming_user_query)
+        )
         if (
-            self._looks_like_ordinary_knowledge_query(query)
+            (
+                explicit_local_knowledge_instruction
+                or self._looks_like_ordinary_knowledge_query(query)
+            )
             and not early_compound_memory_request
             and not self._looks_like_memory_recall_request(query)
         ):
@@ -5548,15 +5558,13 @@ usable evidence is present. Do not invent details absent from the evidence.
 
             context.update({
                 "query": query,
-                "original_query": str(base_context.get("query") or query),
+                "original_query": incoming_user_query or str(query),
                 "resolved_query": query,
                 "references_resolved": True,
                 "local_knowledge_query": True,
                 "local_knowledge": True,
                 "require_source_url": (
-                    self._is_local_knowledge_instruction(
-                        str(base_context.get("query") or "")
-                    )
+                    self._is_local_knowledge_instruction(incoming_user_query)
                     or self._is_local_knowledge_instruction(query)
                 ),
                 "external_llm_synthesis": False,
