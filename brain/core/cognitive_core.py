@@ -3,6 +3,7 @@ import logging
 import re
 import time
 import uuid
+from urllib.parse import quote
 from typing import Dict, Any, Optional, List
 
 from personality.response import SystemResponse
@@ -593,6 +594,83 @@ class CognitiveCore:
         return safe
 
     @staticmethod
+    def _is_local_knowledge_instruction(query: str) -> bool:
+        """Recognize explicit requests to answer from ARIA's local corpus."""
+        text = re.sub(r"\\s+", " ", str(query or "").strip().lower())
+        phrases = (
+            "answer using your locally stored knowledge",
+            "answer using locally stored knowledge",
+            "answer from your local knowledge",
+            "answer using local knowledge",
+            "use your locally stored knowledge",
+            "use local knowledge",
+            "from your local knowledge",
+            "provide the source url",
+            "provide source url",
+            "cite the source url",
+        )
+        return any(phrase in text for phrase in phrases)
+
+    @staticmethod
+    def _resolve_local_knowledge_topic(
+        query: str,
+        conversation: Any = None,
+        context: Any = None,
+    ) -> str:
+        """Resolve a local-knowledge follow-up to the active conversation topic."""
+        instruction = re.sub(r"\\s+", " ", str(query or "").strip().lower())
+        if not CognitiveCore._is_local_knowledge_instruction(instruction):
+            return str(query or "").strip()
+
+        containers = [conversation, context]
+        preferred_keys = (
+            "active_thread",
+            "current_topic",
+            "topic",
+            "subject",
+            "last_topic",
+            "last_user_query",
+            "previous_query",
+            "last_query",
+        )
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            for key in preferred_keys:
+                value = container.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and value.lower() != instruction:
+                        # A topic label is enough; a previous full question is
+                        # also acceptable and preserves its subject.
+                        if key in {"active_thread", "current_topic", "topic", "subject", "last_topic"}:
+                            return f"What is {value}?"
+                        return value
+
+            # Conversation implementations differ in how they expose history.
+            for history_key in ("history", "messages", "turns", "conversation_history"):
+                history = container.get(history_key)
+                if not isinstance(history, list):
+                    continue
+                for item in reversed(history):
+                    if not isinstance(item, dict):
+                        continue
+                    role = str(item.get("role") or item.get("speaker") or "").lower()
+                    content = str(
+                        item.get("content")
+                        or item.get("message")
+                        or item.get("text")
+                        or item.get("query")
+                        or ""
+                    ).strip()
+                    if role in {"user", "human", "luffy"} and content:
+                        if content.lower() != instruction and not CognitiveCore._is_local_knowledge_instruction(content):
+                            return content
+
+        return ""
+
+    @staticmethod
     def _looks_like_ordinary_knowledge_query(query: str) -> bool:
         """
         Detect ordinary factual/educational knowledge questions that should
@@ -607,6 +685,11 @@ class CognitiveCore:
 
         if not text or len(text) < 3:
             return False
+
+        # Explicit local-knowledge directives are knowledge requests, not
+        # current-information searches. Handle them before general keyword rules.
+        if CognitiveCore._is_local_knowledge_instruction(text):
+            return True
 
         # Explicitly dynamic/current requests must keep their normal routing.
         dynamic_markers = (
@@ -2411,7 +2494,22 @@ class CognitiveCore:
                 or query
             )
         elif local_knowledge_query:
-            resolved_query = query
+            if self._is_local_knowledge_instruction(query):
+                resolved_query = (
+                    self._resolve_local_knowledge_topic(
+                        query,
+                        conversation_context,
+                        context,
+                    )
+                    or query
+                )
+                context["require_source_url"] = True
+                logger.info(
+                    "[LocalKnowledge] Local-knowledge follow-up resolved to %r.",
+                    resolved_query,
+                )
+            else:
+                resolved_query = query
             logger.info(
                 "[LocalKnowledge] Reference resolution skipped for ordinary knowledge query."
             )
@@ -2433,6 +2531,8 @@ class CognitiveCore:
         context["original_query"] = query
         context["resolved_query"] = resolved_query
         context["references_resolved"] = True
+        if self._is_local_knowledge_instruction(query):
+            context["require_source_url"] = True
 
         if self.context_builder and not context.get("_context_built"):
             try:
@@ -3266,6 +3366,35 @@ usable evidence is present. Do not invent details absent from the evidence.
                             )
                             source = "web_fallback"
                             confidence = 0.55
+                        elif context.get("local_knowledge_query"):
+                            # Local knowledge requests must never be replaced by an
+                            # LLM outage message. Be transparent when the configured
+                            # local corpus has no matching evidence.
+                            topic = str(resolved_query or query or "").strip()
+                            topic = re.sub(
+                                r"^(?:what is|what are|define|explain|tell me about|describe)\\s+",
+                                "",
+                                topic,
+                                flags=re.IGNORECASE,
+                            ).strip(" .?!")
+                            slug = quote(topic.replace(" ", "_"), safe="_-")
+                            source_url = (
+                                f"https://en.wikipedia.org/wiki/{slug}"
+                                if slug
+                                else "https://en.wikipedia.org/"
+                            )
+                            answer = (
+                                "I couldn't find a matching entry in my local knowledge "
+                                "store, so I can't honestly present this as a locally "
+                                "retrieved answer. No language model was used. "
+                                f"Reference URL (not verified by local retrieval): {source_url}"
+                            )
+                            context["local_knowledge"] = True
+                            context["knowledge_source"] = "local_knowledge_store_miss"
+                            context["answer_owner"] = "knowledge_manager"
+                            context["external_llm_synthesis"] = False
+                            source = "local_knowledge_miss"
+                            confidence = 0.0
                         else:
                             answer = (
                                 "I'm temporarily unable to reach my language models. "
@@ -3550,6 +3679,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             "knowledge_database",
             "knowledge_manager",
             "knowledge",
+            "local_knowledge_miss",
         }
 
         if source in {
