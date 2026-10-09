@@ -110,6 +110,31 @@ class KnowledgeDatabase:
     # Store Knowledge
     ############################################################
 
+    @staticmethod
+    def _is_rejected_learning_payload(title, content) -> bool:
+        """Reject infrastructure errors and serialized chat wrappers as facts."""
+        text = str(content or "").strip().lower()
+        title_text = str(title or "").strip().lower()
+        failure_starts = (
+            "i'm temporarily unable to reach",
+            "i’m temporarily unable to reach",
+            "i am temporarily unable to reach",
+            "i couldn't reach the language model",
+            "i could not reach the language model",
+            "all available llm providers failed",
+            "language models are unavailable",
+            "please try again in a few seconds",
+            "service unavailable",
+            "internal server error",
+        )
+        if text.startswith(failure_starts):
+            return True
+        if text.startswith("query:") and "answer:" in text:
+            return True
+        if title_text.startswith("query ") and "answer" in title_text and text.startswith("query:"):
+            return True
+        return False
+
     async def detect_duplicate(
         self,
         title: str,
@@ -158,26 +183,9 @@ class KnowledgeDatabase:
         source = self._safe_text(source, 200)
         metadata = self._safe_metadata(metadata)
 
-        # Never store provider failures or generated error wrappers as facts.
-        # This guard sits at the database boundary so every caller benefits.
-        rejected_markers = (
-            "temporarily unable to reach my language models",
-            "unable to reach my language models",
-            "all available llm providers failed",
-            "no available language model",
-            "please try again in a few seconds",
-            "please try again later",
-            "rate limited",
-            "service unavailable",
-            "internal server error",
-        )
-        candidate_text = f"{title}\n{content}".lower()
-        if not title or not content or any(
-            marker in candidate_text for marker in rejected_markers
-        ):
+        if self._is_rejected_learning_payload(title, content):
             logger.warning(
-                "[KnowledgeDB] Rejected empty or provider-failure payload; source=%s",
-                source,
+                "[KnowledgeDB] Rejected failure/wrapper payload; it was not stored as knowledge."
             )
             return None
 
