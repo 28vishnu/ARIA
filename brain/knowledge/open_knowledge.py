@@ -10,6 +10,7 @@ Examples:
   python -m brain.knowledge.open_knowledge init --db data/aria_knowledge.sqlite3
   python -m brain.knowledge.open_knowledge wikipedia --dump data/wiki.xml.bz2 --db data/aria_knowledge.sqlite3 --limit 1000
   python -m brain.knowledge.open_knowledge wikidata --dump data/wikidata.json.bz2 --db data/aria_knowledge.sqlite3 --limit 1000
+  python -m brain.knowledge.open_knowledge import-both --wikipedia-dump data/wiki.xml.bz2 --wikidata-dump data/wikidata.json.bz2 --db data/aria_knowledge.sqlite3
   python -m brain.knowledge.open_knowledge search --db data/aria_knowledge.sqlite3 --query "photosynthesis"
   python -m brain.knowledge.open_knowledge stats --db data/aria_knowledge.sqlite3
 """
@@ -29,6 +30,7 @@ import xml.etree.ElementTree as ET
 
 from pathlib import Path
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 LOG = logging.getLogger("aria.open_knowledge")
 
@@ -174,6 +176,29 @@ def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def clean_wikitext(value: str) -> str:
+    """Convert common MediaWiki markup into searchable plain text."""
+    text = str(value or "")
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    text = re.sub(r"<ref\b[^>]*>.*?</ref\s*>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<ref\b[^>]*/\s*>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    # Remove simple/nested templates iteratively without unbounded recursion.
+    for _ in range(8):
+        updated = re.sub(r"\{\{[^{}]*\}\}", " ", text, flags=re.S)
+        if updated == text:
+            break
+        text = updated
+    text = re.sub(r"\[\[(?:File|Image):.*?\]\]", " ", text, flags=re.I | re.S)
+    text = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", text)
+    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+    text = re.sub(r"\[(?:https?://\S+\s+)?([^\]]+)\]", r"\1", text)
+    text = re.sub(r"'{2,5}", "", text)
+    text = re.sub(r"^\s*=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.M)
+    text = re.sub(r"\[\[Category:.*?\]\]", " ", text, flags=re.I)
+    return clean_text(text)
+
+
 def local_name(tag: str) -> str:
     """Remove an XML namespace from an element name."""
     return tag.rsplit("}", 1)[-1]
@@ -224,7 +249,7 @@ def wikipedia_pages(dump_path: str, language: str = "en"):
                         "source": "wikipedia",
                         "source_id": page_id,
                         "title": clean_text(title),
-                        "content": clean_text(text),
+                        "content": clean_wikitext(text),
                         "url": (
                             f"https://{language}.wikipedia.org/wiki/"
                             + quote(
@@ -348,6 +373,118 @@ def wikidata_entities(dump_path: str):
                 "url": f"https://www.wikidata.org/wiki/{entity_id}",
                 "language": "en",
             }
+
+
+def fetch_and_store_topic(
+    db_path: str,
+    topic: str,
+    language: str = "en",
+    timeout: int = 8,
+) -> dict:
+    """Fetch one topic from official Wikimedia APIs and cache both sources locally.
+
+    This uses encyclopedia/data APIs, not an LLM. It is intentionally a small,
+    incremental bootstrap path; bulk dumps remain the way to import large corpora.
+    """
+    topic = clean_text(topic)[:180]
+    if not topic:
+        return {"stored": 0, "reason": "empty_topic"}
+
+    def get_json(url: str) -> dict:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "ARIA-OpenKnowledge/1.0 (local knowledge importer)",
+                "Accept": "application/json",
+            },
+        )
+        with urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+
+    records = []
+    page_title = topic.replace(" ", "_")
+    wiki_url = (
+        f"https://{language}.wikipedia.org/api/rest_v1/page/summary/"
+        + quote(page_title, safe="()'!*~.-_")
+    )
+    try:
+        summary = get_json(wiki_url)
+        extract = clean_text(summary.get("extract") or "")
+        title = clean_text(summary.get("title") or topic)
+        page_url = (
+            (summary.get("content_urls") or {}).get("desktop") or {}
+        ).get("page") or (
+            f"https://{language}.wikipedia.org/wiki/"
+            + quote(title.replace(" ", "_"), safe="()'!*~.-_")
+        )
+        if extract and str(summary.get("type") or "").lower() != "disambiguation":
+            records.append({
+                "source": "wikipedia",
+                "source_id": str(summary.get("pageid") or title),
+                "title": title,
+                "content": extract,
+                "url": page_url,
+                "language": language,
+            })
+    except Exception as exc:
+        LOG.warning("Wikipedia topic fetch failed for %r: %s", topic, exc)
+
+    try:
+        search_url = (
+            "https://www.wikidata.org/w/api.php?action=wbsearchentities"
+            "&format=json&language=en&uselang=en&limit=1&search="
+            + quote(topic, safe="")
+        )
+        search_data = get_json(search_url)
+        entities = search_data.get("search") or []
+        if entities:
+            found = entities[0]
+            qid = clean_text(found.get("id") or "")
+            if qid:
+                entity_data = get_json(
+                    f"https://www.wikidata.org/wiki/Special:EntityData/{quote(qid)}.json"
+                )
+                entity = (entity_data.get("entities") or {}).get(qid) or {}
+                labels = entity.get("labels") or {}
+                descriptions = entity.get("descriptions") or {}
+                aliases_map = entity.get("aliases") or {}
+                label = clean_text(
+                    ((labels.get("en") or {}).get("value"))
+                    or found.get("label")
+                    or qid
+                )
+                description = clean_text(
+                    ((descriptions.get("en") or {}).get("value"))
+                    or found.get("description")
+                    or ""
+                )
+                aliases = [
+                    clean_text(item.get("value"))
+                    for item in aliases_map.get("en", [])[:12]
+                    if isinstance(item, dict) and item.get("value")
+                ]
+                parts = [description] if description else []
+                if aliases:
+                    parts.append("Aliases: " + ", ".join(aliases))
+                content = clean_text(". ".join(parts)) or label
+                records.append({
+                    "source": "wikidata",
+                    "source_id": qid,
+                    "title": label,
+                    "content": content,
+                    "url": f"https://www.wikidata.org/wiki/{qid}",
+                    "language": "en",
+                })
+    except Exception as exc:
+        LOG.warning("Wikidata topic fetch failed for %r: %s", topic, exc)
+
+    if not records:
+        return {"stored": 0, "reason": "no_wikimedia_records", "topic": topic}
+
+    result = import_records(db_path, records, limit=None, batch_size=50)
+    result["topic"] = topic
+    result["sources"] = [item["source"] for item in records]
+    return result
 
 
 def import_records(
@@ -526,6 +663,18 @@ def build_parser():
     wiki.add_argument("--limit", type=int, default=None)
     wiki.add_argument("--batch-size", type=int, default=250)
 
+    both = sub.add_parser(
+        "import-both",
+        help="Import Wikipedia and Wikidata dumps into the same SQLite database",
+    )
+    both.add_argument("--wikipedia-dump", required=True)
+    both.add_argument("--wikidata-dump", required=True)
+    both.add_argument("--db", default=DEFAULT_DB)
+    both.add_argument("--language", default="en")
+    both.add_argument("--wikipedia-limit", type=int, default=None)
+    both.add_argument("--wikidata-limit", type=int, default=None)
+    both.add_argument("--batch-size", type=int, default=250)
+
     wd = sub.add_parser(
         "wikidata", help="Import a Wikidata JSON-lines dump"
     )
@@ -588,6 +737,34 @@ def main(argv=None) -> int:
                 args.limit,
                 args.batch_size,
             )
+
+        elif args.command == "import-both":
+            wiki_path = Path(args.wikipedia_dump)
+            wikidata_path = Path(args.wikidata_dump)
+            if not wiki_path.is_file():
+                raise FileNotFoundError(f"Wikipedia dump file not found: {wiki_path}")
+            if not wikidata_path.is_file():
+                raise FileNotFoundError(f"Wikidata dump file not found: {wikidata_path}")
+
+            # Both sources are written to the same documents table/database.
+            wiki_result = import_records(
+                args.db,
+                wikipedia_pages(str(wiki_path), args.language),
+                args.wikipedia_limit,
+                args.batch_size,
+            )
+            wikidata_result = import_records(
+                args.db,
+                wikidata_entities(str(wikidata_path)),
+                args.wikidata_limit,
+                args.batch_size,
+            )
+            result = {
+                "status": "imported_both_sources",
+                "database": str(Path(args.db).resolve()),
+                "wikipedia": wiki_result,
+                "wikidata": wikidata_result,
+            }
 
         elif args.command == "search":
             result = search(args.db, args.query, args.limit)
