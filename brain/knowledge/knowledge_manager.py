@@ -2,6 +2,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 import logging
 import asyncio
+import os
+import re
+import sqlite3
+from pathlib import Path
 
 logger = logging.getLogger("aria")
 
@@ -659,93 +663,224 @@ class KnowledgeManager:
 
         return []
 
+    # =========================================================
+    # Optional Wikipedia / Wikidata SQLite Corpus
+    # =========================================================
+
+    @staticmethod
+    def _search_open_knowledge_sync(
+        question: str,
+        db_path: str,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Search the optional SQLite open-knowledge corpus.
+
+        This method is deliberately read-only with respect to the corpus:
+        it never creates a missing database or modifies imported records.
+        """
+        question = str(question or "").strip()
+        path = Path(db_path).expanduser()
+
+        if not question or not path.is_file():
+            return []
+
+        tokens = re.findall(r"[\w'-]+", question, flags=re.UNICODE)
+        tokens = [token for token in tokens if len(token) > 1][:10]
+
+        if not tokens:
+            return []
+
+        limit = max(1, min(int(limit), 20))
+        conn = None
+
+        try:
+            conn = sqlite3.connect(
+                path.resolve().as_uri() + "?mode=ro",
+                uri=True,
+                timeout=5.0,
+            )
+            conn.row_factory = sqlite3.Row
+
+            # FTS5 is substantially faster for large corpora. The fallback
+            # supports databases created without the optional FTS5 module.
+            match_query = " OR ".join(
+                '"' + token.replace('"', '""') + '"'
+                for token in tokens
+            )
+
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT d.source, d.source_id, d.title, d.content,
+                           d.source_url AS url,
+                           bm25(open_knowledge_fts) AS score
+                    FROM open_knowledge_fts
+                    JOIN open_knowledge d
+                        ON d.id = open_knowledge_fts.rowid
+                    WHERE open_knowledge_fts MATCH ?
+                    ORDER BY score
+                    LIMIT ?
+                    """,
+                    (match_query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # FTS table absent or unsupported: use a bounded LIKE query.
+                conditions = " AND ".join(
+                    "(title LIKE ? OR content LIKE ?)"
+                    for _ in tokens[:6]
+                )
+                params = []
+                for token in tokens[:6]:
+                    escaped = (
+                        token.replace("\\\\", "\\\\\\\\")
+                        .replace("%", "\\%")
+                        .replace("_", "\\_")
+                    )
+                    params.extend((f"%{escaped}%", f"%{escaped}%"))
+
+                rows = conn.execute(
+                    f"""
+                    SELECT source, source_id, title, content,
+                           source_url AS url
+                    FROM open_knowledge
+                    WHERE {conditions}
+                    LIMIT ?
+                    """,
+                    (*params, limit),
+                ).fetchall()
+
+            results = []
+            for row in rows:
+                content = str(row["content"] or "").strip()
+                if not content:
+                    continue
+
+                source = str(row["source"] or "open_knowledge")
+                title = str(row["title"] or "").strip()
+                url = str(row["url"] or "").strip()
+
+                # Keep source text and metadata separate so ARIA can cite it.
+                results.append({
+                    "source": source,
+                    "source_id": str(row["source_id"] or ""),
+                    "title": title,
+                    "content": content,
+                    "url": url,
+                    "language": "en",
+                    "confidence": 0.82,
+                    "importance": 65,
+                    "relevance": 0.82,
+                    "freshness": 0.65,
+                    "verified": False,
+                    "evidence_type": "open_dataset",
+                    "provenance": url or source,
+                    "local_knowledge": True,
+                    "external_llm_synthesis": False,
+                })
+
+            return results
+
+        except (sqlite3.Error, OSError, ValueError):
+            logger.exception(
+                "[KnowledgeManager] Open-knowledge SQLite search failed"
+            )
+            return []
+        finally:
+            if conn is not None:
+                conn.close()
+
+    async def search_open_knowledge(
+        self,
+        question: str,
+    ) -> List[Dict[str, Any]]:
+        """Run local SQLite retrieval off the event loop."""
+        db_path = os.environ.get(
+            "ARIA_OPEN_KNOWLEDGE_DB",
+            "data/aria_open_knowledge.sqlite3",
+        )
+
+        try:
+            results = await asyncio.to_thread(
+                self._search_open_knowledge_sync,
+                question,
+                db_path,
+                5,
+            )
+        except Exception:
+            logger.exception(
+                "[KnowledgeManager] Open-knowledge retrieval failed"
+            )
+            return []
+
+        if results:
+            logger.info(
+                "[LocalKnowledge] Retrieved %d open-corpus result(s)",
+                len(results),
+            )
+
+        return results
+
     async def search_database(
         self,
         question: str,
     ) -> List[Dict[str, Any]]:
+        """Merge the existing knowledge database with the optional corpus."""
+        normalized: List[Dict[str, Any]] = []
 
-        if not (
+        # Preserve ARIA's existing database retrieval.
+        if (
             self.knowledge_database
-            and hasattr(
-                self.knowledge_database,
-                "retrieve",
-            )
+            and hasattr(self.knowledge_database, "retrieve")
         ):
-            return []
-
-        try:
-            kb_res = await self.knowledge_database.retrieve(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Knowledge database retrieval failed"
-            )
-            return []
-
-        if not kb_res:
-            return []
-
-        normalized = []
-
-        for item in kb_res:
-
-            if isinstance(item, dict):
-
-                content = item.get(
-                    "content",
-                    str(item),
+            try:
+                kb_res = await self.knowledge_database.retrieve(question)
+            except Exception:
+                logger.exception(
+                    "[KnowledgeManager] Knowledge database retrieval failed"
                 )
+                kb_res = []
 
-                # Preserve database metadata instead of throwing
-                # it away. This is important for semantic retrieval.
-                result = {
-                    **item,
-                    "source": item.get(
-                        "source",
-                        "knowledge_database",
-                    ),
-                    "confidence": item.get(
-                        "confidence",
-                        0.85,
-                    ),
-                    "importance": item.get(
-                        "importance",
-                        50,
-                    ),
-                    "relevance": item.get(
-                        "relevance",
-                        0.75,
-                    ),
-                    "freshness": item.get(
-                        "freshness",
-                        0.7,
-                    ),
-                    "content": content,
-                }
+            if kb_res:
+                for item in kb_res:
+                    if isinstance(item, dict):
+                        content = item.get("content", str(item))
+                        result = {
+                            **item,
+                            "source": item.get(
+                                "source", "knowledge_database"
+                            ),
+                            "confidence": item.get("confidence", 0.85),
+                            "importance": item.get("importance", 50),
+                            "relevance": item.get("relevance", 0.75),
+                            "freshness": item.get("freshness", 0.7),
+                            "content": content,
+                        }
+                    else:
+                        result = {
+                            "source": "knowledge_database",
+                            "confidence": 0.85,
+                            "importance": 50,
+                            "relevance": 0.75,
+                            "freshness": 0.7,
+                            "content": str(item),
+                        }
 
-            else:
-                result = {
-                    "source": "knowledge_database",
-                    "confidence": 0.85,
-                    "importance": 50,
-                    "relevance": 0.75,
-                    "freshness": 0.7,
-                    "content": str(item),
-                }
+                    if self._is_bad_knowledge_content(
+                        result.get("content", "")
+                    ):
+                        logger.warning(
+                            "[KnowledgeManager] Rejected invalid knowledge "
+                            "database result."
+                        )
+                        continue
 
-            if self._is_bad_knowledge_content(
-                result.get("content", "")
-            ):
-                logger.warning(
-                    "[KnowledgeManager] Rejected invalid knowledge "
-                    "database result."
-                )
-                continue
+                    normalized.append(result)
 
-            normalized.append(
-                result
-            )
+        # The SQLite corpus is optional and does not replace existing stores.
+        # It is read only when ARIA_OPEN_KNOWLEDGE_DB points to an existing DB.
+        normalized.extend(
+            await self.search_open_knowledge(question)
+        )
 
         return normalized
 
@@ -1563,6 +1698,21 @@ class KnowledgeManager:
                             "unknown",
                         ),
                     )
+
+                    # Include a source link for imported open-knowledge
+                    # records while preserving source-free built-in answers.
+                    source_url = str(result.get("url") or "").strip()
+                    source_title = str(result.get("title") or "").strip()
+                    source_name = str(result.get("source") or "").strip()
+
+                    if source_url and source_name in {
+                        "wikipedia", "wikidata", "open_knowledge"
+                    }:
+                        citation_label = source_title or source_name
+                        return (
+                            f"{content}\n\nSource: "
+                            f"{citation_label} — {source_url}"
+                        )
 
                     return content
 
