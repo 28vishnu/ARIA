@@ -7,6 +7,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from brain.knowledge.answer_composer import AnswerComposer
+
 logger = logging.getLogger("aria")
 
 
@@ -45,6 +47,8 @@ class KnowledgeManager:
         self.llm_router = llm_router
 
         self.event_bus = event_bus
+        # Deterministic, non-LLM answer formatting over evidence from all stores.
+        self.answer_composer = AnswerComposer()
 
     # =========================================================
     # Local Knowledge Safety
@@ -151,6 +155,9 @@ class KnowledgeManager:
             "service unavailable",
             "internal server error",
         )
+
+        if text.startswith("query:") and "answer:" in text:
+            return True
 
         return any(
             marker in text
@@ -1477,120 +1484,39 @@ class KnowledgeManager:
         session_id: str,
         question: str,
     ) -> List[Dict[str, Any]]:
+        """Retrieve evidence from ARIA's connected knowledge systems.
 
-        # -----------------------------------------------------
-        # Deterministic local knowledge gets first-class priority.
-        # -----------------------------------------------------
-
-        local_fact = (
-            self._local_foundational_knowledge(
-                question
-            )
-        )
-
+        The built-in facts, Mongo/knowledge DB, Wikipedia/Wikidata SQLite
+        corpus, knowledge graph, world model, documents, skills, and allowed
+        working-memory sources are merged and ranked as one evidence set.
+        Personal/episodic memory helpers already skip ordinary factual queries.
+        """
+        local_fact = self._local_foundational_knowledge(question)
         if local_fact:
             logger.info(
-                "[LocalKnowledge] Deterministic foundational "
-                "knowledge match found."
+                "[KnowledgeBrain] Found a deterministic foundational fact; "
+                "merging it with other knowledge sources."
             )
 
-            # Still retrieve database knowledge so that once the
-            # large corpus is populated, it can coexist with this.
+        async def safe_call(label, coroutine):
             try:
-                knowledge = await self.search_database(
-                    question
-                )
+                return await coroutine
             except Exception:
-                logger.exception(
-                    "[KnowledgeManager] Database search failed"
-                )
-                knowledge = []
+                logger.exception("[KnowledgeBrain] %s retrieval failed", label)
+                return []
 
-            merged = await self.merge_results(
-                [local_fact],
-                knowledge,
-            )
-
-            return await self.rank_results(
-                merged
-            )
-
-        # -----------------------------------------------------
-        # Normal retrieval pipeline
-        # -----------------------------------------------------
-
-        try:
-            working = await self.search_working_memory(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Working memory search failed"
-            )
-            working = []
-
-        try:
-            memory = await self.search_memory(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Memory search failed"
-            )
-            memory = []
-
-        try:
-            knowledge = await self.search_database(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Database search failed"
-            )
-            knowledge = []
-
-        try:
-            graph = await self.search_graph(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Graph search failed"
-            )
-            graph = []
-
-        try:
-            world = await self.search_world(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] World model search failed"
-            )
-            world = []
-
-        try:
-            documents = await self.search_documents(
-                session_id,
-                question,
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Document search failed"
-            )
-            documents = []
-
-        try:
-            skills = await self.search_skills(
-                question
-            )
-        except Exception:
-            logger.exception(
-                "[KnowledgeManager] Skills search failed"
-            )
-            skills = []
+        working, memory, knowledge, graph, world, documents, skills = await asyncio.gather(
+            safe_call("working memory", self.search_working_memory(question)),
+            safe_call("memory", self.search_memory(question)),
+            safe_call("knowledge database/Wikipedia/Wikidata", self.search_database(question)),
+            safe_call("knowledge graph", self.search_graph(question)),
+            safe_call("world model", self.search_world(question)),
+            safe_call("documents", self.search_documents(session_id, question)),
+            safe_call("skills", self.search_skills(question)),
+        )
 
         merged = await self.merge_results(
+            [local_fact] if local_fact else [],
             working,
             memory,
             knowledge,
@@ -1599,10 +1525,14 @@ class KnowledgeManager:
             documents,
             skills,
         )
-
-        return await self.rank_results(
-            merged
+        ranked = await self.rank_results(merged)
+        logger.info(
+            "[KnowledgeBrain] Unified retrieval completed: %d evidence records; "
+            "sources=%s",
+            len(ranked),
+            sorted({str(item.get('source', 'unknown')) for item in ranked}),
         )
+        return ranked
 
     # =========================================================
     # Web Decision
@@ -1637,93 +1567,97 @@ class KnowledgeManager:
     async def search_web(
         self,
         question: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
+        """Return cited web evidence records without generating an answer.
 
-        if not (
-            self.web_search
-            and hasattr(
-                self.web_search,
-                "execute",
-            )
-        ):
-            return None
+        Search snippets are evidence only. They are not automatically written
+        into the permanent knowledge base because snippets may be incomplete
+        and often lack enough context for safe factual learning.
+        """
+        if not (self.web_search and hasattr(self.web_search, "execute")):
+            return []
 
         try:
-            res = await self.web_search.execute({
-                "query": question
-            })
+            res = await self.web_search.execute({"query": question, "max_results": 5})
+            if not res or not getattr(res, "success", False):
+                return []
 
-            if not res:
-                return None
-
-            if not getattr(
-                res,
-                "success",
-                False,
-            ):
-                return None
-
-            data = getattr(
-                res,
-                "data",
-                {},
-            )
-
+            data = getattr(res, "data", {})
             if not isinstance(data, dict):
-                data = {
-                    "result": str(data)
-                }
+                data = {"content": str(data)}
 
-            answer = (
-                data.get("result")
-                or data.get("content")
-                or data.get("answer")
-                or str(data)
-            )
+            raw_results = data.get("results")
+            evidence: List[Dict[str, Any]] = []
+            if isinstance(raw_results, list):
+                for item in raw_results[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get("title") or "").strip()
+                    url = str(item.get("url") or item.get("link") or "").strip()
+                    content = str(
+                        item.get("snippet") or item.get("content")
+                        or item.get("description") or ""
+                    ).strip()
+                    if not content or self._is_bad_knowledge_content(content):
+                        continue
+                    if not url.startswith(("https://", "http://")):
+                        continue
+                    evidence.append({
+                        "source": "web_search",
+                        "source_id": url,
+                        "title": title or url,
+                        "url": url,
+                        "content": content,
+                        "confidence": 0.68,
+                        "importance": 60,
+                        "relevance": 0.78,
+                        "freshness": 0.95,
+                        "verified": False,
+                        "evidence_type": "web_snippet",
+                        "provenance": url,
+                        "local_knowledge": False,
+                        "external_llm_synthesis": False,
+                    })
 
-            answer = str(
-                answer
-            ).strip()
+            # Compatibility fallback for providers that return a single text.
+            if not evidence:
+                text = str(
+                    data.get("result") or data.get("content")
+                    or data.get("answer") or ""
+                ).strip()
+                if text and not self._is_bad_knowledge_content(text):
+                    # Parse the stable WebSearchAction format: title, URL, snippet.
+                    blocks = re.split(r"\n\s*\n", text)
+                    for block in blocks[:5]:
+                        match = re.search(r"(?im)^\s*URL:\s*(https?://\S+)\s*$", block)
+                        if not match:
+                            continue
+                        url = match.group(1).rstrip(".,;:!?\"'")
+                        title_match = re.match(r"\s*\d+\.\s*(.*?)\s*\n", block)
+                        title = title_match.group(1).strip() if title_match else url
+                        snippet = re.sub(r"(?im)^\s*(?:\d+\.\s*.*|URL:\s*https?://\S+)\s*$", "", block).strip()
+                        if snippet:
+                            evidence.append({
+                                "source": "web_search", "source_id": url,
+                                "title": title, "url": url, "content": snippet,
+                                "confidence": 0.65, "importance": 55,
+                                "relevance": 0.72, "freshness": 0.9,
+                                "verified": False, "evidence_type": "web_snippet",
+                                "provenance": url, "local_knowledge": False,
+                                "external_llm_synthesis": False,
+                            })
 
-            if self._is_bad_knowledge_content(
-                answer
-            ):
-                logger.warning(
-                    "[KnowledgeManager] Rejected invalid web result."
+            if evidence:
+                logger.info(
+                    "[KnowledgeBrain] Added %d cited web evidence record(s); "
+                    "unverified snippets were not learned automatically.",
+                    len(evidence),
                 )
-                return None
-
-            # Web is an allowed fallback for current/unknown
-            # information. It is NOT an external answer LLM.
-            if self.learning_engine:
-                try:
-                    await self.learning_engine.learn(
-                        text=answer,
-                        source="web",
-                    )
-                except Exception:
-                    logger.exception(
-                        "[KnowledgeManager] Failed to learn web result"
-                    )
-
-            return {
-                "source": "web_search",
-                "confidence": 0.75,
-                "importance": 70,
-                "relevance": 0.90,
-                "freshness": 1.0,
-                "verified": False,
-                "content": answer,
-
-                "local_knowledge": False,
-                "external_llm_synthesis": False,
-            }
+            return evidence
 
         except Exception:
-            logger.exception(
-                "[KnowledgeManager] Web search failed"
-            )
-            return None
+            logger.exception("[KnowledgeBrain] Web evidence search failed")
+            return []
 
     # =========================================================
     # Best Answer
@@ -1749,180 +1683,25 @@ class KnowledgeManager:
         question: str,
         results: List[Dict[str, Any]],
     ) -> str:
+        """Compose a user-facing answer deterministically, never with an LLM."""
+        valid = [
+            item for item in (results or [])
+            if isinstance(item, dict)
+            and str(item.get("content", "")).strip()
+            and not self._is_bad_knowledge_content(item.get("content", ""))
+        ]
+        if not valid:
+            return "I couldn't find reliable information in ARIA's connected knowledge sources."
 
-        if not results:
-            return (
-                "I couldn't find any relevant information."
-            )
-
-        # -----------------------------------------------------
-        # HARD LOCAL KNOWLEDGE GATE
-        # -----------------------------------------------------
-        #
-        # Ordinary factual questions NEVER enter LLMRouter.
-        # The local evidence itself is the answer.
-        # -----------------------------------------------------
-
-        if self._is_ordinary_knowledge_query(
-            question
-        ):
+        answer = self.answer_composer.compose(question, valid)
+        if answer and not self._is_bad_knowledge_content(answer):
             logger.info(
-                "[LocalKnowledge] Ordinary knowledge query "
-                "detected; external LLM synthesis skipped."
+                "[KnowledgeBrain] Answer composed locally from %d evidence record(s); "
+                "external LLM formatting/synthesis disabled.",
+                len(valid),
             )
-
-            for result in results:
-
-                content = str(
-                    result.get(
-                        "content",
-                        "",
-                    )
-                ).strip()
-
-                if self._is_bad_knowledge_content(
-                    content
-                ):
-                    continue
-
-                if content:
-                    logger.info(
-                        "[LocalKnowledge] Returning local evidence "
-                        "without LLM synthesis. source=%s",
-                        result.get(
-                            "source",
-                            "unknown",
-                        ),
-                    )
-
-                    # Include a source link for imported open-knowledge
-                    # records while preserving source-free built-in answers.
-                    source_url = str(result.get("url") or "").strip()
-                    source_title = str(result.get("title") or "").strip()
-                    source_name = str(result.get("source") or "").strip()
-
-                    if source_url and source_name in {
-                        "wikipedia", "wikidata", "open_knowledge"
-                    }:
-                        citation_label = source_title or source_name
-                        return (
-                            f"{content}\n\nSource: "
-                            f"{citation_label} — {source_url}"
-                        )
-
-                    return content
-
-            return (
-                "I couldn't find reliable local information "
-                "for that question."
-            )
-
-        # -----------------------------------------------------
-        # High-confidence non-ordinary evidence
-        # -----------------------------------------------------
-
-        if (
-            len(results) == 1
-            or results[0].get(
-                "confidence",
-                0,
-            ) > 0.92
-        ):
-            content = str(
-                results[0].get(
-                    "content",
-                    "",
-                )
-            ).strip()
-
-            if not self._is_bad_knowledge_content(
-                content
-            ):
-                return content
-
-        # -----------------------------------------------------
-        # Non-ordinary queries may use LLM synthesis.
-        #
-        # This is deliberately NOT reachable for ordinary
-        # factual questions.
-        # -----------------------------------------------------
-
-        if (
-            self.llm_router
-            and hasattr(
-                self.llm_router,
-                "chat",
-            )
-        ):
-
-            valid_results = [
-                r
-                for r in results[:5]
-                if not self._is_bad_knowledge_content(
-                    r.get(
-                        "content",
-                        "",
-                    )
-                )
-            ]
-
-            if not valid_results:
-                return (
-                    "I couldn't find reliable information "
-                    "for that request."
-                )
-
-            evidence_str = "\n\n".join(
-                f"Evidence ({r.get('source')}): "
-                f"{r.get('content')}"
-                for r in valid_results
-            )
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are ARIA, a helpful AI assistant. "
-                        "Synthesize only the provided evidence. "
-                        "Do not invent facts."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Question: {question}\n\n"
-                        f"{evidence_str}"
-                    ),
-                },
-            ]
-
-            try:
-                synth = await self.llm_router.chat(
-                    messages
-                )
-
-                if synth:
-                    synth = str(
-                        synth
-                    ).strip()
-
-                    if not self._is_bad_knowledge_content(
-                        synth
-                    ):
-                        return synth
-
-            except Exception:
-                logger.exception(
-                    "[KnowledgeManager] LLM synthesis failed; "
-                    "using local evidence."
-                )
-
-        return str(
-            results[0].get(
-                "content",
-                "",
-            )
-        ).strip()
+            return answer
+        return "I found records but could not safely compose a reliable answer from them."
 
     # =========================================================
     # Remember Answer
@@ -2007,32 +1786,21 @@ class KnowledgeManager:
         )
 
         # -----------------------------------------------------
-        # For ordinary knowledge:
-        #
-        # 1. local knowledge
-        # 2. local database
-        # 3. web fallback
-        # 4. no external LLM synthesis
+        # Unified evidence retrieval is followed by deterministic composition.
+        # Web search may add evidence when local confidence is insufficient;
+        # neither the local nor web evidence is rewritten by an answer LLM.
         # -----------------------------------------------------
 
         if await self.needs_web(
             results
         ):
 
-            web_res = await self.search_web(
-                question
-            )
+            web_results = await self.search_web(question)
 
-            if web_res:
-
-                results.insert(
-                    0,
-                    web_res,
-                )
-
-                results = await self.rank_results(
-                    results
-                )
+            if web_results:
+                results.extend(web_results)
+                results = await self.merge_results(results)
+                results = await self.rank_results(results)
 
         if not results:
             logger.info(
