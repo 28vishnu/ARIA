@@ -571,14 +571,22 @@ async def process_task(
     # -----------------------------------------------------
     # REFERENCE RESOLUTION
     # -----------------------------------------------------
+    # Explicit local-knowledge instructions must reach CognitiveCore
+    # unchanged. The reference resolver can otherwise rewrite a short
+    # follow-up before the deterministic local-knowledge gate sees it.
+    is_local_knowledge_instruction = False
+    try:
+        is_local_knowledge_instruction = bool(
+            ctx.cognitive_core
+            and ctx.cognitive_core._is_local_knowledge_instruction(user_text)
+        )
+    except Exception:
+        is_local_knowledge_instruction = False
 
-    if conversation_manager:
-
-        resolved_text = (
-            conversation_manager.resolve_reference(
-                session_id=session_id,
-                query=user_text,
-            )
+    if conversation_manager and not is_local_knowledge_instruction:
+        resolved_text = conversation_manager.resolve_reference(
+            session_id=session_id,
+            query=user_text,
         )
 
     # -----------------------------------------------------
