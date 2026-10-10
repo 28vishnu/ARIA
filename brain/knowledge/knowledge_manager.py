@@ -68,6 +68,22 @@ class KnowledgeManager:
             q = re.sub(pattern, replacement, q)
         if not q:
             return False
+        personal_markers = (
+            "my name", "my favorite", "my favourite", "what do you know about me",
+            "remember", "memorize", "save this", "store this", "don't forget",
+            "do not forget", "forget this", "forget that", "what did i tell you",
+            "what did i say", "what have i told you", "my college", "my password",
+        )
+        if any(marker in q for marker in personal_markers):
+            return False
+        explicit_online = any(marker in q for marker in (
+            "search the web", "search online", "search the internet", "browse online",
+            "look up online", "on the internet", "online sources", "live web search",
+        ))
+        # News is served from the locally ingested RSS corpus by default. Only an
+        # explicit request to search online should leave the local-first route.
+        if "news" in q and not explicit_online:
+            return True
         current_markers = (
             "latest", "current", "currently", "today", "tonight", "tomorrow",
             "right now", "this week", "this month", "this year", "breaking",
@@ -841,10 +857,10 @@ class KnowledgeManager:
                     "content": content[:3500],
                     "url": url,
                     "language": "en",
-                    "confidence": 0.88,
-                    "importance": 70,
-                    "relevance": 0.88,
-                    "freshness": 0.65,
+                    "confidence": 0.90 if source.lower().startswith("news") else 0.88,
+                    "importance": 85 if source.lower().startswith("news") else 70,
+                    "relevance": 0.95 if source.lower().startswith("news") else 0.88,
+                    "freshness": 0.98 if source.lower().startswith("news") else 0.65,
                     "verified": False,
                     "evidence_type": "open_dataset",
                     "provenance": url,
@@ -954,33 +970,15 @@ class KnowledgeManager:
             part for part in topic_parts[:3]
             if not has_topic_record(part, results)
         ]
-        fetched_summary = []
+        # Query-time retrieval is strictly local. Dataset acquisition and RSS
+        # refresh run through KnowledgeHub on an explicit/scheduled path; never
+        # call Wikipedia/Wikidata APIs while answering a user question.
         if missing_topics:
-            try:
-                from .open_knowledge import fetch_and_store_topic
-                for topic_part in missing_topics:
-                    try:
-                        part_result = await asyncio.to_thread(
-                            fetch_and_store_topic, db_path, topic_part
-                        )
-                        fetched_summary.append({
-                            "topic": topic_part,
-                            "result": part_result.get(
-                                "sources", part_result.get("reason", "completed")
-                            ),
-                        })
-                    except Exception as exc:
-                        logger.warning(
-                            "[LocalKnowledge] Could not bootstrap topic %r: %s",
-                            topic_part, exc,
-                        )
-                if fetched_summary:
-                    logger.info(
-                        "[LocalKnowledge] Wikimedia bootstrap for %r: %s",
-                        topic, fetched_summary,
-                    )
-            except Exception:
-                logger.exception("[LocalKnowledge] Wikimedia bootstrap unavailable for %r", topic)
+            logger.info(
+                "[LocalKnowledge] Missing local topic(s) %s; online API fetch skipped. "
+                "Use bulk dataset ingestion or wait for scheduled acquisition.",
+                missing_topics,
+            )
 
         # Re-query every component separately. This is essential because FTS
         # AND queries for "TCP and UDP" do not match two separate articles.
@@ -1009,13 +1007,22 @@ class KnowledgeManager:
             seen_keys.add(identity)
             merged_results.append(item)
 
-        merged_results.sort(
-            key=lambda item: (
-                0 if item.get("source") == "wikipedia" else
-                1 if item.get("source") == "wikidata" else 2,
-                -len(str(item.get("content") or "")),
+        if "news" in str(question or "").lower():
+            merged_results.sort(
+                key=lambda item: (
+                    0 if str(item.get("source") or "").lower().startswith("news") else 1,
+                    0 if re.search(r"Published:\s*20\d\d-", str(item.get("content") or "")) else 1,
+                    str(item.get("content") or ""),
+                )
             )
-        )
+        else:
+            merged_results.sort(
+                key=lambda item: (
+                    0 if item.get("source") == "wikipedia" else
+                    1 if item.get("source") == "wikidata" else 2,
+                    -len(str(item.get("content") or "")),
+                )
+            )
         if merged_results:
             logger.info(
                 "[LocalKnowledge] Retrieved %d open-corpus result(s)",
@@ -1587,6 +1594,16 @@ class KnowledgeManager:
             reverse=True,
         )
 
+    @staticmethod
+    def _get_local_answer_cache(question: str):
+        from brain.knowledge.knowledge_hub import get_cached_answer
+        return get_cached_answer(question)
+
+    @staticmethod
+    def _save_local_answer_cache(question: str, answer: str, evidence):
+        from brain.knowledge.knowledge_hub import cache_answer
+        return cache_answer(question, answer, evidence)
+
     # =========================================================
     # Unified Retrieval
     # =========================================================
@@ -1603,6 +1620,33 @@ class KnowledgeManager:
         working-memory sources are merged and ranked as one evidence set.
         Personal/episodic memory helpers already skip ordinary factual queries.
         """
+        # Exact-question cache is local and source-backed. It avoids repeating
+        # retrieval/composition for questions ARIA has already answered reliably.
+        try:
+            cached = None
+            if self._is_ordinary_knowledge_query(question):
+                cached = await asyncio.to_thread(self._get_local_answer_cache, question)
+            if cached and cached.get("answer"):
+                logger.info("[KnowledgeBrain] Exact local answer-cache hit; retrieval skipped.")
+                return [{
+                    "source": "local_answer_cache",
+                    "title": "Previously verified local answer",
+                    "content": str(cached["answer"]),
+                    "url": "",
+                    "confidence": 0.99,
+                    "importance": 95,
+                    "relevance": 1.0,
+                    "freshness": 0.95,
+                    "verified": True,
+                    "evidence_type": "cached_composed_answer",
+                    "local_knowledge": True,
+                    "cached_answer": True,
+                    "cache_sources": cached.get("sources", []),
+                    "external_llm_synthesis": False,
+                }]
+        except Exception:
+            logger.exception("[KnowledgeBrain] Local answer cache lookup failed; continuing retrieval.")
+
         local_fact = self._local_foundational_knowledge(question)
         if local_fact:
             logger.info(
@@ -1812,6 +1856,14 @@ class KnowledgeManager:
         results: List[Dict[str, Any]],
     ) -> str:
         """Compose a user-facing answer deterministically, never with an LLM."""
+        cached_item = next(
+            (item for item in (results or []) if isinstance(item, dict) and item.get("cached_answer")),
+            None,
+        )
+        if cached_item:
+            logger.info("[KnowledgeBrain] Returning cached local answer without recomposition.")
+            return str(cached_item.get("content") or "")
+
         valid = [
             item for item in (results or [])
             if isinstance(item, dict)
@@ -1828,6 +1880,11 @@ class KnowledgeManager:
                 "external LLM formatting/synthesis disabled.",
                 len(valid),
             )
+            try:
+                if self._is_ordinary_knowledge_query(question):
+                    await asyncio.to_thread(self._save_local_answer_cache, question, answer, valid)
+            except Exception:
+                logger.exception("[KnowledgeBrain] Could not cache composed local answer.")
             return answer
         return "I found records but could not safely compose a reliable answer from them."
 
