@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 from brain.knowledge.answer_composer import AnswerComposer
+from brain.knowledge.retrieval_coordinator import RetrievalCoordinator
 
 logger = logging.getLogger("aria")
 
@@ -49,6 +50,7 @@ class KnowledgeManager:
         self.event_bus = event_bus
         # Deterministic, non-LLM answer formatting over evidence from all stores.
         self.answer_composer = AnswerComposer()
+        self.retrieval_coordinator = RetrievalCoordinator()
 
     # =========================================================
     # Local Knowledge Safety
@@ -1199,15 +1201,7 @@ class KnowledgeManager:
                             "content": str(item),
                         }
 
-                    metadata = result.get("metadata")
-                    if not isinstance(metadata, dict):
-                        metadata = {}
-                    if not result.get("url"):
-                        result["url"] = metadata.get("url") or metadata.get("provenance") or ""
                     source_name = str(result.get("source", "knowledge_database") or "knowledge_database").strip().lower()
-                    if source_name == "web_search":
-                        result.setdefault("evidence_type", metadata.get("evidence_type", "search_excerpt"))
-                        result.setdefault("verified", False)
                     if self._is_ordinary_knowledge_query(question) and source_name in {
                         "conversation", "memory", "success", "working_memory",
                         "episodic_memory", "chat", "assistant_response",
@@ -1889,11 +1883,25 @@ class KnowledgeManager:
             return []
 
         try:
-            res = await self.web_search.execute({"query": question, "max_results": 5})
-            if not res or not getattr(res, "success", False):
-                return []
+            # The repository has two supported interfaces: WebSearchAction-style
+            # execute({"query": ...}) and SearchTool-style execute(query, context).
+            # Adapt by signature/TypeError rather than assuming one response shape.
+            try:
+                res = await self.web_search.execute({"query": question, "max_results": 5})
+            except (TypeError, AttributeError):
+                res = await self.web_search.execute(
+                    question,
+                    context={"max_results": 5, "requires_web": True},
+                )
 
-            data = getattr(res, "data", {})
+            if isinstance(res, dict):
+                if not res.get("success", True):
+                    return []
+                data = res.get("data") if isinstance(res.get("data"), dict) else res
+            else:
+                if not res or not getattr(res, "success", False):
+                    return []
+                data = getattr(res, "data", {})
             if not isinstance(data, dict):
                 data = {"content": str(data)}
 
@@ -2091,196 +2099,6 @@ class KnowledgeManager:
                     "[KnowledgeManager] Failed to learn answer"
                 )
 
-
-    @staticmethod
-    def _requires_fresh_online_evidence(question: str) -> bool:
-        """Current or explicitly online questions should not rely on stale corpus data."""
-        q = re.sub(r"\s+", " ", str(question or "").casefold())
-        markers = (
-            "latest", "current", "currently", "today", "tonight", "tomorrow",
-            "right now", "this week", "this month", "this year", "breaking",
-            "latest release", "current version", "news", "recent update",
-            "search online", "search the web", "search the internet",
-            "look up online", "on the internet",
-        )
-        return any(marker in q for marker in markers)
-
-    @staticmethod
-    def _evidence_is_sufficient(question: str, results: List[Dict[str, Any]]) -> bool:
-        """Conservative lexical sufficiency check; avoid treating any hit as a full answer."""
-        if not results:
-            return False
-        if any(item.get("cached_answer") for item in results if isinstance(item, dict)):
-            return True
-        from brain.knowledge.online_knowledge import topic_from_question
-
-        topic = topic_from_question(question)
-        tokens = {
-            token.casefold()
-            for token in re.findall(r"[\w'-]+", topic, flags=re.UNICODE)
-            if len(token) > 2 and token.casefold() not in {
-                "the", "and", "for", "with", "from", "into", "about", "between",
-                "example", "examples", "simple", "words", "terms", "explain",
-                "please", "give", "show", "tell", "what", "who", "why", "how",
-                "does", "can", "you", "are", "was", "were", "that", "this",
-            }
-        }
-        if not tokens:
-            return bool(results)
-        corpus = " ".join(
-            f"{item.get('title', '')} {item.get('content', '')}"
-            for item in results if isinstance(item, dict)
-        ).casefold()
-        covered = sum(1 for token in tokens if token in corpus)
-        # Compound/comparison questions need evidence for more than one concept.
-        compound = bool(re.search(r"\b(?:and|versus|vs\.?|compare|relationship|related)\b", question, re.I))
-        required = max(1, (len(tokens) + 1) // 2)
-        if compound:
-            required = max(2, required)
-        top = next((item for item in results if isinstance(item, dict)), {})
-        confidence = float(top.get("confidence", 0.5) or 0.0)
-        return covered >= min(required, len(tokens)) and confidence >= 0.40
-
-    async def _persist_online_to_durable_store(
-        self,
-        evidence: List[Dict[str, Any]],
-    ) -> int:
-        """Persist online excerpts in the existing Mongo-backed knowledge store when available."""
-        store = self.knowledge_database
-        if not store or not hasattr(store, "store"):
-            return 0
-        saved = 0
-        now = datetime.now(timezone.utc).isoformat()
-        seen = set()
-        for item in evidence or []:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "").strip()[:500]
-            content = str(item.get("content") or "").strip()[:12000]
-            url = str(item.get("url") or item.get("provenance") or "").strip()
-            if not title or len(content) < 40 or not url.startswith(("https://", "http://")):
-                continue
-            identity = (url.casefold(), content.casefold())
-            if identity in seen:
-                continue
-            seen.add(identity)
-            try:
-                record = await store.store(
-                    title=title,
-                    content=content,
-                    source="web_search",
-                    metadata={
-                        "url": url,
-                        "provenance": url,
-                        "evidence_type": "search_excerpt",
-                        "verification_status": "source_excerpt",
-                        "license": "Search-result excerpt; original page license not established",
-                        "retrieved_at": now,
-                        "external_llm_used": False,
-                    },
-                )
-                if record is not None:
-                    saved += 1
-            except Exception:
-                logger.exception(
-                    "[KnowledgeBrain] Durable online evidence write failed for %s", url
-                )
-        if saved:
-            logger.info(
-                "[KnowledgeBrain] Persisted %d online evidence excerpt(s) to durable knowledge store.",
-                saved,
-            )
-        return saved
-
-    async def _online_fallback(
-        self,
-        question: str,
-        *,
-        try_wikimedia: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """Search public sources, persist useful excerpts, and import Wikimedia topic data.
-
-        This path never calls an LLM. Search excerpts are stored with explicit
-        provenance and conservative license metadata; Wikimedia records are
-        imported through the existing resumable local corpus importer.
-        """
-        from brain.knowledge.online_knowledge import (
-            fetch_and_store_wikimedia,
-            store_search_evidence,
-            topic_from_question,
-        )
-
-        db_path = os.environ.get(
-            "ARIA_OPEN_KNOWLEDGE_DB",
-            "data/aria_open_knowledge.sqlite3",
-        )
-        topic = topic_from_question(question)
-        online: List[Dict[str, Any]] = []
-        try:
-            online = await self.search_web(question)
-        except Exception:
-            logger.exception("[KnowledgeBrain] Online fallback search failed.")
-
-        if online:
-            try:
-                stored = await asyncio.to_thread(
-                    store_search_evidence, db_path, online
-                )
-                logger.info(
-                    "[KnowledgeBrain] Persisted online evidence excerpts: %d",
-                    stored.get("processed", 0),
-                )
-            except Exception:
-                logger.exception("[KnowledgeBrain] Could not persist online search excerpts.")
-
-            try:
-                await self._persist_online_to_durable_store(online)
-            except Exception:
-                logger.exception("[KnowledgeBrain] Durable online evidence persistence failed.")
-
-        # A direct Wikimedia lookup works even when no search-provider key is
-        # configured. For freshness-sensitive questions, avoid treating an
-        # encyclopedia summary as current news or current-version evidence.
-        should_wikimedia = (
-            try_wikimedia
-            and bool(topic)
-            and not self._requires_fresh_online_evidence(question)
-            and (not online or len(online) < 2)
-        )
-        if should_wikimedia:
-            try:
-                result = await asyncio.to_thread(
-                    fetch_and_store_wikimedia, topic, db_path
-                )
-                logger.info(
-                    "[KnowledgeBrain] On-demand Wikimedia acquisition result: %s",
-                    result.get("processed", result.get("stored", 0)),
-                )
-            except Exception:
-                logger.exception("[KnowledgeBrain] On-demand Wikimedia acquisition failed.")
-
-        # Read newly persisted records back through the same local retrieval and
-        # relevance filters used by later questions.
-        try:
-            stored_results = await self.search_open_knowledge(question)
-        except Exception:
-            logger.exception("[KnowledgeBrain] Could not retrieve newly stored online evidence.")
-            stored_results = []
-
-        combined = []
-        seen = set()
-        for item in list(online or []) + list(stored_results or []):
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content") or "").strip()
-            url = str(item.get("url") or item.get("provenance") or "").strip()
-            identity = (url.casefold(), re.sub(r"\W+", " ", content.casefold()).strip())
-            if not content or identity in seen:
-                continue
-            seen.add(identity)
-            combined.append(item)
-        return combined
-
     # =========================================================
     # Main Answer Pipeline
     # =========================================================
@@ -2290,70 +2108,91 @@ class KnowledgeManager:
         session_id,
         question,
     ):
+        """Local-first deterministic answer pipeline with a safe evidence fallback.
 
-        question = str(
-            question or ""
-        ).strip()
-
+        Hosted LLMs are never called here. The coordinator first checks local
+        retrieval, then invokes the already-configured public search tool only
+        when local evidence is absent or insufficient.
+        """
+        question = str(question or "").strip()
         if not question:
             return None
 
-        results = await self.retrieve(session_id, question)
-        fresh_query = self._requires_fresh_online_evidence(question)
-        sufficient = self._evidence_is_sufficient(question, results)
+        async def local_retrieval(q):
+            return await self.retrieve(session_id, q)
 
-        # Local-first, online-on-demand: don't let a local miss terminate the
-        # request. Search online for missing/weak evidence and combine it with
-        # local records. Freshness-sensitive questions always check online.
-        if fresh_query or not sufficient:
+        async def online_retrieval(q):
+            return await self.search_web(q)
+
+        outcome = await self.retrieval_coordinator.retrieve(
+            question=question,
+            local_retriever=local_retrieval,
+            online_retriever=online_retrieval,
+            is_sufficient=self._has_sufficient_evidence,
+        )
+        results = outcome.evidence
+
+        if outcome.used_online:
             logger.info(
-                "[KnowledgeBrain] Online fallback triggered | local_records=%d "
-                "sufficient=%s fresh_query=%s",
-                len(results), sufficient, fresh_query,
+                "[RetrievalCoordinator] Local evidence %s; online fallback returned %d evidence record(s).",
+                "was insufficient" if outcome.local_evidence_count else "was absent",
+                len(results),
             )
-            try:
-                online_results = await self._online_fallback(
-                    question,
-                    try_wikimedia=not fresh_query,
-                )
-            except Exception:
-                logger.exception("[KnowledgeBrain] Online fallback pipeline failed.")
-                online_results = []
-
-            if online_results:
-                results = await self.rank_results(list(results or []) + online_results)
+        elif outcome.local_evidence_count:
+            logger.info(
+                "[RetrievalCoordinator] Local-first retrieval accepted %d evidence record(s); online search skipped.",
+                outcome.local_evidence_count,
+            )
 
         if not results:
             logger.info(
-                "[KnowledgeManager] Local and online retrieval exhausted; "
-                "no reliable evidence found for query=%r",
-                question,
+                "[RetrievalCoordinator] No sufficient local or online evidence found; returning an honest miss."
             )
             return (
-                "I couldn't find sufficiently reliable evidence for this question "
-                "in ARIA's local corpus or its available online sources. "
-                "Please try rephrasing the question or try again later."
+                "I couldn't find reliable evidence for this question in ARIA's local knowledge or configured web search. "
+                "I won't guess. Try rephrasing the topic or importing a trusted source."
             )
 
         final_answer = await self.best_answer(question, results)
-
-        if not final_answer:
-            return None
-
-        # -----------------------------------------------------
-        # Explicit safety check before returning the answer.
-        # -----------------------------------------------------
-
-        if self._is_bad_knowledge_content(
-            final_answer
-        ):
-            logger.warning(
-                "[KnowledgeManager] Final knowledge answer "
-                "was rejected as invalid."
-            )
-            return None
-
+        if not final_answer or self._is_bad_knowledge_content(final_answer):
+            logger.warning("[RetrievalCoordinator] Answer rejected by deterministic safety checks.")
+            return "I found source records but could not safely compose a reliable answer from them."
         return final_answer
+
+    @staticmethod
+    def _has_sufficient_evidence(results, question: str = "") -> bool:
+        """Conservative evidence gate: reject empty, failure, or clearly unrelated hits."""
+        if not isinstance(results, list):
+            return False
+        question_terms = {
+            token.casefold() for token in re.findall(r"[\w'-]+", RetrievalCoordinator.normalize_query(question))
+            if len(token) > 2 and token.casefold() not in RetrievalCoordinator.STOP_WORDS
+        }
+        valid = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not content or KnowledgeManager._is_bad_knowledge_content(content):
+                continue
+            if KnowledgeManager._is_non_factual_source(item.get("source"), item.get("evidence_type")):
+                continue
+            if item.get("cached_answer") or item.get("local_knowledge"):
+                valid.append(item)
+                continue
+            if not question_terms:
+                valid.append(item)
+                continue
+            haystack = (title + " " + content).casefold()
+            overlap = sum(1 for term in question_terms if term in haystack)
+            # A topic phrase in the title is strong evidence; otherwise require
+            # meaningful overlap instead of accepting a random FTS result.
+            title_terms = set(re.findall(r"[\w'-]+", title.casefold()))
+            title_overlap = len(question_terms & title_terms)
+            if title_overlap >= 1 or overlap >= min(2, len(question_terms)):
+                valid.append(item)
+        return bool(valid)
 
     # =========================================================
     # Learn New Knowledge
