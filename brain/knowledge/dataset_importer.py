@@ -30,7 +30,8 @@ import sys
 import zipfile
 from pathlib import Path
 from typing import Iterable, Iterator
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
+from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
 
 from brain.knowledge.open_knowledge import DEFAULT_DB, import_records
@@ -81,6 +82,12 @@ DATASETS = {
         "format": "OpenAlex works JSONL (.jsonl, .jsonl.gz, or JSON-lines .gz)",
         "license": "Review current OpenAlex terms; full snapshot is very large",
     },
+    "codingdocs": {
+        "description": "Offline programming-language and developer documentation in HTML, Markdown, text, PDF, or EPUB form.",
+        "url": "https://docs.python.org/3/download.html",
+        "format": "A single supported document or a directory tree of docs; pass --base-url to preserve canonical source links",
+        "license": "Varies by documentation project; preserve per-source license and attribution before importing or redistributing",
+    },
 }
 
 
@@ -114,6 +121,7 @@ def _record(source: str, source_id: str, title: str, content: str,
             "pubmed": "Metadata/abstract rights vary; verify record terms",
             "gutenberg": "Verify public-domain status and notices",
             "openalex": "Verify current OpenAlex snapshot terms",
+            "codingdocs": "Preserve each documentation project's license and attribution; verify before redistribution",
         }.get(source, "unknown"),
     }
 
@@ -267,8 +275,128 @@ def _text_or_html(path: Path, source: str) -> Iterator[dict]:
                           " ".join(chunk), DATASETS.get(source, {}).get("url", ""))
 
 
-def records_for(source: str, path: Path) -> Iterable[dict]:
+class _HTMLTextExtractor(HTMLParser):
+    """Small standard-library HTML text extractor that retains document title."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.in_title = False
+        self.title_parts = []
+        self.text_parts = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "title":
+            self.in_title = True
+        if tag in {"script", "style", "noscript", "svg"}:
+            self.skip_depth += 1
+        if tag in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "pre", "br"}:
+            self.text_parts.append("\n")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag == "title":
+            self.in_title = False
+        if tag in {"script", "style", "noscript", "svg"} and self.skip_depth:
+            self.skip_depth -= 1
+        if tag in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "pre", "br"}:
+            self.text_parts.append("\n")
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title_parts.append(data)
+        if not self.skip_depth:
+            self.text_parts.append(data)
+
+
+def _codingdocs(path: Path, base_url: str = "") -> Iterator[dict]:
+    """Import individual documentation pages with stable IDs and canonical URLs."""
+    supported = {".html", ".htm", ".md", ".markdown", ".txt", ".rst", ".pdf", ".epub"}
+    ignored_parts = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
+    files = [path] if path.is_file() else sorted(
+        item for item in path.rglob("*")
+        if item.is_file() and item.suffix.lower() in supported
+        and not any(part in ignored_parts for part in item.parts)
+    )
+    root = path.parent if path.is_file() else path
+    base = base_url.strip()
+    if base and not base.endswith("/"):
+        base += "/"
+    for file_path in files:
+        suffix = file_path.suffix.lower()
+        rel = file_path.name if path.is_file() else file_path.relative_to(root).as_posix()
+        if rel.startswith("files/en-us/"):
+            # MDN's source repository stores pages under files/en-us/<slug>.md;
+            # map these to the corresponding published /en-US/docs/<slug> URL.
+            rel = rel[len("files/en-us/"):]
+            rel = re.sub(r"\.(?:md|markdown)$", "", rel, flags=re.I)
+            rel = re.sub(r"(?:^|/)index$", "", rel, flags=re.I).strip("/")
+        elif suffix in {".md", ".markdown"}:
+            rel = re.sub(r"\.(?:md|markdown)$", "", rel, flags=re.I)
+        if suffix == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError as exc:
+                raise RuntimeError("PDF import requires pypdf; install requirements.txt") from exc
+            reader = PdfReader(str(file_path))
+            url = urljoin(base, quote(rel)) if base else ""
+            page_text = []
+            for page_number, page in enumerate(reader.pages, 1):
+                page_content = _clean(page.extract_text() or "")
+                if page_content:
+                    page_text.append((page_number, page_content))
+            digest = hashlib.sha1(rel.encode("utf-8")).hexdigest()[:20]
+            for index in range(0, len(page_text), 5):
+                group = page_text[index:index + 5]
+                content = "\n".join(f"[Page {number}] {text}" for number, text in group)
+                if content:
+                    yield _record("codingdocs", f"{digest}:pages:{group[0][0]}-{group[-1][0]}",
+                                  f"{file_path.stem} (pages {group[0][0]}-{group[-1][0]})", content, url)
+            continue
+        if suffix == ".epub":
+            for rec in _epub(file_path):
+                rec["source"] = "codingdocs"
+                rec["url"] = urljoin(base, quote(rel)) if base else ""
+                yield rec
+            continue
+        try:
+            raw = _open_text(file_path).read()
+        except (OSError, UnicodeError) as exc:
+            LOG.warning("Skipping unreadable documentation file %s: %s", file_path, exc)
+            continue
+        title = ""
+        if suffix in {".html", ".htm"}:
+            parser = _HTMLTextExtractor()
+            try:
+                parser.feed(raw)
+                title = _clean(" ".join(parser.title_parts))
+                raw = " ".join(parser.text_parts)
+            except Exception:
+                raw = _clean(raw)
+        else:
+            raw = re.sub(r"(?s)^---\s*\n.*?\n---\s*\n", "", raw, count=1)
+            raw = re.sub(r"!?(\[[^\]]*\])\([^)]*\)", r"\1", raw)
+            title_match = re.search(r"(?m)^#\s+(.+)$", raw)
+            title = _clean(title_match.group(1)) if title_match else ""
+        content = _clean(raw)
+        if len(content) < 40:
+            continue
+        title = title or file_path.stem.replace("_", " ").replace("-", " ")
+        url = urljoin(base, quote(rel)) if base else ""
+        digest = hashlib.sha1(rel.encode("utf-8")).hexdigest()[:20]
+        # Split long documents into bounded overlapping-ish chunks, preserving page title/URL.
+        for index, start in enumerate(range(0, len(content), 10_000), 1):
+            chunk = content[start:start + 10_000]
+            if len(chunk) < 40:
+                continue
+            chunk_title = title if index == 1 else f"{title} (part {index})"
+            yield _record("codingdocs", f"{digest}:{index}", chunk_title, chunk, url)
+
+
+def records_for(source: str, path: Path, base_url: str = "") -> Iterable[dict]:
     source = source.lower()
+    if source == "codingdocs":
+        return _codingdocs(path, base_url=base_url)
     if source == "stackexchange":
         return _stackexchange(path)
     if source == "pubmed":
@@ -292,6 +420,7 @@ def main(argv=None) -> int:
     imp.add_argument("--db", default=DEFAULT_DB)
     imp.add_argument("--limit", type=int, default=None)
     imp.add_argument("--batch-size", type=int, default=250)
+    imp.add_argument("--base-url", default="", help="Canonical base URL for codingdocs imports, e.g. https://docs.python.org/3/")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
@@ -299,13 +428,13 @@ def main(argv=None) -> int:
             print(json.dumps(DATASETS, ensure_ascii=False, indent=2))
             return 0
         path = Path(args.file).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError(f"Dataset file not found: {path}")
+        if not path.exists() or (not path.is_file() and not (args.source == "codingdocs" and path.is_dir())):
+            raise FileNotFoundError(f"Dataset file/directory not found: {path}")
         if args.source in {"wikipedia", "wikidata"}:
             raise ValueError(
                 f"Use `python -m brain.knowledge.open_knowledge {args.source} --dump \"{path}\" --db \"{args.db}\"`."
             )
-        result = import_records(args.db, records_for(args.source, path), args.limit, args.batch_size)
+        result = import_records(args.db, records_for(args.source, path, base_url=args.base_url), args.limit, args.batch_size)
         result.update({"source": args.source, "input_file": str(path.resolve())})
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
