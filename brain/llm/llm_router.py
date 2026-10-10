@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import os
 from typing import Any, Dict, List
 
 import httpx
@@ -24,6 +25,10 @@ class LLMRouter:
 
     def __init__(self, config):
         self.config = config
+        # Option A: strict no-LLM mode. It defaults ON so deployments do not
+        # silently call paid/free hosted model APIs. Set ARIA_STRICT_NO_LLM=0
+        # only if the owner intentionally changes this policy later.
+        self.strict_no_llm = os.getenv("ARIA_STRICT_NO_LLM", "1").strip().lower() not in {"0", "false", "no", "off"}
 
         self.groq_api_key = config.groq_api_key
         self.gemini_api_key = config.gemini_api_key
@@ -199,6 +204,10 @@ class LLMRouter:
         - Provider in cooldown: skip immediately.
         - Permanent failure: move to next provider.
         """
+
+        if self.strict_no_llm:
+            logger.info("[LLMRouter] Strict no-LLM mode enabled; no provider request was made.")
+            return None
 
         if not self.is_allowed_for_llm(context):
             logger.info(
@@ -1068,6 +1077,10 @@ class LLMRouter:
             RETRIEVAL_DOCUMENT -> when indexing document chunks
             RETRIEVAL_QUERY    -> when embedding a user's search/question
         """
+
+        if self.strict_no_llm:
+            logger.info("[LLMRouter] Strict no-LLM mode enabled; remote embeddings are disabled.")
+            return []
 
         if not self.gemini_api_key:
             raise RuntimeError(
