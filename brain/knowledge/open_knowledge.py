@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS documents (
     content TEXT NOT NULL,
     url TEXT NOT NULL,
     language TEXT NOT NULL DEFAULT 'en',
+    license TEXT NOT NULL DEFAULT 'unknown',
     imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source, source_id)
 );
@@ -72,6 +73,11 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(SCHEMA)
+    # Upgrade databases created by older ARIA versions without discarding records.
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(documents)")}
+    if "license" not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN license TEXT NOT NULL DEFAULT 'unknown'")
+        conn.commit()
 
     try:
         conn.execute("""
@@ -508,14 +514,15 @@ def import_records(
 
     sql = """
         INSERT INTO documents(
-            source, source_id, title, content, url, language
+            source, source_id, title, content, url, language, license
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, source_id) DO UPDATE SET
             title=excluded.title,
             content=excluded.content,
             url=excluded.url,
-            language=excluded.language
+            language=excluded.language,
+            license=excluded.license
     """
 
     try:
@@ -529,12 +536,24 @@ def import_records(
             source = clean_text(record.get("source") or "unknown")[:50]
             url = clean_text(record.get("url"))[:2000]
             language = clean_text(record.get("language") or "en")[:20]
+            default_licenses = {
+                "wikipedia": "CC BY-SA / GFDL; verify dump terms",
+                "wikidata": "CC0 structured data; verify dump terms",
+                "stackexchange": "CC BY-SA; preserve attribution",
+                "openstax": "Check individual textbook license",
+                "pubmed": "Metadata/abstract rights vary; verify record terms",
+                "gutenberg": "Verify public-domain status and notices",
+                "openalex": "Verify current OpenAlex snapshot terms",
+            }
+            license_name = clean_text(
+                record.get("license") or default_licenses.get(source, "unknown")
+            )[:200]
 
             if not title or not source_id or not content:
                 continue
 
             batch.append(
-                (source, source_id, title, content, url, language)
+                (source, source_id, title, content, url, language, license_name)
             )
             processed += 1
 
