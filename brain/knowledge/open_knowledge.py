@@ -26,6 +26,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 from pathlib import Path
@@ -427,48 +428,7 @@ def fetch_and_store_topic(
                 "language": language,
             })
     except Exception as exc:
-        LOG.warning("Wikipedia summary fetch failed for %r: %s; trying search API", topic, exc)
-        # The REST summary endpoint can miss acronyms, redirects, or be rate
-        # limited. Fall back to Wikipedia's Action API search + plaintext extract
-        # so one failed endpoint does not leave ARIA with only a Wikidata label.
-        try:
-            action_url = (
-                f"https://{language}.wikipedia.org/w/api.php?action=query"
-                "&format=json&generator=search&gsrnamespace=0&gsrlimit=3"
-                "&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url"
-                "&gsrsearch=" + quote(topic, safe="")
-            )
-            action_data = get_json(action_url)
-            pages = ((action_data.get("query") or {}).get("pages") or {})
-            candidates = sorted(
-                (page for page in pages.values() if isinstance(page, dict)),
-                key=lambda page: int(page.get("index", 9999)),
-            )
-            for page in candidates:
-                extract = clean_text(page.get("extract") or "")
-                title = clean_text(page.get("title") or topic)
-                if not extract or len(extract) < 80:
-                    continue
-                if "disambiguation" in title.lower() and len(candidates) > 1:
-                    continue
-                page_url = clean_text(page.get("fullurl") or "") or (
-                    f"https://{language}.wikipedia.org/wiki/"
-                    + quote(title.replace(" ", "_"), safe="()'!*~.-_")
-                )
-                records.append({
-                    "source": "wikipedia",
-                    "source_id": str(page.get("pageid") or title),
-                    "title": title,
-                    "content": extract,
-                    "url": page_url,
-                    "language": language,
-                })
-                break
-        except Exception as fallback_exc:
-            LOG.warning(
-                "Wikipedia search fallback failed for %r: %s",
-                topic, fallback_exc,
-            )
+        LOG.warning("Wikipedia topic fetch failed for %r: %s", topic, exc)
 
     try:
         search_url = (
@@ -685,6 +645,121 @@ def search(db_path: str, query: str, limit: int = 5) -> list[dict]:
         conn.close()
 
 
+
+# A compact starter corpus. Add more lines to a topics file for broader coverage.
+DEFAULT_SEED_TOPICS = [
+    "Photosynthesis", "Cellular respiration", "Chlorophyll", "Plant",
+    "Ecosystem", "Habitat", "Biosphere", "Food chain", "Evolution",
+    "DNA", "RNA", "Cell biology", "Human body", "Solar System",
+    "Earth", "Moon", "Sun", "Gravity", "Water", "Climate change",
+    "Computer", "Computer science", "Algorithm", "Data structure",
+    "Python (programming language)", "Java (programming language)",
+    "HTML", "CSS", "JavaScript", "Database", "SQL", "Operating system",
+    "Computer network", "Internet", "Transmission Control Protocol",
+    "User Datagram Protocol", "HTTP", "DNS", "Artificial intelligence",
+    "Machine learning", "Neural network", "Cybersecurity", "Cryptography",
+    "Mathematics", "Algebra", "Geometry", "Statistics", "Physics",
+    "Chemistry", "Biology", "History", "Geography", "Democracy",
+    "Economics", "Renewable energy", "Electricity", "Magnetism",
+    "Human brain", "Nutrition", "Exercise", "First aid",
+]
+
+
+def seed_topics(
+    db_path: str,
+    topics,
+    delay: float = 0.25,
+    timeout: int = 8,
+    limit: int | None = None,
+) -> dict:
+    """Acquire source-backed article summaries and persist them locally.
+
+    Network access happens only during this explicit ingestion operation, never
+    as part of answering a user query. Existing records are skipped to make
+    repeated runs idempotent and reduce unnecessary requests.
+    """
+    conn = connect(db_path)
+    try:
+        existing = {
+            str(row[0]).strip().casefold()
+            for row in conn.execute(
+                "SELECT title FROM documents WHERE source = 'wikipedia'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+
+    clean_topics = []
+    seen = set()
+    for item in topics or []:
+        topic = clean_text(item)
+        key = topic.casefold()
+        if topic and key not in seen:
+            seen.add(key)
+            clean_topics.append(topic)
+
+    if limit is not None:
+        clean_topics = clean_topics[:max(0, int(limit))]
+
+    totals = {
+        "status": "completed",
+        "database": str(Path(db_path).expanduser().resolve()),
+        "requested": len(clean_topics),
+        "skipped_existing": 0,
+        "stored_records": 0,
+        "failed_topics": [],
+        "topics": [],
+    }
+
+    for index, topic in enumerate(clean_topics, start=1):
+        if topic.casefold() in existing:
+            totals["skipped_existing"] += 1
+            continue
+
+        LOG.info("Seeding topic %d/%d: %s", index, len(clean_topics), topic)
+        try:
+            result = fetch_and_store_topic(
+                db_path=db_path,
+                topic=topic,
+                language="en",
+                timeout=timeout,
+            )
+        except Exception as exc:
+            LOG.warning("Topic acquisition failed for %r: %s", topic, exc)
+            result = {"stored": 0, "reason": str(exc)}
+
+        stored = int(result.get("processed") or result.get("stored") or result.get("changed") or 0)
+        totals["stored_records"] += stored
+        totals["topics"].append({"topic": topic, **result})
+        if stored <= 0:
+            totals["failed_topics"].append({
+                "topic": topic,
+                "reason": result.get("reason", "no_records_stored"),
+            })
+        if delay > 0 and index < len(clean_topics):
+            time.sleep(min(float(delay), 5.0))
+
+    # Recount actual records because UPSERT results may report processed rows.
+    conn = connect(db_path)
+    try:
+        totals["total_documents"] = int(
+            conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        )
+    finally:
+        conn.close()
+    return totals
+
+
+def read_topics_file(path: str):
+    topics = []
+    with open(path, "rt", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                topics.append(line)
+    return topics
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="ARIA local open-knowledge importer"
@@ -694,6 +769,28 @@ def build_parser():
 
     init = sub.add_parser("init", help="Initialize the database")
     init.add_argument("--db", default=DEFAULT_DB)
+
+    seed = sub.add_parser(
+        "seed",
+        help="Fetch a small set of free Wikimedia article summaries and store them locally",
+    )
+    seed.add_argument("--db", default=DEFAULT_DB)
+    seed.add_argument("--topics-file", default=None,
+                      help="Optional UTF-8 file containing one topic per line")
+    seed.add_argument("--limit", type=int, default=None,
+                      help="Limit number of topics processed")
+    seed.add_argument("--delay", type=float, default=0.25,
+                      help="Delay between topics in seconds")
+    seed.add_argument("--timeout", type=int, default=8,
+                      help="HTTP timeout per request in seconds")
+
+    fetch = sub.add_parser(
+        "fetch-topic",
+        help="Fetch one named topic now and save it to the local corpus",
+    )
+    fetch.add_argument("--db", default=DEFAULT_DB)
+    fetch.add_argument("--topic", required=True)
+    fetch.add_argument("--timeout", type=int, default=8)
 
     wiki = sub.add_parser(
         "wikipedia", help="Import a Wikipedia XML dump"
@@ -752,6 +849,26 @@ def main(argv=None) -> int:
                 "status": "ready",
                 "database": str(Path(args.db).resolve()),
             }
+
+        elif args.command == "seed":
+            topics = list(DEFAULT_SEED_TOPICS)
+            if args.topics_file:
+                topics.extend(read_topics_file(args.topics_file))
+            result = seed_topics(
+                db_path=args.db,
+                topics=topics,
+                delay=args.delay,
+                timeout=args.timeout,
+                limit=args.limit,
+            )
+
+        elif args.command == "fetch-topic":
+            result = fetch_and_store_topic(
+                db_path=args.db,
+                topic=args.topic,
+                timeout=args.timeout,
+            )
+            result["database"] = str(Path(args.db).expanduser().resolve())
 
         elif args.command == "wikipedia":
             if not Path(args.dump).is_file():
