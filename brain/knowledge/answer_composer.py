@@ -138,6 +138,57 @@ class AnswerComposer:
         if not valid:
             return "I couldn't find reliable information in ARIA's connected knowledge sources."
 
+        # News records have a structured title/content/url schema. Render them
+        # as a compact headline digest rather than exposing the importer fields
+        # ("Published:", "Feed:", "Headline:", "Summary:") as a raw paragraph.
+        question_lc = str(question or "").lower()
+        news_query = any(term in question_lc for term in (
+            "news", "latest", "breaking", "today", "recent developments",
+        ))
+        news_records = [
+            item for item, _content in valid
+            if str(item.get("source") or "").strip().lower() == "news"
+        ]
+        if news_query and news_records:
+            lines = ["Recent headlines stored in ARIA's local news corpus:"]
+            citations = []
+            seen_urls = set()
+            for item in news_records[:5]:
+                title = self._clean_text(item.get("title") or "")
+                raw_content = str(item.get("content") or "")
+                published = ""
+                summary = ""
+                for raw_line in raw_content.replace("\r", "").splitlines():
+                    line = raw_line.strip()
+                    if line.lower().startswith("published:"):
+                        published = self._clean_text(line.split(":", 1)[1])
+                    elif line.lower().startswith("summary:"):
+                        summary = self._clean_text(line.split(":", 1)[1])
+                if not title:
+                    match = re.search(r"(?im)^headline:\s*(.+)$", raw_content)
+                    title = self._clean_text(match.group(1)) if match else ""
+                if not title:
+                    continue
+                line = f"• {title}"
+                if published and published.lower() != "unknown publication date":
+                    line += f" — {published}"
+                if summary:
+                    summary = re.sub(r"^(?:article url|comments url|points):.*$", "", summary, flags=re.I)
+                    summary = re.sub(r"\s+", " ", summary).strip()
+                    if summary:
+                        if len(summary) > 280:
+                            summary = summary[:277].rsplit(" ", 1)[0] + "..."
+                        line += f"\n  Summary: {summary}"
+                lines.append(line)
+                url = self._valid_url(item.get("url") or item.get("source_url"))
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    citations.append(f"• {title} — {url}")
+            if citations:
+                lines.extend(["", "Sources:", *citations[:5]])
+            if len(lines) > 1:
+                return "\n".join(lines)[: self.max_answer_chars + 900]
+
         # A comparison must not collapse into whichever single encyclopedia
         # entity ranked first. The local foundational record is deliberately a
         # structured answer and cites the primary protocol specifications.
