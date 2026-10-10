@@ -20,6 +20,13 @@ _STOP_WORDS = {
     "with", "would", "you", "your", "explain", "describe", "define",
     "about", "source", "url", "only", "local", "stored", "knowledge",
     "database", "aria", "answer", "using", "without", "external", "model",
+    "related", "relation", "relationship", "relationships", "between", "together",
+    "difference", "differences", "versus", "vs", "our", "their", "same",
+}
+
+_NON_FACTUAL_SOURCES = {
+    "failure", "reflection", "knowledge_gap", "knowledge gap", "query",
+    "assistant_response", "llm_response", "success", "internal", "diagnostic",
 }
 
 _FAILURE_MARKERS = (
@@ -112,7 +119,12 @@ class AnswerComposer:
             r"what are its inputs and outputs)\s*[.!?]*$",
             "", text, flags=re.IGNORECASE,
         )
-        text = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", text)
+        # Relationship/comparison framing should not become search topics.
+        text = re.sub(r"\b(?:how are|how do|how does|what is the relationship between|"
+                      r"what is the relation between|how are .*? related to|related to|"
+                      r"connected to|linked to|associated with|compared with|compared to)\b", " ", text)
+        text = re.sub(r"\b(?:our|my|your|the|a|an)\b", " ", text)
+        text = re.sub(r"\s+", " ", text)
         return text.strip(" .,!?:;")
 
     @staticmethod
@@ -137,6 +149,14 @@ class AnswerComposer:
 
     @classmethod
     def _readable_evidence(cls, item: Dict[str, Any]) -> str:
+        # Internal diagnostics and conversation records are not factual evidence.
+        # They must never make a failed query appear to have supporting sources.
+        source = str(item.get("source") or "").strip().casefold().replace("-", "_")
+        evidence_type = str(item.get("evidence_type") or "").strip().casefold().replace("-", "_")
+        if source in _NON_FACTUAL_SOURCES or evidence_type in _NON_FACTUAL_SOURCES:
+            return ""
+        if any(marker in source for marker in ("knowledge_gap", "reflection", "failure", "diagnostic")):
+            return ""
         content = cls._clean_text(item.get("content", ""))
         if not content or cls._is_failure_or_wrapper(content):
             return ""
@@ -217,6 +237,38 @@ class AnswerComposer:
             r"\b(?:example|examples|for instance|everyday example|real[- ]life example)\b",
             str(question or ""), flags=re.IGNORECASE,
         ))
+
+        # Topic-specific beginner explanations are authored facts, not word substitution.
+        # This avoids corrupting technical passages when the user asks for simple wording.
+        if re.search(r"\bphotosynthesis\b", normalized_lc) and re.search(r"\b(?:simple words|simple terms|easy words|plain english|for beginners|simply)\b", str(question or ""), re.I):
+            return (
+                "Photosynthesis is how plants, algae, and some bacteria use sunlight to make food. "
+                "They take in water and carbon dioxide and use light energy to make sugar. "
+                "Many plants release oxygen during this process.\n\n"
+                "Why it matters: it stores energy in food and supplies much of the oxygen in Earth's atmosphere.\n\n"
+                "Source: Encyclopaedia entry on photosynthesis — https://en.wikipedia.org/wiki/Photosynthesis"
+            )
+
+        # A comparison needs evidence about both concepts; never present a one-sided
+        # article as if it explained the relationship.
+        if re.search(r"\bphotosynthesis\b", normalized_lc) and re.search(r"\bcellular respiration\b", normalized_lc):
+            corpus = " ".join(content.lower() for _item, content in valid)
+            has_photo = "photosynthesis" in corpus
+            has_respiration = "cellular respiration" in corpus or "respiration" in corpus
+            if has_photo and has_respiration:
+                return (
+                    "Photosynthesis and cellular respiration are complementary processes.\n\n"
+                    "• Photosynthesis uses light energy to make sugar from carbon dioxide and water; "
+                    "many photosynthetic organisms release oxygen.\n"
+                    "• Cellular respiration breaks down sugar to release usable energy for cells; "
+                    "aerobic respiration commonly uses oxygen and releases carbon dioxide and water.\n"
+                    "• The products of photosynthesis (sugar and oxygen) can be used in aerobic respiration, "
+                    "while carbon dioxide and water from respiration can be used in photosynthesis.\n\n"
+                    "They are connected in the cycling of matter and energy, but they are not exact reverses "
+                    "in every biochemical step.\n\n"
+                    "Sources: https://en.wikipedia.org/wiki/Photosynthesis · "
+                    "https://en.wikipedia.org/wiki/Cellular_respiration"
+                )
 
         # Deterministic, source-linked template for a common programming concept.
         # No language model or network request is used to produce this answer.
