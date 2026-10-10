@@ -98,6 +98,28 @@ class LearningEngine:
             )
             return None
 
+        # Conversation turns can contain a user's question concatenated with
+        # ARIA's generated answer. Do not ingest those mixed Q&A strings into
+        # the factual database; they belong in conversation history.
+        starts_as_question = bool(re.match(
+            r"^(?:what(?:'s| is| are| was| were)?|who(?:'s| is| are)?|"
+            r"why(?: is| are| does| do)?|how(?: is| are| does| do)?|"
+            r"explain|define|describe|difference between)\b",
+            text, re.IGNORECASE,
+        ))
+        has_source_trailer = bool(re.search(
+            r"\bSources?:\s*https?://|https?://[^\s]+", text, re.IGNORECASE
+        ))
+        if source_name in {"conversation", "chat", "user_conversation"} and (
+            (starts_as_question and len(text) > 180) or
+            (starts_as_question and has_source_trailer)
+        ):
+            self.statistics["rejected"] += 1
+            logger.warning(
+                "[LearningEngine] Rejected mixed question/answer conversation from factual store."
+            )
+            return None
+
         if not self._should_learn(text):
             return
 
