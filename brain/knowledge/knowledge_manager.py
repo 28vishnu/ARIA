@@ -850,6 +850,9 @@ class KnowledgeManager:
                     continue
                 if KnowledgeManager._is_bad_knowledge_content(content):
                     continue
+                is_news = source.lower().startswith("news") or bool(
+                    re.search(r"\b(?:headline|feed):\s*|\bPublished:\s*20\d\d-", content, re.IGNORECASE)
+                )
                 results.append({
                     "source": source,
                     "source_id": str(row["source_id"] or ""),
@@ -857,10 +860,12 @@ class KnowledgeManager:
                     "content": content[:3500],
                     "url": url,
                     "language": "en",
-                    "confidence": 0.90 if source.lower().startswith("news") else 0.88,
-                    "importance": 85 if source.lower().startswith("news") else 70,
-                    "relevance": 0.95 if source.lower().startswith("news") else 0.88,
-                    "freshness": 0.98 if source.lower().startswith("news") else 0.65,
+                    # Freshness should not make news outrank an encyclopedia
+                    # article for a stable, non-current factual question.
+                    "confidence": 0.68 if is_news else 0.88,
+                    "importance": 45 if is_news else 70,
+                    "relevance": 0.45 if is_news else 0.88,
+                    "freshness": 0.98 if is_news else 0.65,
                     "verified": False,
                     "evidence_type": "open_dataset",
                     "provenance": url,
@@ -929,16 +934,22 @@ class KnowledgeManager:
 
         topic = re.sub(
             r"^\s*(?:what is the difference between|what is a difference between|"
-            r"difference between|compare|what is|what are|what does|what do|"
-            r"who is|who are|where is|where are|when is|when was|why is|why are|"
-            r"why does|why do|how is|how are|how does|how do|define|explain|"
-            r"describe|tell me about)\s+",
+            r"difference between|compare|explain|define|describe|tell me about|"
+            r"what is|what are|what does|what do|who is|who are|where is|where are|"
+            r"when is|when was|why is|why are|why does|why do|how is|how are|"
+            r"how does|how do)\s+",
             "", normalized_question, flags=re.IGNORECASE,
         ).strip(" \t.,;:!?")
+        # These phrases describe the desired answer style, not a different topic.
         topic = re.sub(
-            r"\s+(?:and give|and provide|provide the source|give the source|with source).*?$",
+            r"\s+(?:in simple words|in simple terms|in easy words|simply|"
+            r"for beginners|in detail|in brief|briefly|in short|"
+            r"and give|and provide|provide the source|give the source|with source).*?$",
             "", topic, flags=re.IGNORECASE,
         ).strip(" \t.,;:!?")
+        # Remove non-informative possessive/determiner prefixes without damaging
+        # meaningful topic names such as "The Solar System".
+        topic = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", topic, flags=re.IGNORECASE)
 
         if not topic or len(topic) > 180:
             if results:
@@ -997,20 +1008,59 @@ class KnowledgeManager:
 
         seen_keys = set()
         merged_results: List[Dict[str, Any]] = []
+        explicit_news_query = bool(re.search(r"\b(news|headlines|latest developments)\b", question, re.IGNORECASE))
+        query_terms = {
+            token.casefold()
+            for token in re.findall(r"[\w'-]+", topic, flags=re.UNICODE)
+            if len(token) > 2
+        }
         for item in gathered:
+            source_name = str(item.get("source") or "").strip().casefold()
+            title_text = str(item.get("title") or "").strip()
+            content_text = str(item.get("content") or "").strip()
+
+            # RSS records are useful for news questions, but their broad FTS
+            # matches (e.g. "solar" in a solar-roof headline) must not pollute
+            # stable factual answers.
+            if not explicit_news_query and (
+                source_name.startswith("news")
+                or source_name in {"bbc_science", "bbc_technology", "hacker_news"}
+                or re.search(r"\b(?:headline|feed):\s*|\bPublished:\s*20\d\d-", content_text, re.IGNORECASE)
+            ):
+                continue
+
+            # Require a meaningful topic overlap. This prevents a single shared
+            # word in a long query from making an unrelated article look relevant.
+            title_terms = {
+                token.casefold()
+                for token in re.findall(r"[\w'-]+", title_text, flags=re.UNICODE)
+                if len(token) > 2
+            }
+            content_terms = {
+                token.casefold()
+                for token in re.findall(r"[\w'-]+", content_text, flags=re.UNICODE)
+                if len(token) > 2
+            }
+            title_overlap = len(query_terms & title_terms)
+            content_overlap = len(query_terms & content_terms)
+            if query_terms and title_overlap == 0 and content_overlap == 0:
+                continue
+
             identity = (
                 str(item.get("url") or item.get("source_url") or ""),
-                re.sub(r"\W+", " ", str(item.get("content") or "").lower()).strip(),
+                re.sub(r"\W+", " ", content_text.lower()).strip(),
             )
             if identity in seen_keys:
                 continue
             seen_keys.add(identity)
+            item["_query_title_overlap"] = title_overlap
+            item["_query_content_overlap"] = content_overlap
             merged_results.append(item)
 
-        if "news" in str(question or "").lower():
+        if explicit_news_query:
             merged_results.sort(
                 key=lambda item: (
-                    0 if str(item.get("source") or "").lower().startswith("news") else 1,
+                    -int(item.get("_query_title_overlap", 0)),
                     0 if re.search(r"Published:\s*20\d\d-", str(item.get("content") or "")) else 1,
                     str(item.get("content") or ""),
                 )
@@ -1018,11 +1068,16 @@ class KnowledgeManager:
         else:
             merged_results.sort(
                 key=lambda item: (
-                    0 if item.get("source") == "wikipedia" else
-                    1 if item.get("source") == "wikidata" else 2,
+                    -int(item.get("_query_title_overlap", 0)),
+                    -int(item.get("_query_content_overlap", 0)),
+                    0 if str(item.get("source") or "").casefold() == "wikipedia" else
+                    1 if str(item.get("source") or "").casefold() == "wikidata" else 2,
                     -len(str(item.get("content") or "")),
                 )
             )
+        for item in merged_results:
+            item.pop("_query_title_overlap", None)
+            item.pop("_query_content_overlap", None)
         if merged_results:
             logger.info(
                 "[LocalKnowledge] Retrieved %d open-corpus result(s)",
