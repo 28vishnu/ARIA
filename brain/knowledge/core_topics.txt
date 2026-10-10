@@ -1,0 +1,95 @@
+# Add one topic/article title per line. These are appended to built-in starter topics.
+Photosynthesis
+Cellular respiration
+Chloroplast
+Mitosis
+Meiosis
+Genetics
+Natural selection
+Biodiversity
+Ecology
+Water cycle
+Carbon cycle
+Periodic table
+Chemical reaction
+Atomic theory
+Quantum mechanics
+Relativity
+Thermodynamics
+Electromagnetism
+Calculus
+Linear algebra
+Probability theory
+Graph theory
+Big O notation
+Binary search
+Sorting algorithm
+Linked list
+Stack (abstract data type)
+Queue (abstract data type)
+Hash table
+Tree (data structure)
+Graph (abstract data type)
+Compiler
+Operating system
+Process (computing)
+Thread (computing)
+Computer memory
+Computer security
+Computer virus
+Machine learning
+Deep learning
+Natural language processing
+Large language model
+Robotics
+Computer vision
+Version control
+Git
+GitHub
+REST
+API
+JSON
+Python (programming language)
+C (programming language)
+C++
+Java (programming language)
+TypeScript
+React (JavaScript library)
+Node.js
+MongoDB
+SQLite
+PostgreSQL
+TCP/IP
+OSI model
+Ethernet
+Wi-Fi
+HTTP
+HTTPS
+DNS
+IP address
+Encryption
+Public-key cryptography
+Blockchain
+Solar energy
+Wind power
+Nuclear power
+Electric vehicle
+Human heart
+Blood
+Immune system
+Digestive system
+Respiratory system
+Sleep
+Balanced diet
+Mental health
+World War II
+Industrial Revolution
+Indian independence movement
+Constitution of India
+United Nations
+Climate
+Weather
+Ocean
+Plate tectonics
+Volcano
+Earthquake
