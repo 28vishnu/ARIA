@@ -50,6 +50,38 @@ class CodingEngine:
         if CodingEngine._has(q, r"binary search") and CodingEngine._has(q, r"python"):
             return ('Binary search works on a **sorted** list and runs in O(log n) time.\n\n'
                     '```python\ndef binary_search(values, target):\n    low, high = 0, len(values) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if values[mid] == target:\n            return mid\n        if values[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1\n\nassert binary_search([1, 3, 5, 7], 5) == 2\nassert binary_search([1, 3, 5, 7], 2) == -1\n```\n\nReference: https://docs.python.org/3/library/bisect.html')
+        if (CodingEngine._has(q, r"prime") and CodingEngine._has(q, r"python")) or CodingEngine._has(q, r"check whether a number is prime", r"is a number prime"):
+            return ('A prime number is an integer greater than 1 with exactly two positive divisors: 1 and itself. '
+                    'This implementation checks divisors only up to the square root of `n`, so it runs in O(\u221an) time.\n\n'
+                    '```python\n'
+                    'def is_prime(n):\n'
+                    '    if not isinstance(n, int) or isinstance(n, bool):\n'
+                    '        raise TypeError("n must be an integer")\n'
+                    '    if n < 2:\n'
+                    '        return False\n'
+                    '    if n == 2:\n'
+                    '        return True\n'
+                    '    if n % 2 == 0:\n'
+                    '        return False\n'
+                    '    divisor = 3\n'
+                    '    while divisor * divisor <= n:\n'
+                    '        if n % divisor == 0:\n'
+                    '            return False\n'
+                    '        divisor += 2\n'
+                    '    return True\n\n'
+                    '# Tests\n'
+                    'assert not is_prime(-7)\n'
+                    'assert not is_prime(0)\n'
+                    'assert not is_prime(1)\n'
+                    'assert is_prime(2)\n'
+                    'assert is_prime(3)\n'
+                    'assert not is_prime(9)\n'
+                    'assert is_prime(97)\n'
+                    'assert not is_prime(100)\n'
+                    'print("All prime tests passed")\n'
+                    '```\n\n'
+                    'The function returns `False` for integers below 2 and raises `TypeError` for non-integer inputs.')
+
         if CodingEngine._has(q, r"factorial") and CodingEngine._has(q, r"python"):
             return ('This iterative implementation rejects negative inputs and defines 0! = 1.\n\n'
                     '```python\ndef factorial(n):\n    if not isinstance(n, int) or isinstance(n, bool):\n        raise TypeError("n must be an integer")\n    if n < 0:\n        raise ValueError("n must be non-negative")\n    result = 1\n    for value in range(2, n + 1):\n        result *= value\n    return result\n\nassert factorial(0) == 1\nassert factorial(5) == 120\n```')
