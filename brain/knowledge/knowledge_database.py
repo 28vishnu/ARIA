@@ -183,6 +183,15 @@ class KnowledgeDatabase:
         source = self._safe_text(source, 200)
         metadata = self._safe_metadata(metadata)
 
+        # Provider/assistant "success" records are generated outputs, not trusted
+        # source material. Keep them out of the factual knowledge brain.
+        if source.strip().lower() in {"success", "assistant_response", "llm_response"}:
+            logger.warning(
+                "[KnowledgeDB] Rejected generated response from source=%s",
+                source,
+            )
+            return None
+
         if self._is_rejected_learning_payload(title, content):
             logger.warning(
                 "[KnowledgeDB] Rejected failure/wrapper payload; it was not stored as knowledge."
