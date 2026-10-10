@@ -51,6 +51,7 @@ class CodeGenerationRouter:
         allow_fallback: bool | None = None,
     ) -> None:
         self.config = config
+        self.strict_no_llm = os.getenv("ARIA_STRICT_NO_LLM", "1").strip().lower() not in {"0", "false", "no", "off"}
         self.provider = self._normalize_provider(
             provider or os.getenv("ARIA_CODEGEN_PROVIDER", self.DEFAULT_PROVIDER)
         )
@@ -328,7 +329,16 @@ class CodeGenerationRouter:
         task: str = "coding",
         context: dict[str, Any] | None = None,
     ) -> str:
-        """Generate code using only the dedicated coding provider route."""
+        """Generate code unless strict no-LLM mode forbids all model inference."""
+        if self.strict_no_llm:
+            logger.info(
+                "[Phase1][CodeGenerationRouter] Strict no-LLM mode enabled; "
+                "hosted and local model inference are disabled."
+            )
+            raise RuntimeError(
+                "ARIA strict no-LLM mode is enabled. Arbitrary autonomous code generation "
+                "is unavailable; use the deterministic coding engine and verified local documentation."
+            )
         temperature = max(0.0, min(1.0, float(temperature)))
         max_tokens = max(1024, min(8192, int(max_tokens)))
 
