@@ -56,64 +56,36 @@ class KnowledgeManager:
 
     @staticmethod
     def _is_ordinary_knowledge_query(question: str) -> bool:
-        """
-        Detect normal factual / educational questions.
-
-        These queries are owned by the local knowledge system.
-        They must not invoke:
-            - personal-memory relevance LLMs
-            - external answer-generation LLMs
-            - personality LLM synthesis
-
-        Current/live requests are intentionally excluded.
-        """
-        q = str(question or "").strip().lower()
-
+        """Recognize stable factual questions that must use local retrieval only."""
+        q = re.sub(r"\s+", " ", str(question or "").strip().lower()).replace("’", "'")
+        for pattern, replacement in (
+            (r"^what's\b", "what is"), (r"^whats\b", "what is"),
+            (r"^who's\b", "who is"), (r"^whos\b", "who is"),
+            (r"^where's\b", "where is"), (r"^wheres\b", "where is"),
+            (r"^when's\b", "when is"), (r"^whens\b", "when is"),
+            (r"^how's\b", "how is"), (r"^hows\b", "how is"),
+        ):
+            q = re.sub(pattern, replacement, q)
         if not q:
             return False
-
         current_markers = (
-            "latest",
-            "current",
-            "today",
-            "now",
-            "recent",
-            "this week",
-            "this month",
-            "this year",
-            "breaking",
-            "online",
-            "search the web",
-            "look up",
-            "on the internet",
+            "latest", "current", "currently", "today", "tonight", "tomorrow",
+            "right now", "this week", "this month", "this year", "breaking",
+            "online", "search the web", "look up", "on the internet", "recent",
         )
-
         if any(marker in q for marker in current_markers):
             return False
-
         prefixes = (
-            "what is ",
-            "what are ",
-            "what does ",
-            "what do ",
-            "what was ",
-            "what were ",
-            "why is ",
-            "why are ",
-            "why does ",
-            "why do ",
-            "how does ",
-            "how do ",
-            "how is ",
-            "how are ",
-            "explain ",
-            "define ",
-            "describe ",
-            "tell me about ",
-            "difference between ",
+            "what is ", "what are ", "what does ", "what do ", "what was ",
+            "what were ", "who is ", "who are ", "where is ", "where are ",
+            "when is ", "when was ", "why is ", "why are ", "why does ",
+            "why do ", "how does ", "how do ", "how is ", "how are ",
+            "explain ", "define ", "describe ", "tell me about ",
+            "difference between ", "compare ",
         )
-
-        return q.startswith(prefixes)
+        if q.startswith(prefixes):
+            return True
+        return (" vs " in f" {q} " or " versus " in f" {q} ") and ("?" in q or q.endswith(("tcp", "udp")))
 
     @staticmethod
     def _is_bad_knowledge_content(content: str) -> bool:
@@ -877,10 +849,14 @@ class KnowledgeManager:
         # Wikimedia's public APIs (never from an LLM), persist both source records,
         # and retry against SQLite. Subsequent requests are local-only hits.
         if not results and self._is_ordinary_knowledge_query(question):
+            normalized_question = re.sub(r"\s+", " ", str(question or "").strip()).replace("’", "'")
+            normalized_question = re.sub(r"^what's\b", "what is", normalized_question, flags=re.IGNORECASE)
+            normalized_question = re.sub(r"^whats\b", "what is", normalized_question, flags=re.IGNORECASE)
+            normalized_question = re.sub(r"^who's\b", "who is", normalized_question, flags=re.IGNORECASE)
             topic = re.sub(
-                r"^\s*(?:what is|who is|where is|when is|define|explain|describe|tell me about|what are|who are)\s+",
+                r"^\s*(?:what is|who is|where is|when is|define|explain|describe|tell me about|what are|who are|where are|why is|how is|how are)\s+",
                 "",
-                str(question or ""),
+                normalized_question,
                 flags=re.IGNORECASE,
             ).strip(" \t.,;:!?")
             topic = re.sub(
@@ -893,22 +869,56 @@ class KnowledgeManager:
                 try:
                     from .open_knowledge import fetch_and_store_topic
 
-                    fetched = await asyncio.to_thread(
-                        fetch_and_store_topic,
-                        db_path,
-                        topic,
-                    )
+                    # Compound factual questions should seed each named topic,
+                    # e.g. "TCP and UDP", instead of searching that whole phrase
+                    # as if it were one encyclopedia article.
+                    topic_parts = [topic]
+                    compound = re.fullmatch(r"(.+?)\s+(?:and|vs\.?|versus)\s+(.+)", topic, flags=re.IGNORECASE)
+                    if compound:
+                        topic_parts = [compound.group(1).strip(), compound.group(2).strip()]
+                    fetched = {"sources": []}
+                    for topic_part in topic_parts[:3]:
+                        if not topic_part:
+                            continue
+                        part_result = await asyncio.to_thread(
+                            fetch_and_store_topic,
+                            db_path,
+                            topic_part,
+                        )
+                        fetched["sources"].append({
+                            "topic": topic_part,
+                            "result": part_result.get("sources", part_result.get("reason", "completed")),
+                        })
                     logger.info(
                         "[LocalKnowledge] Wikimedia bootstrap for %r: %s",
                         topic,
                         fetched.get("sources", fetched.get("reason", "completed")),
                     )
-                    results = await asyncio.to_thread(
-                        self._search_open_knowledge_sync,
-                        question,
-                        db_path,
-                        5,
-                    )
+                    # Search each seeded topic separately. A combined FTS query
+                    # like "TCP and UDP" may require both terms in one document,
+                    # even though the evidence correctly lives in two articles.
+                    gathered = []
+                    search_terms = topic_parts if len(topic_parts) > 1 else [question]
+                    for search_term in search_terms:
+                        part_results = await asyncio.to_thread(
+                            self._search_open_knowledge_sync,
+                            search_term,
+                            db_path,
+                            5,
+                        )
+                        if part_results:
+                            gathered.extend(part_results)
+                    seen_keys = set()
+                    results = []
+                    for item in gathered:
+                        identity = (
+                            str(item.get("url") or item.get("source_url") or ""),
+                            re.sub(r"\W+", " ", str(item.get("content") or "").lower()).strip(),
+                        )
+                        if identity in seen_keys:
+                            continue
+                        seen_keys.add(identity)
+                        results.append(item)
                 except Exception:
                     logger.exception(
                         "[LocalKnowledge] Wikimedia bootstrap failed for %r",
@@ -967,6 +977,17 @@ class KnowledgeManager:
                             "freshness": 0.7,
                             "content": str(item),
                         }
+
+                    source_name = str(result.get("source", "knowledge_database") or "knowledge_database").strip().lower()
+                    if self._is_ordinary_knowledge_query(question) and source_name in {
+                        "conversation", "memory", "success", "working_memory",
+                        "episodic_memory", "chat", "assistant_response",
+                    }:
+                        logger.info(
+                            "[KnowledgeBrain] Ignored unverified %s record for factual query.",
+                            source_name,
+                        )
+                        continue
 
                     if self._is_bad_knowledge_content(
                         result.get("content", "")
@@ -1505,15 +1526,29 @@ class KnowledgeManager:
                 logger.exception("[KnowledgeBrain] %s retrieval failed", label)
                 return []
 
-        working, memory, knowledge, graph, world, documents, skills = await asyncio.gather(
-            safe_call("working memory", self.search_working_memory(question)),
-            safe_call("memory", self.search_memory(question)),
-            safe_call("knowledge database/Wikipedia/Wikidata", self.search_database(question)),
-            safe_call("knowledge graph", self.search_graph(question)),
-            safe_call("world model", self.search_world(question)),
-            safe_call("documents", self.search_documents(session_id, question)),
-            safe_call("skills", self.search_skills(question)),
-        )
+        if self._is_ordinary_knowledge_query(question):
+            # Ordinary facts must not be sourced from episodic chat memory or
+            # executable skills. Use the shared factual brain: SQLite corpus,
+            # trusted knowledge DB, graph, world model, and explicitly active docs.
+            working, memory, knowledge, graph, world, documents, skills = await asyncio.gather(
+                asyncio.sleep(0, result=[]),
+                asyncio.sleep(0, result=[]),
+                safe_call("knowledge database/Wikipedia/Wikidata", self.search_database(question)),
+                safe_call("knowledge graph", self.search_graph(question)),
+                safe_call("world model", self.search_world(question)),
+                asyncio.sleep(0, result=[]),
+                asyncio.sleep(0, result=[]),
+            )
+        else:
+            working, memory, knowledge, graph, world, documents, skills = await asyncio.gather(
+                safe_call("working memory", self.search_working_memory(question)),
+                safe_call("memory", self.search_memory(question)),
+                safe_call("knowledge database/Wikipedia/Wikidata", self.search_database(question)),
+                safe_call("knowledge graph", self.search_graph(question)),
+                safe_call("world model", self.search_world(question)),
+                safe_call("documents", self.search_documents(session_id, question)),
+                safe_call("skills", self.search_skills(question)),
+            )
 
         merged = await self.merge_results(
             [local_fact] if local_fact else [],
