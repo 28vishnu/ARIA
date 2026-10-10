@@ -666,10 +666,38 @@ class CognitiveCore:
         conversation: Any = None,
         context: Any = None,
     ) -> str:
-        """Resolve a local-knowledge follow-up to the active conversation topic."""
-        instruction = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        """Resolve a local-knowledge follow-up without discarding explicit topics.
+
+        A request may contain both a topic and instructions to use local knowledge
+        or provide a URL. In that case, route the actual topic to KnowledgeManager
+        instead of treating the entire message as a context-only follow-up.
+        """
+        raw_query = re.sub(r"\s+", " ", str(query or "").strip())
+        instruction = raw_query.lower()
         if not CognitiveCore._is_local_knowledge_instruction(instruction):
-            return str(query or "").strip()
+            return raw_query
+
+        # Remove answer-style directives while preserving a real question in the
+        # same message, e.g. "Answer using local knowledge: What is X? Provide URL".
+        explicit_topic = raw_query
+        directive_patterns = (
+            r"\banswer\s+using\s+(?:your\s+)?(?:locally\s+stored|local)\s+knowledge\b[:,; ]*",
+            r"\banswer\s+from\s+(?:your\s+)?local\s+knowledge\b[:,; ]*",
+            r"\buse\s+(?:your\s+)?(?:locally\s+stored|local)\s+knowledge\b[:,; ]*",
+            r"\bfrom\s+your\s+local\s+knowledge\b[:,; ]*",
+            r"\b(?:and\s+)?(?:please\s+)?(?:provide|give|show|include)\s+(?:me\s+)?(?:the\s+)?source\s+urls?\b[.!? ]*",
+            r"\b(?:and\s+)?(?:please\s+)?cite\s+(?:the\s+)?source\s+urls?\b[.!? ]*",
+        )
+        for pattern in directive_patterns:
+            explicit_topic = re.sub(pattern, " ", explicit_topic, flags=re.IGNORECASE)
+        explicit_topic = re.sub(r"\s+", " ", explicit_topic).strip(" \t,;:-")
+        explicit_topic = re.sub(r"^(?:and|then)\s+", "", explicit_topic, flags=re.IGNORECASE).strip()
+        if explicit_topic and explicit_topic.lower() != instruction:
+            # Only bypass conversational resolution when meaningful subject text
+            # remains after removing the directives.
+            meaningful = re.sub(r"[^a-z0-9]+", "", explicit_topic.lower())
+            if len(meaningful) >= 5:
+                return explicit_topic
 
         containers = [conversation, context]
         preferred_keys = (
