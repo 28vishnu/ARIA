@@ -77,6 +77,18 @@ class LearningEngine:
             return
 
         text = text.strip()
+        source_name = str(source or "conversation").strip().lower()
+
+        # Do not promote a generated assistant answer into factual knowledge.
+        # User-facing answers belong in conversation history; source-backed facts
+        # should enter through Wikipedia, Wikidata, documents, or verified imports.
+        if source_name in {"success", "assistant_response", "llm_response"}:
+            self.statistics["rejected"] += 1
+            logger.warning(
+                "[LearningEngine] Rejected generated response as factual knowledge from source=%s",
+                source_name,
+            )
+            return None
 
         if self._is_untrusted_failure_or_wrapper(text):
             self.statistics["rejected"] += 1
