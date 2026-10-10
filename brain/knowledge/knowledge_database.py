@@ -3,6 +3,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from uuid import uuid4
 import asyncio
+import re
 
 try:
     from brain.embeddings import get_embedding
@@ -195,6 +196,30 @@ class KnowledgeDatabase:
         if self._is_rejected_learning_payload(title, content):
             logger.warning(
                 "[KnowledgeDB] Rejected failure/wrapper payload; it was not stored as knowledge."
+            )
+            return None
+
+        # A completed Q&A turn can be sent here with source="conversation".
+        # It must remain in conversation history instead of becoming a factual
+        # record (which can later outrank real source-backed knowledge).
+        source_name = source.strip().lower()
+        lower_content = content.strip().lower()
+        starts_as_question = bool(re.match(
+            r"^(?:what(?:'s| is| are| was| were)?|who(?:'s| is| are)?|"
+            r"why(?: is| are| does| do)?|how(?: is| are| does| do)?|"
+            r"explain|define|describe|difference between)\b",
+            lower_content,
+        ))
+        has_source_trailer = bool(re.search(
+            r"\bSources?:\s*https?://|https?://[^\s]+",
+            lower_content,
+        ))
+        if source_name in {"conversation", "chat", "user_conversation"} and (
+            (starts_as_question and len(content) > 180)
+            or (starts_as_question and has_source_trailer)
+        ):
+            logger.warning(
+                "[KnowledgeDB] Rejected mixed question/answer conversation as factual knowledge."
             )
             return None
 
