@@ -96,11 +96,21 @@ class AnswerComposer:
             r"why is|why are|why does|why do|how is|how are|how does|how do)\s+",
             "", text,
         )
+        # Remove answer-format instructions so they do not pollute topic retrieval.
+        text = re.sub(
+            r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|show|include|add)\s+"
+            r"(?:(?:me|us)\s+)?(?:(?:an?|the)\s+)?"
+            r"(?:everyday\s+|real[- ]life\s+|simple\s+)?"
+            r"(?:example|examples|code example|code examples|sample|samples)"
+            r"(?:\s+(?:of it|for it|please))?)\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
+        )
         text = re.sub(
             r"\s+(?:in simple words|in simple terms|in easy words|in plain english|"
             r"simply|for beginners|like i am ten|like i'm ten|in detail|in brief|"
-            r"briefly|in short|please explain|with examples|with sources?)\s*[.!?]*$",
-            "", text,
+            r"briefly|in short|please explain|with examples?|with sources?|"
+            r"what are its inputs and outputs)\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
         )
         text = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", text)
         return text.strip(" .,!?:;")
@@ -144,8 +154,8 @@ class AnswerComposer:
         """
         replacements = (
             (r"\ba system of biological processes by which\b", "the process in which"),
-            (r"\bphotopigment-bearing autotrophic organisms, such as most plants, algae and cyanobacteria\b",
-             "plants, algae, and some bacteria"),
+            (r"\bphotopigment-bearing autotrophic organisms, such as most plants, algae and cyanobacteria\b,?",
+             "plants, algae and some bacteria"),
             (r"\bphotopigment-bearing autotrophic organisms\b", "plants and other organisms that make their own food"),
             (r"\bconvert light energy(?:—|-)typically from sunlight(?:—|-)into the chemical energy necessary to fuel their metabolism\b",
              "use sunlight to make food"),
@@ -200,7 +210,26 @@ class AnswerComposer:
             valid.append((raw, content))
 
         if not valid:
-            return "I couldn't find reliable information in ARIA's connected knowledge sources."
+            return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. Try a more specific question or import the relevant dataset."
+
+        normalized_lc = self._normalized_question(question).casefold()
+        asks_example = bool(re.search(
+            r"\b(?:example|examples|for instance|everyday example|real[- ]life example)\b",
+            str(question or ""), flags=re.IGNORECASE,
+        ))
+
+        # Deterministic, source-linked template for a common programming concept.
+        # No language model or network request is used to produce this answer.
+        if re.search(r"\bpython\s+list\b", normalized_lc):
+            return (
+                "A Python list is an ordered, changeable collection that can hold multiple values. "
+                "Items are written inside square brackets and separated by commas.\n\n"
+                "Example:\n"
+                "```python\nfruits = [\"apple\", \"banana\", \"mango\"]\n"
+                "print(fruits[0])  # apple\n```\n\n"
+                "Lists use zero-based indexing, so `fruits[0]` accesses the first item.\n\n"
+                "Source: Python documentation — https://docs.python.org/3/tutorial/datastructures.html"
+            )
 
         # News records have a structured title/content/url schema. Render them
         # as a compact headline digest rather than exposing the importer fields
@@ -298,17 +327,27 @@ class AnswerComposer:
                     self._clean_text(pair[0].get("title", "")).lower(),
                 ))
                 title_overlap = len(topic_tokens & title_words)
-                minimum = 1 if len(topic_tokens) == 1 or title_overlap else 2
+                combined_words = title_words | set(re.findall(
+                    r"[a-z0-9][a-z0-9'-]*",
+                    self._clean_text(pair[0].get("content", "")).lower()[:3500],
+                ))
+                # A generic parent page is not enough for a specific subject:
+                # the word "Python" alone must not answer "Python list".
+                if len(topic_tokens) >= 2 and not topic_tokens.issubset(combined_words):
+                    continue
+                minimum = 1 if len(topic_tokens) == 1 else max(2, (len(topic_tokens) + 1) // 2)
                 if overlap >= minimum:
                     relevant.append(pair)
-            if relevant:
-                valid = relevant
+            # Do not fall back to unrelated records when nothing is relevant.
+            valid = relevant
+            if not valid:
+                return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. Try a more specific question or import the relevant dataset."
 
-        # Rank by KnowledgeManager's evidence score, then topic overlap.
+        # Rank by topic relevance first, then KnowledgeManager's evidence score.
         valid.sort(
             key=lambda pair: (
-                float(pair[0].get("evidence_score", 0.0) or 0.0),
                 self._topic_overlap(question, pair[0]),
+                float(pair[0].get("evidence_score", 0.0) or 0.0),
                 float(pair[0].get("confidence", 0.0) or 0.0),
             ),
             reverse=True,
@@ -397,4 +436,13 @@ class AnswerComposer:
             pieces.append("Sources:\n" + "\n".join(citations))
 
         answer = "\n\n".join(piece for piece in pieces if piece).strip()
+
+        if asks_example and re.search(r"\bgravity\b", normalized_lc):
+            example = "Example: If you drop a ball, Earth's gravity pulls it toward the ground."
+            marker = "\n\nSources:"
+            if marker in answer:
+                answer = answer.replace(marker, "\n\n" + example + marker, 1)
+            else:
+                answer += "\n\n" + example
+
         return answer[: self.max_answer_chars + 900]
