@@ -427,7 +427,48 @@ def fetch_and_store_topic(
                 "language": language,
             })
     except Exception as exc:
-        LOG.warning("Wikipedia topic fetch failed for %r: %s", topic, exc)
+        LOG.warning("Wikipedia summary fetch failed for %r: %s; trying search API", topic, exc)
+        # The REST summary endpoint can miss acronyms, redirects, or be rate
+        # limited. Fall back to Wikipedia's Action API search + plaintext extract
+        # so one failed endpoint does not leave ARIA with only a Wikidata label.
+        try:
+            action_url = (
+                f"https://{language}.wikipedia.org/w/api.php?action=query"
+                "&format=json&generator=search&gsrnamespace=0&gsrlimit=3"
+                "&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url"
+                "&gsrsearch=" + quote(topic, safe="")
+            )
+            action_data = get_json(action_url)
+            pages = ((action_data.get("query") or {}).get("pages") or {})
+            candidates = sorted(
+                (page for page in pages.values() if isinstance(page, dict)),
+                key=lambda page: int(page.get("index", 9999)),
+            )
+            for page in candidates:
+                extract = clean_text(page.get("extract") or "")
+                title = clean_text(page.get("title") or topic)
+                if not extract or len(extract) < 80:
+                    continue
+                if "disambiguation" in title.lower() and len(candidates) > 1:
+                    continue
+                page_url = clean_text(page.get("fullurl") or "") or (
+                    f"https://{language}.wikipedia.org/wiki/"
+                    + quote(title.replace(" ", "_"), safe="()'!*~.-_")
+                )
+                records.append({
+                    "source": "wikipedia",
+                    "source_id": str(page.get("pageid") or title),
+                    "title": title,
+                    "content": extract,
+                    "url": page_url,
+                    "language": language,
+                })
+                break
+        except Exception as fallback_exc:
+            LOG.warning(
+                "Wikipedia search fallback failed for %r: %s",
+                topic, fallback_exc,
+            )
 
     try:
         search_url = (
