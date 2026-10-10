@@ -1971,27 +1971,23 @@ class KnowledgeManager:
         )
 
         # -----------------------------------------------------
-        # Unified evidence retrieval is followed by deterministic composition.
-        # Web search may add evidence when local confidence is insufficient;
-        # neither the local nor web evidence is rewritten by an answer LLM.
+        # Strict local-first policy:
+        # ordinary knowledge questions are answered only from the local
+        # corpus/cache. Do not silently fall back to a live web/API search.
+        # Explicit online-search commands are handled by their own route.
         # -----------------------------------------------------
-
-        if await self.needs_web(
-            results
-        ):
-
-            web_results = await self.search_web(question)
-
-            if web_results:
-                results.extend(web_results)
-                results = await self.merge_results(results)
-                results = await self.rank_results(results)
 
         if not results:
             logger.info(
-                "[KnowledgeManager] No knowledge results found."
+                "[KnowledgeManager] No local evidence found; returning a clean "
+                "local-corpus miss instead of invoking online search or memory fallback."
             )
-            return None
+            return (
+                "I don't have reliable information about this topic in ARIA's "
+                "local knowledge database yet. No external knowledge API was "
+                "called. The topic will be answerable once its dataset or "
+                "source-backed article has been imported into the local corpus."
+            )
 
         final_answer = await self.best_answer(
             question,
