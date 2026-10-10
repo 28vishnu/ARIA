@@ -55,6 +55,20 @@ class KnowledgeManager:
     # =========================================================
 
     @staticmethod
+    def _is_non_factual_source(source: Any, evidence_type: Any = "") -> bool:
+        """Internal traces and failed queries are not evidence about the world."""
+        blocked = {
+            "failure", "reflection", "knowledge_gap", "knowledge gap", "query",
+            "assistant_response", "llm_response", "success", "diagnostic", "internal",
+        }
+        values = [str(source or "").strip().casefold(), str(evidence_type or "").strip().casefold()]
+        for value in values:
+            value = value.replace("-", "_")
+            if value in blocked or any(marker in value for marker in ("knowledge_gap", "reflection", "failure", "diagnostic")):
+                return True
+        return False
+
+    @staticmethod
     def _is_ordinary_knowledge_query(question: str) -> bool:
         """Recognize stable factual questions that must use local retrieval only."""
         q = re.sub(r"\s+", " ", str(question or "").strip().lower()).replace("’", "'")
@@ -755,7 +769,13 @@ class KnowledgeManager:
             r"(?:\s+(?:of it|for it|please))?\s*[.!?]*$",
             "", query_text, flags=re.IGNORECASE,
         )
+        query_text = re.sub(
+            r"\b(?:what is the relationship between|what is the relation between|"
+            r"how are|how do|how does|related to|connected to|linked to|associated with)\b",
+            " ", query_text, flags=re.IGNORECASE,
+        )
         query_text = re.sub(r"^\s*(?:our|my|your|the|a|an)\s+", "", query_text, flags=re.IGNORECASE)
+        query_text = re.sub(r"\s+", " ", query_text).strip()
         tokens = re.findall(r"[\w'-]+", query_text, flags=re.UNICODE)
         stop_words = {
             "what", "is", "are", "the", "a", "an", "of", "to", "and",
@@ -765,6 +785,8 @@ class KnowledgeManager:
             "call", "any", "external", "language", "model", "simple", "words",
             "terms", "easy", "plain", "english", "beginner", "beginners", "detail",
             "brief", "briefly", "short", "like", "ten", "can", "you", "how", "why",
+            "related", "relation", "relationship", "relationships", "connected", "linked",
+            "associated", "between", "together", "difference", "differences", "versus", "vs",
         }
         tokens = [t for t in tokens if len(t) > 1 and t.lower() not in stop_words][:12]
         if not tokens:
@@ -1521,6 +1543,13 @@ class KnowledgeManager:
                 if not content:
                     continue
 
+                if self._is_non_factual_source(item.get("source"), item.get("evidence_type")):
+                    logger.info(
+                        "[KnowledgeManager] Rejected non-factual source=%s evidence_type=%s",
+                        item.get("source"), item.get("evidence_type"),
+                    )
+                    continue
+
                 # Never allow system failure text to enter the
                 # knowledge graph/index again.
                 if self._is_bad_knowledge_content(
@@ -1983,7 +2012,11 @@ class KnowledgeManager:
                 len(valid),
             )
             try:
-                if self._is_ordinary_knowledge_query(question):
+                if (
+                    self._is_ordinary_knowledge_query(question)
+                    and "couldn't find sufficiently relevant information" not in answer.casefold()
+                    and "don't have reliable information" not in answer.casefold()
+                ):
                     await asyncio.to_thread(self._save_local_answer_cache, question, answer, valid)
             except Exception:
                 logger.exception("[KnowledgeBrain] Could not cache composed local answer.")
