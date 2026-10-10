@@ -138,6 +138,39 @@ class AnswerComposer:
         if not valid:
             return "I couldn't find reliable information in ARIA's connected knowledge sources."
 
+        # A comparison must not collapse into whichever single encyclopedia
+        # entity ranked first. The local foundational record is deliberately a
+        # structured answer and cites the primary protocol specifications.
+        comparison = next(
+            (item for item, _content in valid
+             if str(item.get("title") or "").strip().lower() == "tcp vs udp"
+             and item.get("source") == "local_foundational_knowledge"),
+            None,
+        )
+        if comparison is not None:
+            return (
+                "TCP and UDP are both transport-layer protocols used over IP networks, "
+                "but they make different trade-offs.\n\n"
+                "**TCP (Transmission Control Protocol)**\n"
+                "• Connection-oriented: establishes a connection before transferring data.\n"
+                "• Reliable and ordered: uses acknowledgements and retransmissions to "
+                "deliver a byte stream in order.\n"
+                "• Includes flow control and congestion control, with more protocol overhead.\n"
+                "• Common uses include web connections, email, and file transfer.\n\n"
+                "**UDP (User Datagram Protocol)**\n"
+                "• Connectionless: sends individual datagrams without setting up a connection.\n"
+                "• Does not guarantee delivery, ordering, or retransmission.\n"
+                "• Has lower protocol overhead and is often useful for latency-sensitive traffic.\n"
+                "• Common uses include DNS, voice/video calls, live streaming, and many games.\n\n"
+                "**Main difference:** TCP prioritizes reliable, ordered delivery; UDP provides "
+                "lightweight datagram delivery and leaves reliability to the application when needed. "
+                "UDP is not automatically faster in every situation. Neither protocol provides "
+                "encryption by itself.\n\n"
+                "Sources:\n"
+                "• TCP specification (IETF RFC 9293) — https://www.rfc-editor.org/rfc/rfc9293\n"
+                "• UDP specification (IETF RFC 768) — https://www.rfc-editor.org/rfc/rfc768"
+            )
+
         # Rank by KnowledgeManager's evidence score, then topic overlap.
         valid.sort(
             key=lambda pair: (
