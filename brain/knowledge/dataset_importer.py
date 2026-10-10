@@ -238,11 +238,12 @@ def _text_or_html(path: Path, source: str) -> Iterator[dict]:
             if content.strip():
                 yield _record(source, f"{path.stem}:pages:{pages[0][0]}-{pages[-1][0]}",
                               f"{path.stem} (pages {pages[0][0]}-{pages[-1][0]})",
-                              content, f"file://{path.resolve()}#page={pages[0][0]}")
+                              content, DATASETS.get(source, {}).get("url", ""))
         return
     if suffix == ".epub":
         for rec in _epub(path):
             rec["source"] = source
+            rec["url"] = DATASETS.get(source, {}).get("url", rec.get("url", ""))
             yield rec
         return
     with _open_text(path) as stream:
@@ -258,12 +259,12 @@ def _text_or_html(path: Path, source: str) -> Iterator[dict]:
             if chars >= 12_000:
                 index += 1
                 yield _record(source, f"{path.stem}:{index}", f"{path.stem} (section {index})",
-                              " ".join(chunk), f"file://{path.resolve()}")
+                              " ".join(chunk), DATASETS.get(source, {}).get("url", ""))
                 chunk, chars = [], 0
         if chunk:
             index += 1
             yield _record(source, f"{path.stem}:{index}", f"{path.stem} (section {index})",
-                          " ".join(chunk), f"file://{path.resolve()}")
+                          " ".join(chunk), DATASETS.get(source, {}).get("url", ""))
 
 
 def records_for(source: str, path: Path) -> Iterable[dict]:
