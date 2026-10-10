@@ -731,13 +731,32 @@ class KnowledgeManager:
         if not question or not path.is_file():
             return []
 
-        tokens = re.findall(r"[\w'-]+", question, flags=re.UNICODE)
+        # Normalize question framing so answer-style modifiers are not search terms.
+        query_text = re.sub(r"\s+", " ", question).strip()
+        query_text = re.sub(
+            r"^\s*(?:please\s+)?(?:can you\s+)?(?:what is the difference between|"
+            r"what is a difference between|difference between|compare|explain|define|describe|"
+            r"tell me about|what is|what are|what does|what do|who is|who are|where is|"
+            r"where are|when is|when was|why is|why are|why does|why do|how is|how are|"
+            r"how does|how do)\s+",
+            "", query_text, flags=re.IGNORECASE,
+        )
+        query_text = re.sub(
+            r"\s+(?:in simple words|in simple terms|in easy words|in plain english|"
+            r"simply|for beginners|like i am ten|like i'm ten|in detail|in brief|"
+            r"briefly|in short|with examples|with sources?)\s*[.!?]*$",
+            "", query_text, flags=re.IGNORECASE,
+        )
+        query_text = re.sub(r"^\s*(?:our|my|your|the|a|an)\s+", "", query_text, flags=re.IGNORECASE)
+        tokens = re.findall(r"[\w'-]+", query_text, flags=re.UNICODE)
         stop_words = {
             "what", "is", "are", "the", "a", "an", "of", "to", "and",
             "or", "in", "on", "for", "using", "only", "aria", "local",
-            "knowledge", "database", "stored", "provide", "source", "url",
-            "explain", "please", "give", "me", "your", "from", "do", "not",
-            "call", "any", "external", "language", "model",
+            "knowledge", "database", "stored", "provide", "source", "sources", "url",
+            "explain", "please", "give", "me", "your", "our", "from", "do", "not",
+            "call", "any", "external", "language", "model", "simple", "words",
+            "terms", "easy", "plain", "english", "beginner", "beginners", "detail",
+            "brief", "briefly", "short", "like", "ten", "can", "you", "how", "why",
         }
         tokens = [t for t in tokens if len(t) > 1 and t.lower() not in stop_words][:12]
         if not tokens:
@@ -746,6 +765,7 @@ class KnowledgeManager:
             return []
 
         limit = max(1, min(int(limit), 20))
+        candidate_limit = min(100, max(limit, limit * 5))
         conn = None
         try:
             conn = sqlite3.connect(
@@ -808,7 +828,7 @@ class KnowledgeManager:
                         ORDER BY score
                         LIMIT ?
                         """,
-                        (match_query, limit),
+                        (match_query, candidate_limit),
                     ).fetchall()
                 except sqlite3.OperationalError:
                     # An FTS table may exist but be out of sync or unavailable.
@@ -837,7 +857,7 @@ class KnowledgeManager:
                     ORDER BY CASE WHEN lower(title) LIKE lower(?) THEN 0 ELSE 1 END
                     LIMIT ?
                     """,
-                    (*params, f"%{tokens[0]}%", limit),
+                    (*params, f"%{tokens[0]}%", candidate_limit),
                 ).fetchall()
 
             results: List[Dict[str, Any]] = []
@@ -872,16 +892,25 @@ class KnowledgeManager:
                     "local_knowledge": True,
                     "external_llm_synthesis": False,
                 })
-            # Prefer readable encyclopedia prose over terse Wikidata entity
-            # descriptions for ordinary explanatory questions.
-            results.sort(
-                key=lambda item: (
-                    0 if item.get("source") == "wikipedia" else
-                    1 if item.get("source") == "wikidata" else 2,
-                    -len(str(item.get("content") or "")),
-                )
-            )
-            return results
+            # Rank by query relevance first; source type is only a tie-breaker.
+            query_set = {token.casefold() for token in tokens}
+            def relevance_key(item):
+                title_tokens = {
+                    token.casefold()
+                    for token in re.findall(r"[\w'-]+", str(item.get("title") or ""))
+                }
+                content_tokens = {
+                    token.casefold()
+                    for token in re.findall(r"[\w'-]+", str(item.get("content") or "")[:3500])
+                }
+                title_overlap = len(query_set & title_tokens)
+                content_overlap = len(query_set & content_tokens)
+                source = str(item.get("source") or "").casefold()
+                source_tiebreak = 0 if source == "wikipedia" else 1 if source == "wikidata" else 2
+                return (-title_overlap, -content_overlap, source_tiebreak,
+                        -float(item.get("confidence", 0.0) or 0.0))
+            results.sort(key=relevance_key)
+            return results[:limit]
 
         except (sqlite3.Error, OSError, ValueError) as exc:
             logger.exception(
@@ -1043,8 +1072,10 @@ class KnowledgeManager:
             }
             title_overlap = len(query_terms & title_terms)
             content_overlap = len(query_terms & content_terms)
-            if query_terms and title_overlap == 0 and content_overlap == 0:
-                continue
+            if query_terms:
+                minimum_content_overlap = 1 if len(query_terms) == 1 else max(2, (len(query_terms) + 1) // 2)
+                if title_overlap == 0 and content_overlap < minimum_content_overlap:
+                    continue
 
             identity = (
                 str(item.get("url") or item.get("source_url") or ""),
