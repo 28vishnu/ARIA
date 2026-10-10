@@ -28,6 +28,11 @@ from brain.development.telegram_approval_interface import (
     TelegramApprovalInterface,
 )
 from audio_engine import AudioEngine
+from brain.knowledge.knowledge_hub import (
+    mark_user_activity as _mark_knowledge_activity,
+    begin_user_activity as _begin_knowledge_activity,
+    end_user_activity as _end_knowledge_activity,
+)
 
 
 # =========================================================
@@ -1437,6 +1442,11 @@ async def telegram_webhook(
         update_id,
     )
 
+    try:
+        _mark_knowledge_activity()
+    except Exception:
+        logger.exception("[KnowledgeHub] Failed to record incoming user activity.")
+
     # ---------------------------------------------------------
     # SCHEDULE ACTUAL PROCESSING
     # ---------------------------------------------------------
@@ -2010,6 +2020,11 @@ async def process_telegram_update(
     token = None
 
     http_client = None
+
+    try:
+        _begin_knowledge_activity(request_id)
+    except Exception:
+        logger.exception("[KnowledgeHub] Failed to mark active Telegram processing.")
 
     try:
 
@@ -3383,6 +3398,11 @@ async def process_telegram_update(
             )
 
     finally:
+
+        try:
+            _end_knowledge_activity(request_id)
+        except Exception:
+            logger.exception("[KnowledgeHub] Failed to clear active Telegram processing marker.")
 
         if (
             status_started
