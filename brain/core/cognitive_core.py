@@ -626,7 +626,7 @@ class CognitiveCore:
                 extracted = CognitiveCore._extract_knowledge_answer(item)
                 if extracted:
                     answers.append(extracted)
-            return "\n".join(answers).strip()
+            return "\\n".join(answers).strip()
 
         # SystemResponse-like objects may carry the answer in data.
         data = getattr(result, "data", None)
@@ -745,9 +745,17 @@ class CognitiveCore:
         if CognitiveCore._is_local_knowledge_instruction(text):
             return True
 
+        explicit_online = any(marker in text for marker in (
+            "search the web", "search online", "search the internet", "browse online",
+            "look up online", "on the internet", "online sources", "live web search",
+        ))
+        # Current news is answered from ARIA's periodically ingested local news
+        # corpus. Explicit online-search requests keep their dedicated route.
+        if "news" in text and not explicit_online:
+            return True
         dynamic_markers = (
             "latest", "current", "currently", "today", "tonight", "tomorrow",
-            "right now", "this week", "this month", "this year", "news",
+            "right now", "this week", "this month", "this year",
             "online", "on the internet", "search the web", "look up", "recent",
         )
         if any(marker in text for marker in dynamic_markers):
@@ -3395,7 +3403,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                             # local corpus has no matching evidence.
                             topic = str(resolved_query or query or "").strip()
                             topic = re.sub(
-                                r"^(?:what is|what are|define|explain|tell me about|describe)\s+",
+                                r"^(?:what is|what are|define|explain|tell me about|describe)\\s+",
                                 "",
                                 topic,
                                 flags=re.IGNORECASE,
@@ -4050,7 +4058,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                 pass
 
         return bool(re.search(
-            r"\b(?:my|mine|me|i|remember|recall|about me)\b",
+            r"\\b(?:my|mine|me|i|remember|recall|about me)\\b",
             q,
             re.IGNORECASE,
         ))
@@ -4229,7 +4237,7 @@ usable evidence is present. Do not invent details absent from the evidence.
 
         # Explicit sequential connectors are the strongest signal.
         connector_count = len(re.findall(
-            r"\b(?:then|also|and then|after that|next)\b",
+            r"\\b(?:then|also|and then|after that|next)\\b",
             text,
         ))
 
