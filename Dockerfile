@@ -12,7 +12,7 @@ COPY . .
 
 EXPOSE 10000
 
-# Acquire a small, source-backed starter corpus before serving requests.
-# This is Wikimedia content acquisition, not an LLM call. User questions are
-# still answered from the local corpus by KnowledgeManager.
-CMD ["sh", "-c", "python -m brain.knowledge.open_knowledge seed --db \"${ARIA_OPEN_KNOWLEDGE_DB:-data/aria_open_knowledge.sqlite3}\" --limit \"${ARIA_KNOWLEDGE_SEED_LIMIT:-25}\" --delay 0.2; exec uvicorn main:app --host 0.0.0.0 --port \"${PORT:-10000}\""]
+# Temporary diagnostics: seed the local corpus, then print database statistics
+# and verify that a photosynthesis record can be searched before starting ARIA.
+# No paid LLM API is used. Network requests here are only for Wikimedia ingestion.
+CMD ["sh", "-c", "DB=\"${ARIA_OPEN_KNOWLEDGE_DB:-data/aria_open_knowledge.sqlite3}\"; echo '=== ARIA KNOWLEDGE SEED START ==='; python -u -m brain.knowledge.open_knowledge seed --db \"$DB\" --limit \"${ARIA_KNOWLEDGE_SEED_LIMIT:-25}\" --delay 0.2; echo '=== ARIA KNOWLEDGE DATABASE STATS ==='; python -u -m brain.knowledge.open_knowledge stats --db \"$DB\"; echo '=== ARIA PHOTOSYNTHESIS SEARCH TEST ==='; python -u -m brain.knowledge.open_knowledge search --db \"$DB\" --query photosynthesis --limit 5; echo '=== ARIA KNOWLEDGE DIAGNOSTICS COMPLETE ==='; exec uvicorn main:app --host 0.0.0.0 --port \"${PORT:-10000}\""]
