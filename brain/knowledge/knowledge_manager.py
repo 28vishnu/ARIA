@@ -747,6 +747,14 @@ class KnowledgeManager:
             r"briefly|in short|with examples|with sources?)\s*[.!?]*$",
             "", query_text, flags=re.IGNORECASE,
         )
+        query_text = re.sub(
+            r"\s*(?:[.!?]?\s*)(?:and\s+)?(?:please\s+)?(?:give|provide|show|include|add)\s+"
+            r"(?:(?:me|us)\s+)?(?:(?:an?|the)\s+)?"
+            r"(?:everyday\s+|real[- ]life\s+|simple\s+)?"
+            r"(?:example|examples|code example|code examples|sample|samples)"
+            r"(?:\s+(?:of it|for it|please))?\s*[.!?]*$",
+            "", query_text, flags=re.IGNORECASE,
+        )
         query_text = re.sub(r"^\s*(?:our|my|your|the|a|an)\s+", "", query_text, flags=re.IGNORECASE)
         tokens = re.findall(r"[\w'-]+", query_text, flags=re.UNICODE)
         stop_words = {
@@ -976,6 +984,14 @@ class KnowledgeManager:
             r"and give|and provide|provide the source|give the source|with source).*?$",
             "", topic, flags=re.IGNORECASE,
         ).strip(" \t.,;:!?")
+        topic = re.sub(
+            r"\s*(?:[.!?]?\s*)(?:and\s+)?(?:please\s+)?(?:give|provide|show|include|add)\s+"
+            r"(?:(?:me|us)\s+)?(?:(?:an?|the)\s+)?"
+            r"(?:everyday\s+|real[- ]life\s+|simple\s+)?"
+            r"(?:example|examples|code example|code examples|sample|samples)"
+            r"(?:\s+(?:of it|for it|please))?\s*[.!?]*$",
+            "", topic, flags=re.IGNORECASE,
+        ).strip(" \\t.,;:!?")
         # Remove non-informative possessive/determiner prefixes without damaging
         # meaningful topic names such as "The Solar System".
         topic = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", topic, flags=re.IGNORECASE)
