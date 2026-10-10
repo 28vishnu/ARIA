@@ -154,10 +154,60 @@ class KnowledgeManager:
 
         No LLM/API is involved.
         """
-        q = str(question or "").strip().lower()
+        q = re.sub(r"\s+", " ", str(question or "").strip().lower()).replace("’", "'")
+        # Normalize common contractions so direct local facts work for natural
+        # Telegram phrasing such as "What's TCP and UDP?".
+        q = re.sub(r"^what's\b", "what is", q)
+        q = re.sub(r"^whats\b", "what is", q)
+        q = re.sub(r"^what is the difference between\b", "difference between", q)
+        q = q.strip(" \t.,;:!?")
 
         if not q:
             return None
+
+        # -----------------------------------------------------
+        # Compound comparison: TCP and UDP
+        # -----------------------------------------------------
+        if ("tcp" in q and "udp" in q) and (
+            "difference" in q or "compare" in q or "versus" in q
+            or re.search(r"\bwhat is tcp and udp\b", q)
+            or re.search(r"\btcp and udp\b", q)
+        ):
+            return {
+                "source": "local_foundational_knowledge",
+                "title": "TCP vs UDP",
+                "confidence": 1.0,
+                "importance": 100,
+                "relevance": 1.0,
+                "freshness": 1.0,
+                "verified": True,
+                "evidence_type": "built_in_fact",
+                "provenance": "ARIA foundational networking knowledge; TCP: RFC 9293; UDP: RFC 768",
+                "url": "https://www.rfc-editor.org/rfc/rfc9293",
+                "metadata": {"related_sources": [
+                    {"title": "Transmission Control Protocol (TCP)", "url": "https://www.rfc-editor.org/rfc/rfc9293"},
+                    {"title": "User Datagram Protocol (UDP)", "url": "https://www.rfc-editor.org/rfc/rfc768"},
+                ]},
+                "content": (
+                    "TCP (Transmission Control Protocol) and UDP (User Datagram Protocol) "
+                    "are transport-layer protocols used over IP networks.\n\n"
+                    "TCP: connection-oriented; establishes a connection before sending data; "
+                    "provides reliable, ordered byte-stream delivery using acknowledgements "
+                    "and retransmissions; includes flow and congestion control; has more "
+                    "protocol overhead. Common uses include web connections, email, and file transfer.\n\n"
+                    "UDP: connectionless; sends independent datagrams without establishing a "
+                    "connection; does not guarantee delivery, ordering, or retransmission; has "
+                    "lower protocol overhead and can suit latency-sensitive traffic. Common uses "
+                    "include DNS queries, voice/video calls, live streaming, and many online games.\n\n"
+                    "Main difference: TCP prioritizes reliable, ordered delivery, while UDP "
+                    "prioritizes lightweight message delivery and leaves reliability, if needed, "
+                    "to the application. UDP is not automatically faster in every situation; "
+                    "the result depends on the network and application. Neither protocol "
+                    "provides encryption by itself."
+                ),
+                "local_knowledge": True,
+                "external_llm_synthesis": False,
+            }
 
         # -----------------------------------------------------
         # TCP
@@ -826,7 +876,12 @@ class KnowledgeManager:
         self,
         question: str,
     ) -> List[Dict[str, Any]]:
-        """Run local SQLite retrieval off the event loop."""
+        """Retrieve local corpus evidence and fill missing topic records.
+
+        Compound questions are handled per topic. If TCP is already cached but
+        UDP was missed during a Wikimedia rate limit, ARIA retries only the
+        missing topic instead of treating the first partial result as complete.
+        """
         db_path = os.environ.get(
             "ARIA_OPEN_KNOWLEDGE_DB",
             "data/aria_open_knowledge.sqlite3",
@@ -834,104 +889,139 @@ class KnowledgeManager:
 
         try:
             results = await asyncio.to_thread(
-                self._search_open_knowledge_sync,
-                question,
-                db_path,
-                5,
+                self._search_open_knowledge_sync, question, db_path, 5
             )
         except Exception:
-            logger.exception(
-                "[KnowledgeManager] Open-knowledge retrieval failed"
+            logger.exception("[KnowledgeManager] Open-knowledge retrieval failed")
+            results = []
+
+        if not self._is_ordinary_knowledge_query(question):
+            if results:
+                logger.info("[LocalKnowledge] Retrieved %d open-corpus result(s)", len(results))
+            return results
+
+        normalized_question = re.sub(
+            r"\s+", " ", str(question or "").strip()
+        ).replace("’", "'")
+        for pattern, replacement in (
+            (r"^what's\b", "what is"), (r"^whats\b", "what is"),
+            (r"^who's\b", "who is"), (r"^whos\b", "who is"),
+        ):
+            normalized_question = re.sub(
+                pattern, replacement, normalized_question, flags=re.IGNORECASE
             )
-            return []
 
-        # If local retrieval misses an ordinary factual topic, bootstrap it from
-        # Wikimedia's public APIs (never from an LLM), persist both source records,
-        # and retry against SQLite. Subsequent requests are local-only hits.
-        if not results and self._is_ordinary_knowledge_query(question):
-            normalized_question = re.sub(r"\s+", " ", str(question or "").strip()).replace("’", "'")
-            normalized_question = re.sub(r"^what's\b", "what is", normalized_question, flags=re.IGNORECASE)
-            normalized_question = re.sub(r"^whats\b", "what is", normalized_question, flags=re.IGNORECASE)
-            normalized_question = re.sub(r"^who's\b", "who is", normalized_question, flags=re.IGNORECASE)
-            topic = re.sub(
-                r"^\s*(?:what is|who is|where is|when is|define|explain|describe|tell me about|what are|who are|where are|why is|how is|how are)\s+",
-                "",
-                normalized_question,
-                flags=re.IGNORECASE,
-            ).strip(" \t.,;:!?")
-            topic = re.sub(
-                r"\s+(?:and give|and provide|provide the source|give the source|with source).*?$",
-                "",
-                topic,
-                flags=re.IGNORECASE,
-            ).strip(" \t.,;:!?")
-            if topic and len(topic) <= 180:
-                try:
-                    from .open_knowledge import fetch_and_store_topic
+        topic = re.sub(
+            r"^\s*(?:what is the difference between|what is a difference between|"
+            r"difference between|compare|what is|what are|what does|what do|"
+            r"who is|who are|where is|where are|when is|when was|why is|why are|"
+            r"why does|why do|how is|how are|how does|how do|define|explain|"
+            r"describe|tell me about)\s+",
+            "", normalized_question, flags=re.IGNORECASE,
+        ).strip(" \t.,;:!?")
+        topic = re.sub(
+            r"\s+(?:and give|and provide|provide the source|give the source|with source).*?$",
+            "", topic, flags=re.IGNORECASE,
+        ).strip(" \t.,;:!?")
 
-                    # Compound factual questions should seed each named topic,
-                    # e.g. "TCP and UDP", instead of searching that whole phrase
-                    # as if it were one encyclopedia article.
-                    topic_parts = [topic]
-                    compound = re.fullmatch(r"(.+?)\s+(?:and|vs\.?|versus)\s+(.+)", topic, flags=re.IGNORECASE)
-                    if compound:
-                        topic_parts = [compound.group(1).strip(), compound.group(2).strip()]
-                    fetched = {"sources": []}
-                    for topic_part in topic_parts[:3]:
-                        if not topic_part:
-                            continue
+        if not topic or len(topic) > 180:
+            if results:
+                logger.info("[LocalKnowledge] Retrieved %d open-corpus result(s)", len(results))
+            return results
+
+        topic_parts = [topic]
+        compound = re.fullmatch(
+            r"(.+?)\s+(?:and|vs\.?|versus)\s+(.+)", topic, flags=re.IGNORECASE
+        )
+        if compound:
+            topic_parts = [part.strip(" \t.,;:!?") for part in compound.groups()]
+
+        def has_topic_record(topic_part: str, items: List[Dict[str, Any]]) -> bool:
+            target = re.sub(r"\W+", " ", topic_part.lower()).strip()
+            if not target:
+                return True
+            for item in items:
+                title = re.sub(r"\W+", " ", str(item.get("title") or "").lower()).strip()
+                content = str(item.get("content") or "").lower()
+                if target == title or target in title:
+                    return True
+                # Acronyms often appear as aliases in a Wikidata description.
+                if re.search(r"\baliases?\s*:\s*[^.]{0,300}\b" + re.escape(topic_part.lower()) + r"\b", content):
+                    return True
+            return False
+
+        missing_topics = [
+            part for part in topic_parts[:3]
+            if not has_topic_record(part, results)
+        ]
+        fetched_summary = []
+        if missing_topics:
+            try:
+                from .open_knowledge import fetch_and_store_topic
+                for topic_part in missing_topics:
+                    try:
                         part_result = await asyncio.to_thread(
-                            fetch_and_store_topic,
-                            db_path,
-                            topic_part,
+                            fetch_and_store_topic, db_path, topic_part
                         )
-                        fetched["sources"].append({
+                        fetched_summary.append({
                             "topic": topic_part,
-                            "result": part_result.get("sources", part_result.get("reason", "completed")),
+                            "result": part_result.get(
+                                "sources", part_result.get("reason", "completed")
+                            ),
                         })
+                    except Exception as exc:
+                        logger.warning(
+                            "[LocalKnowledge] Could not bootstrap topic %r: %s",
+                            topic_part, exc,
+                        )
+                if fetched_summary:
                     logger.info(
                         "[LocalKnowledge] Wikimedia bootstrap for %r: %s",
-                        topic,
-                        fetched.get("sources", fetched.get("reason", "completed")),
+                        topic, fetched_summary,
                     )
-                    # Search each seeded topic separately. A combined FTS query
-                    # like "TCP and UDP" may require both terms in one document,
-                    # even though the evidence correctly lives in two articles.
-                    gathered = []
-                    search_terms = topic_parts if len(topic_parts) > 1 else [question]
-                    for search_term in search_terms:
-                        part_results = await asyncio.to_thread(
-                            self._search_open_knowledge_sync,
-                            search_term,
-                            db_path,
-                            5,
-                        )
-                        if part_results:
-                            gathered.extend(part_results)
-                    seen_keys = set()
-                    results = []
-                    for item in gathered:
-                        identity = (
-                            str(item.get("url") or item.get("source_url") or ""),
-                            re.sub(r"\W+", " ", str(item.get("content") or "").lower()).strip(),
-                        )
-                        if identity in seen_keys:
-                            continue
-                        seen_keys.add(identity)
-                        results.append(item)
-                except Exception:
-                    logger.exception(
-                        "[LocalKnowledge] Wikimedia bootstrap failed for %r",
-                        topic,
-                    )
+            except Exception:
+                logger.exception("[LocalKnowledge] Wikimedia bootstrap unavailable for %r", topic)
 
-        if results:
+        # Re-query every component separately. This is essential because FTS
+        # AND queries for "TCP and UDP" do not match two separate articles.
+        search_terms = topic_parts if len(topic_parts) > 1 else [question, topic_parts[0]]
+        gathered: List[Dict[str, Any]] = list(results)
+        for search_term in search_terms:
+            try:
+                part_results = await asyncio.to_thread(
+                    self._search_open_knowledge_sync, search_term, db_path, 5
+                )
+                gathered.extend(part_results or [])
+            except Exception:
+                logger.exception(
+                    "[LocalKnowledge] Corpus search failed for component %r", search_term
+                )
+
+        seen_keys = set()
+        merged_results: List[Dict[str, Any]] = []
+        for item in gathered:
+            identity = (
+                str(item.get("url") or item.get("source_url") or ""),
+                re.sub(r"\W+", " ", str(item.get("content") or "").lower()).strip(),
+            )
+            if identity in seen_keys:
+                continue
+            seen_keys.add(identity)
+            merged_results.append(item)
+
+        merged_results.sort(
+            key=lambda item: (
+                0 if item.get("source") == "wikipedia" else
+                1 if item.get("source") == "wikidata" else 2,
+                -len(str(item.get("content") or "")),
+            )
+        )
+        if merged_results:
             logger.info(
                 "[LocalKnowledge] Retrieved %d open-corpus result(s)",
-                len(results),
+                len(merged_results),
             )
-
-        return results
+        return merged_results
 
     async def search_database(
         self,
@@ -1075,10 +1165,11 @@ class KnowledgeManager:
             return []
 
         try:
-            w_res = await self.world_model.search(
-                question
-            )
-
+            # WorldModel.search in this repository is synchronous, while some
+            # adapters may implement it asynchronously. Call first, then await
+            # only when the returned value is awaitable. Awaiting a plain dict
+            # caused the recurring "World model search failed" log.
+            w_res = self.world_model.search(question)
             if asyncio.iscoroutine(w_res):
                 w_res = await w_res
 
@@ -1536,7 +1627,9 @@ class KnowledgeManager:
                 safe_call("knowledge database/Wikipedia/Wikidata", self.search_database(question)),
                 safe_call("knowledge graph", self.search_graph(question)),
                 safe_call("world model", self.search_world(question)),
-                asyncio.sleep(0, result=[]),
+                # Include only documents explicitly active in this session;
+                # never search personal/episodic chat memory for general facts.
+                safe_call("active document", self.search_documents(session_id, question)),
                 asyncio.sleep(0, result=[]),
             )
         else:
