@@ -87,8 +87,28 @@ class AnswerComposer:
         return [part.strip() for part in parts if part.strip()]
 
     @staticmethod
+    def _normalized_question(question: str) -> str:
+        """Remove question framing and answer-style modifiers before relevance checks."""
+        text = re.sub(r"\s+", " ", str(question or "").strip().lower())
+        text = re.sub(
+            r"^(?:please\s+)?(?:can you\s+)?(?:explain|describe|define|tell me about|"
+            r"what is|what are|who is|who are|where is|where are|when is|when was|"
+            r"why is|why are|why does|why do|how is|how are|how does|how do)\s+",
+            "", text,
+        )
+        text = re.sub(
+            r"\s+(?:in simple words|in simple terms|in easy words|in plain english|"
+            r"simply|for beginners|like i am ten|like i'm ten|in detail|in brief|"
+            r"briefly|in short|please explain|with examples|with sources?)\s*[.!?]*$",
+            "", text,
+        )
+        text = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", text)
+        return text.strip(" .,!?:;")
+
+    @staticmethod
     def _topic_tokens(question: str) -> set:
-        words = re.findall(r"[a-z0-9][a-z0-9'-]*", question.lower())
+        normalized = AnswerComposer._normalized_question(question)
+        words = re.findall(r"[a-z0-9][a-z0-9'-]*", normalized)
         return {w for w in words if len(w) > 2 and w not in _STOP_WORDS}
 
     @classmethod
@@ -99,8 +119,11 @@ class AnswerComposer:
         title = cls._clean_text(item.get("title", "")).lower()
         content = cls._clean_text(item.get("content", "")).lower()
         title_words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", title))
-        content_words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", content[:2500]))
-        return len(topic & title_words) * 3 + len(topic & content_words)
+        content_words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", content[:3500]))
+        title_overlap = len(topic & title_words)
+        content_overlap = len(topic & content_words)
+        # Title matches are much more meaningful than generic words like "system".
+        return title_overlap * 5 + content_overlap
 
     @classmethod
     def _readable_evidence(cls, item: Dict[str, Any]) -> str:
@@ -111,6 +134,47 @@ class AnswerComposer:
         if content[:1] in "{[" and any(token in content[:120].lower() for token in ('"claims"', '"entities"', '"_id"', '"content"')):
             return ""
         return content
+
+    @staticmethod
+    def _simplify_text(text: str) -> str:
+        """Deterministic readability pass for explicit simple-language requests.
+
+        This uses a small, conservative phrase map rather than generative inference.
+        It improves common educational phrasing while retaining the source's meaning.
+        """
+        replacements = (
+            (r"\ba system of biological processes by which\b", "the process in which"),
+            (r"\bphotopigment-bearing autotrophic organisms, such as most plants, algae and cyanobacteria\b",
+             "plants, algae, and some bacteria"),
+            (r"\bphotopigment-bearing autotrophic organisms\b", "plants and other organisms that make their own food"),
+            (r"\bconvert light energy(?:—|-)typically from sunlight(?:—|-)into the chemical energy necessary to fuel their metabolism\b",
+             "use sunlight to make food"),
+            (r"\bconvert light energy into chemical energy\b", "use light to make stored energy"),
+            (r"\bchemical energy necessary to fuel their metabolism\b", "energy they can use to live and grow"),
+            (r"\bphotosynthetic organisms\b", "organisms that use photosynthesis"),
+            (r"\boxygenic photosynthesis\b", "a type of photosynthesis that releases oxygen"),
+            (r"\bbyproduct\b", "extra product"),
+            (r"\bcellular respiration\b", "the process cells use to release energy from food"),
+            (r"\bgravitationally bound system\b", "group of objects held together by gravity"),
+            (r"\bprotoplanetary disc\b", "disk of gas and dust around the young Sun"),
+            (r"\bmolecular cloud\b", "large cloud of gas and dust"),
+            (r"\bmetabolism\b", "the processes that keep an organism alive"),
+            (r"\bchloroplasts\b", "parts of plant and algae cells"),
+            (r"\bchlorophyll\b", "the green pigment that absorbs light"),
+            (r"\bautotrophic\b", "able to make its own food"),
+            (r"\borganisms\b", "living things"),
+            (r"\butilize\b", "use"),
+            (r"\bconvert\b", "change"),
+        )
+        result = text
+        for pattern, replacement in replacements:
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+        result = re.sub(r"\s+", " ", result).strip()
+        # A short definition is more useful than a technical paragraph in simple mode.
+        sentences = AnswerComposer._sentences(result)
+        if len(sentences) > 3:
+            result = " ".join(sentences[:3])
+        return result
 
     @staticmethod
     def _source_label(item: Dict[str, Any]) -> str:
@@ -222,6 +286,24 @@ class AnswerComposer:
                 "• UDP specification (IETF RFC 768) — https://www.rfc-editor.org/rfc/rfc768"
             )
 
+        # Remove unrelated records before combining evidence. A generic shared word
+        # such as "system" must not make a computer article support a solar-system answer.
+        topic_tokens = self._topic_tokens(question)
+        if topic_tokens:
+            relevant = []
+            for pair in valid:
+                overlap = self._topic_overlap(question, pair[0])
+                title_words = set(re.findall(
+                    r"[a-z0-9][a-z0-9'-]*",
+                    self._clean_text(pair[0].get("title", "")).lower(),
+                ))
+                title_overlap = len(topic_tokens & title_words)
+                minimum = 1 if len(topic_tokens) == 1 or title_overlap else 2
+                if overlap >= minimum:
+                    relevant.append(pair)
+            if relevant:
+                valid = relevant
+
         # Rank by KnowledgeManager's evidence score, then topic overlap.
         valid.sort(
             key=lambda pair: (
@@ -234,6 +316,11 @@ class AnswerComposer:
         valid = [pair for pair in valid if self._topic_overlap(question, pair[0]) > 0] or valid
 
         primary_item, primary_text = valid[0]
+        simple_mode = bool(re.search(
+            r"\b(?:simple words|simple terms|easy words|plain english|for beginners|"
+            r"like i am ten|like i'm ten)\b",
+            str(question or ""), flags=re.IGNORECASE,
+        ))
         title = self._clean_text(primary_item.get("title", ""))
         # Do not use a title that is just the entire question or an internal key.
         q_clean = re.sub(r"[^a-z0-9]+", " ", question.lower()).strip()
@@ -259,6 +346,8 @@ class AnswerComposer:
             lead_parts.append(sentence)
             current_len += len(sentence) + 1
         body = " ".join(lead_parts).strip()
+        if simple_mode:
+            body = self._simplify_text(body)
 
         # Bring in corroborating facts from other systems only when they match
         # the same topic and add distinct information. No paraphrasing model.
@@ -281,7 +370,7 @@ class AnswerComposer:
                 chosen = sentence
                 break
             if chosen:
-                extra_points.append(chosen)
+                extra_points.append(self._simplify_text(chosen) if simple_mode else chosen)
                 source_records.append(item)
 
         pieces: List[str] = []
