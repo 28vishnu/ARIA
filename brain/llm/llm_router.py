@@ -1511,6 +1511,62 @@ Return ONLY valid JSON in this exact format:
         if not memory_payload:
             return []
 
+        # Strict no-LLM mode must not call chat() and then try to parse
+        # its None result as JSON. Use conservative lexical ranking instead.
+        if self.strict_no_llm:
+            import unicodedata
+
+            stop_words = {
+                "a", "an", "and", "are", "as", "at", "be", "been", "being",
+                "but", "by", "can", "could", "did", "do", "does", "for", "from",
+                "had", "has", "have", "how", "i", "if", "in", "into", "is", "it",
+                "me", "my", "of", "on", "or", "our", "please", "should", "so",
+                "that", "the", "their", "them", "there", "this", "to", "was", "we",
+                "what", "when", "where", "which", "who", "why", "will", "with", "would",
+                "you", "your", "aria", "tell", "show", "remember", "said", "say",
+                "write", "create", "make", "give", "explain", "function", "code", "python",
+                "test", "tests", "example", "examples", "algorithm", "include", "using",
+            }
+
+            def tokens(value: str) -> set[str]:
+                normalized = unicodedata.normalize("NFKC", str(value or "")).lower()
+                return {
+                    token for token in re.findall(r"[a-z0-9]+", normalized)
+                    if len(token) > 1 and token not in stop_words
+                }
+
+            query_tokens = tokens(query)
+            if not query_tokens:
+                logger.debug("[LLMRouter] No meaningful terms for deterministic memory selection.")
+                return []
+
+            scored: list[tuple[float, str]] = []
+            for item in memory_payload:
+                key_tokens = tokens(item.get("key", "").replace("_", " "))
+                value_tokens = tokens(item.get("value", ""))
+                category_tokens = tokens(item.get("category", ""))
+                searchable = key_tokens | value_tokens | category_tokens
+                overlap = query_tokens & searchable
+                if not overlap:
+                    continue
+
+                # Key matches are more meaningful than incidental value matches.
+                score = (2.0 * len(query_tokens & key_tokens)) + len(query_tokens & value_tokens)
+                score += 0.25 * len(query_tokens & category_tokens)
+                coverage = len(overlap) / max(1, len(query_tokens))
+                score += coverage
+                scored.append((score, item["key"]))
+
+            scored.sort(key=lambda pair: (-pair[0], pair[1]))
+            # Conservative threshold prevents unrelated memories from being
+            # selected just because they share a common word.
+            selected = [key for score, key in scored if score >= 2.0][:10]
+            logger.info(
+                "[LLMRouter] Deterministic memory relevance selected %d/%d memories (strict no-LLM mode).",
+                len(selected), len(memory_payload),
+            )
+            return selected
+
         user_prompt = (
             "USER QUESTION:\n"
             f"{query}\n\n"
@@ -1538,7 +1594,12 @@ Return ONLY valid JSON in this exact format:
                 task="memory_relevance"
             )
 
+            if response is None:
+                logger.debug("[LLMRouter] Memory relevance unavailable; no response returned.")
+                return []
             cleaned = str(response).strip()
+            if not cleaned:
+                return []
 
             # Remove accidental Markdown fences.
             if cleaned.startswith("```"):
@@ -1753,6 +1814,8 @@ IMPORTANT RULES:
                 task="memory_reasoning"
             )
 
+            if response is None:
+                return ""
             answer = str(response).strip()
 
             if not answer:
