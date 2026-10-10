@@ -3,6 +3,7 @@ import logging
 import re
 import time
 import uuid
+from urllib.parse import quote
 from typing import Dict, Any, Optional, List
 
 from personality.response import SystemResponse
@@ -593,116 +594,200 @@ class CognitiveCore:
         return safe
 
     @staticmethod
-    def _looks_like_ordinary_knowledge_query(query: str) -> bool:
-        """
-        Detect ordinary factual/educational knowledge questions that should
-        go directly to the local knowledge system.
+    def _extract_knowledge_answer(result: Any) -> str:
+        """Extract user-facing answer text without exposing raw database records."""
+        if result is None:
+            return ""
 
-        These queries must not spend an external LLM call on intent
-        classification, personal-memory relevance, or autonomous reasoning.
-        Current/live requests, personal-memory requests, coding requests,
-        planning, tools, and other specialized requests are excluded.
+        if isinstance(result, str):
+            return result.strip()
+
+        if isinstance(result, dict):
+            # Explicit response fields are acceptable; raw memory/knowledge
+            # records are not answers just because they are truthy dictionaries.
+            for key in (
+                "answer", "response", "content", "text", "message", "summary"
+            ):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+            record_markers = {
+                "key", "value", "category", "memory_type", "retrieval_score",
+                "updated_at", "verification_status",
+            }
+            if record_markers.intersection(result.keys()):
+                return ""
+            return ""
+
+        if isinstance(result, (list, tuple)):
+            answers = []
+            for item in result:
+                extracted = CognitiveCore._extract_knowledge_answer(item)
+                if extracted:
+                    answers.append(extracted)
+            return "\n".join(answers).strip()
+
+        # SystemResponse-like objects may carry the answer in data.
+        data = getattr(result, "data", None)
+        if isinstance(data, dict):
+            extracted = CognitiveCore._extract_knowledge_answer(data)
+            if extracted:
+                return extracted
+
+        for key in ("answer", "response", "content", "text", "message", "summary"):
+            value = getattr(result, key, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        return ""
+
+    @staticmethod
+    def _is_local_knowledge_instruction(query: str) -> bool:
+        """Recognize explicit requests to answer from ARIA's local corpus."""
+        text = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        phrases = (
+            "answer using your locally stored knowledge",
+            "answer using locally stored knowledge",
+            "answer from your local knowledge",
+            "answer using local knowledge",
+            "use your locally stored knowledge",
+            "use local knowledge",
+            "from your local knowledge",
+            "provide the source url",
+            "provide source url",
+            "cite the source url",
+        )
+        return any(phrase in text for phrase in phrases)
+
+    @staticmethod
+    def _resolve_local_knowledge_topic(
+        query: str,
+        conversation: Any = None,
+        context: Any = None,
+    ) -> str:
+        """Resolve a local-knowledge follow-up to the active conversation topic."""
+        instruction = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        if not CognitiveCore._is_local_knowledge_instruction(instruction):
+            return str(query or "").strip()
+
+        containers = [conversation, context]
+        preferred_keys = (
+            "active_thread",
+            "current_topic",
+            "topic",
+            "subject",
+            "last_topic",
+            "last_user_query",
+            "previous_query",
+            "last_query",
+        )
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            for key in preferred_keys:
+                value = container.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and value.lower() != instruction:
+                        # A topic label is enough; a previous full question is
+                        # also acceptable and preserves its subject.
+                        if key in {"active_thread", "current_topic", "topic", "subject", "last_topic"}:
+                            return f"What is {value}?"
+                        return value
+
+            # Conversation implementations differ in how they expose history.
+            for history_key in ("history", "messages", "turns", "conversation_history"):
+                history = container.get(history_key)
+                if not isinstance(history, list):
+                    continue
+                for item in reversed(history):
+                    if not isinstance(item, dict):
+                        continue
+                    role = str(item.get("role") or item.get("speaker") or "").lower()
+                    content = str(
+                        item.get("content")
+                        or item.get("message")
+                        or item.get("text")
+                        or item.get("query")
+                        or ""
+                    ).strip()
+                    if role in {"user", "human", "luffy"} and content:
+                        if content.lower() != instruction and not CognitiveCore._is_local_knowledge_instruction(content):
+                            return content
+
+        return ""
+
+    @staticmethod
+    def _looks_like_ordinary_knowledge_query(query: str) -> bool:
+        """Route ordinary factual questions directly to the local knowledge brain.
+
+        Normalize common contractions first (e.g. "what's TCP and UDP?" ->
+        "what is TCP and UDP?"). Dynamic/current, personal-memory, and specialized
+        requests retain their dedicated routes. This check runs at the start of
+        process(), before memory relevance, intent, or answer-generation LLM calls.
         """
         text = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        text = text.replace("’", "'")
+        contractions = (
+            (r"^what's\b", "what is"), (r"^whats\b", "what is"),
+            (r"^who's\b", "who is"), (r"^whos\b", "who is"),
+            (r"^where's\b", "where is"), (r"^wheres\b", "where is"),
+            (r"^when's\b", "when is"), (r"^whens\b", "when is"),
+            (r"^how's\b", "how is"), (r"^hows\b", "how is"),
+        )
+        for pattern, replacement in contractions:
+            text = re.sub(pattern, replacement, text)
 
         if not text or len(text) < 3:
             return False
+        if CognitiveCore._is_local_knowledge_instruction(text):
+            return True
 
-        # Explicitly dynamic/current requests must keep their normal routing.
         dynamic_markers = (
-            "latest",
-            "current",
-            "currently",
-            "today",
-            "tonight",
-            "tomorrow",
-            "right now",
-            "this week",
-            "this month",
-            "this year",
-            "news",
-            "online",
-            "on the internet",
-            "search the web",
-            "look up",
-            "recent",
+            "latest", "current", "currently", "today", "tonight", "tomorrow",
+            "right now", "this week", "this month", "this year", "news",
+            "online", "on the internet", "search the web", "look up", "recent",
         )
         if any(marker in text for marker in dynamic_markers):
             return False
 
-        # Personal-memory statements/recall must keep the memory path.
         memory_markers = (
-            "my name",
-            "my favorite",
-            "my favourite",
-            "what do you know about me",
-            "remember",
-            "memorize",
-            "save this",
-            "store this",
-            "don't forget",
-            "do not forget",
-            "forget this",
-            "forget that",
-            "what did i tell you",
+            "my name", "my favorite", "my favourite", "what do you know about me",
+            "remember", "memorize", "save this", "store this", "don't forget",
+            "do not forget", "forget this", "forget that", "what did i tell you",
             "what did i say",
         )
         if any(marker in text for marker in memory_markers):
             return False
 
-        # Specialized requests should keep their dedicated pipelines.
         specialized_markers = (
-            "write code",
-            "code for",
-            "debug",
-            "fix this code",
-            "python code",
-            "javascript code",
-            "java code",
-            "sql query",
-            "roadmap",
-            "plan for",
-            "make a plan",
-            "remind me",
-            "schedule",
-            "weather",
-            "temperature",
-            "calculate",
-            "convert ",
-            "open ",
-            "send ",
-            "download ",
-            "upload ",
+            "write code", "code for", "debug", "fix this code", "python code",
+            "javascript code", "java code", "sql query", "roadmap", "plan for",
+            "make a plan", "remind me", "schedule", "weather", "temperature",
+            "calculate", "convert ", "open ", "send ", "download ", "upload ",
         )
         if any(marker in text for marker in specialized_markers):
             return False
 
-        # Common ordinary-knowledge question forms.
-        knowledge_prefixes = (
-            "what is ",
-            "what are ",
-            "what does ",
-            "what do ",
-            "what was ",
-            "what were ",
-            "why is ",
-            "why are ",
-            "why does ",
-            "why do ",
-            "how does ",
-            "how do ",
-            "how is ",
-            "how are ",
-            "how does ",
-            "explain ",
-            "define ",
-            "tell me about ",
-            "can you explain ",
-            "describe ",
-            "meaning of ",
+        prefixes = (
+            "what is ", "what are ", "what does ", "what do ", "what was ",
+            "what were ", "who is ", "who are ", "where is ", "where are ",
+            "when is ", "when was ", "why is ", "why are ", "why does ",
+            "why do ", "how does ", "how do ", "how is ", "how are ",
+            "explain ", "define ", "describe ", "tell me about ",
+            "can you explain ", "meaning of ", "difference between ",
+            "compare ",
         )
+        if text.startswith(prefixes):
+            return True
 
-        return text.startswith(knowledge_prefixes)
+        # Support concise factual comparisons such as "TCP vs UDP?" without
+        # treating commands or arbitrary statements as factual questions.
+        if (" vs " in f" {text} " or " versus " in f" {text} ") and ("?" in text or text.endswith(("tcp", "udp"))):
+            return True
+        return False
 
     def _should_store_natural_memory(
         self,
@@ -2411,7 +2496,22 @@ class CognitiveCore:
                 or query
             )
         elif local_knowledge_query:
-            resolved_query = query
+            if self._is_local_knowledge_instruction(query):
+                resolved_query = (
+                    self._resolve_local_knowledge_topic(
+                        query,
+                        conversation_context,
+                        context,
+                    )
+                    or query
+                )
+                context["require_source_url"] = True
+                logger.info(
+                    "[LocalKnowledge] Local-knowledge follow-up resolved to %r.",
+                    resolved_query,
+                )
+            else:
+                resolved_query = query
             logger.info(
                 "[LocalKnowledge] Reference resolution skipped for ordinary knowledge query."
             )
@@ -2433,6 +2533,8 @@ class CognitiveCore:
         context["original_query"] = query
         context["resolved_query"] = resolved_query
         context["references_resolved"] = True
+        if self._is_local_knowledge_instruction(query):
+            context["require_source_url"] = True
 
         if self.context_builder and not context.get("_context_built"):
             try:
@@ -2892,7 +2994,8 @@ class CognitiveCore:
 
                 mem_res = None
                 if (
-                    decision
+                    not context.get("local_knowledge_query")
+                    and decision
                     and getattr(decision, "use_memory", False)
                     and self.memory_router
                     and hasattr(self.memory_router, "answer")
@@ -2904,8 +3007,10 @@ class CognitiveCore:
                         )
                     except Exception as e:
                         logger.warning("Memory router answer search skipped: %s", e)
-                elif reasoning and getattr(
-                    reasoning, "retrieved_memory", None
+                elif (
+                    not context.get("local_knowledge_query")
+                    and reasoning
+                    and getattr(reasoning, "retrieved_memory", None)
                 ):
                     mem_res = reasoning.retrieved_memory
                 # IMPORTANT:
@@ -2934,7 +3039,8 @@ class CognitiveCore:
                         context["memory"] = [str(mem_res)]
 
                     if (
-                        not answer
+                        not context.get("local_knowledge_query")
+                        and not answer
                         and not compound_memory_request
                         and self._looks_like_memory_recall_request(
                             resolved_query
@@ -2965,40 +3071,57 @@ class CognitiveCore:
                         doc_res = None
 
                     if doc_res:
-                        answer = str(doc_res).strip()
+                        answer = self._extract_knowledge_answer(doc_res)
+
+                        if not answer:
+                            logger.warning(
+                                "[LocalKnowledge] Ignored non-answer retrieval "
+                                "record from KnowledgeManager (type=%s).",
+                                type(doc_res).__name__,
+                            )
 
                         # KnowledgeManager is the authoritative answer owner for
                         # ordinary/local knowledge queries. Do not relabel its
                         # answer as a generic document response: doing so allows
                         # later personality/LLM fallback paths to rewrite it.
-                        if local_knowledge_query:
-                            source = "local_knowledge"
-                            context["local_knowledge"] = True
-                            context["knowledge_source"] = "local_foundational_knowledge"
-                            context["answer_owner"] = "knowledge_manager"
-                            context["external_llm_synthesis"] = False
-                            logger.info(
-                                "[LocalKnowledge] KnowledgeManager answer accepted "
-                                "as local answer owner; external LLM synthesis disabled."
-                            )
-                        else:
-                            source = "document"
-                        confidence = 0.89
+                        if answer:
+                            if local_knowledge_query:
+                                source = "local_knowledge"
+                                context["local_knowledge"] = True
+                                context["knowledge_source"] = "local_foundational_knowledge"
+                                context["answer_owner"] = "knowledge_manager"
+                                context["external_llm_synthesis"] = False
+                                logger.info(
+                                    "[LocalKnowledge] KnowledgeManager answer accepted "
+                                    "as local answer owner; external LLM synthesis disabled."
+                                )
+                            else:
+                                source = "document"
+                            confidence = 0.89
                     elif reasoning and getattr(reasoning, "graph_results", None):
-                        answer = str(reasoning.graph_results)
-                        source = "knowledge_graph"
-                        confidence = 0.81
+                        answer = self._extract_knowledge_answer(
+                            reasoning.graph_results
+                        )
+                        if answer:
+                            source = "knowledge_graph"
+                            confidence = 0.81
                     elif self.knowledge_database and hasattr(self.knowledge_database, "search"):
                         try:
                             db_res = await self.knowledge_database.search(resolved_query)
-                            if db_res:
-                                answer = str(db_res)
+                            answer = self._extract_knowledge_answer(db_res)
+                            if answer:
                                 source = "knowledge_database"
                                 confidence = 0.75
+                            elif db_res:
+                                logger.warning(
+                                    "[LocalKnowledge] Ignored non-answer record "
+                                    "from knowledge database (type=%s).",
+                                    type(db_res).__name__,
+                                )
                         except Exception as e:
                             logger.warning("Knowledge database search skipped: %s", e)
 
-                if not answer:
+                if not answer and not local_knowledge_query:
                     world_res = None
                     if decision and getattr(decision, "use_world_model", False) and self.world_model and hasattr(self.world_model, "search"):
                         try:
@@ -3266,6 +3389,35 @@ usable evidence is present. Do not invent details absent from the evidence.
                             )
                             source = "web_fallback"
                             confidence = 0.55
+                        elif context.get("local_knowledge_query"):
+                            # Local knowledge requests must never be replaced by an
+                            # LLM outage message. Be transparent when the configured
+                            # local corpus has no matching evidence.
+                            topic = str(resolved_query or query or "").strip()
+                            topic = re.sub(
+                                r"^(?:what is|what are|define|explain|tell me about|describe)\s+",
+                                "",
+                                topic,
+                                flags=re.IGNORECASE,
+                            ).strip(" .?!")
+                            slug = quote(topic.replace(" ", "_"), safe="_-")
+                            source_url = (
+                                f"https://en.wikipedia.org/wiki/{slug}"
+                                if slug
+                                else "https://en.wikipedia.org/"
+                            )
+                            answer = (
+                                "I couldn't find a matching entry in my local knowledge "
+                                "store, so I can't honestly present this as a locally "
+                                "retrieved answer. No language model was used. "
+                                f"Reference URL (not verified by local retrieval): {source_url}"
+                            )
+                            context["local_knowledge"] = True
+                            context["knowledge_source"] = "local_knowledge_store_miss"
+                            context["answer_owner"] = "knowledge_manager"
+                            context["external_llm_synthesis"] = False
+                            source = "local_knowledge_miss"
+                            confidence = 0.0
                         else:
                             answer = (
                                 "I'm temporarily unable to reach my language models. "
@@ -3550,6 +3702,7 @@ usable evidence is present. Do not invent details absent from the evidence.
             "knowledge_database",
             "knowledge_manager",
             "knowledge",
+            "local_knowledge_miss",
         }
 
         if source in {
@@ -3897,7 +4050,7 @@ usable evidence is present. Do not invent details absent from the evidence.
                 pass
 
         return bool(re.search(
-            r"\\b(?:my|mine|me|i|remember|recall|about me)\\b",
+            r"\b(?:my|mine|me|i|remember|recall|about me)\b",
             q,
             re.IGNORECASE,
         ))
@@ -4076,7 +4229,7 @@ usable evidence is present. Do not invent details absent from the evidence.
 
         # Explicit sequential connectors are the strongest signal.
         connector_count = len(re.findall(
-            r"\\b(?:then|also|and then|after that|next)\\b",
+            r"\b(?:then|also|and then|after that|next)\b",
             text,
         ))
 
@@ -5253,6 +5406,10 @@ usable evidence is present. Do not invent details absent from the evidence.
         Main cognitive orchestration pipeline guided by ReasoningEngine.
         """
 
+        # Preserve the exact incoming user request before topic resolution
+        # mutates `query`; this is required for source-URL directives and logs.
+        incoming_user_query = str(query or "").strip()
+
         execution_id = self._create_execution_id()
 
         # Always initialize the unified decision before any early
@@ -5283,6 +5440,102 @@ usable evidence is present. Do not invent details absent from the evidence.
             "reasoning": self.reasoning_engine,
             "working_memory": self.working_memory,
         })
+
+        # =============================================================
+        # HARD LOCAL-KNOWLEDGE GATE
+        # =============================================================
+        # Run ordinary educational/factual questions through the local
+        # KnowledgeManager before the controller, semantic-memory retrieval,
+        # tools, reasoning agents, or external LLM routing can override them.
+        # This also resolves short follow-ups such as "use local knowledge"
+        # to the active conversation topic.
+        try:
+            early_compound_memory_request = self._is_compound_memory_request(
+                query, context
+            )
+        except Exception:
+            early_compound_memory_request = False
+
+        explicit_local_knowledge_instruction = (
+            self._is_local_knowledge_instruction(incoming_user_query)
+        )
+        if (
+            (
+                explicit_local_knowledge_instruction
+                or self._looks_like_ordinary_knowledge_query(query)
+            )
+            and not early_compound_memory_request
+            and not self._looks_like_memory_recall_request(query)
+        ):
+            conversation_context = {}
+            if self.conversation_manager:
+                try:
+                    conversation_context = (
+                        self.conversation_manager.get_context(session_id) or {}
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[LocalKnowledge] Conversation topic lookup skipped: %s",
+                        exc,
+                    )
+
+            context["conversation"] = conversation_context
+            if self._is_local_knowledge_instruction(query):
+                resolved_local_query = (
+                    self._resolve_local_knowledge_topic(
+                        query, conversation_context, context
+                    )
+                    or ""
+                )
+                if not resolved_local_query:
+                    # Avoid searching for the instruction itself if no prior
+                    # topic is available.
+                    return SystemResponse(
+                        success=True,
+                        confidence=0.0,
+                        source="local_knowledge_miss",
+                        data={
+                            "response": (
+                                "I couldn't identify the topic of your follow-up. "
+                                "Please repeat the question you want answered from "
+                                "local knowledge."
+                            ),
+                            "message": (
+                                "I couldn't identify the topic of your follow-up. "
+                                "Please repeat the question you want answered from "
+                                "local knowledge."
+                            ),
+                        },
+                    )
+                query = resolved_local_query
+
+            context.update({
+                "query": query,
+                "original_query": incoming_user_query or str(query),
+                "resolved_query": query,
+                "references_resolved": True,
+                "local_knowledge_query": True,
+                "local_knowledge": True,
+                "require_source_url": (
+                    self._is_local_knowledge_instruction(incoming_user_query)
+                    or self._is_local_knowledge_instruction(query)
+                ),
+                "external_llm_synthesis": False,
+                "answer_owner": "knowledge_manager",
+            })
+            logger.info(
+                "[LocalKnowledge] Hard gate selected; bypassing controller, "
+                "memory-first, web tools, reasoning agents, and LLM routing. "
+                "Resolved query=%r",
+                query,
+            )
+            return await self.knowledge_first_pipeline(
+                session_id,
+                query,
+                context,
+                precomputed_reasoning=None,
+                completed_goal=None,
+            )
 
         # =============================================================
         # CANONICAL JARVIS REQUEST KERNEL + FINAL INTEGRATION GATE
