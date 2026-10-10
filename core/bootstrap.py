@@ -1960,6 +1960,35 @@ async def bootstrap_application() -> ServiceRegistry:
     )
 
     # ---------------------------------------------------------
+    # Unified local knowledge acquisition (idle-only RSS updates)
+    # ---------------------------------------------------------
+
+    try:
+        from brain.knowledge.knowledge_hub import idle_knowledge_collection
+
+        knowledge_refresh_interval = max(
+            900.0,
+            float(os.getenv("ARIA_KNOWLEDGE_REFRESH_INTERVAL", "1800")),
+        )
+        knowledge_hub_job_id = scheduler.schedule_recurring(
+            knowledge_refresh_interval,
+            idle_knowledge_collection,
+            goal_id="aria_idle_knowledge_acquisition",
+            timeout_seconds=min(
+                max(60.0, scheduler.default_timeout_seconds),
+                float(os.getenv("ARIA_KNOWLEDGE_REFRESH_TIMEOUT", "180")),
+            ),
+            run_immediately=True,
+        )
+        registry.register("knowledge_hub_job", knowledge_hub_job_id)
+        logger.info(
+            "[KnowledgeHub] Idle-only local news acquisition scheduled | interval=%ss",
+            knowledge_refresh_interval,
+        )
+    except Exception:
+        logger.exception("[KnowledgeHub] Could not schedule idle knowledge acquisition.")
+
+    # ---------------------------------------------------------
     # Automation Watchers
     # ---------------------------------------------------------
 
