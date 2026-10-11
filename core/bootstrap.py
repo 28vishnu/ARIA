@@ -1712,6 +1712,19 @@ async def bootstrap_application() -> ServiceRegistry:
         tool_manager.list_tools(),
     )
 
+    # KnowledgeManager is created before SearchTool during bootstrap. Wire the
+    # shared instance so local misses can use configured public search.
+    try:
+        knowledge_manager.web_search = search_tool
+        logger.info(
+            "[Bootstrap] Shared SearchTool connected to KnowledgeManager | available=%s",
+            search_tool.is_available(),
+        )
+    except Exception:
+        logger.exception(
+            "[Bootstrap] Failed to connect SearchTool to KnowledgeManager."
+        )
+
     # Register safe built-in calculator capability.
     try:
 
