@@ -489,12 +489,21 @@ class AnswerComposer:
 
         answer = "\n\n".join(piece for piece in pieces if piece).strip()
 
-        if asks_example and re.search(r"\bgravity\b", normalized_lc):
-            example = "Example: If you drop a ball, Earth's gravity pulls it toward the ground."
-            marker = "\n\nSources:"
-            if marker in answer:
-                answer = answer.replace(marker, "\n\n" + example + marker, 1)
-            else:
-                answer += "\n\n" + example
+        if asks_example:
+            example = ""
+            if re.search(r"\bgravity\b", normalized_lc):
+                example = "Example: If you drop a ball, Earth's gravity pulls it toward the ground."
+            elif re.search(r"\bsolar system\b", normalized_lc):
+                example = (
+                    "Everyday analogy: Imagine a lamp in the middle of a room and small objects "
+                    "moving around it. The Sun is like the lamp at the center, while planets orbit "
+                    "it because of gravity; unlike the analogy, planets are not held by strings."
+                )
+            if example:
+                marker = "\n\nSources:"
+                if marker in answer:
+                    answer = answer.replace(marker, "\n\n" + example + marker, 1)
+                else:
+                    answer += "\n\n" + example
 
         return answer[: self.max_answer_chars + 900]
