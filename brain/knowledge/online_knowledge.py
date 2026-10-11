@@ -13,12 +13,26 @@ LOG = logging.getLogger("aria.online_knowledge")
 
 
 def topic_from_question(question: str) -> str:
-    """Remove common answer-style framing while preserving the requested topic."""
+    """Remove answer-style framing while preserving meaningful article titles."""
     topic = re.sub(r"\s+", " ", str(question or "").strip())
     topic = re.sub(
         r"^(?:please\s+)?(?:can you\s+)?(?:explain|define|describe|tell me about|"
         r"what is|what are|what was|who is|who are|where is|where are|"
         r"why is|why are|how does|how do|how is|how are)\s+",
+        "", topic, flags=re.IGNORECASE,
+    )
+    # Remove trailing answer requests, including punctuation between clauses.
+    topic = re.sub(
+        r"(?:[?.!,;]\s*)?(?:and\s+)?(?:please\s+)?"
+        r"(?:give|provide|show|include|add)\s+(?:(?:me|us)\s+)?"
+        r"(?:(?:an?|the)\s+)?(?:everyday\s+|real[- ]life\s+|simple\s+)?"
+        r"(?:example|examples|sample|samples)(?:\s+(?:of it|for it|please))?\s*[?.!]*$",
+        "", topic, flags=re.IGNORECASE,
+    )
+    topic = re.sub(
+        r"(?:[?.!,;]\s*)?(?:and\s+)?(?:please\s+)?"
+        r"(?:provide|give|show|include|cite)\s+(?:the\s+)?"
+        r"source(?:\s+urls?)?\s*[?.!]*$",
         "", topic, flags=re.IGNORECASE,
     )
     topic = re.sub(
@@ -28,6 +42,7 @@ def topic_from_question(question: str) -> str:
         "", topic, flags=re.IGNORECASE,
     )
     topic = re.sub(r"[?.!]+$", "", topic).strip()
+    topic = re.sub(r"\s+(?:and|then)$", "", topic, flags=re.IGNORECASE).strip()
     return topic[:180]
 
 
