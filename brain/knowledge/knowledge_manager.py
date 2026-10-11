@@ -1016,7 +1016,8 @@ class KnowledgeManager:
         ).strip(" \\t.,;:!?")
         # Remove non-informative possessive/determiner prefixes without damaging
         # meaningful topic names such as "The Solar System".
-        topic = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", topic, flags=re.IGNORECASE)
+        # Preserve title-initial determiners such as "The Solar System".
+        topic = re.sub(r"^(?:our|my|your)\s+", "", topic, flags=re.IGNORECASE)
 
         if not topic or len(topic) > 180:
             if results:
@@ -1879,23 +1880,49 @@ class KnowledgeManager:
         self,
         question: str,
     ) -> List[Dict[str, Any]]:
-        """Return cited web evidence records without generating an answer.
+        """Return cited public-web evidence without using an LLM.
 
-        Search snippets are evidence only. They are not automatically written
-        into the permanent knowledge base because snippets may be incomplete
-        and often lack enough context for safe factual learning.
+        SearchTool.execute returns a dictionary, not an object with attributes.
+        Accept both the current SearchTool contract and legacy ActionResult-like
+        objects so a provider result is not silently discarded.
         """
         if not (self.web_search and hasattr(self.web_search, "execute")):
+            logger.warning(
+                "[KnowledgeBrain] Web fallback unavailable: no SearchTool is wired."
+            )
             return []
 
         try:
-            res = await self.web_search.execute({"query": question, "max_results": 5})
-            if not res or not getattr(res, "success", False):
-                return []
+            try:
+                res = await self.web_search.execute(
+                    query=question,
+                    context={"search_depth": "advanced"},
+                )
+            except TypeError:
+                # Compatibility with older action wrappers expecting one params dict.
+                res = await self.web_search.execute(
+                    {"query": question, "max_results": 5}
+                )
 
-            data = getattr(res, "data", {})
-            if not isinstance(data, dict):
-                data = {"content": str(data)}
+            if isinstance(res, dict):
+                success = bool(res.get("success", False))
+                data = res
+            else:
+                success = bool(getattr(res, "success", False))
+                data = getattr(res, "data", {})
+                if not isinstance(data, dict):
+                    data = {"content": str(data or "")}
+
+            if not success:
+                error = (
+                    res.get("error", "") if isinstance(res, dict)
+                    else getattr(res, "error", "")
+                )
+                logger.warning(
+                    "[KnowledgeBrain] Web search returned no success: %s",
+                    str(error or "no details")[:240],
+                )
+                return []
 
             raw_results = data.get("results")
             evidence: List[Dict[str, Any]] = []
@@ -1909,7 +1936,7 @@ class KnowledgeManager:
                         item.get("snippet") or item.get("content")
                         or item.get("description") or ""
                     ).strip()
-                    if not content or self._is_bad_knowledge_content(content):
+                    if len(content) < 30 or self._is_bad_knowledge_content(content):
                         continue
                     if not url.startswith(("https://", "http://")):
                         continue
@@ -1930,24 +1957,27 @@ class KnowledgeManager:
                         "external_llm_synthesis": False,
                     })
 
-            # Compatibility fallback for providers that return a single text.
             if not evidence:
                 text = str(
                     data.get("result") or data.get("content")
                     or data.get("answer") or ""
                 ).strip()
                 if text and not self._is_bad_knowledge_content(text):
-                    # Parse the stable WebSearchAction format: title, URL, snippet.
                     blocks = re.split(r"\n\s*\n", text)
                     for block in blocks[:5]:
-                        match = re.search(r"(?im)^\s*URL:\s*(https?://\S+)\s*$", block)
+                        match = re.search(
+                            r"(?im)^\s*URL:\s*(https?://\S+)\s*$", block
+                        )
                         if not match:
                             continue
                         url = match.group(1).rstrip(".,;:!?\"'")
                         title_match = re.match(r"\s*\d+\.\s*(.*?)\s*\n", block)
                         title = title_match.group(1).strip() if title_match else url
-                        snippet = re.sub(r"(?im)^\s*(?:\d+\.\s*.*|URL:\s*https?://\S+)\s*$", "", block).strip()
-                        if snippet:
+                        snippet = re.sub(
+                            r"(?im)^\s*(?:\d+\.\s*.*|URL:\s*https?://\S+)\s*$",
+                            "", block,
+                        ).strip()
+                        if snippet and len(snippet) >= 30:
                             evidence.append({
                                 "source": "web_search", "source_id": url,
                                 "title": title, "url": url, "content": snippet,
@@ -1960,9 +1990,12 @@ class KnowledgeManager:
 
             if evidence:
                 logger.info(
-                    "[KnowledgeBrain] Added %d cited web evidence record(s); "
-                    "unverified snippets were not learned automatically.",
+                    "[KnowledgeBrain] Web fallback returned %d cited evidence record(s).",
                     len(evidence),
+                )
+            else:
+                logger.warning(
+                    "[KnowledgeBrain] Web search succeeded but returned no usable cited evidence."
                 )
             return evidence
 
