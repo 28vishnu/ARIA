@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 from brain.knowledge.answer_composer import AnswerComposer
+from brain.knowledge.evidence_cleaner import clean_evidence_text, is_useful_evidence
 
 logger = logging.getLogger("aria")
 
@@ -1016,8 +1017,7 @@ class KnowledgeManager:
         ).strip(" \\t.,;:!?")
         # Remove non-informative possessive/determiner prefixes without damaging
         # meaningful topic names such as "The Solar System".
-        # Preserve title-initial determiners such as "The Solar System".
-        topic = re.sub(r"^(?:our|my|your)\s+", "", topic, flags=re.IGNORECASE)
+        topic = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", topic, flags=re.IGNORECASE)
 
         if not topic or len(topic) > 180:
             if results:
@@ -1880,127 +1880,103 @@ class KnowledgeManager:
         self,
         question: str,
     ) -> List[Dict[str, Any]]:
-        """Return cited public-web evidence without using an LLM.
+        """Return clean, source-backed web evidence from the configured SearchTool.
 
-        SearchTool.execute returns a dictionary, not an object with attributes.
-        Accept both the current SearchTool contract and legacy ActionResult-like
-        objects so a provider result is not silently discarded.
+        SearchTool.execute accepts ``query=`` and returns a dictionary. Search
+        excerpts are treated as excerpts, never as full-page article text.
         """
-        if not (self.web_search and hasattr(self.web_search, "execute")):
-            logger.warning(
-                "[KnowledgeBrain] Web fallback unavailable: no SearchTool is wired."
-            )
+        tool = self.web_search
+        if not (tool and callable(getattr(tool, "execute", None))):
+            logger.info("[KnowledgeBrain] Web fallback unavailable: SearchTool is not connected.")
             return []
 
         try:
-            try:
-                res = await self.web_search.execute(
-                    query=question,
-                    context={"search_depth": "advanced"},
-                )
-            except TypeError:
-                # Compatibility with older action wrappers expecting one params dict.
-                res = await self.web_search.execute(
-                    {"query": question, "max_results": 5}
-                )
+            from brain.knowledge.online_knowledge import _safe_public_http_url, topic_from_question
 
-            if isinstance(res, dict):
-                success = bool(res.get("success", False))
-                data = res
-            else:
-                success = bool(getattr(res, "success", False))
-                data = getattr(res, "data", {})
-                if not isinstance(data, dict):
-                    data = {"content": str(data or "")}
-
-            if not success:
-                error = (
-                    res.get("error", "") if isinstance(res, dict)
-                    else getattr(res, "error", "")
-                )
+            search_query = topic_from_question(question) or str(question or "").strip()
+            response = await tool.execute(
+                query=search_query,
+                context={"search_depth": "advanced"},
+            )
+            if not isinstance(response, dict):
                 logger.warning(
-                    "[KnowledgeBrain] Web search returned no success: %s",
-                    str(error or "no details")[:240],
+                    "[KnowledgeBrain] SearchTool returned unsupported response type=%s.",
+                    type(response).__name__,
+                )
+                return []
+            if not response.get("success"):
+                logger.warning(
+                    "[KnowledgeBrain] SearchTool reported failure: %s",
+                    response.get("error", "unspecified search failure"),
                 )
                 return []
 
-            raw_results = data.get("results")
+            raw_results = response.get("results")
+            if not isinstance(raw_results, list):
+                logger.warning("[KnowledgeBrain] SearchTool response did not contain a results list.")
+                return []
+
+            topic_tokens = {
+                token.casefold()
+                for token in re.findall(r"[a-zA-Z0-9]+", search_query)
+                if len(token) > 2 and token.casefold() not in {
+                    "what", "who", "where", "when", "why", "how", "the", "and",
+                    "for", "with", "from", "into", "about", "between", "please",
+                    "explain", "define", "describe", "provide", "source", "everyday",
+                    "example", "examples", "latest", "major", "development",
+                }
+            }
             evidence: List[Dict[str, Any]] = []
-            if isinstance(raw_results, list):
-                for item in raw_results[:5]:
-                    if not isinstance(item, dict):
-                        continue
-                    title = str(item.get("title") or "").strip()
-                    url = str(item.get("url") or item.get("link") or "").strip()
-                    content = str(
-                        item.get("snippet") or item.get("content")
-                        or item.get("description") or ""
-                    ).strip()
-                    if len(content) < 30 or self._is_bad_knowledge_content(content):
-                        continue
-                    if not url.startswith(("https://", "http://")):
-                        continue
-                    evidence.append({
-                        "source": "web_search",
-                        "source_id": url,
-                        "title": title or url,
-                        "url": url,
-                        "content": content,
-                        "confidence": 0.68,
-                        "importance": 60,
-                        "relevance": 0.78,
-                        "freshness": 0.95,
-                        "verified": False,
-                        "evidence_type": "web_snippet",
-                        "provenance": url,
-                        "local_knowledge": False,
-                        "external_llm_synthesis": False,
-                    })
+            seen_urls = set()
+            for item in raw_results[:5]:
+                if not isinstance(item, dict):
+                    continue
+                title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", str(item.get("title") or ""))).strip()[:300]
+                url = _safe_public_http_url(item.get("url") or item.get("link"))
+                raw_content = item.get("snippet") or item.get("content") or item.get("description") or ""
+                content = clean_evidence_text(raw_content, max_chars=6000)
+                if not url or not content or not is_useful_evidence(content):
+                    continue
+                # A title match alone is not enough: short-topic search snippets
+                # must mention at least one core topic term in their actual text.
+                if len(topic_tokens) <= 3 and topic_tokens and not any(
+                    token in content.casefold() for token in topic_tokens
+                ):
+                    continue
+                if self._is_bad_knowledge_content(content):
+                    continue
+                if self._is_non_factual_source("web_search", "web_snippet"):
+                    continue
+                key = url.casefold()
+                if key in seen_urls:
+                    continue
+                seen_urls.add(key)
+                evidence.append({
+                    "source": "web_search",
+                    "source_id": url,
+                    "title": title or url,
+                    "url": url,
+                    "content": content,
+                    "confidence": 0.68,
+                    "importance": 60,
+                    "relevance": 0.78,
+                    "freshness": 0.75,
+                    "verified": False,
+                    "evidence_type": "web_search_excerpt",
+                    "content_type": "search_excerpt",
+                    "provenance": url,
+                    "local_knowledge": False,
+                    "external_llm_synthesis": False,
+                })
 
-            if not evidence:
-                text = str(
-                    data.get("result") or data.get("content")
-                    or data.get("answer") or ""
-                ).strip()
-                if text and not self._is_bad_knowledge_content(text):
-                    blocks = re.split(r"\n\s*\n", text)
-                    for block in blocks[:5]:
-                        match = re.search(
-                            r"(?im)^\s*URL:\s*(https?://\S+)\s*$", block
-                        )
-                        if not match:
-                            continue
-                        url = match.group(1).rstrip(".,;:!?\"'")
-                        title_match = re.match(r"\s*\d+\.\s*(.*?)\s*\n", block)
-                        title = title_match.group(1).strip() if title_match else url
-                        snippet = re.sub(
-                            r"(?im)^\s*(?:\d+\.\s*.*|URL:\s*https?://\S+)\s*$",
-                            "", block,
-                        ).strip()
-                        if snippet and len(snippet) >= 30:
-                            evidence.append({
-                                "source": "web_search", "source_id": url,
-                                "title": title, "url": url, "content": snippet,
-                                "confidence": 0.65, "importance": 55,
-                                "relevance": 0.72, "freshness": 0.9,
-                                "verified": False, "evidence_type": "web_snippet",
-                                "provenance": url, "local_knowledge": False,
-                                "external_llm_synthesis": False,
-                            })
-
-            if evidence:
-                logger.info(
-                    "[KnowledgeBrain] Web fallback returned %d cited evidence record(s).",
-                    len(evidence),
-                )
-            else:
-                logger.warning(
-                    "[KnowledgeBrain] Web search succeeded but returned no usable cited evidence."
-                )
+            logger.info(
+                "[KnowledgeBrain] SearchTool returned %d results for topic=%r; accepted %d clean cited evidence record(s).",
+                len(raw_results), search_query, len(evidence),
+            )
             return evidence
 
         except Exception:
-            logger.exception("[KnowledgeBrain] Web evidence search failed")
+            logger.exception("[KnowledgeBrain] Web evidence search failed.")
             return []
 
     # =========================================================
