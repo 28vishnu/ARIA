@@ -992,32 +992,11 @@ class KnowledgeManager:
                 pattern, replacement, normalized_question, flags=re.IGNORECASE
             )
 
-        topic = re.sub(
-            r"^\s*(?:what is the difference between|what is a difference between|"
-            r"difference between|compare|explain|define|describe|tell me about|"
-            r"what is|what are|what does|what do|who is|who are|where is|where are|"
-            r"when is|when was|why is|why are|why does|why do|how is|how are|"
-            r"how does|how do)\s+",
-            "", normalized_question, flags=re.IGNORECASE,
-        ).strip(" \t.,;:!?")
-        # These phrases describe the desired answer style, not a different topic.
-        topic = re.sub(
-            r"\s+(?:in simple words|in simple terms|in easy words|simply|"
-            r"for beginners|in detail|in brief|briefly|in short|"
-            r"and give|and provide|provide the source|give the source|with source).*?$",
-            "", topic, flags=re.IGNORECASE,
-        ).strip(" \t.,;:!?")
-        topic = re.sub(
-            r"\s*(?:[.!?]?\s*)(?:and\s+)?(?:please\s+)?(?:give|provide|show|include|add)\s+"
-            r"(?:(?:me|us)\s+)?(?:(?:an?|the)\s+)?"
-            r"(?:everyday\s+|real[- ]life\s+|simple\s+)?"
-            r"(?:example|examples|code example|code examples|sample|samples)"
-            r"(?:\s+(?:of it|for it|please))?\s*[.!?]*$",
-            "", topic, flags=re.IGNORECASE,
-        ).strip(" \\t.,;:!?")
-        # Remove non-informative possessive/determiner prefixes without damaging
-        # meaningful topic names such as "The Solar System".
-        topic = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", topic, flags=re.IGNORECASE)
+        # Use the same canonical normalizer as online retrieval. Duplicate regex
+        # implementations drifted and produced malformed topics such as
+        # "he Solar System" in production logs.
+        from brain.knowledge.online_knowledge import topic_from_question
+        topic = topic_from_question(normalized_question)
 
         if not topic or len(topic) > 180:
             if results:
