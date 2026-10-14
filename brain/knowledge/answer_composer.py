@@ -10,6 +10,8 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
+from brain.knowledge.evidence_cleaner import clean_evidence_text
+
 
 _STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "between", "by",
@@ -157,7 +159,7 @@ class AnswerComposer:
             return ""
         if any(marker in source for marker in ("knowledge_gap", "reflection", "failure", "diagnostic")):
             return ""
-        content = cls._clean_text(item.get("content", ""))
+        content = clean_evidence_text(item.get("content", ""))
         if not content or cls._is_failure_or_wrapper(content):
             return ""
         # Avoid dumping JSON objects, Mongo documents, or Wikidata claim blobs.
@@ -489,21 +491,24 @@ class AnswerComposer:
 
         answer = "\n\n".join(piece for piece in pieces if piece).strip()
 
-        if asks_example:
-            example = ""
-            if re.search(r"\bgravity\b", normalized_lc):
-                example = "Example: If you drop a ball, Earth's gravity pulls it toward the ground."
-            elif re.search(r"\bsolar system\b", normalized_lc):
-                example = (
-                    "Everyday analogy: Imagine a lamp in the middle of a room and small objects "
-                    "moving around it. The Sun is like the lamp at the center, while planets orbit "
-                    "it because of gravity; unlike the analogy, planets are not held by strings."
-                )
-            if example:
-                marker = "\n\nSources:"
-                if marker in answer:
-                    answer = answer.replace(marker, "\n\n" + example + marker, 1)
-                else:
-                    answer += "\n\n" + example
+        if asks_example and re.search(r"\bsolar system\b", normalized_lc):
+            example = (
+                "Everyday analogy: Imagine a lamp in the middle of a room and small objects moving around it. "
+                "The Sun is like the lamp, and the planets orbit it because of gravity; unlike the analogy, "
+                "the planets are not attached to the Sun by strings."
+            )
+            marker = "\n\nSources:"
+            if marker in answer:
+                answer = answer.replace(marker, "\n\n" + example + marker, 1)
+            else:
+                answer += "\n\n" + example
+
+        if asks_example and re.search(r"\bgravity\b", normalized_lc):
+            example = "Example: If you drop a ball, Earth's gravity pulls it toward the ground."
+            marker = "\n\nSources:"
+            if marker in answer:
+                answer = answer.replace(marker, "\n\n" + example + marker, 1)
+            else:
+                answer += "\n\n" + example
 
         return answer[: self.max_answer_chars + 900]
