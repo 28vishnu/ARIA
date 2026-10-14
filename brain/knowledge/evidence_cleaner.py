@@ -37,6 +37,22 @@ _BOILERPLATE = re.compile(
     r"table of contents|additional resources\s*$|frequently asked questions\s*$)"
 )
 
+# These phrases are reliable page-chrome boundaries seen in search snippets.
+# Cut from the first marker onward because search providers often concatenate
+# the article excerpt with unrelated subscription and site-navigation text.
+_PROMO_TAIL = re.compile(
+    r"(?is)\b(?:start exploring exclusive deals|explore exclusive deals|"
+    r"space news, cosmic updates and expert insights straight to your inbox|"
+    r"want to add more newsletters|choose your newsletters|"
+    r"get full access to premium articles|unlock premium articles|"
+    r"sign up to our newsletter|sign up for our newsletter|"
+    r"get the [a-z0-9 -]{0,80}newsletter|subscribe to our newsletter|"
+    r"by submitting your information you agree|"
+    r"read more from [a-z0-9 .'-]{0,80}|"
+    r"related articles|related stories|you may also like)\b.*$"
+)
+_TRUNCATED_END = re.compile(r"(?is)(?:\s*\.{2,}|\s*…+|\s*\[[^]]{0,30})\s*$")
+
 
 class _ReadableHTML(HTMLParser):
     def __init__(self) -> None:
@@ -108,17 +124,41 @@ def _clean_fragments(value: str) -> List[str]:
     text = re.sub(r"(?is)(?:appearance\s+)?from wikipedia, the free encyclopedia.*?(?:uncertainty\.{0,3}|$)", " ", text)
     text = re.sub(r"(?i)\b(?:quantum entanglement|solar system|photosynthesis)\s+faqs?\b", " ", text)
     text = re.sub(r"(?is)have we proven quantum entanglement\?.*?additional resources", " ", text)
-    text = re.sub(r"(?i)\bkey details\s*:", " ", text)
+    # This heading is produced by search-result presentation layers, not article
+    # prose. Its following bullets are separate snippets and should not be merged
+    # into the source's lead paragraph.
+    text = re.split(r"(?i)\bkey details\s*:", text, maxsplit=1)[0]
     text = re.sub(r"(?i)\b(?:appearance|key takeaway|additional resources)\b", " ", text)
     text = re.sub(r"[\t\f\v]+", " ", text)
+    # Search snippets can concatenate valid article prose with page promotions.
+    # Keep the factual lead and drop the unrelated tail deterministically.
+    text = _PROMO_TAIL.sub(" ", text)
 
     # Split long single-line snippets as well as ordinary paragraphs. This is
     # deliberately deterministic; it does not attempt to invent a summary.
-    chunks = re.split(r"(?:\n+|(?<=[.!?])\s+|\s{2,})", text)
+    # Some search APIs remove punctuation between sentences. Recover conservative
+    # sentence boundaries at common sentence-opening words when capitalization
+    # strongly suggests a new sentence, without trying to paraphrase the text.
+    chunks = re.split(
+        r"(?:\n+|(?<=[.!?])\s+|\s{2,}|"
+        r"(?<=[a-z”’])\s+(?=(?:The|This|These|Those|It|They|A|An|In|For example|Our|Inside|Many|Quantum)\b))",
+        text,
+    )
     cleaned: List[str] = []
     seen = set()
-    for chunk in chunks:
-        part = re.sub(r"\s+", " ", chunk).strip(" .,!?:;\t\n•|·-–—")
+    for chunk_index, chunk in enumerate(chunks):
+        # Preserve existing punctuation. If a provider removed punctuation and
+        # capitalization forced a sentence split, restore only a period for
+        # readability; this does not add factual content.
+        part = re.sub(r"\s+", " ", chunk).strip(" \t\n•|·-–—")
+        if chunk_index < len(chunks) - 1 and part and not re.search(r"[.!?…]$", part):
+            part += "."
+        if not part:
+            continue
+        # A provider's trailing ellipsis marks an incomplete fragment. Reject
+        # that whole fragment rather than presenting a sentence ending mid-thought.
+        if _TRUNCATED_END.search(part):
+            continue
         if not part:
             continue
         low = part.casefold()
