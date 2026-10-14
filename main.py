@@ -820,45 +820,6 @@ def markdown_to_telegram_html(
     )
 
     # -----------------------------------------------------
-    # AUTOMATIC IMPORTANT CALLOUTS
-    # -----------------------------------------------------
-    # Telegram Bot API supports blockquotes, but bots cannot set a
-    # custom text/quote color. Telegram clients render the quote accent
-    # according to the user's theme. Highlight clear importance labels
-    # consistently without wrapping ordinary factual paragraphs.
-    callout_pattern = re.compile(
-        r"^(?:"
-        r"<b>\s*(?:important|key takeaway|takeaway|remember|note|warning|caution|bottom line|in short)\s*:?[ ]*</b>"
-        r"|(?:important|key takeaway|takeaway|remember|note|warning|caution|bottom line|in short)\s*:"
-        r")\s*(.*)$",
-        flags=re.IGNORECASE,
-    )
-
-    callout_lines = []
-    for line in text.split("\\n"):
-        stripped = line.strip()
-        match = callout_pattern.match(stripped)
-        if match and stripped and not stripped.startswith("<blockquote>"):
-            label = re.match(
-                r"^(?:<b>\\s*)?(important|key takeaway|takeaway|remember|note|warning|caution|bottom line|in short)",
-                stripped,
-                flags=re.IGNORECASE,
-            )
-            label_text = label.group(1).title() if label else "Important"
-            content = match.group(1).strip()
-            # Keep the semantic label visible and make the whole callout
-            # visually distinct in Telegram.
-            callout_lines.append(
-                f"<blockquote><b>{html.escape(label_text)}:</b>"
-                + (f" {content}" if content else "")
-                + "</blockquote>"
-            )
-        else:
-            callout_lines.append(line)
-
-    text = "\\n".join(callout_lines)
-
-    # -----------------------------------------------------
     # BULLETS
     # -----------------------------------------------------
 
@@ -1162,15 +1123,12 @@ def markdown_to_telegram_html(
 
 def format_telegram_response(
     text: str,
+    *,
+    include_sources: bool = False,
 ) -> str:
-    """Format a readable Telegram answer without exposing citation footers.
-
-    Source metadata remains in the evidence records for auditing and the future
-    app. This function changes only Telegram presentation.
-    """
-    return markdown_to_telegram_html(
-        hide_source_references(text)
-    )
+    """Format Telegram answers, showing citations only when the user asks for them."""
+    visible_text = str(text or "") if include_sources else hide_source_references(text)
+    return markdown_to_telegram_html(visible_text)
 
 
 # =========================================================
@@ -3326,8 +3284,14 @@ async def process_telegram_update(
             result
         )
 
+        asks_for_source = bool(re.search(
+            r"\b(?:source\s+urls?|urls?\s+of\s+(?:the\s+)?sources?|provide\s+(?:the\s+)?sources?|give\s+(?:me\s+)?(?:the\s+)?sources?)\b",
+            text or "",
+            flags=re.IGNORECASE,
+        ))
         telegram_text = format_telegram_response(
-            reply_text
+            reply_text,
+            include_sources=asks_for_source,
         )
 
         logger.info(
