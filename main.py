@@ -28,6 +28,7 @@ from brain.development.telegram_approval_interface import (
     TelegramApprovalInterface,
 )
 from audio_engine import AudioEngine
+from brain.knowledge.evidence_cleaner import hide_source_references
 from brain.knowledge.knowledge_hub import (
     mark_user_activity as _mark_knowledge_activity,
     begin_user_activity as _begin_knowledge_activity,
@@ -1123,9 +1124,13 @@ def markdown_to_telegram_html(
 def format_telegram_response(
     text: str,
 ) -> str:
+    """Format a readable Telegram answer without exposing citation footers.
 
+    Source metadata remains in the evidence records for auditing and the future
+    app. This function changes only Telegram presentation.
+    """
     return markdown_to_telegram_html(
-        text
+        hide_source_references(text)
     )
 
 
