@@ -992,11 +992,32 @@ class KnowledgeManager:
                 pattern, replacement, normalized_question, flags=re.IGNORECASE
             )
 
-        # Use the same canonical normalizer as online retrieval. Duplicate regex
-        # implementations drifted and produced malformed topics such as
-        # "he Solar System" in production logs.
-        from brain.knowledge.online_knowledge import topic_from_question
-        topic = topic_from_question(normalized_question)
+        topic = re.sub(
+            r"^\s*(?:what is the difference between|what is a difference between|"
+            r"difference between|compare|explain|define|describe|tell me about|"
+            r"what is|what are|what does|what do|who is|who are|where is|where are|"
+            r"when is|when was|why is|why are|why does|why do|how is|how are|"
+            r"how does|how do)\s+",
+            "", normalized_question, flags=re.IGNORECASE,
+        ).strip(" \t.,;:!?")
+        # These phrases describe the desired answer style, not a different topic.
+        topic = re.sub(
+            r"\s+(?:in simple words|in simple terms|in easy words|simply|"
+            r"for beginners|in detail|in brief|briefly|in short|"
+            r"and give|and provide|provide the source|give the source|with source).*?$",
+            "", topic, flags=re.IGNORECASE,
+        ).strip(" \t.,;:!?")
+        topic = re.sub(
+            r"\s*(?:[.!?]?\s*)(?:and\s+)?(?:please\s+)?(?:give|provide|show|include|add)\s+"
+            r"(?:(?:me|us)\s+)?(?:(?:an?|the)\s+)?"
+            r"(?:everyday\s+|real[- ]life\s+|simple\s+)?"
+            r"(?:example|examples|code example|code examples|sample|samples)"
+            r"(?:\s+(?:of it|for it|please))?\s*[.!?]*$",
+            "", topic, flags=re.IGNORECASE,
+        ).strip(" \\t.,;:!?")
+        # Remove non-informative possessive/determiner prefixes without damaging
+        # meaningful topic names such as "The Solar System".
+        topic = re.sub(r"^(?:our|my|your|the|a|an)\s+", "", topic, flags=re.IGNORECASE)
 
         if not topic or len(topic) > 180:
             if results:
@@ -2095,15 +2116,23 @@ class KnowledgeManager:
 
     @staticmethod
     def _evidence_is_sufficient(question: str, results: List[Dict[str, Any]]) -> bool:
-        """Conservative lexical sufficiency check; avoid treating any hit as a full answer."""
+        """Require topic-matched evidence before skipping online fallback.
+
+        A generic word overlap across unrelated records is not sufficient. For a
+        normal multi-word topic (for example, "Solar System"), at least one
+        individual record must identify the complete phrase in its title or
+        content. Comparisons may be supported by separate records, but each
+        requested concept must be represented in the retrieved corpus.
+        """
         if not results:
             return False
         if any(item.get("cached_answer") for item in results if isinstance(item, dict)):
             return True
+
         from brain.knowledge.online_knowledge import topic_from_question
 
         topic = topic_from_question(question)
-        tokens = {
+        tokens = [
             token.casefold()
             for token in re.findall(r"[\w'-]+", topic, flags=re.UNICODE)
             if len(token) > 2 and token.casefold() not in {
@@ -2112,22 +2141,47 @@ class KnowledgeManager:
                 "please", "give", "show", "tell", "what", "who", "why", "how",
                 "does", "can", "you", "are", "was", "were", "that", "this",
             }
-        }
+        ]
         if not tokens:
-            return bool(results)
-        corpus = " ".join(
-            f"{item.get('title', '')} {item.get('content', '')}"
-            for item in results if isinstance(item, dict)
-        ).casefold()
-        covered = sum(1 for token in tokens if token in corpus)
-        # Compound/comparison questions need evidence for more than one concept.
-        compound = bool(re.search(r"\b(?:and|versus|vs\.?|compare|relationship|related)\b", question, re.I))
-        required = max(1, (len(tokens) + 1) // 2)
-        if compound:
-            required = max(2, required)
-        top = next((item for item in results if isinstance(item, dict)), {})
-        confidence = float(top.get("confidence", 0.5) or 0.0)
-        return covered >= min(required, len(tokens)) and confidence >= 0.40
+            return False
+
+        comparison = bool(re.search(r"\b(?:compare|comparison|difference between|versus|vs\.?|relationship between)\b", question, re.I))
+        records = [item for item in results if isinstance(item, dict)]
+        if not records:
+            return False
+
+        def norm(value: Any) -> str:
+            return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+        title_content_pairs = []
+        for item in records:
+            title = norm(item.get("title", ""))
+            content = norm(item.get("content", ""))
+            confidence = float(item.get("confidence", 0.5) or 0.0)
+            if confidence < 0.40:
+                continue
+            title_content_pairs.append((title, content))
+
+        if not title_content_pairs:
+            return False
+
+        if not comparison:
+            # Phrase matching blocks false positives such as a Biosphere article
+            # mentioning "solar energy" from satisfying a Solar System query.
+            phrase = norm(topic)
+            for title, content in title_content_pairs:
+                if phrase and (phrase in title or phrase in content):
+                    return True
+                # A title containing every core token is a strong entity match.
+                if all(token in title.split() for token in tokens):
+                    return True
+            return False
+
+        # For a true comparison, allow different records to cover each concept,
+        # but never count a single generic word such as "system" as a match.
+        corpus = " ".join(f"{title} {content}" for title, content in title_content_pairs)
+        covered = sum(1 for token in tokens if re.search(r"\b" + re.escape(token) + r"\b", corpus))
+        return covered == len(tokens)
 
     async def _persist_online_to_durable_store(
         self,
