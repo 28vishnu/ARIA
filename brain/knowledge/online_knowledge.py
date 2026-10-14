@@ -9,40 +9,36 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from brain.knowledge.evidence_cleaner import clean_evidence_text, is_useful_evidence
+
 LOG = logging.getLogger("aria.online_knowledge")
 
 
 def topic_from_question(question: str) -> str:
-    """Remove answer-style framing while preserving meaningful article titles."""
-    topic = re.sub(r"\s+", " ", str(question or "").strip())
+    """Remove question framing and answer directives without corrupting the topic."""
+    topic = re.sub(r"\s+", " ", str(question or "").strip()).replace("’", "'")
+    if not topic:
+        return ""
+
+    # Remove instruction phrases first so they do not become search keywords.
+    directive_patterns = (
+        r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:provide|give|show|include)\s+(?:me\s+)?(?:the\s+)?source\s+urls?)\b.*$",
+        r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|show|include)\s+(?:me\s+)?(?:an?\s+)?(?:everyday|real[- ]life|simple)?\s*examples?)\b.*$",
+        r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|show|include)\s+(?:me\s+)?(?:an?\s+)?(?:code\s+)?examples?)\b.*$",
+        r"\s+(?:in simple words|in simple terms|in easy words|in plain english|for beginners|briefly|in brief|in detail|with an example|with examples|with an everyday example|with a real[- ]life example)\s*[?.!]*$",
+    )
+    for pattern in directive_patterns:
+        topic = re.sub(pattern, "", topic, flags=re.IGNORECASE).strip()
+
+    # Strip a leading request verb or question phrase, but do not strip a leading
+    # article from a proper topic such as "The Solar System".
     topic = re.sub(
-        r"^(?:please\s+)?(?:can you\s+)?(?:explain|define|describe|tell me about|"
-        r"what is|what are|what was|who is|who are|where is|where are|"
-        r"why is|why are|how does|how do|how is|how are)\s+",
+        r"^(?:please\s+)?(?:can you\s+)?(?:explain|define|describe|tell me about|compare|difference between|what is|what are|what was|who is|who are|where is|where are|when is|when was|why is|why are|how does|how do|how is|how are)\s+",
         "", topic, flags=re.IGNORECASE,
     )
-    # Remove trailing answer requests, including punctuation between clauses.
-    topic = re.sub(
-        r"(?:[?.!,;]\s*)?(?:and\s+)?(?:please\s+)?"
-        r"(?:give|provide|show|include|add)\s+(?:(?:me|us)\s+)?"
-        r"(?:(?:an?|the)\s+)?(?:everyday\s+|real[- ]life\s+|simple\s+)?"
-        r"(?:example|examples|sample|samples)(?:\s+(?:of it|for it|please))?\s*[?.!]*$",
-        "", topic, flags=re.IGNORECASE,
-    )
-    topic = re.sub(
-        r"(?:[?.!,;]\s*)?(?:and\s+)?(?:please\s+)?"
-        r"(?:provide|give|show|include|cite)\s+(?:the\s+)?"
-        r"source(?:\s+urls?)?\s*[?.!]*$",
-        "", topic, flags=re.IGNORECASE,
-    )
-    topic = re.sub(
-        r"\s+(?:in simple words|in simple terms|in easy words|in plain english|"
-        r"for beginners|briefly|in brief|in detail|with an example|"
-        r"and give an example|give an everyday example)\s*[?.!]*$",
-        "", topic, flags=re.IGNORECASE,
-    )
-    topic = re.sub(r"[?.!]+$", "", topic).strip()
-    topic = re.sub(r"\s+(?:and|then)$", "", topic, flags=re.IGNORECASE).strip()
+    topic = re.sub(r"[?.!]+$", "", topic).strip(" \t,;:")
+    # Leading articles are request framing, not part of this canonical topic.
+    topic = re.sub(r"^(?:the|a|an)\s+", "", topic, flags=re.IGNORECASE).strip()
     return topic[:180]
 
 
@@ -76,8 +72,8 @@ def store_search_evidence(db_path: str, evidence: Iterable[dict[str, Any]]) -> d
             continue
         url = _safe_public_http_url(item.get("url") or item.get("provenance"))
         title = re.sub(r"\s+", " ", str(item.get("title") or "").strip())[:500]
-        content = re.sub(r"\s+", " ", str(item.get("content") or "").strip())
-        if not url or not title or len(content) < 40:
+        content = clean_evidence_text(item.get("content") or "")
+        if not url or not title or len(content) < 40 or not is_useful_evidence(content):
             continue
         if re.search(r"(?i)\b(access denied|page not found|internal server error|search timed out)\b", content):
             continue
