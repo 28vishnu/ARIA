@@ -820,6 +820,45 @@ def markdown_to_telegram_html(
     )
 
     # -----------------------------------------------------
+    # AUTOMATIC IMPORTANT CALLOUTS
+    # -----------------------------------------------------
+    # Telegram Bot API supports blockquotes, but bots cannot set a
+    # custom text/quote color. Telegram clients render the quote accent
+    # according to the user's theme. Highlight clear importance labels
+    # consistently without wrapping ordinary factual paragraphs.
+    callout_pattern = re.compile(
+        r"^(?:"
+        r"<b>\s*(?:important|key takeaway|takeaway|remember|note|warning|caution|bottom line|in short)\s*:?[ ]*</b>"
+        r"|(?:important|key takeaway|takeaway|remember|note|warning|caution|bottom line|in short)\s*:"
+        r")\s*(.*)$",
+        flags=re.IGNORECASE,
+    )
+
+    callout_lines = []
+    for line in text.split("\\n"):
+        stripped = line.strip()
+        match = callout_pattern.match(stripped)
+        if match and stripped and not stripped.startswith("<blockquote>"):
+            label = re.match(
+                r"^(?:<b>\\s*)?(important|key takeaway|takeaway|remember|note|warning|caution|bottom line|in short)",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+            label_text = label.group(1).title() if label else "Important"
+            content = match.group(1).strip()
+            # Keep the semantic label visible and make the whole callout
+            # visually distinct in Telegram.
+            callout_lines.append(
+                f"<blockquote><b>{html.escape(label_text)}:</b>"
+                + (f" {content}" if content else "")
+                + "</blockquote>"
+            )
+        else:
+            callout_lines.append(line)
+
+    text = "\\n".join(callout_lines)
+
+    # -----------------------------------------------------
     # BULLETS
     # -----------------------------------------------------
 
