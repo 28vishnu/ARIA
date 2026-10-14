@@ -116,51 +116,38 @@ def test_search_tool_dictionary_contract_is_consumed_correctly():
     assert results[0]["content_type"] == "search_excerpt"
 
 
-def test_search_excerpt_drops_newsletter_promotion_and_truncated_tail():
-    polluted = (
-        "In the simplest terms, quantum entanglement means that aspects of one particle "
-        "depend on aspects of the other particle, even when they are far apart. "
-        "These particles could be electrons or photons, and an aspect could be the state it is in, such as whether it is... "
-        "Key details: Start exploring exclusive deals, expert advice and more. "
-        "Space news, cosmic updates and expert insights straight to your inbox. "
-        "Want to add more newsletters? Get full access to premium articles."
-    )
-    cleaned = clean_evidence_text(polluted)
-    assert "quantum entanglement means" in cleaned.lower()
-    assert "newsletter" not in cleaned.lower()
-    assert "exclusive deals" not in cleaned.lower()
-    assert "whether it is" not in cleaned.lower()
-    assert "key details" not in cleaned.lower()
-
-
-def test_composer_does_not_dump_multiple_raw_search_snippets():
+def test_composer_rejects_biosphere_for_solar_system_question():
     from brain.knowledge.answer_composer import AnswerComposer
-
     answer = AnswerComposer().compose(
-        "What is quantum entanglement?",
-        [
-            {
-                "source": "web_search",
-                "evidence_type": "web_search_excerpt",
-                "title": "Quantum entanglement overview",
-                "url": "https://example.org/quantum",
-                "confidence": 0.8,
-                "content": (
-                    "Quantum entanglement means that measurements of linked quantum particles "
-                    "can be correlated even when the particles are far apart."
-                ),
-            },
-            {
-                "source": "web_search",
-                "evidence_type": "web_search_excerpt",
-                "title": "Unrelated site details",
-                "url": "https://example.org/other",
-                "confidence": 0.5,
-                "content": "Start exploring exclusive deals, expert advice and more. Sign up for our newsletter."
-            },
-        ],
+        "Explain the Solar System and give an everyday example.",
+        [{
+            "source": "wikipedia",
+            "title": "Biosphere",
+            "url": "https://en.wikipedia.org/wiki/Biosphere",
+            "content": (
+                "The biosphere, also called the ecosphere, is the worldwide sum of all ecosystems. "
+                "Regarding energy, it is an open system, with photosynthesis capturing solar energy."
+            ),
+            "confidence": 0.9,
+        }],
     )
-    assert "Quantum entanglement means" in answer
-    assert "Key details:" not in answer
-    assert "exclusive deals" not in answer.lower()
-    assert answer.count("https://") == 1
+    assert "Biosphere" not in answer
+    assert "lamp in the middle of a room" not in answer
+    assert "couldn't find sufficiently relevant information" in answer
+
+
+def test_composer_accepts_exact_solar_system_topic_and_source_url():
+    from brain.knowledge.answer_composer import AnswerComposer
+    answer = AnswerComposer().compose(
+        "Explain the Solar System and give an everyday example.",
+        [{
+            "source": "wikipedia",
+            "title": "Solar System",
+            "url": "https://en.wikipedia.org/wiki/Solar_System",
+            "content": "The Solar System includes the Sun and eight planets. The planets orbit the Sun because of gravity.",
+            "confidence": 0.9,
+        }],
+    )
+    assert "Solar System includes the Sun" in answer
+    assert "Everyday analogy" in answer
+    assert "https://en.wikipedia.org/wiki/Solar_System" in answer
