@@ -135,6 +135,24 @@ class AnswerComposer:
         words = re.findall(r"[a-z0-9][a-z0-9'-]*", normalized)
         return {w for w in words if len(w) > 2 and w not in _STOP_WORDS}
 
+    @staticmethod
+    def _ordered_topic_tokens(question: str) -> List[str]:
+        """Return topic terms in order, excluding question framing and stop words."""
+        normalized = AnswerComposer._normalized_question(question)
+        words = re.findall(r"[a-z0-9][a-z0-9'-]*", normalized)
+        return [word for word in words if len(word) > 2 and word not in _STOP_WORDS]
+
+    @staticmethod
+    def _contains_ordered_topic(topic_tokens: Sequence[str], text: str) -> bool:
+        """Match topic terms in order, ignoring ordinary connector words."""
+        if not topic_tokens:
+            return True
+        words = re.findall(r"[a-z0-9][a-z0-9'-]*", AnswerComposer._clean_text(text).lower())
+        words = [word for word in words if len(word) > 2 and word not in _STOP_WORDS]
+        width = len(topic_tokens)
+        return any(words[index:index + width] == list(topic_tokens)
+                   for index in range(max(0, len(words) - width + 1)))
+
     @classmethod
     def _topic_overlap(cls, question: str, item: Dict[str, Any]) -> int:
         topic = cls._topic_tokens(question)
@@ -369,33 +387,33 @@ class AnswerComposer:
                 "• UDP specification (IETF RFC 768) — https://www.rfc-editor.org/rfc/rfc768"
             )
 
-        # Remove unrelated records before combining evidence. A generic shared word
-        # such as "system" must not make a computer article support a solar-system answer.
+        # Reject off-topic evidence before composing. A record mentioning "solar energy"
+        # and "system" separately must not answer a question about the Solar System.
+        # Multi-term topics need an ordered topic match in title/content, not just the
+        # same individual words scattered across an unrelated article.
         topic_tokens = self._topic_tokens(question)
+        ordered_topic = self._ordered_topic_tokens(question)
         if topic_tokens:
             relevant = []
             for pair in valid:
-                overlap = self._topic_overlap(question, pair[0])
-                title_words = set(re.findall(
-                    r"[a-z0-9][a-z0-9'-]*",
-                    self._clean_text(pair[0].get("title", "")).lower(),
-                ))
-                title_overlap = len(topic_tokens & title_words)
-                combined_words = title_words | set(re.findall(
-                    r"[a-z0-9][a-z0-9'-]*",
-                    self._clean_text(pair[0].get("content", "")).lower()[:3500],
-                ))
-                # A generic parent page is not enough for a specific subject:
-                # the word "Python" alone must not answer "Python list".
-                if len(topic_tokens) >= 2 and not topic_tokens.issubset(combined_words):
+                item, content = pair
+                title = self._clean_text(item.get("title", ""))
+                title_words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", title.lower()))
+                title_has_all_terms = topic_tokens.issubset(title_words)
+                content_has_topic_phrase = self._contains_ordered_topic(ordered_topic, content)
+                title_has_topic_phrase = self._contains_ordered_topic(ordered_topic, title)
+                overlap = self._topic_overlap(question, item)
+
+                if len(ordered_topic) >= 2:
+                    if not (title_has_all_terms or title_has_topic_phrase or content_has_topic_phrase):
+                        continue
+                elif overlap <= 0:
                     continue
-                minimum = 1 if len(topic_tokens) == 1 else max(2, (len(topic_tokens) + 1) // 2)
-                if overlap >= minimum:
-                    relevant.append(pair)
-            # Do not fall back to unrelated records when nothing is relevant.
+                relevant.append(pair)
+
             valid = relevant
             if not valid:
-                return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. Try a more specific question or import the relevant dataset."
+                return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. I won't guess from an unrelated article. Please try again or use a more specific query."
 
         # Rank by topic relevance first, then KnowledgeManager's evidence score.
         valid.sort(
@@ -423,48 +441,11 @@ class AnswerComposer:
         sentences = self._sentences(primary_text)
         if not sentences:
             sentences = [primary_text]
-        title_norm = re.sub(r"\W+", " ", self._clean_text(primary_item.get("title", "")).casefold()).strip()
-        if sentences and title_norm:
-            first_norm = re.sub(r"\W+", " ", sentences[0].casefold()).strip()
-            # Search excerpts frequently repeat the page title as their first line.
-            if first_norm == title_norm or (len(title_norm) > 18 and first_norm.startswith(title_norm)):
-                sentences = sentences[1:]
-        if not sentences:
-            sentences = [primary_text]
-
-        # Search providers sometimes prepend a headline and append page chrome to
-        # snippets. For definition questions, prefer sentences that actually define
-        # the requested topic. Keep web excerpts short and never stitch several
-        # unrelated provider snippets into a pseudo-answer.
-        source_kind = str(primary_item.get("source") or "").casefold().replace("-", "_")
-        evidence_kind = str(primary_item.get("evidence_type") or primary_item.get("content_type") or "").casefold().replace("-", "_")
-        is_web_excerpt = source_kind in {"web_search", "websearch", "search"} or "search_excerpt" in evidence_kind or "web_snippet" in evidence_kind
-        definition_question = bool(re.match(r"^\s*(?:what is|what are|define|explain|describe)\b", str(question or ""), re.I))
-        if is_web_excerpt and definition_question and len(sentences) > 1:
-            definition_markers = re.compile(r"\b(?:is|are|means|refers to|describes|is called|is known as|consists of|is the process)\b", re.I)
-            topic_words = self._topic_tokens(question)
-            ranked_sentences = sorted(
-                enumerate(sentences),
-                key=lambda pair: (
-                    bool(topic_words & set(re.findall(r"[a-z0-9][a-z0-9'-]*", pair[1].casefold()))),
-                    bool(definition_markers.search(pair[1])),
-                    -pair[0],
-                ),
-                reverse=True,
-            )
-            # Put the best definitional sentence first instead of restoring the
-            # original headline-first order.
-            sentences = [sentence for _idx, sentence in ranked_sentences[:2]]
-
-        if is_web_excerpt:
-            # Page titles are not answer content and are frequently repeated by
-            # the provider; omit the raw title heading from excerpt-based answers.
-            heading = ""
 
         # Keep a useful, bounded extract rather than dumping the full article.
         lead_parts: List[str] = []
         current_len = 0
-        sentence_limit = 2 if is_web_excerpt else (4 if len(primary_text) > 500 else 6)
+        sentence_limit = 4 if len(primary_text) > 500 else 6
         for sentence in sentences[:sentence_limit]:
             if len(sentence) > 600:
                 sentence = sentence[:597].rsplit(" ", 1)[0] + "..."
@@ -479,15 +460,36 @@ class AnswerComposer:
         if simple_mode:
             body = self._simplify_text(body)
 
-        # Use only the primary validated record in a factual response. Additional
-        # raw search snippets are not paraphrased or merged; source URLs remain
-        # attached to the chosen evidence record for provenance.
+        # Bring in corroborating facts from other systems only when they match
+        # the same topic and add distinct information. No paraphrasing model.
         extra_points: List[str] = []
         source_records: List[Dict[str, Any]] = [primary_item]
+        primary_sentences = {re.sub(r"\W+", " ", s.lower()).strip() for s in sentences}
+        for item, content in valid[1:]:
+            if len(source_records) >= self.max_sources:
+                break
+            if self._topic_overlap(question, item) <= 0:
+                continue
+            candidate_sentences = self._sentences(content)
+            chosen = None
+            for sentence in candidate_sentences[:5]:
+                norm = re.sub(r"\W+", " ", sentence.lower()).strip()
+                if len(sentence) < 35 or norm in primary_sentences:
+                    continue
+                if len(sentence) > 240:
+                    sentence = sentence[:237].rsplit(" ", 1)[0] + "..."
+                chosen = sentence
+                break
+            if chosen:
+                extra_points.append(self._simplify_text(chosen) if simple_mode else chosen)
+                source_records.append(item)
+
         pieces: List[str] = []
         if heading:
             pieces.append(heading)
         pieces.append(body or primary_text[:self.max_answer_chars])
+        if extra_points:
+            pieces.append("Key details:\n" + "\n".join(f"• {point}" for point in extra_points[:3]))
 
         citations: List[str] = []
         seen_urls = set()
