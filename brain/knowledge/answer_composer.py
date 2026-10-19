@@ -175,6 +175,25 @@ class AnswerComposer:
         return title_overlap * 5 + content_overlap
 
     @classmethod
+    def _sentence_supports_topic(cls, question: str, sentence: str) -> bool:
+        """Require a corroborating sentence to mention the requested topic.
+
+        Record-level relevance is not enough: an article about photosynthesis can
+        also contain unrelated facts about the biosphere. This sentence-level gate
+        prevents those neighboring facts from leaking into the answer. It is generic
+        and deliberately does not contain topic-specific keyword lists.
+        """
+        topic = cls._topic_tokens(question)
+        if not topic:
+            return True
+        sentence_words = set(
+            re.findall(r"[a-z0-9][a-z0-9'-]*", cls._clean_text(sentence).lower())
+        )
+        # Allow a sentence that explicitly names at least one meaningful query term.
+        # For compound questions, the answer may explain one side per sentence.
+        return bool(topic & sentence_words)
+
+    @classmethod
     def _readable_evidence(cls, item: Dict[str, Any]) -> str:
         # Internal diagnostics and conversation records are not factual evidence.
         # They must never make a failed query appear to have supporting sources.
@@ -479,9 +498,13 @@ class AnswerComposer:
                 continue
             candidate_sentences = self._sentences(content)
             chosen = None
-            for sentence in candidate_sentences[:5]:
+            for sentence in candidate_sentences[:8]:
                 norm = re.sub(r"\W+", " ", sentence.lower()).strip()
                 if len(sentence) < 35 or norm in primary_sentences:
+                    continue
+                # Filter at sentence level as well as record level. A source may be
+                # about the requested topic overall while a particular sentence is not.
+                if not self._sentence_supports_topic(question, sentence):
                     continue
                 if len(sentence) > 240:
                     sentence = sentence[:237].rsplit(" ", 1)[0] + "..."
