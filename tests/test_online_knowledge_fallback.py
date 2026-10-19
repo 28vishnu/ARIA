@@ -122,3 +122,70 @@ def test_online_evidence_is_saved_to_durable_knowledge_store():
     assert record["source"] == "web_search"
     assert record["metadata"]["url"] == "https://example.org/gravity"
     assert record["metadata"]["external_llm_used"] is False
+
+
+def test_topic_from_question_preserves_final_character_of_multiword_topic():
+    assert topic_from_question("What is quantum entanglement?") == "quantum entanglement"
+    assert topic_from_question("What is quantum entanglement? And provide the source URL") == "quantum entanglement"
+
+
+def test_topic_from_question_preserves_solar_system_phrase():
+    assert topic_from_question("Explain the Solar System and give an everyday example.") == "Solar System"
+
+
+def test_web_search_rejects_unrelated_biosphere_result_for_solar_system(monkeypatch):
+    manager = KnowledgeManager(None, None, None)
+
+    class FakeSearchTool:
+        async def execute(self, **kwargs):
+            return {
+                "success": True,
+                "results": [
+                    {
+                        "title": "Biosphere",
+                        "url": "https://example.org/biosphere",
+                        "snippet": (
+                            "The biosphere is the worldwide sum of all ecosystems. "
+                            "Photosynthesis captures solar energy and the biosphere is an open system."
+                        ),
+                    },
+                    {
+                        "title": "Solar System - NASA Science",
+                        "url": "https://science.nasa.gov/solar-system/",
+                        "snippet": (
+                            "The Solar System consists of the Sun and the objects that orbit it, "
+                            "including eight planets, dwarf planets, moons, asteroids, and comets."
+                        ),
+                    },
+                ],
+            }
+
+    manager.web_search = FakeSearchTool()
+    result = asyncio.run(manager.search_web("Explain the Solar System and give an everyday example."))
+    assert len(result) == 1
+    assert result[0]["title"] == "Solar System - NASA Science"
+
+
+def test_web_search_preserves_quantum_entanglement_evidence(monkeypatch):
+    manager = KnowledgeManager(None, None, None)
+
+    class FakeSearchTool:
+        async def execute(self, **kwargs):
+            assert kwargs["query"] == "quantum entanglement"
+            return {
+                "success": True,
+                "results": [{
+                    "title": "Quantum entanglement explained",
+                    "url": "https://example.org/quantum-entanglement",
+                    "snippet": (
+                        "Quantum entanglement is a physical phenomenon in which particles "
+                        "share a quantum state, with correlations that cannot be explained "
+                        "by treating each particle independently."
+                    ),
+                }],
+            }
+
+    manager.web_search = FakeSearchTool()
+    result = asyncio.run(manager.search_web("What is quantum entanglement? And provide the source URL."))
+    assert len(result) == 1
+    assert result[0]["url"] == "https://example.org/quantum-entanglement"
