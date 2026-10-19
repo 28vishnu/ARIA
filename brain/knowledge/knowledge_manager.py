@@ -2225,15 +2225,23 @@ class KnowledgeManager:
             return False
 
         if not comparison:
-            # Phrase matching blocks false positives such as a Biosphere article
-            # mentioning "solar energy" from satisfying a Solar System query.
+            # An incidental mention inside an unrelated article is not enough to
+            # declare retrieval complete. Prefer a topic-specific title; allow a
+            # content-only match only when the passage opens with a definition of
+            # the requested topic. This lets the online fallback acquire the right
+            # article instead of composing an answer from (for example) a Biosphere
+            # page that merely mentions photosynthesis.
             phrase = norm(topic)
             for title, content in title_content_pairs:
-                if phrase and (phrase in title or phrase in content):
+                if phrase and (phrase in title or all(token in title.split() for token in tokens)):
                     return True
-                # A title containing every core token is a strong entity match.
-                if all(token in title.split() for token in tokens):
-                    return True
+                if phrase:
+                    definition_prefix = re.compile(
+                        r"^(?:the )?" + re.escape(phrase) +
+                        r"\s+(?:is|are|refers to|means|describes|denotes|is defined as)\b"
+                    )
+                    if definition_prefix.search(content):
+                        return True
             return False
 
         # For a true comparison, allow different records to cover each concept,
