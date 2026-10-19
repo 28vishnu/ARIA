@@ -162,6 +162,12 @@ class AnswerComposer:
 
     @classmethod
     def _topic_overlap(cls, question: str, item: Dict[str, Any]) -> int:
+        """Score evidence with a strong preference for documents about the topic.
+
+        A document that merely mentions the requested term (for example, a
+        Biosphere article mentioning photosynthesis) must not outrank a document
+        whose title is actually about the requested topic.
+        """
         topic = cls._topic_tokens(question)
         if not topic:
             return 1
@@ -171,27 +177,50 @@ class AnswerComposer:
         content_words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", content[:3500]))
         title_overlap = len(topic & title_words)
         content_overlap = len(topic & content_words)
-        # Title matches are much more meaningful than generic words like "system".
-        return title_overlap * 5 + content_overlap
+        title_has_all = bool(topic) and topic.issubset(title_words)
+        # A full title match dominates repeated incidental mentions in content.
+        return title_overlap * 20 + (10 if title_has_all else 0) + content_overlap
 
     @classmethod
-    def _sentence_supports_topic(cls, question: str, sentence: str) -> bool:
-        """Require a corroborating sentence to mention the requested topic.
-
-        Record-level relevance is not enough: an article about photosynthesis can
-        also contain unrelated facts about the biosphere. This sentence-level gate
-        prevents those neighboring facts from leaking into the answer. It is generic
-        and deliberately does not contain topic-specific keyword lists.
-        """
+    def _title_matches_topic(cls, question: str, item: Dict[str, Any]) -> bool:
         topic = cls._topic_tokens(question)
         if not topic:
             return True
-        sentence_words = set(
-            re.findall(r"[a-z0-9][a-z0-9'-]*", cls._clean_text(sentence).lower())
-        )
-        # Allow a sentence that explicitly names at least one meaningful query term.
-        # For compound questions, the answer may explain one side per sentence.
-        return bool(topic & sentence_words)
+        title = cls._clean_text(item.get("title", ""))
+        title_words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", title.lower()))
+        ordered = cls._ordered_topic_tokens(question)
+        return bool(topic.issubset(title_words) or cls._contains_ordered_topic(ordered, title))
+
+    @classmethod
+    def _sentence_matches_topic(cls, question: str, sentence: str) -> bool:
+        """Require topic-specific sentence evidence when the document title is off-topic."""
+        ordered = cls._ordered_topic_tokens(question)
+        topic = cls._topic_tokens(question)
+        if not topic:
+            return True
+        cleaned = cls._clean_text(sentence)
+        if cls._contains_ordered_topic(ordered, cleaned):
+            return True
+        words = set(re.findall(r"[a-z0-9][a-z0-9'-]*", cleaned.lower()))
+        # For one-word topics, exact mention is required. For compound topics,
+        # require every topic term in the same sentence to avoid loose co-occurrence.
+        if len(topic) == 1:
+            return next(iter(topic)) in words
+        return topic.issubset(words)
+
+    @classmethod
+    def _sentence_defines_topic(cls, question: str, sentence: str) -> bool:
+        """Recognize a topic definition without accepting incidental mentions."""
+        topic = cls._normalized_question(question)
+        topic = re.sub(r"[^a-z0-9]+", " ", topic.casefold()).strip()
+        text = re.sub(r"[^a-z0-9]+", " ", cls._clean_text(sentence).casefold()).strip()
+        if not topic or not text.startswith(topic + " "):
+            return False
+        remainder = text[len(topic):].strip()
+        return bool(re.match(
+            r"^(?:is|are|refers to|means|describes|denotes|is defined as|can be defined as)\b",
+            remainder,
+        ))
 
     @classmethod
     def _readable_evidence(cls, item: Dict[str, Any]) -> str:
@@ -441,9 +470,11 @@ class AnswerComposer:
             if not valid:
                 return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. I won't guess from an unrelated article. Please try again or use a more specific query."
 
-        # Rank by topic relevance first, then KnowledgeManager's evidence score.
+        # Rank topic-specific titles ahead of documents that only mention the topic.
+        # This is a general rule, not a list of topic-specific exceptions.
         valid.sort(
             key=lambda pair: (
+                1 if self._title_matches_topic(question, pair[0]) else 0,
                 self._topic_overlap(question, pair[0]),
                 float(pair[0].get("evidence_score", 0.0) or 0.0),
                 float(pair[0].get("confidence", 0.0) or 0.0),
@@ -452,6 +483,22 @@ class AnswerComposer:
         )
         valid = [pair for pair in valid if self._topic_overlap(question, pair[0]) > 0] or valid
 
+        # If no result is actually about the requested topic, do not promote an
+        # incidental mention into a misleading article-level answer.
+        title_relevant_exists = any(self._title_matches_topic(question, item) for item, _ in valid)
+        if not title_relevant_exists:
+            # A document title that is unrelated to the topic is not a reliable
+            # primary source just because its body mentions the requested term.
+            # Accept only a direct definition sentence from such a document;
+            # otherwise fail safely and let acquisition/retrieval improve.
+            definitional_evidence = any(
+                self._sentence_defines_topic(question, sentence)
+                for _item, content in valid
+                for sentence in self._sentences(content)
+            )
+            if not definitional_evidence:
+                return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. I won't guess from an unrelated article. Please try again or use a more specific query."
+
         primary_item, primary_text = valid[0]
         simple_mode = bool(re.search(
             r"\b(?:simple words|simple terms|easy words|plain english|for beginners|"
@@ -459,14 +506,31 @@ class AnswerComposer:
             str(question or ""), flags=re.IGNORECASE,
         ))
         title = self._clean_text(primary_item.get("title", ""))
-        # Do not use a title that is just the entire question or an internal key.
+        # Never display an unrelated document title as the answer heading.
         q_clean = re.sub(r"[^a-z0-9]+", " ", question.lower()).strip()
         title_clean = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
-        heading = title if title_clean and title_clean != q_clean and len(title) <= 90 else ""
+        if self._title_matches_topic(question, primary_item):
+            heading = title if title_clean and title_clean != q_clean and len(title) <= 90 else ""
+        else:
+            topic_heading = self._normalized_question(question)
+            heading = topic_heading[:90].strip().title() if topic_heading else ""
 
         sentences = self._sentences(primary_text)
         if not sentences:
             sentences = [primary_text]
+        # Strip common media captions/credits even when they appear in the primary
+        # article excerpt rather than a secondary evidence record.
+        sentences = [
+            sentence for sentence in sentences
+            if not re.search(r"\b(?:illustration|image|photo|photograph|©|copyright)\b", sentence, re.I)
+        ]
+        # When the best available document is only tangentially related, extract
+        # only sentences that explicitly support the topic. Never dump the full
+        # unrelated article under a topic-shaped heading.
+        if not self._title_matches_topic(question, primary_item):
+            sentences = [s for s in sentences if self._sentence_defines_topic(question, s)]
+            if not sentences:
+                return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. I won't guess from an unrelated article. Please try again or use a more specific query."
 
         # Keep a useful, bounded extract rather than dumping the full article.
         lead_parts: List[str] = []
@@ -500,11 +564,13 @@ class AnswerComposer:
             chosen = None
             for sentence in candidate_sentences[:8]:
                 norm = re.sub(r"\W+", " ", sentence.lower()).strip()
-                if len(sentence) < 35 or norm in primary_sentences:
+                # Avoid image captions, credits, and sentences that do not add
+                # evidence about the requested subject.
+                if re.search(r"\b(?:illustration|image|photo|photograph|©|copyright)\b", sentence, re.I):
                     continue
-                # Filter at sentence level as well as record level. A source may be
-                # about the requested topic overall while a particular sentence is not.
-                if not self._sentence_supports_topic(question, sentence):
+                if not self._sentence_matches_topic(question, sentence):
+                    continue
+                if len(sentence) < 35 or norm in primary_sentences:
                     continue
                 if len(sentence) > 240:
                     sentence = sentence[:237].rsplit(" ", 1)[0] + "..."
