@@ -1923,9 +1923,11 @@ class KnowledgeManager:
                     "what", "who", "where", "when", "why", "how", "the", "and",
                     "for", "with", "from", "into", "about", "between", "please",
                     "explain", "define", "describe", "provide", "source", "everyday",
-                    "example", "examples", "latest", "major", "development",
+                    "example", "examples", "latest", "major", "development", "give",
+                    "include", "show", "url", "simple", "words", "terms",
                 }
             }
+            normalized_topic = re.sub(r"[^a-z0-9]+", " ", search_query.casefold()).strip()
             evidence: List[Dict[str, Any]] = []
             seen_urls = set()
             for item in raw_results[:5]:
@@ -1937,11 +1939,27 @@ class KnowledgeManager:
                 content = clean_evidence_text(raw_content, max_chars=6000)
                 if not url or not content or not is_useful_evidence(content):
                     continue
-                # A title match alone is not enough: short-topic search snippets
-                # must mention at least one core topic term in their actual text.
-                if len(topic_tokens) <= 3 and topic_tokens and not any(
-                    token in content.casefold() for token in topic_tokens
-                ):
+                # Require evidence to match the topic, not merely a generic word
+                # shared with it (e.g. a Biosphere page mentioning "solar energy"
+                # must not satisfy a Solar System question). A full phrase in the
+                # title is strong evidence; otherwise require every core topic token
+                # to occur in the title/content together.
+                title_norm = re.sub(r"[^a-z0-9]+", " ", title.casefold()).strip()
+                content_norm = re.sub(r"[^a-z0-9]+", " ", content.casefold()).strip()
+                title_tokens = set(title_norm.split())
+                combined_tokens = title_tokens | set(content_norm.split())
+                phrase_match = bool(normalized_topic and (
+                    normalized_topic in title_norm or normalized_topic in content_norm
+                ))
+                title_covers_topic = bool(topic_tokens and topic_tokens.issubset(title_tokens))
+                content_covers_topic = bool(
+                    len(topic_tokens) == 1 and topic_tokens.issubset(combined_tokens)
+                )
+                if topic_tokens and not (phrase_match or title_covers_topic or content_covers_topic):
+                    logger.debug(
+                        "[KnowledgeBrain] Rejected search result for topic mismatch: title=%r topic=%r",
+                        title, search_query,
+                    )
                     continue
                 if self._is_bad_knowledge_content(content):
                     continue
