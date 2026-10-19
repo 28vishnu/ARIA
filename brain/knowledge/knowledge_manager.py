@@ -197,6 +197,39 @@ class KnowledgeManager:
             return None
 
         # -----------------------------------------------------
+        # Compound comparison: RAM and storage
+        # -----------------------------------------------------
+        if re.search(r"\bram\b", q) and re.search(r"\bstorage\b", q) and (
+            re.search(r"\b(compare|comparison|difference|differences|versus|vs)\b", q)
+            or "and storage" in q
+        ):
+            return {
+                "source": "local_foundational_knowledge",
+                "title": "RAM vs Storage",
+                "confidence": 1.0,
+                "importance": 100,
+                "relevance": 1.0,
+                "freshness": 1.0,
+                "verified": True,
+                "evidence_type": "built_in_fact",
+                "provenance": "ARIA deterministic foundational computer knowledge",
+                "url": "https://www.ibm.com/think/topics/ram-vs-rom-vs-storage",
+                "content": (
+                    "RAM (random-access memory) is fast, temporary working memory for data and "
+                    "programs a device is using right now; its contents normally disappear when "
+                    "power is turned off. Storage, such as an SSD, hard drive, or phone flash storage, "
+                    "keeps files and apps for the long term, even when the device is powered off.\n\n"
+                    "Everyday example: RAM is your desk space for the books and papers you are using "
+                    "right now; storage is a bookshelf or filing cabinet where you keep things for "
+                    "later. A bigger desk lets you work with more things at once, while a bigger "
+                    "bookshelf lets you keep more things. RAM and storage do different jobs, and "
+                    "neither replaces the other."
+                ),
+                "local_knowledge": True,
+                "external_llm_synthesis": False,
+            }
+
+        # -----------------------------------------------------
         # Compound comparison: TCP and UDP
         # -----------------------------------------------------
         if ("tcp" in q and "udp" in q) and (
@@ -1005,6 +1038,14 @@ class KnowledgeManager:
             r"\s+(?:in simple words|in simple terms|in easy words|simply|"
             r"for beginners|in detail|in brief|briefly|in short|"
             r"and give|and provide|provide the source|give the source|with source).*?$",
+            "", topic, flags=re.IGNORECASE,
+        ).strip(" \t.,;:!?")
+        # Remove example/analogy requests before splitting compound topics. Without
+        # this, "Compare RAM and storage with an everyday example" can be split into
+        # the false second topic "storage with an everyday example".
+        topic = re.sub(
+            r"\s+(?:with|using)\s+(?:an?\s+)?(?:everyday|real[- ]life|simple|practical)\s+"
+            r"(?:example|analogy)(?:s)?\s*[.!?]*$",
             "", topic, flags=re.IGNORECASE,
         ).strip(" \t.,;:!?")
         topic = re.sub(
