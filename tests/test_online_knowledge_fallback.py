@@ -189,3 +189,26 @@ def test_web_search_preserves_quantum_entanglement_evidence(monkeypatch):
     result = asyncio.run(manager.search_web("What is quantum entanglement? And provide the source URL."))
     assert len(result) == 1
     assert result[0]["url"] == "https://example.org/quantum-entanglement"
+
+
+def test_incidental_mention_does_not_count_as_sufficient_local_evidence():
+    manager = KnowledgeManager(None, None, None)
+    assert not manager._evidence_is_sufficient("What is photosynthesis?", [{
+        "title": "Biosphere",
+        "content": "The biosphere is the worldwide sum of all ecosystems. "
+                   "Photosynthesis captures solar energy within the biosphere.",
+        "confidence": 0.9,
+    }])
+
+
+def test_definition_in_content_can_count_when_title_is_generic():
+    manager = KnowledgeManager(None, None, None)
+    assert manager._evidence_is_sufficient("What is photosynthesis?", [{
+        "title": "Science glossary excerpt",
+        "content": "Photosynthesis is the process by which plants use light to make sugars.",
+        "confidence": 0.9,
+    }])
+
+
+def test_topic_from_question_preserves_solar_system_phrase():
+    assert topic_from_question("Explain the Solar System and give an everyday example.") == "Solar System"
