@@ -23,7 +23,7 @@ _STOP_WORDS = {
     "about", "source", "url", "only", "local", "stored", "knowledge",
     "database", "aria", "answer", "using", "without", "external", "model",
     "related", "relation", "relationship", "relationships", "between", "together",
-    "difference", "differences", "versus", "vs", "our", "their", "same",
+    "difference", "differences", "compare", "comparison", "versus", "vs", "our", "their", "same",
 }
 
 _NON_FACTUAL_SOURCES = {
@@ -100,10 +100,17 @@ class AnswerComposer:
         """Remove question framing and answer-style modifiers before relevance checks."""
         text = re.sub(r"\s+", " ", str(question or "").strip().lower())
         text = re.sub(
-            r"^(?:please\s+)?(?:can you\s+)?(?:explain|describe|define|tell me about|"
+            r"^(?:please\s+)?(?:can you\s+)?(?:compare|explain|describe|define|tell me about|"
             r"what is|what are|who is|who are|where is|where are|when is|when was|"
             r"why is|why are|why does|why do|how is|how are|how does|how do)\s+",
             "", text,
+        )
+        # Strip requested everyday examples/analogies before relevance checks.
+        # They describe the output style, not additional subject terms.
+        text = re.sub(
+            r"\s+(?:with|using)\s+(?:an?\s+)?(?:everyday|real[- ]life|simple|practical)\s+"
+            r"(?:example|analogy)(?:s)?\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
         )
         # Remove answer-format instructions so they do not pollute topic retrieval.
         text = re.sub(
