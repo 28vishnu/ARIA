@@ -99,23 +99,7 @@ public class MainActivity extends Activity {
             attrs.preferredRefreshRate = 120f;
             window.setAttributes(attrs);
         }
-        if (android.os.Build.VERSION.SDK_INT >= 30) {
-            try {
-                window.getDecorView().setFrameRate(120f,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
-            } catch (RuntimeException ignored) {
-                // Refresh-rate hints are advisory and vary by device/OS build.
-            }
-        }
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-    }
-
-    private void hintViewRefreshRate(View view) {
-        if (view != null && android.os.Build.VERSION.SDK_INT >= 30) {
-            try {
-                view.setFrameRate(120f, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
-            } catch (RuntimeException ignored) { }
-        }
     }
 
     @Override public void onCreate(Bundle state) {
@@ -1357,5 +1341,4 @@ public class MainActivity extends Activity {
     private int dp(int v) { return (int)(v*getResources().getDisplayMetrics().density+0.5f); }
     private void scrollDown(ScrollView s) { s.post(() -> s.fullScroll(View.FOCUS_DOWN)); }
     private void toast(String msg) { Toast.makeText(this,msg,Toast.LENGTH_SHORT).show(); }
-    @Override protected void onDestroy() { super.onDestroy(); executor.shutdownNow(); }
 }
