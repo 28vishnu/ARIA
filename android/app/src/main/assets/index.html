@@ -13,10 +13,11 @@
             theme: {
                 extend: {
                     colors: {
-                        obsidian: '#06070B',
-                        gold: '#D4AF37',
-                        'gold-light': '#F3E5AB',
-                        'glass-bg': 'rgba(18, 22, 34, 0.72)',
+                        obsidian: '#08090E',
+                        gold: '#E5C158',
+                        'gold-dark': '#C49A2D',
+                        'gold-light': '#F6E4A8',
+                        'glass-bg': 'rgba(16, 19, 31, 0.72)',
                         'glass-card': 'rgba(255, 255, 255, 0.04)',
                         'glass-input': 'rgba(255, 255, 255, 0.07)',
                     },
@@ -24,10 +25,10 @@
                         ios: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"SF Pro Text"', 'system-ui', 'sans-serif'],
                     },
                     boxShadow: {
-                        'glass-glow': '0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(212, 175, 55, 0.08)',
-                        'drawer-glow': '25px 0 60px rgba(0, 0, 0, 0.8), 10px 0 30px rgba(123, 44, 191, 0.15)',
-                        'gold-sm': '0 0 15px rgba(212, 175, 55, 0.25)',
-                        'cyan-sm': '0 0 15px rgba(0, 245, 212, 0.25)',
+                        'glass-glow': '0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(229, 193, 88, 0.12)',
+                        'drawer-glow': '25px 0 60px rgba(0, 0, 0, 0.85), 10px 0 30px rgba(123, 44, 191, 0.15)',
+                        'gold-sm': '0 0 15px rgba(229, 193, 88, 0.3)',
+                        'cyan-sm': '0 0 15px rgba(0, 245, 212, 0.3)',
                     }
                 }
             }
@@ -36,7 +37,7 @@
     <style>
         /* Custom Native iOS Glassmorphism Styles */
         body {
-            background-color: #06070B;
+            background-color: #08090E;
             color: #F3F4F6;
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
             overflow: hidden;
@@ -46,39 +47,39 @@
 
         /* High Intensity iOS Glassmorphism */
         .ios-glass {
-            background: rgba(18, 22, 34, 0.72);
-            backdrop-filter: blur(30px) saturate(210%);
-            -webkit-backdrop-filter: blur(30px) saturate(210%);
+            background: rgba(16, 19, 31, 0.75);
+            backdrop-filter: blur(28px) saturate(200%);
+            -webkit-backdrop-filter: blur(28px) saturate(200%);
         }
 
         .ios-glass-card {
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.04);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .ios-glass-pill {
-            background: rgba(255, 255, 255, 0.08);
-            backdrop-filter: blur(15px);
-            -webkit-backdrop-filter: blur(15px);
+            background: rgba(255, 255, 255, 0.07);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
             border: 1px solid rgba(255, 255, 255, 0.12);
         }
 
         .ios-glass-menu {
-            background: rgba(22, 26, 40, 0.88);
+            background: rgba(20, 24, 38, 0.92);
             backdrop-filter: blur(35px) saturate(220%);
             -webkit-backdrop-filter: blur(35px) saturate(220%);
-            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7), 0 0 40px rgba(212, 175, 55, 0.12);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(229, 193, 88, 0.15);
         }
 
-        /* Safe Notch Margins */
+        /* SAFE AREA INSETS FOR ALL NOTCHES / DYNAMIC ISLANDS */
         .safe-notch-top {
-            padding-top: max(20px, env(safe-area-inset-top));
+            padding-top: max(38px, env(safe-area-inset-top, 38px));
         }
 
         .safe-notch-bottom {
-            padding-bottom: max(16px, env(safe-area-inset-bottom));
+            padding-bottom: max(18px, env(safe-area-inset-bottom, 18px));
         }
 
         /* Ambient Glow Background Orbs */
@@ -86,10 +87,10 @@
             position: absolute;
             top: -10%;
             left: -10%;
-            width: 50vw;
-            height: 50vw;
-            background: radial-gradient(circle, rgba(123, 44, 191, 0.25) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(60px);
+            width: 60vw;
+            height: 60vw;
+            background: radial-gradient(circle, rgba(123, 44, 191, 0.22) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(70px);
             pointer-events: none;
             z-index: 0;
         }
@@ -98,10 +99,10 @@
             position: absolute;
             bottom: -10%;
             right: -10%;
-            width: 60vw;
-            height: 60vw;
-            background: radial-gradient(circle, rgba(212, 175, 55, 0.15) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(70px);
+            width: 70vw;
+            height: 70vw;
+            background: radial-gradient(circle, rgba(229, 193, 88, 0.15) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(80px);
             pointer-events: none;
             z-index: 0;
         }
@@ -110,9 +111,9 @@
             position: absolute;
             top: 40%;
             right: -20%;
-            width: 45vw;
-            height: 45vw;
-            background: radial-gradient(circle, rgba(0, 245, 212, 0.12) 0%, rgba(0,0,0,0) 70%);
+            width: 50vw;
+            height: 50vw;
+            background: radial-gradient(circle, rgba(0, 245, 212, 0.1) 0%, rgba(0,0,0,0) 70%);
             filter: blur(80px);
             pointer-events: none;
             z-index: 0;
@@ -120,7 +121,7 @@
 
         /* Custom Scrollbars */
         ::-webkit-scrollbar {
-            width: 4px;
+            width: 3px;
         }
         ::-webkit-scrollbar-track {
             background: transparent;
@@ -130,14 +131,13 @@
             border-radius: 10px;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: rgba(212, 175, 55, 0.4);
+            background: rgba(229, 193, 88, 0.4);
         }
 
         /* Sidebar Transition Logic */
         #sidebar-drawer {
             transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 25px 0 60px rgba(0, 0, 0, 0.85);
-            /* CRITICAL: NO BORDER HERE AS REQUESTED */
             border: none !important;
         }
 
@@ -151,14 +151,14 @@
 
         /* Pulse animation for voice mode */
         @keyframes pulse-gold {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(212, 175, 55, 0.4); }
-            50% { transform: scale(1.08); box-shadow: 0 0 30px rgba(212, 175, 55, 0.8); }
+            0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(229, 193, 88, 0.4); }
+            50% { transform: scale(1.06); box-shadow: 0 0 25px rgba(229, 193, 88, 0.8); }
         }
 
         .voice-active {
             animation: pulse-gold 1.8s infinite ease-in-out;
-            background: linear-gradient(135deg, #D4AF37, #F3E5AB) !important;
-            color: #06070B !important;
+            background: linear-gradient(135deg, #E5C158, #F6E4A8) !important;
+            color: #08090E !important;
         }
     </style>
 </head>
@@ -172,27 +172,27 @@
     <!-- MAIN ROOT CONTAINER -->
     <div id="app-root" class="relative w-full h-full flex flex-col z-10 overflow-hidden">
 
-        <!-- FIXED TOP HEADER (Non-Scrolling with Notch Inset) -->
+        <!-- FIXED TOP HEADER (With generous notch & camera cutout safe-area gap) -->
         <header id="main-header" class="safe-notch-top fixed top-0 left-0 right-0 z-30 ios-glass border-b border-white/5 px-4 pb-3 flex items-center justify-between">
             
-            <!-- Left: 3-Line iOS Hamburger Button -->
-            <button id="btn-open-sidebar" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" aria-label="Open Sidebar">
+            <!-- Left: iOS Hamburger Button -->
+            <button id="btn-open-sidebar" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10 flex-shrink-0" aria-label="Open Sidebar">
                 <i data-lucide="menu" class="w-5 h-5"></i>
             </button>
 
             <!-- Center: Model Selector Pill -->
             <div class="relative">
-                <button id="btn-model-selector" class="ios-glass-pill px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs font-semibold tracking-wide text-white/90 hover:border-gold/40 transition-all">
+                <button id="btn-model-selector" class="ios-glass-pill px-4 py-1.5 rounded-full flex items-center gap-2 text-xs font-semibold tracking-wide text-white/90 hover:border-gold/40 transition-all shadow-sm">
                     <span id="active-model-icon" class="text-gold"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i></span>
-                    <span id="active-model-name" class="font-bold text-white">ChatGPT-4o</span>
+                    <span id="active-model-name" class="font-bold text-white tracking-tight">ChatGPT-4o</span>
                     <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-white/50"></i>
                 </button>
 
                 <!-- Model Picker Dropdown -->
-                <div id="model-dropdown" class="hidden absolute top-10 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-2 z-50 border border-white/10 text-xs">
+                <div id="model-dropdown" class="hidden absolute top-12 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-2 z-50 border border-white/10 text-xs">
                     <div class="text-[10px] uppercase font-bold text-white/40 px-3 py-1.5 tracking-wider">AI Engines</div>
                     
-                    <button onclick="switchEngine('chatgpt-4o', 'ChatGPT-4o', 'sparkles', '#D4AF37')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                    <button onclick="switchEngine('chatgpt-4o', 'ChatGPT-4o', 'sparkles', '#E5C158')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
                         <div class="flex items-center gap-2.5">
                             <div class="p-1.5 rounded-lg bg-amber-500/20 text-gold"><i data-lucide="sparkles" class="w-4 h-4"></i></div>
                             <div>
@@ -228,26 +228,26 @@
             </div>
 
             <!-- Right: New Chat Fast Action Button -->
-            <button onclick="startNewChat()" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" title="New Chat">
+            <button onclick="startNewChat()" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10 flex-shrink-0" title="New Chat">
                 <i data-lucide="square-pen" class="w-5 h-5"></i>
             </button>
         </header>
 
-        <!-- CHAT MESSAGES SCROLL AREA (Only middle container scrolls) -->
-        <main id="chat-scroll-area" class="flex-1 overflow-y-auto px-4 pt-24 pb-36 space-y-6">
+        <!-- CHAT MESSAGES SCROLL AREA -->
+        <main id="chat-scroll-area" class="flex-1 overflow-y-auto px-4 pt-32 pb-40 space-y-6">
             
-            <!-- WELCOME SCREEN (Shown when activeChat is empty) -->
-            <div id="welcome-container" class="h-full flex flex-col items-center justify-center text-center px-4 max-w-lg mx-auto py-12">
-                <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-6 border border-gold/30">
+            <!-- WELCOME SCREEN -->
+            <div id="welcome-container" class="h-full flex flex-col items-center justify-center text-center px-4 max-w-lg mx-auto py-8">
+                <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-5 border border-gold/30">
                     <i data-lucide="bot" class="w-8 h-8"></i>
                 </div>
                 <h1 class="text-2xl font-black tracking-tight text-white mb-2">AURA Intelligence</h1>
-                <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed">
+                <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed font-medium">
                     Unified Super-App powered by OpenAI, Google Gemini & Perplexity Deep Research.
                 </p>
 
                 <!-- Feature Quick Toggles Grid -->
-                <div class="grid grid-cols-2 gap-3 w-full mb-6">
+                <div class="grid grid-cols-2 gap-3 w-full mb-4">
                     <button onclick="quickPrompt('Perform deep research on quantum computing advancements in 2026')" class="ios-glass-card p-3.5 rounded-2xl text-left hover:border-gold/40 transition-all group">
                         <div class="flex items-center gap-2 text-purple-400 font-bold text-xs mb-1">
                             <i data-lucide="search" class="w-3.5 h-3.5"></i> Deep Research
@@ -284,46 +284,46 @@
             </div>
         </main>
 
-        <!-- FLOATING BOTTOM GLASS INPUT BAR -->
-        <div class="fixed bottom-0 left-0 right-0 z-20 px-3 safe-notch-bottom pointer-events-none">
-            <div class="max-w-2xl mx-auto pointer-events-auto">
+        <!-- FLOATING BOTTOM GLASS INPUT BAR (PERFECT FIT FOR ALL SCREEN WIDTHS & NO CUTOFFS) -->
+        <div class="fixed bottom-0 left-0 right-0 z-20 px-3 pb-2 safe-notch-bottom pointer-events-none">
+            <div class="max-w-xl mx-auto w-full pointer-events-auto box-border">
                 
-                <!-- Perplexity Search Bar Mode Indicator (Hidden by default) -->
+                <!-- Perplexity Search Bar Mode Indicator -->
                 <div id="perplexity-badge" class="hidden mb-2 px-3 py-1 rounded-full ios-glass-pill w-max flex items-center gap-2 text-[11px] text-purple-300 font-bold border border-purple-500/30">
                     <i data-lucide="globe" class="w-3.5 h-3.5 text-purple-400"></i>
                     <span>Pro Search / Deep Web Grounding Active</span>
                     <button onclick="toggleProSearch()" class="ml-1 text-white/40 hover:text-white"><i data-lucide="x" class="w-3 h-3"></i></button>
                 </div>
 
-                <!-- Main Glass Input Capsule -->
-                <div class="ios-glass p-2 rounded-3xl border border-white/10 shadow-glass-glow flex items-center gap-2">
+                <!-- Main Glass Input Capsule - Fully Compact & Responsive -->
+                <div class="ios-glass p-1.5 pl-2.5 rounded-full border border-white/10 shadow-glass-glow flex items-center gap-1.5 w-full box-border">
                     
                     <!-- File / Attachment Plus Button -->
-                    <button onclick="triggerFileUpload()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all active:scale-95" title="Attach file or image">
-                        <i data-lucide="plus" class="w-5 h-5"></i>
+                    <button onclick="triggerFileUpload()" class="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all active:scale-95 flex-shrink-0" title="Attach file or image">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
                     </button>
                     <input type="file" id="file-input" class="hidden" onchange="handleFileSelect(event)">
 
                     <!-- Perplexity Deep Research Toggle Button -->
-                    <button id="btn-pro-search" onclick="toggleProSearch()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-purple-400 transition-all active:scale-95" title="Toggle Perplexity Deep Research">
-                        <i data-lucide="globe" class="w-5 h-5"></i>
+                    <button id="btn-pro-search" onclick="toggleProSearch()" class="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-purple-400 transition-all active:scale-95 flex-shrink-0" title="Toggle Perplexity Deep Research">
+                        <i data-lucide="globe" class="w-4 h-4"></i>
                     </button>
 
                     <!-- Text Input -->
-                    <input type="text" id="user-input" placeholder="Ask AURA anything..." class="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/40 px-2 font-medium" onkeydown="handleKeyPress(event)">
+                    <input type="text" id="user-input" placeholder="Ask AURA anything..." class="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm text-white placeholder-white/40 px-1 font-medium" onkeydown="handleKeyPress(event)">
 
-                    <!-- Voice Mode Button -->
-                    <button id="btn-voice-mode" onclick="toggleVoiceMode()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-gold transition-all active:scale-95" title="Voice Conversation">
-                        <i data-lucide="mic" class="w-5 h-5"></i>
+                    <!-- Voice Mode Button (STRICTLY VISIBLE & COMPACT) -->
+                    <button id="btn-voice-mode" onclick="toggleVoiceMode()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/80 hover:text-gold transition-all active:scale-95 flex-shrink-0" title="Voice Mode">
+                        <i data-lucide="mic" class="w-4 h-4"></i>
                     </button>
 
-                    <!-- Send Button -->
-                    <button onclick="sendMessage()" class="p-2.5 rounded-full bg-gold text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
-                        <i data-lucide="arrow-up" class="w-5 h-5 stroke-[2.5]"></i>
+                    <!-- Send Button (STRICTLY VISIBLE & COMPACT) -->
+                    <button onclick="sendMessage()" class="p-2.5 rounded-full bg-gradient-to-r from-gold to-amber-300 text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center flex-shrink-0">
+                        <i data-lucide="arrow-up" class="w-4 h-4 stroke-[2.5]"></i>
                     </button>
                 </div>
 
-                <div class="text-center text-[10px] text-white/30 mt-2 font-medium">
+                <div class="text-center text-[10px] text-white/30 mt-1.5 font-medium tracking-wide">
                     AURA Super-App • GPT-4o, Gemini 1.5 & Perplexity Engine
                 </div>
             </div>
@@ -332,14 +332,12 @@
         <!-- SIDEBAR DRAWER OVERLAY BACKDROP -->
         <div id="sidebar-overlay" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity opacity-0" onclick="closeSidebar()"></div>
 
-        <!-- SLIDING SIDEBAR DRAWER (No border, rich glass shadow) -->
+        <!-- SLIDING SIDEBAR DRAWER -->
         <aside id="sidebar-drawer" class="sidebar-closed fixed top-0 bottom-0 left-0 w-[82vw] max-w-xs ios-glass z-50 flex flex-col justify-between safe-notch-top safe-notch-bottom">
             
-            <!-- TOP SECTION (Fixed Search & New Chat) -->
+            <!-- TOP SECTION -->
             <div class="p-4 space-y-3 flex-shrink-0">
-                
-                <!-- Sidebar Top Title & Close Button -->
-                <div class="flex items-center justify-between pb-2">
+                <div class="flex items-center justify-between pb-1">
                     <div class="flex items-center gap-2">
                         <div class="w-7 h-7 rounded-xl bg-gold/20 flex items-center justify-center text-gold border border-gold/30">
                             <i data-lucide="bot" class="w-4 h-4"></i>
@@ -364,31 +362,24 @@
                 </button>
             </div>
 
-            <!-- MIDDLE SECTION (INDEPENDENTLY SCROLLABLE CHATS) -->
+            <!-- MIDDLE SECTION (SCROLLABLE CHATS) -->
             <div id="sidebar-chats-scroll" class="flex-1 overflow-y-auto px-4 py-2 space-y-4">
-                
-                <!-- PINNED CHATS SECTION -->
                 <div id="pinned-chats-wrapper" class="space-y-1">
                     <div class="text-[10px] uppercase font-bold text-white/40 tracking-wider px-2 py-1 flex items-center gap-1.5">
                         <i data-lucide="pin" class="w-3 h-3 text-gold"></i> Pinned Chats
                     </div>
-                    <div id="pinned-chats-list" class="space-y-1">
-                        <!-- Pinned chat items inserted here dynamically -->
-                    </div>
+                    <div id="pinned-chats-list" class="space-y-1"></div>
                 </div>
 
-                <!-- RECENT CHATS SECTION -->
                 <div class="space-y-1">
                     <div class="text-[10px] uppercase font-bold text-white/40 tracking-wider px-2 py-1 flex items-center gap-1.5">
                         <i data-lucide="clock" class="w-3 h-3 text-cyan-400"></i> Recents
                     </div>
-                    <div id="recent-chats-list" class="space-y-1">
-                        <!-- Recent chat items inserted here dynamically -->
-                    </div>
+                    <div id="recent-chats-list" class="space-y-1"></div>
                 </div>
             </div>
 
-            <!-- BOTTOM USER PROFILE CARD (STRICTLY PINNED AT BOTTOM) -->
+            <!-- BOTTOM USER PROFILE CARD -->
             <div class="p-4 border-t border-white/5 flex-shrink-0 bg-black/20">
                 <div class="ios-glass-card p-3 rounded-2xl flex items-center justify-between">
                     <div class="flex items-center gap-3">
@@ -407,7 +398,7 @@
             </div>
         </aside>
 
-        <!-- CRITICAL Z-INDEX FIX: TOP-LEVEL CHAT CONTEXT MENU POPUP (Z-INDEX 9999) -->
+        <!-- TOP-LEVEL CHAT CONTEXT MENU POPUP -->
         <div id="chat-context-menu" class="hidden fixed w-52 ios-glass-menu rounded-2xl p-2 text-xs border border-white/15 z-[9999] shadow-glass-glow">
             <div id="context-chat-title" class="px-3 py-1.5 font-bold text-white/90 border-b border-white/10 mb-1 truncate">Chat Options</div>
             
@@ -436,16 +427,14 @@
 
     </div>
 
-    <!-- JAVASCRIPT APP LOGIC & GESTURES -->
+    <!-- JAVASCRIPT APP LOGIC -->
     <script>
-        // APP STATE MANAGEMENT
-        let currentEngine = 'chatgpt-4o'; // 'chatgpt-4o', 'gemini-1.5', 'perplexity-pro'
+        let currentEngine = 'chatgpt-4o';
         let isProSearch = false;
         let isVoiceActive = false;
-        let activeChatId = null; // null represents fresh new chat state
+        let activeChatId = null;
         let contextTargetChatId = null;
 
-        // MOCK CHATS DATABASE
         let chatsDatabase = [
             { id: 'c1', title: 'Photosynthesis & Light Reactions', pinned: true, engine: 'chatgpt-4o', updated: '2h ago', messages: [
                 { role: 'user', text: 'Photosynthesis process' },
@@ -453,21 +442,19 @@
             ]},
             { id: 'c2', title: 'Quantum Computing Breakthroughs', pinned: false, engine: 'perplexity-pro', updated: 'Yesterday', messages: [
                 { role: 'user', text: 'What are recent quantum computing milestones?' },
-                { role: 'assistant', text: 'Recent 2026 quantum breakthroughs include fault-tolerant logical qubits demonstrated with over 99.9% fidelity.', sources: [
-                    { title: 'Nature Physics 2026', url: 'https://nature.com' },
+                { role: 'assistant', text: 'Recent quantum breakthroughs include fault-tolerant logical qubits demonstrated with over 99.9% fidelity.', sources: [
+                    { title: 'Nature Physics', url: 'https://nature.com' },
                     { title: 'MIT Tech Review', url: 'https://technologyreview.com' }
                 ]}
             ]},
             { id: 'c3', title: 'React Canvas Code Review', pinned: false, engine: 'gemini-1.5', updated: '3 days ago', messages: [] }
         ];
 
-        // INITIALIZATION
         window.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
             renderSidebarChats();
             initGestureListeners();
 
-            // Handle Model Dropdown Toggle
             const modelBtn = document.getElementById('btn-model-selector');
             const modelDropdown = document.getElementById('model-dropdown');
             
@@ -481,11 +468,9 @@
                 hideContextMenu();
             });
 
-            // Prevent closing when clicking inside dropdown
             modelDropdown.addEventListener('click', (e) => e.stopPropagation());
         });
 
-        // RESTART / NEW CHAT STATE FIX
         function startNewChat() {
             activeChatId = null;
             document.getElementById('messages-container').innerHTML = '';
@@ -495,7 +480,6 @@
             renderSidebarChats();
         }
 
-        // LOAD AN EXISTING CHAT
         function loadChat(chatId) {
             activeChatId = chatId;
             const chat = chatsDatabase.find(c => c.id === chatId);
@@ -515,18 +499,16 @@
             closeSidebar();
         }
 
-        // SEND MESSAGE & AI RESPONSE LOGIC
         function sendMessage() {
             const input = document.getElementById('user-input');
             const text = input.value.trim();
             if (!text) return;
 
-            // If in fresh state, create a new chat entry
             if (!activeChatId) {
                 const newId = 'c_' + Date.now();
                 const newChat = {
                     id: newId,
-                    title: text.length > 28 ? text.substring(0, 28) + '...' : text,
+                    title: text.length > 26 ? text.substring(0, 26) + '...' : text,
                     pinned: false,
                     engine: currentEngine,
                     updated: 'Just now',
@@ -538,36 +520,33 @@
 
             const currentChat = chatsDatabase.find(c => c.id === activeChatId);
 
-            // Hide Welcome, Show Messages
             document.getElementById('welcome-container').classList.add('hidden');
             document.getElementById('messages-container').classList.remove('hidden');
 
-            // Render User Message
             appendMessageToUI('user', text);
             currentChat.messages.push({ role: 'user', text: text });
             input.value = '';
 
-            // Simulate AI Generating Response
             setTimeout(() => {
                 let aiResponse = "";
                 let sources = [];
 
                 if (isProSearch || currentEngine === 'perplexity-pro') {
-                    aiResponse = `Deep search complete for: "${text}". Based on current web indices, here are the grounded results:`;
+                    aiResponse = `Deep search complete for: "${text}". Grounded live web sources:`;
                     sources = [
                         { title: 'Global Tech Index 2026', url: 'https://arxiv.org' },
                         { title: 'AI Research Papers', url: 'https://deepmind.google' }
                     ];
                 } else if (currentEngine === 'gemini-1.5') {
-                    aiResponse = `[Gemini 1.5 Pro Multimodal Engine]\nProcessed query in 120ms with 1M context window capacity. Here is the breakdown regarding "${text}".`;
+                    aiResponse = `[Gemini 1.5 Pro]\nProcessed query in 120ms with 1M context window capacity regarding "${text}".`;
                 } else {
-                    aiResponse = `[ChatGPT-4o Omni]\nI've analyzed your query regarding "${text}". Here is a concise, high-level summary and recommended next steps.`;
+                    aiResponse = `[ChatGPT-4o Omni]\nI've analyzed your query regarding "${text}". Here is a concise summary and next steps.`;
                 }
 
                 appendMessageToUI('assistant', aiResponse, sources);
                 currentChat.messages.push({ role: 'assistant', text: aiResponse, sources: sources });
                 renderSidebarChats();
-            }, 800);
+            }, 700);
         }
 
         function quickPrompt(promptText) {
@@ -579,7 +558,6 @@
             if (e.key === 'Enter') sendMessage();
         }
 
-        // RENDER MESSAGES TO CHAT FEED
         function appendMessageToUI(role, text, sources = []) {
             const container = document.getElementById('messages-container');
             const isUser = role === 'user';
@@ -606,18 +584,18 @@
             }
 
             wrapper.innerHTML = `
-                <div class="max-w-[85%] sm:max-w-[75%] p-4 rounded-3xl ${
+                <div class="max-w-[85%] sm:max-w-[75%] p-3.5 sm:p-4 rounded-3xl ${
                     isUser 
                     ? 'bg-gradient-to-r from-gold to-amber-300 text-obsidian font-semibold rounded-br-none shadow-gold-sm' 
                     : 'ios-glass-card text-white rounded-bl-none border border-white/10'
                 }">
                     ${!isUser ? `
-                        <div class="flex items-center gap-2 mb-2 text-gold font-bold text-xs">
-                            <i data-lucide="bot" class="w-4 h-4"></i>
+                        <div class="flex items-center gap-2 mb-1.5 text-gold font-bold text-xs">
+                            <i data-lucide="bot" class="w-3.5 h-3.5"></i>
                             <span>AURA Engine</span>
                         </div>
                     ` : ''}
-                    <p class="text-sm leading-relaxed whitespace-pre-wrap">${text}</p>
+                    <p class="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">${text}</p>
                     ${sourcesHTML}
                 </div>
             `;
@@ -632,7 +610,6 @@
             scrollArea.scrollTop = scrollArea.scrollHeight;
         }
 
-        // SIDEBAR CHATS RENDERING
         function renderSidebarChats() {
             const pinnedList = document.getElementById('pinned-chats-list');
             const recentList = document.getElementById('recent-chats-list');
@@ -672,7 +649,6 @@
                     <span class="text-xs truncate">${chat.title}</span>
                 </div>
                 
-                <!-- Context Menu Trigger Button -->
                 <button onclick="openContextMenu(event, '${chat.id}')" class="p-1 rounded-lg hover:bg-white/15 text-white/40 hover:text-white transition-all opacity-0 group-hover:opacity-100" title="Options">
                     <i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>
                 </button>
@@ -681,7 +657,6 @@
             return div;
         }
 
-        // CRITICAL Z-INDEX & CONTEXT MENU FIX
         function openContextMenu(e, chatId) {
             e.stopPropagation();
             e.preventDefault();
@@ -693,11 +668,10 @@
             document.getElementById('context-chat-title').innerText = chat ? chat.title : 'Chat Options';
             document.getElementById('context-pin-text').innerText = chat && chat.pinned ? 'Unpin chat' : 'Pin chat';
 
-            // Calculate Optimal Screen Positioning
             const clickX = e.clientX;
             const clickY = e.clientY;
             
-            const menuWidth = 208; // w-52 = 13rem = 208px
+            const menuWidth = 208;
             const menuHeight = 180;
 
             let posX = clickX;
@@ -709,7 +683,6 @@
             menu.style.left = `${posX}px`;
             menu.style.top = `${posY}px`;
             
-            // Unhide context menu (z-index 9999 ensures it's above everything)
             menu.classList.remove('hidden');
         }
 
@@ -730,8 +703,6 @@
             } else if (action === 'delete') {
                 chatsDatabase = chatsDatabase.filter(c => c.id !== contextTargetChatId);
                 if (activeChatId === contextTargetChatId) startNewChat();
-            } else if (action === 'archive') {
-                alert(`Chat "${chat.title}" archived successfully.`);
             }
 
             hideContextMenu();
@@ -747,7 +718,6 @@
             });
         }
 
-        // SIDEBAR TOGGLE & SWIPE GESTURE PHYSICS
         const sidebar = document.getElementById('sidebar-drawer');
         const overlay = document.getElementById('sidebar-overlay');
 
@@ -767,7 +737,6 @@
 
         document.getElementById('btn-open-sidebar').addEventListener('click', openSidebar);
 
-        // EDGE SWIPE GESTURE LISTENERS
         let touchStartX = 0;
         let touchStartY = 0;
 
@@ -784,21 +753,16 @@
                 const deltaX = touchEndX - touchStartX;
                 const deltaY = touchEndY - touchStartY;
 
-                // Ensure horizontal swipe dominant over vertical scroll
                 if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
-                    // Edge Swipe Right to Open (Touch started near left edge < 35px)
                     if (deltaX > 0 && touchStartX < 35) {
                         openSidebar();
-                    }
-                    // Swipe Left to Close Sidebar
-                    else if (deltaX < 0 && sidebar.classList.contains('sidebar-open')) {
+                    } else if (deltaX < 0 && sidebar.classList.contains('sidebar-open')) {
                         closeSidebar();
                     }
                 }
             }, { passive: true });
         }
 
-        // ENGINE & TOGGLE FEATURES
         function switchEngine(id, name, icon, colorHex) {
             currentEngine = id;
             document.getElementById('active-model-name').innerText = name;
@@ -834,7 +798,6 @@
 
             if (isVoiceActive) {
                 btn.classList.add('voice-active');
-                alert("AURA Live Voice Mode Connected (Simulated)");
             } else {
                 btn.classList.remove('voice-active');
             }
@@ -848,7 +811,7 @@
             const file = e.target.files[0];
             if (file) {
                 const input = document.getElementById('user-input');
-                input.value = `[Attached File: ${file.name}] ` + input.value;
+                input.value = `[Attached: ${file.name}] ` + input.value;
             }
         }
     </script>
