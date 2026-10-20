@@ -28,6 +28,7 @@ import re
 import sqlite3
 import sys
 import zipfile
+from itertools import islice
 from pathlib import Path
 from typing import Iterable, Iterator
 from urllib.parse import quote, urljoin
@@ -420,6 +421,8 @@ def main(argv=None) -> int:
     imp.add_argument("--db", default=DEFAULT_DB)
     imp.add_argument("--limit", type=int, default=None)
     imp.add_argument("--batch-size", type=int, default=250)
+    imp.add_argument("--dry-run", action="store_true", help="Preview records without writing to the database")
+    imp.add_argument("--preview-count", type=int, default=10, help="Maximum records inspected during --dry-run (1-100)")
     imp.add_argument("--base-url", default="", help="Canonical base URL for codingdocs imports, e.g. https://docs.python.org/3/")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -434,7 +437,40 @@ def main(argv=None) -> int:
             raise ValueError(
                 f"Use `python -m brain.knowledge.open_knowledge {args.source} --dump \"{path}\" --db \"{args.db}\"`."
             )
-        result = import_records(args.db, records_for(args.source, path, base_url=args.base_url), args.limit, args.batch_size)
+        if args.batch_size < 1:
+            raise ValueError("--batch-size must be at least 1")
+        if args.limit is not None and args.limit < 0:
+            raise ValueError("--limit must be zero or greater")
+
+        records = records_for(args.source, path, base_url=args.base_url)
+        if args.dry_run:
+            if not 1 <= args.preview_count <= 100:
+                raise ValueError("--preview-count must be between 1 and 100")
+            preview_limit = min(args.preview_count, args.limit) if args.limit is not None else args.preview_count
+            preview = list(islice(records, preview_limit))
+            result = {
+                "dry_run": True,
+                "source": args.source,
+                "input_file": str(path.resolve()),
+                "records_previewed": len(preview),
+                "preview_limit": preview_limit,
+                "database_written": False,
+                "records": [
+                    {
+                        "source": str(item.get("source", "")),
+                        "source_id": str(item.get("source_id", "")),
+                        "title": str(item.get("title", ""))[:200],
+                        "content_characters": len(str(item.get("content", ""))),
+                        "url": str(item.get("url", "")),
+                        "license": str(item.get("license", "unknown")),
+                    }
+                    for item in preview
+                ],
+                "note": "Preview only; this does not validate or import the entire dataset.",
+            }
+        else:
+            result = import_records(args.db, records, args.limit, args.batch_size)
+            result.update({"dry_run": False})
         result.update({"source": args.source, "input_file": str(path.resolve())})
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
