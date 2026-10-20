@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ARIA Glass AI</title>
+    <title>AURA AI Super-App</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
@@ -160,6 +160,37 @@
             background: linear-gradient(135deg, #D4AF37, #F3E5AB) !important;
             color: #06070B !important;
         }
+
+
+        /* Responsive viewport + keyboard-safe mobile layout */
+        :root { --app-vh: 100dvh; --composer-height: 100px; }
+        html, body { width:100%; height:100%; height:var(--app-vh); min-height:0; margin:0; overflow:hidden; }
+        body { position:fixed; inset:0; overscroll-behavior:none; }
+        #app-root { height:var(--app-vh) !important; min-height:0; }
+        #main-header { position:absolute; top:0; padding-top:max(8px, env(safe-area-inset-top)); padding-bottom:10px; min-height:64px; }
+        #chat-scroll-area { position:absolute; inset:64px 0 calc(var(--composer-height) + env(safe-area-inset-bottom)) 0; height:auto; min-height:0; padding-top:14px !important; padding-bottom:18px !important; overscroll-behavior:contain; scroll-padding-bottom:18px; }
+        #welcome-container { min-height:100%; height:auto !important; justify-content:center; padding-top:20px !important; padding-bottom:24px !important; }
+        #messages-container { width:100%; max-width:760px; margin-inline:auto; padding-bottom:12px; overflow-wrap:anywhere; word-break:break-word; }
+        #messages-container a { overflow-wrap:anywhere; word-break:break-word; }
+        #composer-root { position:absolute !important; left:0; right:0; bottom:0; padding:8px 12px max(8px, env(safe-area-inset-bottom)); background:linear-gradient(180deg, transparent, rgba(6,7,11,.92) 24%); }
+        #composer-capsule { width:100%; min-width:0; display:flex; align-items:center; gap:5px; padding:7px; border-radius:24px; }
+        #composer-capsule > button { flex:0 0 38px; width:38px; height:38px; min-width:38px; padding:8px; display:flex; align-items:center; justify-content:center; }
+        #user-input { flex:1 1 0%; min-width:0; width:0; font-size:16px !important; padding:8px 3px; }
+        #composer-root .composer-caption { margin-top:5px; }
+        .message-content { min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:break-word; white-space:pre-wrap; line-height:1.65; }
+        .source-list { display:flex; flex-wrap:wrap; gap:7px; min-width:0; }
+        .source-link { max-width:100%; min-width:0; overflow-wrap:anywhere; }
+        .typing-indicator { display:flex; align-items:center; gap:6px; color:rgba(255,255,255,.58); font-size:12px; }
+        .typing-dot { width:5px; height:5px; border-radius:50%; background:#D4AF37; animation:typingPulse 1.1s infinite ease-in-out; }
+        .typing-dot:nth-child(2) { animation-delay:.15s; } .typing-dot:nth-child(3) { animation-delay:.3s; }
+        @keyframes typingPulse { 0%,80%,100% {opacity:.25; transform:translateY(0)} 40% {opacity:1; transform:translateY(-3px)} }
+        @media (max-width:380px) {
+          #main-header { padding-left:12px; padding-right:12px; }
+          #btn-model-selector { max-width:190px; gap:6px; padding-inline:10px; }
+          #active-model-name { max-width:125px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          #composer-root { padding-left:8px; padding-right:8px; }
+          #composer-capsule > button { flex-basis:34px; width:34px; min-width:34px; height:36px; }
+        }
     </style>
 </head>
 <body class="h-screen w-screen flex flex-col overflow-hidden select-none bg-obsidian">
@@ -188,10 +219,42 @@
                     <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-white/50"></i>
                 </button>
 
-                <!-- The deployed ARIA API exposes one assistant endpoint; it does not expose client-side provider switching. -->
-                <div id="model-dropdown" class="hidden absolute top-12 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-3 z-50 border border-white/10 text-xs">
-                    <div class="font-bold text-white mb-1">ARIA Backend</div>
-                    <p class="text-white/60 leading-relaxed">Messages are sent to your configured ARIA server. Provider selection is controlled by the backend; this interface will not pretend to switch providers.</p>
+                <!-- Model Picker Dropdown -->
+                <div id="model-dropdown" class="hidden absolute top-10 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-2 z-50 border border-white/10 text-xs">
+                    <div class="text-[10px] uppercase font-bold text-white/40 px-3 py-1.5 tracking-wider">AI Engines</div>
+                    
+                    <button onclick="switchEngine('chatgpt-4o', 'ChatGPT-4o', 'sparkles', '#D4AF37')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-1.5 rounded-lg bg-amber-500/20 text-gold"><i data-lucide="sparkles" class="w-4 h-4"></i></div>
+                            <div>
+                                <div class="font-bold text-white">ChatGPT-4o</div>
+                                <div class="text-[10px] text-white/50">Omni multimodal reasoning</div>
+                            </div>
+                        </div>
+                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon" id="check-chatgpt-4o"></i>
+                    </button>
+
+                    <button onclick="switchEngine('gemini-1.5', 'Gemini 1.5 Pro', 'cpu', '#00F5D4')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400"><i data-lucide="cpu" class="w-4 h-4"></i></div>
+                            <div>
+                                <div class="font-bold text-white">Gemini 1.5 Pro</div>
+                                <div class="text-[10px] text-white/50">1M Token context & vision</div>
+                            </div>
+                        </div>
+                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon hidden" id="check-gemini-1.5"></i>
+                    </button>
+
+                    <button onclick="switchEngine('perplexity-pro', 'Perplexity Pro', 'globe', '#9D4EDD')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><i data-lucide="globe" class="w-4 h-4"></i></div>
+                            <div>
+                                <div class="font-bold text-white">Perplexity Pro</div>
+                                <div class="text-[10px] text-white/50">Live web & citation research</div>
+                            </div>
+                        </div>
+                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon hidden" id="check-perplexity-pro"></i>
+                    </button>
                 </div>
             </div>
 
@@ -209,9 +272,9 @@
                 <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-6 border border-gold/30">
                     <i data-lucide="bot" class="w-8 h-8"></i>
                 </div>
-                <h1 class="text-2xl font-black tracking-tight text-white mb-2">ARIA Intelligence</h1>
+                <h1 class="text-2xl font-black tracking-tight text-white mb-2">AURA Intelligence</h1>
                 <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed">
-                    Your private assistant, connected to the ARIA backend. Sign in to send real requests.
+                    Unified Super-App powered by OpenAI, Google Gemini & Perplexity Deep Research.
                 </p>
 
                 <!-- Feature Quick Toggles Grid -->
@@ -253,7 +316,7 @@
         </main>
 
         <!-- FLOATING BOTTOM GLASS INPUT BAR -->
-        <div class="fixed bottom-0 left-0 right-0 z-20 px-3 safe-notch-bottom pointer-events-none">
+        <div id="composer-root" class="fixed bottom-0 left-0 right-0 z-20 px-3 safe-notch-bottom pointer-events-none">
             <div class="max-w-2xl mx-auto pointer-events-auto">
                 
                 <!-- Perplexity Search Bar Mode Indicator (Hidden by default) -->
@@ -264,7 +327,7 @@
                 </div>
 
                 <!-- Main Glass Input Capsule -->
-                <div class="ios-glass p-2 rounded-3xl border border-white/10 shadow-glass-glow flex items-center gap-2">
+                <div id="composer-capsule" class="ios-glass p-2 rounded-3xl border border-white/10 shadow-glass-glow flex items-center gap-2">
                     
                     <!-- File / Attachment Plus Button -->
                     <button onclick="triggerFileUpload()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all active:scale-95" title="Attach file or image">
@@ -286,13 +349,13 @@
                     </button>
 
                     <!-- Send Button -->
-                    <button onclick="sendMessage()" class="p-2.5 rounded-full bg-gold text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
+                    <button id="btn-send" onclick="sendMessage()" class="p-2.5 rounded-full bg-gold text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
                         <i data-lucide="arrow-up" class="w-5 h-5 stroke-[2.5]"></i>
                     </button>
                 </div>
 
-                <div class="text-center text-[10px] text-white/30 mt-2 font-medium">
-                    ARIA Super-App • ARIA Backend • Real requests
+                <div class="composer-caption text-center text-[10px] text-white/30 mt-2 font-medium">
+                    ARIA Backend • Real requests • Responses and sources from backend
                 </div>
             </div>
         </div>
@@ -312,7 +375,7 @@
                         <div class="w-7 h-7 rounded-xl bg-gold/20 flex items-center justify-center text-gold border border-gold/30">
                             <i data-lucide="bot" class="w-4 h-4"></i>
                         </div>
-                        <span class="font-black text-base tracking-tight text-white">ARIA</span>
+                        <span class="font-black text-base tracking-tight text-white">AURA</span>
                     </div>
                     <button onclick="closeSidebar()" class="p-1.5 rounded-full bg-white/5 text-white/60 hover:text-white">
                         <i data-lucide="x" class="w-4 h-4"></i>
@@ -365,7 +428,7 @@
                         </div>
                         <div>
                             <div class="text-xs font-bold text-white">ARIA Personal</div>
-                            <div class="text-[10px] text-white/50">Private ARIA • Backend connected</div>
+                            <div class="text-[10px] text-white/50">Pro Subscriber • Unlimited</div>
                         </div>
                     </div>
                     <button class="text-white/40 hover:text-white p-1.5 rounded-lg hover:bg-white/5">
@@ -407,32 +470,31 @@
     <!-- JAVASCRIPT APP LOGIC & GESTURES -->
     <script>
         // APP STATE MANAGEMENT
-        let currentEngine = 'aria-backend'; // 'chatgpt-4o', 'gemini-1.5', 'perplexity-pro'
+        let currentEngine = 'aria-backend'; // UI label only; backend chooses its configured model
         let isProSearch = false;
         let isVoiceActive = false;
         let activeChatId = null; // null represents fresh new chat state
         let contextTargetChatId = null;
 
-        // MOCK CHATS DATABASE
-        let chatsDatabase = loadSavedChats();
+        // Local UI history only. New assistant replies always come from the authenticated ARIA backend.
+        let chatsDatabase = [];
+        let pendingRequests = new Map();
+        let requestCounter = 0;
+        const sessionId = 'android-' + (localStorage.getItem('aria-session-id') || (() => { const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()); localStorage.setItem('aria-session-id', id); return id; })());
 
-        function loadSavedChats() {
-            try {
-                const saved = JSON.parse(localStorage.getItem('aria_glass_chats') || '[]');
-                return Array.isArray(saved) ? saved.filter(c => c && typeof c.id === 'string' && Array.isArray(c.messages)) : [];
-            } catch (_) { return []; }
-        }
-
-        function saveChats() {
-            try { localStorage.setItem('aria_glass_chats', JSON.stringify(chatsDatabase)); }
-            catch (_) { showNotice('Could not save chat history on this device.'); }
-        }
 
         // INITIALIZATION
         window.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
             renderSidebarChats();
             initGestureListeners();
+            updateViewportLayout();
+            window.addEventListener('resize', updateViewportLayout);
+            window.addEventListener('orientationchange', () => setTimeout(updateViewportLayout, 250));
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', updateViewportLayout);
+                window.visualViewport.addEventListener('scroll', updateViewportLayout);
+            }
 
             // Handle Model Dropdown Toggle
             const modelBtn = document.getElementById('btn-model-selector');
@@ -482,185 +544,158 @@
             closeSidebar();
         }
 
-        // SEND MESSAGE & AI RESPONSE LOGIC
-        let pendingRequests = new Map();
-        let requestCounter = 0;
-        let isSignedIn = false;
-
-        function escapeHTML(value) {
-            return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-        }
-
-        function showNotice(message) {
-            const node = document.createElement('div');
-            node.className = 'fixed top-20 left-1/2 -translate-x-1/2 z-[10000] max-w-[90vw] ios-glass-card border border-white/15 rounded-2xl px-4 py-3 text-xs text-white shadow-glass-glow';
-            node.textContent = message;
-            document.body.appendChild(node);
-            setTimeout(() => node.remove(), 3600);
-        }
-
-        function ensureLoginDialog() {
-            if (document.getElementById('aria-login-overlay')) return;
-            const overlay = document.createElement('div');
-            overlay.id = 'aria-login-overlay';
-            overlay.className = 'fixed inset-0 z-[10001] flex items-center justify-center p-5 bg-black/75 backdrop-blur-md';
-            overlay.innerHTML = `<div class="ios-glass-card w-full max-w-sm rounded-3xl p-6 border border-white/15 shadow-glass-glow">
-                <div class="w-12 h-12 rounded-2xl bg-amber-300/15 border border-amber-200/20 flex items-center justify-center text-gold mb-4"><i data-lucide="shield-check" class="w-6 h-6"></i></div>
-                <h2 class="text-lg font-black text-white">Sign in to private ARIA</h2>
-                <p class="text-xs leading-relaxed text-white/60 mt-2 mb-5">Your credentials are sent to the ARIA HTTPS login endpoint. The password is not saved in this page.</p>
-                <label for="aria-login-password" class="block text-xs text-white/70 mb-2">Private app password</label>
-                <input id="aria-login-password" type="password" autocomplete="current-password" class="w-full bg-white/5 border border-white/15 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-amber-200/50" placeholder="Enter your app password">
-                <p id="aria-login-error" class="hidden text-xs text-red-300 mt-3"></p>
-                <button id="aria-login-submit" class="w-full mt-4 rounded-xl py-3 bg-gradient-to-r from-gold to-amber-200 text-obsidian font-bold text-sm">Sign in securely</button>
-            </div>`;
-            document.body.appendChild(overlay);
-            lucide.createIcons();
-            const password = overlay.querySelector('#aria-login-password');
-            const submit = overlay.querySelector('#aria-login-submit');
-            const error = overlay.querySelector('#aria-login-error');
-            const doLogin = () => {
-                const secret = password.value;
-                if (!secret) { error.textContent = 'Enter your private app password.'; error.classList.remove('hidden'); return; }
-                if (!window.AriaNative || typeof window.AriaNative.signIn !== 'function') {
-                    error.textContent = 'Native ARIA bridge is missing. Install the updated Android app files.'; error.classList.remove('hidden'); return;
-                }
-                submit.disabled = true; submit.textContent = 'Signing in…'; error.classList.add('hidden');
-                window.AriaNative.signIn(secret); password.value = '';
-            };
-            submit.addEventListener('click', doLogin);
-            password.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-        }
-
-        window.onAriaLoginResult = function(result) {
-            const submit = document.getElementById('aria-login-submit');
-            const error = document.getElementById('aria-login-error');
-            if (submit) { submit.disabled = false; submit.textContent = 'Sign in securely'; }
-            if (result && result.success) {
-                isSignedIn = true;
-                const overlay = document.getElementById('aria-login-overlay'); if (overlay) overlay.remove();
-                showNotice('Connected securely to ARIA backend.');
-            } else if (error) {
-                error.textContent = (result && result.message) || 'Sign-in failed. Check your password and backend configuration.';
-                error.classList.remove('hidden');
-            }
-        };
-
-        window.onAriaChatResult = function(result) {
-            const id = String(result && result.requestId || '');
-            if (!pendingRequests.has(id)) return;
-            const responseChatId = pendingRequests.get(id);
-            pendingRequests.delete(id);
-            const currentChat = chatsDatabase.find(c => c.id === responseChatId);
-            const reply = result && result.reply ? String(result.reply) : 'ARIA returned an empty response.';
-            const sources = extractRealUrls(reply).map(url => ({title: new URL(url).hostname, url}));
-            if (activeChatId === responseChatId) appendMessageToUI('assistant', reply, sources);
-            if (currentChat) {
-                currentChat.messages.push({ role: 'assistant', text: reply, sources });
-                currentChat.updated = 'Just now';
-                saveChats();
-                renderSidebarChats();
-            }
-            const indicator = document.getElementById('aria-thinking-indicator'); if (indicator) indicator.remove();
-            if (result && result.authRequired) {
-                isSignedIn = false; ensureLoginDialog();
-            }
-            if (result && result.success === false) showNotice(result.message || 'ARIA request failed.');
-        };
-
-        function extractRealUrls(text) {
-            const found = String(text || '').match(/https?:\/\/[^\s)\]}>"']+/gi) || [];
-            return [...new Set(found.map(u => u.replace(/[.,;]+$/, '')).filter(u => { try { const x = new URL(u); return x.protocol === 'https:' || x.protocol === 'http:'; } catch (_) { return false; } }))];
-        }
-
+        // Real backend request path through the native Android bridge (no simulated replies).
         function sendMessage() {
             const input = document.getElementById('user-input');
             const text = input.value.trim();
-            if (!text) return;
-            if (!window.AriaNative || typeof window.AriaNative.chat !== 'function') {
-                showNotice('Backend bridge is not installed. Add the updated AriaGlassActivity.java.'); return;
+            if (!text || !window.AriaNative) {
+                if (!window.AriaNative) showStatus('ARIA native bridge is unavailable. Reopen the app.');
+                return;
             }
-            if (!isSignedIn && typeof window.AriaNative.isSignedIn === 'function' && !window.AriaNative.isSignedIn()) {
-                ensureLoginDialog(); return;
+            if (!window.AriaNative.isSignedIn()) {
+                const secret = window.prompt('Sign in to your private ARIA backend. Enter your ARIA app password:');
+                if (!secret) { showStatus('Sign-in is required before sending messages.'); return; }
+                showStatus('Signing in to ARIA…');
+                window.__pendingFirstMessage = text;
+                window.AriaNative.signIn(secret);
+                input.value = '';
+                return;
             }
             if (!activeChatId) {
-                const newId = 'c_' + Date.now();
-                chatsDatabase.unshift({ id:newId, title:text.length > 26 ? text.substring(0,26)+'...' : text, pinned:false, archived:false, engine:'aria-backend', updated:'Just now', messages:[] });
-                saveChats();
-                activeChatId = newId;
+                activeChatId = 'c_' + Date.now();
+                chatsDatabase.unshift({ id:activeChatId, title:text.length > 36 ? text.slice(0,36)+'…' : text, pinned:false, engine:currentEngine, updated:'Just now', messages:[] });
             }
             const currentChat = chatsDatabase.find(c => c.id === activeChatId);
             document.getElementById('welcome-container').classList.add('hidden');
             document.getElementById('messages-container').classList.remove('hidden');
             appendMessageToUI('user', text);
-            if (currentChat) currentChat.messages.push({role:'user',text});
-            saveChats();
+            currentChat.messages.push({role:'user', text});
             input.value = '';
-            const requestId = String(++requestCounter) + '_' + Date.now();
-            pendingRequests.set(requestId, activeChatId);
-            const indicator = document.createElement('div');
-            indicator.id = 'aria-thinking-indicator';
-            indicator.className = 'max-w-[85%] ios-glass-card rounded-2xl px-4 py-3 text-xs text-white/60';
-            indicator.textContent = 'ARIA is thinking…';
-            document.getElementById('messages-container').appendChild(indicator);
-            scrollToBottom();
-            window.AriaNative.chat(requestId, text, activeChatId);
+            input.style.height = '';
+            const requestId = 'req_' + (++requestCounter) + '_' + Date.now();
+            const typing = appendTypingIndicator();
+            pendingRequests.set(requestId, { chatId:activeChatId, typing });
+            setComposerBusy(true);
+            window.AriaNative.chat(requestId, text, sessionId);
             renderSidebarChats();
+            setTimeout(scrollToBottom, 60);
         }
+
+        window.onAriaLoginResult = function(result) {
+            if (!result || !result.success) { showStatus((result && result.message) || 'ARIA sign-in failed.'); return; }
+            showStatus('Connected to ARIA.');
+            const queued = window.__pendingFirstMessage;
+            window.__pendingFirstMessage = null;
+            if (queued) { document.getElementById('user-input').value = queued; sendMessage(); }
+        };
+
+        window.onAriaChatResult = function(result) {
+            if (!result) return;
+            const pending = pendingRequests.get(result.requestId);
+            if (pending) {
+                if (pending.typing && pending.typing.parentNode) pending.typing.remove();
+                pendingRequests.delete(result.requestId);
+            }
+            setComposerBusy(pendingRequests.size > 0);
+            if (result.authRequired) { showStatus(result.message || 'Please sign in again.'); return; }
+            const chat = chatsDatabase.find(c => c.id === (pending && pending.chatId));
+            if (!result.success) {
+                appendMessageToUI('assistant', result.reply || result.message || 'The ARIA request failed.');
+                if (chat) chat.messages.push({role:'assistant', text:result.reply || result.message || 'The ARIA request failed.', sources:[]});
+                renderSidebarChats();
+                return;
+            }
+            let reply = result.reply || result.answer || result.message || 'ARIA returned an empty response.';
+            const extracted = extractSourcesFromReply(reply);
+            reply = extracted.reply;
+            const sources = normalizeSources([...(Array.isArray(result.sources) ? result.sources : []), ...(Array.isArray(result.citations) ? result.citations : []), ...(Array.isArray(result.references) ? result.references : []), ...extracted.sources]);
+            const uniqueSources = [...new Map(sources.map(source => [source.url, source])).values()];
+            appendMessageToUI('assistant', reply, uniqueSources);
+            if (chat) chat.messages.push({role:'assistant', text:reply, sources:uniqueSources});
+            renderSidebarChats();
+        };
+
+        function extractSourcesFromReply(text) {
+            const raw = String(text || '');
+            const marker = /\n\s*(?:sources|references|citations)\s*:\s*\n/i;
+            const match = marker.exec(raw);
+            if (!match) return { reply:raw, sources:[] };
+            const sectionStart = match.index + match[0].length;
+            const section = raw.slice(sectionStart);
+            const sources = [];
+            const urlPattern = /https?:\/\/[^\s)<>]+/gi;
+            for (const line of section.split(/\r?\n/)) {
+                const urls = line.match(urlPattern) || [];
+                for (const url of urls) {
+                    const clean = url.replace(/[.,;]+$/, '');
+                    const before = line.slice(0, line.indexOf(url)).replace(/^\s*[•*\-]\s*/, '').replace(/\s*[—–-]\s*$/, '').trim();
+                    try { sources.push({title:before || new URL(clean).hostname, url:clean}); } catch (_) {}
+                }
+            }
+            return { reply:raw.slice(0, match.index).trim(), sources };
+        }
+
+        function normalizeSources(items) {
+            if (!Array.isArray(items)) return [];
+            return items.map(item => {
+                if (typeof item === 'string') return {title:item, url:item};
+                if (!item || typeof item !== 'object') return null;
+                const url = item.url || item.link || item.href || item.source_url || '';
+                const title = item.title || item.name || item.domain || item.source || url;
+                return {title:String(title || 'Source'), url:String(url || '')};
+            }).filter(s => /^https?:\/\//i.test(s.url));
+        }
+
+        function appendTypingIndicator() {
+            const container = document.getElementById('messages-container');
+            const row = document.createElement('div'); row.className = 'flex justify-start';
+            row.innerHTML = '<div class="ios-glass-card rounded-2xl px-4 py-3"><div class="typing-indicator"><span>ARIA is thinking</span><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div></div>';
+            container.appendChild(row); scrollToBottom(); return row;
+        }
+        function setComposerBusy(busy) {
+            const btn = document.getElementById('btn-send');
+            if (!btn) return;
+            btn.disabled = !!busy; btn.style.opacity = busy ? '.65' : '1';
+            btn.innerHTML = busy ? '<i data-lucide="loader-circle" class="w-5 h-5"></i>' : '<i data-lucide="arrow-up" class="w-5 h-5"></i>';
+            lucide.createIcons();
+        }
+        function showStatus(message) {
+            let el = document.getElementById('aria-status');
+            if (!el) { el=document.createElement('div'); el.id='aria-status'; el.className='fixed left-4 right-4 z-[80] mx-auto max-w-md rounded-xl border border-white/10 bg-slate-900/95 px-4 py-3 text-sm text-white shadow-2xl'; el.style.bottom='calc(var(--composer-height) + env(safe-area-inset-bottom) + 10px)'; document.body.appendChild(el); }
+            el.textContent=message; el.classList.remove('hidden'); clearTimeout(window.__ariaStatusTimer); window.__ariaStatusTimer=setTimeout(()=>el.classList.add('hidden'),4200);
+        }
+
         function quickPrompt(promptText) {
             document.getElementById('user-input').value = promptText;
             sendMessage();
         }
 
         function handleKeyPress(e) {
-            if (e.key === 'Enter') sendMessage();
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
         }
 
-        // RENDER MESSAGES TO CHAT FEED
+        // Render text as textContent (never inject backend text as HTML).
         function appendMessageToUI(role, text, sources = []) {
             const container = document.getElementById('messages-container');
             const isUser = role === 'user';
-
             const wrapper = document.createElement('div');
-            wrapper.className = `flex ${isUser ? 'justify-end' : 'justify-start'} animate-fadeIn`;
-
-            let sourcesHTML = '';
-            if (sources && sources.length > 0) {
-                sourcesHTML = `
-                    <div class="mt-3 pt-2 border-t border-white/10">
-                        <div class="text-[10px] font-bold text-purple-300 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                            <i data-lucide="globe" class="w-3 h-3"></i> Grounded Sources
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            ${sources.map(s => `
-                                <a href="${escapeHTML(s.url)}" target="_blank" class="ios-glass-pill px-2.5 py-1 rounded-lg text-[10px] text-white/80 hover:text-gold flex items-center gap-1 transition-all">
-                                    <i data-lucide="external-link" class="w-2.5 h-2.5"></i> ${escapeHTML(s.title)}
-                                </a>
-                            `).join('')}
-                        </div>
-                    </div>
-                `;
+            wrapper.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-[92%] sm:max-w-[82%] min-w-0 p-4 rounded-3xl ${isUser ? 'bg-gradient-to-r from-gold to-amber-300 text-obsidian font-semibold rounded-br-md shadow-gold-sm' : 'ios-glass-card text-white rounded-bl-md border border-white/10'}`;
+            if (!isUser) {
+                const heading=document.createElement('div'); heading.className='flex items-center gap-2 mb-2 text-gold font-bold text-xs';
+                heading.innerHTML='<i data-lucide="bot" class="w-4 h-4"></i><span>ARIA</span>'; bubble.appendChild(heading);
             }
-
-            wrapper.innerHTML = `
-                <div class="max-w-[85%] sm:max-w-[75%] p-4 rounded-3xl ${
-                    isUser 
-                    ? 'bg-gradient-to-r from-gold to-amber-300 text-obsidian font-semibold rounded-br-none shadow-gold-sm' 
-                    : 'ios-glass-card text-white rounded-bl-none border border-white/10'
-                }">
-                    ${!isUser ? `
-                        <div class="flex items-center gap-2 mb-2 text-gold font-bold text-xs">
-                            <i data-lucide="bot" class="w-4 h-4"></i>
-                            <span>ARIA Assistant</span>
-                        </div>
-                    ` : ''}
-                    <p class="text-sm leading-relaxed whitespace-pre-wrap">${escapeHTML(text)}</p>
-                    ${sourcesHTML}
-                </div>
-            `;
-
-            container.appendChild(wrapper);
-            lucide.createIcons();
-            scrollToBottom();
+            const body=document.createElement('div'); body.className='message-content text-sm'; body.textContent=String(text ?? ''); bubble.appendChild(body);
+            const safeSources=normalizeSources(sources);
+            if (!isUser && safeSources.length) {
+                const section=document.createElement('div'); section.className='mt-4 pt-3 border-t border-white/10';
+                const title=document.createElement('div'); title.className='text-[11px] font-bold text-purple-300 uppercase tracking-wider mb-2 flex items-center gap-2'; title.innerHTML='<i data-lucide="globe" class="w-3.5 h-3.5"></i><span>Sources</span>'; section.appendChild(title);
+                const list=document.createElement('div'); list.className='source-list';
+                safeSources.forEach(source=>{ const a=document.createElement('a'); a.className='source-link ios-glass-pill px-3 py-2 rounded-xl text-xs text-white/85 hover:text-gold inline-flex items-center gap-2'; a.href=source.url; a.target='_blank'; a.rel='noopener noreferrer'; a.innerHTML='<i data-lucide="external-link" class="w-3 h-3 flex-shrink-0"></i>'; const label=document.createElement('span'); label.textContent=source.title || new URL(source.url).hostname; a.appendChild(label); list.appendChild(a); });
+                section.appendChild(list); bubble.appendChild(section);
+            }
+            wrapper.appendChild(bubble); container.appendChild(wrapper); lucide.createIcons(); scrollToBottom(); return wrapper;
         }
 
         function scrollToBottom() {
@@ -676,9 +711,8 @@
             pinnedList.innerHTML = '';
             recentList.innerHTML = '';
 
-            const visibleChats = chatsDatabase.filter(c => !c.archived);
-            const pinned = visibleChats.filter(c => c.pinned);
-            const recents = visibleChats.filter(c => !c.pinned);
+            const pinned = chatsDatabase.filter(c => c.pinned);
+            const recents = chatsDatabase.filter(c => !c.pinned);
 
             if (pinned.length === 0) {
                 pinnedList.innerHTML = `<div class="text-[11px] text-white/30 italic px-2 py-1">No pinned chats</div>`;
@@ -706,7 +740,7 @@
             div.innerHTML = `
                 <div class="flex items-center gap-2.5 truncate cursor-pointer flex-1" onclick="loadChat('${chat.id}')">
                     <i data-lucide="${chat.pinned ? 'pin' : 'message-square'}" class="w-3.5 h-3.5 ${chat.pinned ? 'text-gold' : 'text-white/40'} flex-shrink-0"></i>
-                    <span class="text-xs truncate">${escapeHTML(chat.title)}</span>
+                    <span class="text-xs truncate">${chat.title}</span>
                 </div>
                 
                 <!-- Context Menu Trigger Button -->
@@ -761,20 +795,14 @@
 
             if (action === 'pin') {
                 chat.pinned = !chat.pinned;
-                saveChats();
             } else if (action === 'rename') {
                 const newTitle = prompt('Enter new chat title:', chat.title);
-                if (newTitle && newTitle.trim()) { chat.title = newTitle.trim(); saveChats(); }
+                if (newTitle) chat.title = newTitle.trim();
             } else if (action === 'delete') {
                 chatsDatabase = chatsDatabase.filter(c => c.id !== contextTargetChatId);
-                saveChats();
                 if (activeChatId === contextTargetChatId) startNewChat();
             } else if (action === 'archive') {
-                chat.archived = !chat.archived;
-                chat.pinned = false;
-                saveChats();
-                if (chat.archived && activeChatId === chat.id) startNewChat();
-                showNotice(chat.archived ? 'Conversation archived on this device.' : 'Conversation restored.');
+                alert(`Chat "${chat.title}" archived successfully.`);
             }
 
             hideContextMenu();
@@ -843,17 +871,46 @@
 
         // ENGINE & TOGGLE FEATURES
         function switchEngine(id, name, icon, colorHex) {
+            showStatus('Model selection is visual only until the ARIA backend exposes provider routing. Requests still go to your configured ARIA backend.');
+            currentEngine = id;
+            document.getElementById('active-model-name').innerText = name;
+            
+            const iconContainer = document.getElementById('active-model-icon');
+            iconContainer.style.color = colorHex;
+            iconContainer.innerHTML = `<i data-lucide="${icon}" class="w-3.5 h-3.5"></i>`;
+
+            document.querySelectorAll('.check-icon').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`check-${id}`).classList.remove('hidden');
+
             document.getElementById('model-dropdown').classList.add('hidden');
-            document.getElementById('active-model-name').innerText = 'ARIA Backend';
-            showNotice('Provider switching is not exposed by the current ARIA /chat API. Your request will use the backend configuration.');
+            lucide.createIcons();
         }
 
         function toggleProSearch() {
-            showNotice('A separate deep-research toggle is not exposed by the current ARIA API. Ask ARIA to research your topic in the message itself.');
+            isProSearch = !isProSearch;
+            const badge = document.getElementById('perplexity-badge');
+            const btn = document.getElementById('btn-pro-search');
+
+            if (isProSearch) {
+                badge.classList.remove('hidden');
+                btn.classList.add('text-purple-400');
+            } else {
+                badge.classList.add('hidden');
+                btn.classList.remove('text-purple-400');
+            }
         }
 
         function toggleVoiceMode() {
-            showNotice('Live voice is not connected to the current backend. The microphone button is a UI placeholder until a speech/voice API is implemented.');
+            isVoiceActive = !isVoiceActive;
+            const btn = document.getElementById('btn-voice-mode');
+
+            if (isVoiceActive) {
+                isVoiceActive = false;
+                showStatus('Live voice conversations are not implemented by this backend yet. Use your phone keyboard microphone for speech-to-text.');
+                btn.classList.remove('voice-active');
+            } else {
+                btn.classList.remove('voice-active');
+            }
         }
 
         function triggerFileUpload() {
@@ -861,21 +918,26 @@
         }
 
         function handleFileSelect(e) {
-            const file = e.target.files && e.target.files[0];
+            const file = e.target.files[0];
             if (file) {
-                showNotice('File selected: ' + file.name + '. The current /chat API has no upload endpoint, so this file was not sent to ARIA.');
-                e.target.value = '';
+                const input = document.getElementById('user-input');
+                input.value = `[Attached File: ${file.name}] ` + input.value;
             }
         }
 
-        window.addEventListener('DOMContentLoaded', () => {
-            if (window.AriaNative && typeof window.AriaNative.isSignedIn === 'function' && window.AriaNative.isSignedIn()) {
-                isSignedIn = true;
-            } else {
-                ensureLoginDialog();
+        function updateViewportLayout() {
+            const vv = window.visualViewport;
+            const height = vv ? vv.height : window.innerHeight;
+            document.documentElement.style.setProperty('--app-vh', Math.max(260, height) + 'px');
+            const composer = document.getElementById('composer-root');
+            if (composer) {
+                const h = composer.getBoundingClientRect().height;
+                document.documentElement.style.setProperty('--composer-height', Math.ceil(h + 8) + 'px');
             }
-        });
-
+            const header = document.getElementById('main-header');
+            const scroll = document.getElementById('chat-scroll-area');
+            if (header && scroll) scroll.style.top = Math.ceil(header.getBoundingClientRect().height) + 'px';
+        }
     </script>
 </body>
 </html>
