@@ -41,6 +41,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
@@ -51,7 +52,23 @@ public class MainActivity extends Activity {
     private static final int TEXT = Color.rgb(242, 245, 252), MUTED = Color.rgb(165, 176, 197), ACCENT = Color.rgb(127, 155, 255);
     private static final String DEFAULT_SERVER = "https://aria-ai-s5go.onrender.com";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final String sessionId = "android-" + java.util.UUID.randomUUID();
+    private String activeChatId = "";
+    private final ArrayList<ChatRecord> chatHistory = new ArrayList<>();
+    private boolean loadingChat = false;
+    private static final String CHAT_PREFS = "aria_chat_history";
+    private static final String CHAT_LIST_KEY = "chats_json";
+    private static class ChatRecord {
+        String id, title; boolean pinned; long updatedAt; JSONArray messages = new JSONArray();
+        ChatRecord(String id, String title) { this.id=id; this.title=title; updatedAt=System.currentTimeMillis(); }
+        JSONObject toJson() throws Exception {
+            JSONObject o=new JSONObject(); o.put("id",id); o.put("title",title); o.put("pinned",pinned); o.put("updatedAt",updatedAt); o.put("messages",messages); return o;
+        }
+        static ChatRecord fromJson(JSONObject o) {
+            ChatRecord c=new ChatRecord(o.optString("id",java.util.UUID.randomUUID().toString()),o.optString("title","New chat"));
+            c.pinned=o.optBoolean("pinned",false); c.updatedAt=o.optLong("updatedAt",System.currentTimeMillis());
+            JSONArray a=o.optJSONArray("messages"); if(a!=null)c.messages=a; return c;
+        }
+    }
     private volatile boolean appVisible = false;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 7401;
     private static final String NOTIFICATION_CHANNEL_ID = "aria_replies";
@@ -80,8 +97,11 @@ public class MainActivity extends Activity {
         }
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         createNotificationChannel();
+        loadChatHistory();
+        if (chatHistory.isEmpty()) createChatRecord();
+        activeChatId = chatHistory.get(0).id;
         buildUi();
-        addWelcome();
+        restoreActiveChat();
         requestNotificationPermissionIfNeeded();
         checkForUpdates();
     }
@@ -102,6 +122,10 @@ public class MainActivity extends Activity {
             if (dialog.getWindow() != null) {
                 dialog.getWindow().setBackgroundDrawable(glassDialogBackground());
                 dialog.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                    dialog.getWindow().setBackgroundBlurRadius(dp(24));
+                }
                 android.view.WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
                 lp.dimAmount = 0.72f;
                 dialog.getWindow().setAttributes(lp);
@@ -131,9 +155,9 @@ public class MainActivity extends Activity {
 
     private GradientDrawable glassDialogBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.rgb(35, 42, 62), Color.rgb(17, 22, 36)});
+                new int[]{Color.argb(224, 54, 68, 102), Color.argb(208, 18, 25, 43)});
         d.setCornerRadius(dp(24));
-        d.setStroke(dp(1), Color.argb(105, 170, 190, 255));
+        d.setStroke(dp(1), Color.argb(155, 180, 204, 255));
         return d;
     }
 
@@ -308,6 +332,14 @@ public class MainActivity extends Activity {
             return false;
         });
         setContentView(root);
+        // Explicit safe-area padding for Android 15+ edge-to-edge and display cutouts.
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            int topInset = insets.getSystemWindowInsetTop();
+            int bottomInset = insets.getSystemWindowInsetBottom();
+            v.setPadding(dp(16), topInset + dp(6), dp(16), bottomInset + dp(6));
+            return insets;
+        });
+        root.requestApplyInsets();
     }
 
     private void showAppMenu() {
@@ -322,9 +354,15 @@ public class MainActivity extends Activity {
         final Dialog drawer = new Dialog(this);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(16), dp(18), dp(12), dp(12));
-        panel.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.rgb(31, 32, 35), Color.rgb(19, 20, 23)}));
+        int statusBarHeight = 0;
+        int statusBarRes = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        if (statusBarRes > 0) statusBarHeight = getResources().getDimensionPixelSize(statusBarRes);
+        panel.setPadding(dp(16), statusBarHeight + dp(12), dp(12), dp(12));
+        GradientDrawable drawerGlass = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.argb(216, 53, 65, 96), Color.argb(188, 19, 26, 45)});
+        drawerGlass.setCornerRadius(dp(0));
+        drawerGlass.setStroke(dp(1), Color.argb(105, 205, 220, 255));
+        panel.setBackground(drawerGlass);
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -354,17 +392,24 @@ public class MainActivity extends Activity {
         addDrawerRow(panel, drawer, "◉", "Plugins", "Connected tools and integrations");
 
         addDrawerDivider(panel);
-        addDrawerSection(panel, "PINNED");
-        addDrawerRow(panel, drawer, "♡", "Prompts", "Prompt collection");
-        addDrawerRow(panel, drawer, "▱", "Education", "Study notes and learning");
-        addDrawerRow(panel, drawer, "◌", "Create Android App", "App-building workspace");
-        addDrawerRow(panel, drawer, "✦", "ARIA backend", "Backend status and settings");
-
+        addDrawerDivider(panel);
+        addDrawerSection(panel, "PINNED CHATS");
+        ArrayList<ChatRecord> sorted = new ArrayList<>(chatHistory);
+        Collections.sort(sorted, (x,y) -> Long.compare(y.updatedAt, x.updatedAt));
+        boolean hasPinned = false;
+        for (ChatRecord chat : sorted) if (chat.pinned) { hasPinned=true; addChatHistoryRow(panel, drawer, chat, true); }
+        if (!hasPinned) {
+            TextView empty = label("No pinned chats yet", 12, MUTED, false);
+            empty.setPadding(dp(10), dp(8), dp(8), dp(8)); panel.addView(empty);
+        }
         addDrawerDivider(panel);
         addDrawerSection(panel, "RECENTS");
-        TextView recent = drawerItem("◌", "New conversation", "This device · current session");
-        panel.addView(recent);
-        recent.setOnClickListener(v -> { drawer.dismiss(); toast("You are viewing the current conversation."); });
+        boolean hasRecent = false;
+        for (ChatRecord chat : sorted) if (!chat.pinned) { hasRecent=true; addChatHistoryRow(panel, drawer, chat, false); }
+        if (!hasRecent) {
+            TextView empty = label("Your conversations will appear here", 12, MUTED, false);
+            empty.setPadding(dp(10), dp(8), dp(8), dp(8)); panel.addView(empty);
+        }
 
         View spacer = new View(this);
         panel.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1));
@@ -402,6 +447,10 @@ public class MainActivity extends Activity {
         if (window != null) {
             window.setBackgroundDrawableResource(android.R.color.transparent);
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                window.setBackgroundBlurRadius(dp(28));
+            }
             WindowManager.LayoutParams lp = window.getAttributes();
             lp.width = Math.min((int)(getResources().getDisplayMetrics().widthPixels * 0.86f), dp(360));
             lp.height = WindowManager.LayoutParams.MATCH_PARENT;
@@ -495,21 +544,107 @@ public class MainActivity extends Activity {
         query.setSingleLine(true);
         query.setTextColor(TEXT);
         query.setHintTextColor(MUTED);
-        query.setHint("Search conversations");
+        query.setHint("Search chats and messages");
         query.setPadding(dp(12), dp(8), dp(12), dp(8));
         query.setBackground(glassBackground());
         dialogBuilder().setTitle("Search chats").setView(query)
                 .setPositiveButton("Search", (d, w) -> {
                     String q = query.getText().toString().trim();
                     if (q.isEmpty()) toast("Enter a search term.");
-                    else toast("Persistent chat history is not connected yet.");
+                    else showSearchResults(q);
                 })
                 .setNegativeButton("Cancel", null).show();
     }
 
+    private ChatRecord getActiveChat() {
+        for (ChatRecord c : chatHistory) if (c.id.equals(activeChatId)) return c;
+        return null;
+    }
+    private void loadChatHistory() {
+        chatHistory.clear();
+        String raw=getSharedPreferences(CHAT_PREFS,MODE_PRIVATE).getString(CHAT_LIST_KEY,"[]");
+        try { JSONArray a=new JSONArray(raw); for(int i=0;i<a.length();i++){JSONObject o=a.optJSONObject(i);if(o!=null)chatHistory.add(ChatRecord.fromJson(o));} } catch(Exception ignored) {}
+        Collections.sort(chatHistory,(x,y)->Long.compare(y.updatedAt,x.updatedAt));
+    }
+    private void saveChatHistory() {
+        JSONArray a=new JSONArray(); for(ChatRecord c:chatHistory)try{a.put(c.toJson());}catch(Exception ignored){}
+        getSharedPreferences(CHAT_PREFS,MODE_PRIVATE).edit().putString(CHAT_LIST_KEY,a.toString()).apply();
+    }
+    private ChatRecord createChatRecord() {
+        ChatRecord c=new ChatRecord(java.util.UUID.randomUUID().toString(),"New chat");
+        chatHistory.add(0,c); activeChatId=c.id; saveChatHistory(); return c;
+    }
     private void newConversation() {
-        transcript.removeAllViews(); lastSources.clear(); renderSources();
-        addWelcome();
+        ChatRecord active=getActiveChat();
+        if(active==null || active.messages.length()>0) createChatRecord();
+        else { active.title="New chat"; active.pinned=false; active.updatedAt=System.currentTimeMillis(); saveChatHistory(); }
+        transcript.removeAllViews(); lastSources.clear(); renderSources(); addWelcome(); saveChatHistory();
+    }
+    private void restoreActiveChat() {
+        ChatRecord chat=getActiveChat(); transcript.removeAllViews(); lastSources.clear();
+        if(chat==null || chat.messages.length()==0){addWelcome();renderSources();return;}
+        loadingChat=true;
+        for(int i=0;i<chat.messages.length();i++){
+            JSONObject m=chat.messages.optJSONObject(i); if(m==null)continue;
+            String role=m.optString("role",""), content=m.optString("content","");
+            if("user".equals(role)) addUserMessageUi(content);
+            else if("assistant".equals(role)){
+                ArrayList<SourceItem> sources=new ArrayList<>(); JSONArray sa=m.optJSONArray("sources");
+                if(sa!=null)for(int j=0;j<sa.length();j++){JSONObject so=sa.optJSONObject(j);if(so!=null)addSourceIfValid(sources,so.optString("title",""),so.optString("url",""));}
+                addAssistantMessageUi(content,sources);
+            }
+        }
+        loadingChat=false; renderSources(); scrollDown(transcriptScroll);
+    }
+    private void persistMessage(String role,String content,ArrayList<SourceItem> sources) {
+        if(loadingChat)return; ChatRecord c=getActiveChat(); if(c==null)c=createChatRecord();
+        try {
+            JSONObject m=new JSONObject();m.put("role",role);m.put("content",content);JSONArray sa=new JSONArray();
+            if(sources!=null)for(SourceItem source:sources){JSONObject so=new JSONObject();so.put("title",source.title);so.put("url",source.url);sa.put(so);}
+            m.put("sources",sa);c.messages.put(m);
+            if("New chat".equals(c.title)&&"user".equals(role)){c.title=content.replaceAll("\\s+"," ").trim();if(c.title.length()>36)c.title=c.title.substring(0,33)+"...";}
+            c.updatedAt=System.currentTimeMillis();saveChatHistory();
+        }catch(Exception ignored){}
+    }
+    private void addChatHistoryRow(LinearLayout panel,Dialog drawer,ChatRecord chat,boolean pinned) {
+        LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(10),dp(10),dp(8),dp(10));row.setBackground(round(Color.TRANSPARENT,10));
+        TextView icon=label(pinned?"★":"◌",13,pinned?ACCENT:MUTED,false);row.addView(icon,new LinearLayout.LayoutParams(dp(24),-2));
+        TextView name=label(chat.title,14,TEXT,false);name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);row.addView(name,new LinearLayout.LayoutParams(0,-2,1));
+        TextView more=label("⋯",22,MUTED,true);more.setGravity(Gravity.CENTER);row.addView(more,new LinearLayout.LayoutParams(dp(32),dp(34)));
+        panel.addView(row,new LinearLayout.LayoutParams(-1,-2));
+        row.setOnClickListener(v->{drawer.dismiss();activeChatId=chat.id;restoreActiveChat();});
+        more.setOnClickListener(v->{drawer.dismiss();showChatActions(chat);});row.setOnLongClickListener(v->{drawer.dismiss();showChatActions(chat);return true;});
+    }
+    private void showChatActions(ChatRecord chat) {
+        dialogBuilder().setTitle(chat.title).setItems(new String[]{"Rename",chat.pinned?"Unpin chat":"Pin chat","Delete chat"},(d,w)->{
+            if(w==0)renameChat(chat);else if(w==1){chat.pinned=!chat.pinned;chat.updatedAt=System.currentTimeMillis();saveChatHistory();toast(chat.pinned?"Chat pinned":"Chat unpinned");}else deleteChat(chat);
+        }).show();
+    }
+    private void renameChat(ChatRecord chat) {
+        EditText edit=new EditText(this);edit.setSingleLine(true);edit.setText(chat.title);edit.setTextColor(TEXT);edit.setHintTextColor(MUTED);edit.setSelectAllOnFocus(true);edit.setBackground(glassBackground());edit.setPadding(dp(12),dp(10),dp(12),dp(10));
+        dialogBuilder().setTitle("Rename chat").setView(edit).setNegativeButton("Cancel",null).setPositiveButton("Save",(d,w)->{
+            String title=edit.getText().toString().trim();if(title.isEmpty()){toast("Chat name cannot be empty.");return;}
+            chat.title=title;chat.updatedAt=System.currentTimeMillis();saveChatHistory();toast("Chat renamed");
+        }).show();
+    }
+    private void deleteChat(ChatRecord chat) {
+        dialogBuilder().setTitle("Delete chat?").setMessage("This removes the conversation from this device.")
+            .setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->{
+                chatHistory.remove(chat);saveChatHistory();
+                if(chat.id.equals(activeChatId)){if(chatHistory.isEmpty())createChatRecord();else activeChatId=chatHistory.get(0).id;restoreActiveChat();}
+                toast("Chat deleted");
+            }).show();
+    }
+    private void showSearchResults(String query) {
+        LinearLayout results=new LinearLayout(this);results.setOrientation(LinearLayout.VERTICAL);ScrollView scroll=new ScrollView(this);scroll.addView(results);int count=0;
+        String q=query.toLowerCase(java.util.Locale.ROOT);
+        for(ChatRecord chat:chatHistory){
+            boolean match=chat.title.toLowerCase(java.util.Locale.ROOT).contains(q);
+            for(int i=0;!match&&i<chat.messages.length();i++){JSONObject m=chat.messages.optJSONObject(i);match=m!=null&&m.optString("content","").toLowerCase(java.util.Locale.ROOT).contains(q);}
+            if(match){count++;TextView item=label((chat.pinned?"★  ":"")+chat.title,14,TEXT,false);item.setPadding(dp(12),dp(12),dp(12),dp(12));results.addView(item);item.setOnClickListener(v->{activeChatId=chat.id;restoreActiveChat();});}
+        }
+        if(count==0)results.addView(label("No matching conversations",13,MUTED,false));
+        dialogBuilder().setTitle("Search results").setView(scroll).setPositiveButton("Done",null).show();
     }
 
     private void addWelcome() {
@@ -547,7 +682,7 @@ public class MainActivity extends Activity {
     }
 
     private void showHistory() {
-        dialogBuilder().setTitle("Chat history").setMessage("Conversation history is not saved between app sessions yet. Persistent history will be added when the backend and storage support are implemented.").setPositiveButton("New chat", (d,w) -> newConversation()).setNegativeButton("Close", null).show();
+        showSideDrawer();
     }
 
     private void showAttachmentMenu() {
@@ -596,7 +731,7 @@ public class MainActivity extends Activity {
             try {
                 HttpURLConnection conn = (HttpURLConnection)new URL(base + "/chat").openConnection();
                 conn.setRequestMethod("POST"); conn.setConnectTimeout(30000); conn.setReadTimeout(180000); conn.setRequestProperty("Accept", "application/json"); conn.setRequestProperty("Content-Type", "application/json; charset=utf-8"); conn.setDoOutput(true);
-                JSONObject payload = new JSONObject(); payload.put("message", message); payload.put("session_id", sessionId);
+                JSONObject payload = new JSONObject(); payload.put("message", message); payload.put("session_id", activeChatId.isEmpty() ? "android-default" : activeChatId);
                 try (OutputStream os = conn.getOutputStream()) { os.write(payload.toString().getBytes(StandardCharsets.UTF_8)); }
                 int code = conn.getResponseCode(); InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream(); StringBuilder body = new StringBuilder();
                 if (stream != null) try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = reader.readLine()) != null) body.append(line).append('\n'); }
@@ -650,12 +785,20 @@ public class MainActivity extends Activity {
     }
 
     private void addUserMessage(String text) {
+        persistMessage("user", text, null);
+        addUserMessageUi(text);
+    }
+    private void addUserMessageUi(String text) {
         LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setGravity(Gravity.END); wrap.setPadding(dp(32), dp(5), 0, dp(14));
         TextView body = label(text, 15, TEXT, false); body.setPadding(dp(15), dp(11), dp(15), dp(11)); body.setBackground(userBubbleBackground()); body.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(76)); wrap.addView(body, new LinearLayout.LayoutParams(-2, -2));
         transcript.addView(wrap); scrollDown(transcriptScroll);
     }
 
     private void addAssistantMessage(String text, ArrayList<SourceItem> sources) {
+        persistMessage("assistant", text, sources);
+        addAssistantMessageUi(text, sources);
+    }
+    private void addAssistantMessageUi(String text, ArrayList<SourceItem> sources) {
         LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setPadding(dp(2), dp(5), dp(2), dp(18));
         LinearLayout whoRow = new LinearLayout(this); whoRow.setOrientation(LinearLayout.HORIZONTAL); whoRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView badge=label("✦", 13, Color.WHITE, true); badge.setGravity(Gravity.CENTER); badge.setBackground(glassAccent()); whoRow.addView(badge, new LinearLayout.LayoutParams(dp(27), dp(27)));
@@ -747,9 +890,9 @@ public class MainActivity extends Activity {
     private GradientDrawable round(int color,int radius) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
     private GradientDrawable glassBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.rgb(31, 37, 54), Color.rgb(18, 23, 37)});
-        d.setCornerRadius(dp(18));
-        d.setStroke(dp(1), Color.argb(65, 190, 205, 245));
+            new int[]{Color.argb(204, 63, 78, 116), Color.argb(172, 22, 31, 52)});
+        d.setCornerRadius(dp(22));
+        d.setStroke(dp(1), Color.argb(145, 190, 210, 255));
         return d;
     }
     private GradientDrawable glassAccent() {
