@@ -3,49 +3,46 @@ plugins {
     id 'com.android.application'
 }
 
-def readEnv = { String name ->
-    String value = System.getenv(name)
-    return value == null ? '' : value.trim()
-}
+def buildVersionCode = (System.getenv('VERSION_CODE') ?: '1').toInteger()
+def buildVersionName = System.getenv('VERSION_NAME') ?: '1.0.0'
+
+def storePath = System.getenv('ARIA_KEYSTORE_PATH')
+def storePass = System.getenv('ARIA_KEYSTORE_PASSWORD')
+def aliasValue = System.getenv('ARIA_KEY_ALIAS')
+def keyPass = System.getenv('ARIA_KEY_PASSWORD')
 
 android {
-    namespace 'com.aria.assistant'
-    compileSdk 35
+    namespace = 'com.aria.assistant'
+    compileSdk = 35
 
     defaultConfig {
-        applicationId 'com.aria.assistant'
-        minSdk 23
-        targetSdk 35
-
-        versionCode (readEnv('VERSION_CODE') ?: '1').toInteger()
-        versionName readEnv('VERSION_NAME') ?: '1.0.0'
+        applicationId = 'com.aria.assistant'
+        minSdk = 23
+        targetSdk = 35
+        versionCode = buildVersionCode
+        versionName = buildVersionName
     }
 
     signingConfigs {
         release {
-            def storePath = readEnv('ARIA_KEYSTORE_PATH')
-            def storePass = readEnv('ARIA_KEYSTORE_PASSWORD')
-            def aliasValue = readEnv('ARIA_KEY_ALIAS')
-            def keyPass = readEnv('ARIA_KEY_PASSWORD')
-
             if (!storePath || !storePass || !aliasValue || !keyPass) {
                 throw new GradleException(
-                    'Release signing is incomplete. Check ARIA_KEYSTORE_PATH, ARIA_KEYSTORE_PASSWORD, ARIA_KEY_ALIAS and ARIA_KEY_PASSWORD.'
+                    'Missing release signing environment variables.'
                 )
             }
 
-            def keyFile = file(storePath)
+            def signingFile = file(storePath)
 
-            if (!keyFile.exists() || !keyFile.isFile()) {
+            if (!signingFile.exists() || !signingFile.isFile()) {
                 throw new GradleException(
-                    'The release keystore file does not exist at ARIA_KEYSTORE_PATH.'
+                    'Release keystore file does not exist.'
                 )
             }
 
-            storeFile keyFile
-            storePassword storePass
-            keyAlias aliasValue
-            keyPassword keyPass
+            storeFile = signingFile
+            storePassword = storePass
+            keyAlias = aliasValue
+            keyPassword = keyPass
         }
     }
 
@@ -54,8 +51,8 @@ android {
         }
 
         release {
-            minifyEnabled false
-            signingConfig signingConfigs.release
+            minifyEnabled = false
+            signingConfig = signingConfigs.release
         }
     }
 }
