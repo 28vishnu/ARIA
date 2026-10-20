@@ -27,6 +27,7 @@ import logging
 import re
 import sqlite3
 import sys
+from datetime import datetime, timezone
 import zipfile
 from itertools import islice
 from pathlib import Path
@@ -411,6 +412,46 @@ def records_for(source: str, path: Path, base_url: str = "") -> Iterable[dict]:
     )
 
 
+def _file_fingerprint(path: Path) -> dict:
+    """Return a lightweight, deterministic input identity without reading huge dumps twice."""
+    if path.is_file():
+        stat = path.stat()
+        return {"kind": "file", "path": str(path.resolve()), "size_bytes": stat.st_size, "modified_ns": stat.st_mtime_ns}
+    files = []
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        try:
+            stat = child.stat()
+        except OSError:
+            continue
+        files.append({"relative_path": child.relative_to(path).as_posix(), "size_bytes": stat.st_size, "modified_ns": stat.st_mtime_ns})
+    encoded = json.dumps(files, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {"kind": "directory", "path": str(path.resolve()), "file_count": len(files), "metadata_sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def _record_import_run(db_path: str, source: str, path: Path, result: dict, limit) -> None:
+    """Record successful imports; this never skips or alters document records."""
+    fingerprint = _file_fingerprint(path)
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS dataset_import_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, input_path TEXT NOT NULL,
+            fingerprint_json TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+            requested_limit INTEGER, processed_records INTEGER NOT NULL DEFAULT 0,
+            database_changes INTEGER NOT NULL DEFAULT 0, result_json TEXT NOT NULL
+        )""")
+        finished = datetime.now(timezone.utc).isoformat()
+        processed = int(result.get("processed", result.get("processed_records", 0)) or 0)
+        changed = int(result.get("changed", result.get("database_changes", 0)) or 0)
+        conn.execute("""INSERT INTO dataset_import_runs
+            (source, input_path, fingerprint_json, started_at, finished_at, requested_limit, processed_records, database_changes, result_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (source, str(path.resolve()), json.dumps(fingerprint, ensure_ascii=False, sort_keys=True),
+             finished, finished, limit, processed, changed, json.dumps(result, ensure_ascii=False, default=str, sort_keys=True)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Import free knowledge datasets into ARIA's local SQLite corpus")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -471,6 +512,8 @@ def main(argv=None) -> int:
         else:
             result = import_records(args.db, records, args.limit, args.batch_size)
             result.update({"dry_run": False})
+            _record_import_run(args.db, args.source, path, result, args.limit)
+            result["manifest_recorded"] = True
         result.update({"source": args.source, "input_file": str(path.resolve())})
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
