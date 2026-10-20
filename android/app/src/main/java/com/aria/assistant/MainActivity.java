@@ -78,57 +78,147 @@ public class MainActivity extends Activity {
             });
             root.requestApplyInsets();
         }
-        addAssistantMessage("Hey, I'm ARIA. What can I help you with?", null);
+        addWelcome();
     }
 
     private void buildUi() {
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BG);
-        root.setPadding(dp(16), dp(8), dp(16), dp(8));
-        root.setBackground(glassBackground());
+        getWindow().setStatusBarColor(Color.rgb(16, 18, 22));
+        getWindow().setNavigationBarColor(Color.rgb(16, 18, 22));
+        getWindow().getDecorView().setSystemUiVisibility(0);
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(16, 18, 22));
+        root.setPadding(dp(14), dp(6), dp(14), dp(6));
 
-        LinearLayout header = new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL); header.setOrientation(LinearLayout.HORIZONTAL);
-        TextView mark = new TextView(this); mark.setText("A"); mark.setTextColor(Color.WHITE); mark.setTextSize(19); mark.setTypeface(null, Typeface.BOLD); mark.setGravity(Gravity.CENTER); mark.setBackground(glassAccent());
-        header.addView(mark, new LinearLayout.LayoutParams(dp(42), dp(42)));
-        LinearLayout titles = new LinearLayout(this); titles.setOrientation(LinearLayout.VERTICAL); titles.setPadding(dp(10), 0, 0, 0);
-        TextView title = label("ARIA", 19, TEXT, true); TextView subtitle = label("PERSONAL AI ASSISTANT", 10, MUTED, true);
-        titles.addView(title); titles.addView(subtitle); header.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView status = label("● ONLINE", 11, Color.rgb(110, 220, 160), true); header.addView(status);
+        // Compact ChatGPT-inspired header: navigation, brand, and new-chat action.
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setPadding(0, dp(2), 0, dp(8));
+        TextView menu = label("☰", 23, TEXT, false);
+        menu.setGravity(Gravity.CENTER);
+        header.addView(menu, new LinearLayout.LayoutParams(dp(42), dp(44)));
+        menu.setOnClickListener(v -> showAppMenu());
+
+        LinearLayout brand = new LinearLayout(this);
+        brand.setOrientation(LinearLayout.HORIZONTAL);
+        brand.setGravity(Gravity.CENTER_VERTICAL);
+        TextView mark = label("✦", 21, Color.WHITE, true);
+        mark.setGravity(Gravity.CENTER);
+        mark.setBackground(glassAccent());
+        brand.addView(mark, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        TextView title = label("  ARIA", 19, TEXT, true);
+        brand.addView(title);
+        header.addView(brand, new LinearLayout.LayoutParams(0, -1, 1));
+        TextView newChat = label("＋", 27, TEXT, false);
+        newChat.setGravity(Gravity.CENTER);
+        header.addView(newChat, new LinearLayout.LayoutParams(dp(42), dp(44)));
+        newChat.setOnClickListener(v -> newConversation());
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
 
-        // Feature launcher: visible product roadmap, with honest status for tools not yet wired to backend.
-        Button featuresButton = new Button(this);
-        featuresButton.setText("＋  Explore ARIA features");
-        featuresButton.setAllCaps(false);
-        featuresButton.setTextSize(13);
-        featuresButton.setTextColor(TEXT);
-        featuresButton.setBackground(glassBackground());
-        LinearLayout.LayoutParams featuresP = new LinearLayout.LayoutParams(-1, dp(42));
-        featuresP.topMargin = dp(7);
-        root.addView(featuresButton, featuresP);
-        featuresButton.setOnClickListener(v -> showFeatureDirectory());
+        // Keep configuration out of the conversation view; accessible through the menu.
+        serverInput = new EditText(this);
+        serverInput.setSingleLine(true);
+        serverInput.setText(DEFAULT_SERVER);
 
-        serverInput = new EditText(this); serverInput.setSingleLine(true); serverInput.setText(DEFAULT_SERVER); serverInput.setTextColor(MUTED); serverInput.setTextSize(11); serverInput.setHint("Backend HTTPS URL"); serverInput.setPadding(dp(10), 0, dp(10), 0); serverInput.setBackground(glassBackground());
-        LinearLayout.LayoutParams serverP = new LinearLayout.LayoutParams(-1, dp(36)); serverP.topMargin = dp(8); root.addView(serverInput, serverP);
-
-        tabRow = new LinearLayout(this); tabRow.setOrientation(LinearLayout.HORIZONTAL); tabRow.setPadding(dp(3), dp(3), dp(3), dp(3)); tabRow.setBackground(glassBackground());
-        answerTab = new Button(this); sourcesTab = new Button(this); styleTab(answerTab, "Answer", true); styleTab(sourcesTab, "Sources", false);
-        tabRow.addView(answerTab, new LinearLayout.LayoutParams(0, dp(38), 1)); tabRow.addView(sourcesTab, new LinearLayout.LayoutParams(0, dp(38), 1));
-        LinearLayout.LayoutParams tabsP = new LinearLayout.LayoutParams(-1, dp(44)); tabsP.topMargin = dp(9); root.addView(tabRow, tabsP);
-        answerTab.setOnClickListener(v -> showTab(false)); sourcesTab.setOnClickListener(v -> showTab(true));
-
-        transcriptScroll = new ScrollView(this); transcriptScroll.setFillViewport(true); transcript = new LinearLayout(this); transcript.setOrientation(LinearLayout.VERTICAL); transcript.setPadding(0, dp(12), 0, dp(14)); transcriptScroll.addView(transcript, new ScrollView.LayoutParams(-1, -2));
-        sourcesScroll = new ScrollView(this); sourcesPanel = new LinearLayout(this); sourcesPanel.setOrientation(LinearLayout.VERTICAL); sourcesPanel.setPadding(0, dp(12), 0, dp(14)); sourcesScroll.addView(sourcesPanel, new ScrollView.LayoutParams(-1, -2));
+        transcriptScroll = new ScrollView(this);
+        transcriptScroll.setFillViewport(true);
+        transcriptScroll.setVerticalScrollBarEnabled(false);
+        transcriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        transcript = new LinearLayout(this);
+        transcript.setOrientation(LinearLayout.VERTICAL);
+        transcript.setPadding(dp(2), dp(18), dp(2), dp(20));
+        transcriptScroll.addView(transcript, new ScrollView.LayoutParams(-1, -2));
         root.addView(transcriptScroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        composer = new LinearLayout(this); composer.setOrientation(LinearLayout.HORIZONTAL); composer.setGravity(Gravity.BOTTOM); composer.setPadding(dp(8), dp(6), dp(5), dp(6)); composer.setBackground(glassBackground()); composer.setElevation(dp(8));
-        input = new EditText(this); input.setTextColor(TEXT); input.setHintTextColor(MUTED); input.setTextSize(15); input.setHint("Message ARIA…"); input.setGravity(Gravity.CENTER_VERTICAL); input.setMinHeight(dp(44)); input.setMaxLines(5); input.setPadding(dp(8), dp(7), dp(8), dp(7)); input.setBackgroundColor(Color.TRANSPARENT);
+        // Floating, rounded message composer that stays compact on small screens.
+        composer = new LinearLayout(this);
+        composer.setOrientation(LinearLayout.HORIZONTAL);
+        composer.setGravity(Gravity.BOTTOM | Gravity.CENTER_VERTICAL);
+        composer.setPadding(dp(8), dp(6), dp(6), dp(6));
+        composer.setBackground(round(Color.rgb(38, 40, 45), 26));
+        composer.setElevation(dp(2));
+        TextView add = label("＋", 24, MUTED, false);
+        add.setGravity(Gravity.CENTER);
+        composer.addView(add, new LinearLayout.LayoutParams(dp(38), dp(42)));
+        add.setOnClickListener(v -> showAttachmentMenu());
+        input = new EditText(this);
+        input.setTextColor(TEXT);
+        input.setHintTextColor(Color.rgb(158, 160, 166));
+        input.setTextSize(16);
+        input.setHint("Message ARIA");
+        input.setGravity(Gravity.CENTER_VERTICAL);
+        input.setMinHeight(dp(42));
+        input.setMaxLines(5);
+        input.setPadding(dp(5), dp(6), dp(5), dp(6));
+        input.setBackgroundColor(Color.TRANSPARENT);
         composer.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
-        sendButton = new Button(this); sendButton.setText("↑"); sendButton.setTextSize(22); sendButton.setTextColor(Color.WHITE); sendButton.setAllCaps(false); sendButton.setPadding(0, 0, 0, dp(3)); sendButton.setBackground(round(ACCENT, 14)); composer.addView(sendButton, new LinearLayout.LayoutParams(dp(48), dp(46)));
-        LinearLayout.LayoutParams compP = new LinearLayout.LayoutParams(-1, -2); compP.bottomMargin = dp(3); root.addView(composer, compP);
-        TextView footer = label("ARIA can make mistakes. Check important information.", 10, MUTED, false); footer.setGravity(Gravity.CENTER); LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(20)); root.addView(footer, fp);
+        sendButton = new Button(this);
+        sendButton.setText("↑");
+        sendButton.setTextSize(23);
+        sendButton.setTextColor(Color.WHITE);
+        sendButton.setAllCaps(false);
+        sendButton.setPadding(0, 0, 0, dp(2));
+        sendButton.setBackground(round(Color.rgb(240, 242, 245), 24));
+        sendButton.setTextColor(Color.rgb(20, 22, 25));
+        composer.addView(sendButton, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+        cp.topMargin = dp(8);
+        root.addView(composer, cp);
+        TextView disclaimer = label("ARIA may make mistakes. Verify important information.", 10, MUTED, false);
+        disclaimer.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(-1, dp(23));
+        root.addView(disclaimer, dp);
         sendButton.setOnClickListener(v -> sendMessage());
-        input.setOnEditorActionListener((v, action, event) -> { if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER && !event.isShiftPressed()) { sendMessage(); return true; } return false; });
+        input.setOnEditorActionListener((v, action, event) -> {
+            if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER && !event.isShiftPressed()) { sendMessage(); return true; }
+            return false;
+        });
         setContentView(root);
+    }
+
+    private void showAppMenu() {
+        String[] options = {"New chat", "Chat history", "Explore ARIA features", "Settings", "About ARIA"};
+        new AlertDialog.Builder(this).setTitle("ARIA").setItems(options, (dialog, which) -> {
+            if (which == 0) newConversation();
+            else if (which == 1) showHistory();
+            else if (which == 2) showFeatureDirectory();
+            else if (which == 3) showSettings();
+            else new AlertDialog.Builder(this).setTitle("About ARIA").setMessage("ARIA is your personal AI assistant, currently connected to your configured backend. Some advanced features are planned and are not active yet.").setPositiveButton("OK", null).show();
+        }).show();
+    }
+
+    private void newConversation() {
+        transcript.removeAllViews(); lastSources.clear(); renderSources();
+        addWelcome();
+    }
+
+    private void addWelcome() {
+        LinearLayout welcome = new LinearLayout(this); welcome.setOrientation(LinearLayout.VERTICAL); welcome.setGravity(Gravity.CENTER); welcome.setPadding(dp(10), dp(20), dp(10), dp(24));
+        TextView icon = label("✦", 32, Color.WHITE, true); icon.setGravity(Gravity.CENTER); icon.setBackground(glassAccent());
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(58), dp(58)); ip.bottomMargin = dp(18); welcome.addView(icon, ip);
+        TextView heading = label("What can I help with?", 25, TEXT, true); heading.setGravity(Gravity.CENTER); welcome.addView(heading);
+        TextView sub = label("Ask a question, explore an idea, or work through a problem.", 14, MUTED, false); sub.setGravity(Gravity.CENTER); sub.setPadding(dp(16), dp(9), dp(16), dp(18)); welcome.addView(sub);
+        LinearLayout suggestions = new LinearLayout(this); suggestions.setOrientation(LinearLayout.VERTICAL);
+        String[] prompts = {"Explain something clearly", "Help me write or improve code", "Explore an idea with me"};
+        for (String prompt : prompts) { TextView item = label("✧   " + prompt, 13, TEXT, false); item.setPadding(dp(14), dp(12), dp(14), dp(12)); item.setBackground(round(Color.rgb(30,32,37), 14)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8); suggestions.addView(item,p); item.setOnClickListener(v -> { input.setText(prompt); input.setSelection(input.length()); input.requestFocus(); }); }
+        welcome.addView(suggestions, new LinearLayout.LayoutParams(-1, -2)); transcript.addView(welcome, new LinearLayout.LayoutParams(-1, -1));
+    }
+
+    private void showSettings() {
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(20), dp(8), dp(20), dp(4));
+        TextView backendLabel = label("Backend URL", 13, MUTED, true); content.addView(backendLabel);
+        EditText backend = new EditText(this); backend.setSingleLine(true); backend.setText(serverInput.getText().toString()); backend.setTextColor(TEXT); backend.setHintTextColor(MUTED); backend.setTextSize(14); backend.setSelectAllOnFocus(true); content.addView(backend);
+        TextView note = label("Render hosting is fine. A free service may take time to wake up after inactivity.", 12, MUTED, false); note.setPadding(0,dp(8),0,0); content.addView(note);
+        new AlertDialog.Builder(this).setTitle("Settings").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> { String url=backend.getText().toString().trim().replaceAll("/+$", ""); if (url.startsWith("https://")) serverInput.setText(url); else toast("Use a valid HTTPS URL."); }).show();
+    }
+
+    private void showHistory() {
+        new AlertDialog.Builder(this).setTitle("Chat history").setMessage("Conversation history is not saved between app sessions yet. Persistent history will be added when the backend and storage support are implemented.").setPositiveButton("New chat", (d,w) -> newConversation()).setNegativeButton("Close", null).show();
+    }
+
+    private void showAttachmentMenu() {
+        new AlertDialog.Builder(this).setTitle("Add to ARIA").setItems(new String[]{"Upload a file (coming soon)", "Take a photo (coming soon)", "Voice input (coming soon)"}, (d,w) -> toast("This feature is not connected yet.")).show();
     }
 
     private void showFeatureDirectory() {
@@ -227,20 +317,30 @@ public class MainActivity extends Activity {
     }
 
     private void addUserMessage(String text) {
-        LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setGravity(Gravity.END); wrap.setPadding(dp(30), dp(4), 0, dp(10));
-        TextView who=label("YOU", 10, MUTED, true); who.setGravity(Gravity.RIGHT); wrap.addView(who);
-        TextView body = label(text, 15, TEXT, false); body.setPadding(dp(14), dp(11), dp(14), dp(11)); body.setBackground(userBubbleBackground()); wrap.addView(body, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setGravity(Gravity.END); wrap.setPadding(dp(32), dp(5), 0, dp(14));
+        TextView body = label(text, 15, TEXT, false); body.setPadding(dp(15), dp(11), dp(15), dp(11)); body.setBackground(round(Color.rgb(48, 50, 56), 21)); body.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(76)); wrap.addView(body, new LinearLayout.LayoutParams(-2, -2));
         transcript.addView(wrap); scrollDown(transcriptScroll);
     }
 
     private void addAssistantMessage(String text, ArrayList<SourceItem> sources) {
-        LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setPadding(0, dp(4), dp(20), dp(14));
+        LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setPadding(dp(2), dp(5), dp(2), dp(18));
         LinearLayout whoRow = new LinearLayout(this); whoRow.setOrientation(LinearLayout.HORIZONTAL); whoRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView badge=label("A", 12, Color.WHITE, true); badge.setGravity(Gravity.CENTER); badge.setBackground(glassAccent()); whoRow.addView(badge, new LinearLayout.LayoutParams(dp(25), dp(25)));
-        TextView who=label("  ARIA", 12, TEXT, true); whoRow.addView(who); wrap.addView(whoRow);
-        TextView body = new TextView(this); body.setText(markdownLite(text)); body.setTextColor(TEXT); body.setTextSize(15); body.setLineSpacing(dp(3), 1f); body.setTextIsSelectable(true); body.setPadding(dp(2), dp(9), dp(2), dp(2)); wrap.addView(body);
-        transcript.addView(wrap); scrollDown(transcriptScroll);
+        TextView badge=label("✦", 13, Color.WHITE, true); badge.setGravity(Gravity.CENTER); badge.setBackground(glassAccent()); whoRow.addView(badge, new LinearLayout.LayoutParams(dp(27), dp(27)));
+        TextView who=label("  ARIA", 13, TEXT, true); whoRow.addView(who); wrap.addView(whoRow);
+        TextView body = new TextView(this); body.setText(markdownLite(text)); body.setTextColor(TEXT); body.setTextSize(16); body.setLineSpacing(dp(4), 1.02f); body.setTextIsSelectable(true); body.setPadding(dp(1), dp(10), dp(1), dp(4)); wrap.addView(body);
+        if (sources != null && !sources.isEmpty()) {
+            TextView sourcesLink = label("↗  Sources · " + sources.size(), 12, ACCENT, true); sourcesLink.setPadding(dp(2),dp(8),dp(2),dp(3)); sourcesLink.setOnClickListener(v -> showSourcesDialog(sources)); wrap.addView(sourcesLink);
+        }
+        LinearLayout actions = new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL); actions.setGravity(Gravity.CENTER_VERTICAL);
+        TextView copy = label("▢  Copy", 11, MUTED, false); copy.setPadding(dp(3),dp(8),dp(15),dp(4)); copy.setOnClickListener(v -> { android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE); cm.setPrimaryClip(android.content.ClipData.newPlainText("ARIA answer", text)); toast("Answer copied"); }); actions.addView(copy);
+        wrap.addView(actions); transcript.addView(wrap); scrollDown(transcriptScroll);
         if (sources != null) { lastSources.clear(); lastSources.addAll(sources); renderSources(); }
+    }
+
+    private void showSourcesDialog(ArrayList<SourceItem> sources) {
+        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL); list.setPadding(dp(16),dp(8),dp(16),dp(8));
+        for (SourceItem item : sources) { TextView link=label(item.title + "\n" + item.url, 13, ACCENT, false); link.setPadding(0,dp(10),0,dp(10)); list.addView(link); link.setOnClickListener(v -> { try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(item.url))); } catch(Exception e) { toast("No browser available"); } }); }
+        ScrollView sc = new ScrollView(this); sc.setVerticalScrollBarEnabled(false); sc.addView(list); new AlertDialog.Builder(this).setTitle("Sources & links").setView(sc).setPositiveButton("Done",null).show();
     }
 
     private SpannableString markdownLite(String source) {
@@ -314,9 +414,9 @@ public class MainActivity extends Activity {
     private GradientDrawable round(int color,int radius) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
     private GradientDrawable glassBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.argb(205, 37, 47, 68), Color.argb(170, 19, 25, 39), Color.argb(190, 31, 39, 58)});
-        d.setCornerRadius(dp(20));
-        d.setStroke(dp(1), Color.argb(70, 205, 220, 255));
+            new int[]{Color.rgb(27, 30, 36), Color.rgb(21, 23, 28)});
+        d.setCornerRadius(dp(18));
+        d.setStroke(dp(1), Color.argb(45, 210, 220, 240));
         return d;
     }
     private GradientDrawable glassAccent() {
