@@ -923,7 +923,7 @@ public class MainActivity extends Activity {
         TextView name=label(chat.title,14,TEXT,false);name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);row.addView(name,new LinearLayout.LayoutParams(0,-2,1));
         TextView more=label("⋯",22,MUTED,true);more.setGravity(Gravity.CENTER);row.addView(more,new LinearLayout.LayoutParams(dp(32),dp(34)));
         panel.addView(row,new LinearLayout.LayoutParams(-1,-2));
-        row.setOnClickListener(v->{drawer.dismiss();if(chat.archived){showChatActions(chat, item);}else{activeChatId=chat.id;restoreActiveChat();}});
+        row.setOnClickListener(v->{if(chat.archived){showChatActions(chat, row);}else{drawer.dismiss();activeChatId=chat.id;restoreActiveChat();}});
         more.setOnClickListener(v -> showChatActions(chat, more));row.setOnLongClickListener(v -> { showChatActions(chat, row); return true; });
     }
     private void showChatActions(ChatRecord chat, View anchor) {
