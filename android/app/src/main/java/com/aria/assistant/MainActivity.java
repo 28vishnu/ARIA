@@ -120,9 +120,11 @@ public class MainActivity extends Activity {
             return;
         }
         loadChatHistory();
-        activeChatId = chatHistory.isEmpty() ? "" : chatHistory.get(0).id;
+        // Always start on a fresh draft. History is retained and can be opened
+        // explicitly from the sidebar; launching ARIA never resumes an old thread.
+        activeChatId = "";
         buildUi();
-        restoreActiveChat();
+        newConversation();
         requestNotificationPermissionIfNeeded();
         checkForUpdates();
     }
@@ -962,7 +964,7 @@ public class MainActivity extends Activity {
         dialogBuilder().setTitle("Delete chat?").setMessage("This removes the conversation from this device.")
             .setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->{
                 chatHistory.remove(chat);saveChatHistory();
-                if(chat.id.equals(activeChatId)){activeChatId=chatHistory.isEmpty()?"":chatHistory.get(0).id;restoreActiveChat();}
+                if(chat.id.equals(activeChatId)) newConversation();
                 toast("Chat deleted");
             }).show();
     }
