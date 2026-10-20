@@ -2,6 +2,7 @@ package com.aria.assistant;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -16,6 +17,8 @@ import android.text.SpannableString;
 import android.text.style.StyleSpan;
 import android.text.style.RelativeSizeSpan;
 import android.view.Gravity;
+import android.view.Window;
+import android.view.WindowManager;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
@@ -196,17 +199,17 @@ public class MainActivity extends Activity {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{Color.rgb(11, 15, 28), Color.rgb(7, 9, 17)}));
-        root.setPadding(dp(14), dp(8), dp(14), dp(8));
+        root.setPadding(dp(16), dp(6), dp(16), dp(6));
 
         // Compact ChatGPT-inspired header: navigation, brand, and new-chat action.
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setPadding(0, dp(2), 0, dp(8));
-        TextView menu = label("☰", 23, TEXT, false);
+        TextView menu = label("☰", 22, TEXT, false);
         menu.setGravity(Gravity.CENTER);
         header.addView(menu, new LinearLayout.LayoutParams(dp(42), dp(44)));
-        menu.setOnClickListener(v -> showAppMenu());
+        menu.setOnClickListener(v -> showSideDrawer());
 
         LinearLayout brand = new LinearLayout(this);
         brand.setOrientation(LinearLayout.HORIZONTAL);
@@ -215,7 +218,7 @@ public class MainActivity extends Activity {
         mark.setGravity(Gravity.CENTER);
         mark.setBackground(glassAccent());
         brand.addView(mark, new LinearLayout.LayoutParams(dp(34), dp(34)));
-        TextView title = label("  ARIA", 19, TEXT, true);
+        TextView title = label("  ARIA", 18, TEXT, true);
         brand.addView(title);
         header.addView(brand, new LinearLayout.LayoutParams(0, -1, 1));
         TextView newChat = label("＋", 27, TEXT, false);
@@ -231,6 +234,9 @@ public class MainActivity extends Activity {
         tabRow.addView(answerTab, new LinearLayout.LayoutParams(dp(86), dp(36)));
         tabRow.addView(sourcesTab, new LinearLayout.LayoutParams(dp(86), dp(36)));
         root.addView(tabRow, new LinearLayout.LayoutParams(-1, dp(42)));
+        // Sources remain available from individual answers; hide the extra tab strip
+        // so the primary chat layout stays close to ChatGPT's uncluttered screen.
+        tabRow.setVisibility(View.GONE);
         answerTab.setOnClickListener(v -> showTab(false)); sourcesTab.setOnClickListener(v -> showTab(true));
 
         // Keep configuration out of the conversation view; accessible through the menu.
@@ -258,8 +264,9 @@ public class MainActivity extends Activity {
         composer = new LinearLayout(this);
         composer.setOrientation(LinearLayout.HORIZONTAL);
         composer.setGravity(Gravity.BOTTOM | Gravity.CENTER_VERTICAL);
-        composer.setPadding(dp(8), dp(6), dp(6), dp(6));
+        composer.setPadding(dp(8), dp(5), dp(6), dp(5));
         composer.setBackground(glassBackground());
+        composer.setElevation(dp(3));
         composer.setElevation(dp(2));
         TextView add = label("＋", 24, MUTED, false);
         add.setGravity(Gravity.CENTER);
@@ -288,7 +295,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.topMargin = dp(8);
         root.addView(composer, cp);
-        TextView disclaimer = label("ARIA may make mistakes. Verify important information.", 10, MUTED, false);
+        TextView disclaimer = label("ARIA can make mistakes. Check important information.", 10, Color.rgb(125, 132, 148), false);
         disclaimer.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams disclaimerParams = new LinearLayout.LayoutParams(-1, dp(20));
         root.addView(disclaimer, disclaimerParams);
@@ -304,14 +311,200 @@ public class MainActivity extends Activity {
     }
 
     private void showAppMenu() {
-        String[] options = {"New chat", "Chat history", "Explore ARIA features", "Settings", "About ARIA"};
-        dialogBuilder().setTitle("ARIA").setItems(options, (dialog, which) -> {
-            if (which == 0) newConversation();
-            else if (which == 1) showHistory();
-            else if (which == 2) showFeatureDirectory();
-            else if (which == 3) showSettings();
-            else dialogBuilder().setTitle("About ARIA").setMessage("ARIA is your personal AI assistant, currently connected to your configured backend. Some advanced features are planned and are not active yet.").setPositiveButton("OK", null).show();
-        }).show();
+        showSideDrawer();
+    }
+
+    /**
+     * ChatGPT-inspired navigation drawer. Uses a real side-aligned Dialog so it
+     * adapts to narrow phones, landscape, display cutouts, and system bars.
+     */
+    private void showSideDrawer() {
+        final Dialog drawer = new Dialog(this);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(18), dp(12), dp(12));
+        panel.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.rgb(31, 32, 35), Color.rgb(19, 20, 23)}));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brand = label("ARIA", 21, TEXT, true);
+        top.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1));
+        TextView close = label("×", 30, MUTED, false);
+        close.setGravity(Gravity.CENTER);
+        top.addView(close, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        close.setOnClickListener(v -> drawer.dismiss());
+        panel.addView(top);
+
+        TextView search = drawerItem("⌕", "Search chats", "Find a past conversation");
+        panel.addView(search);
+        search.setOnClickListener(v -> { drawer.dismiss(); showHistorySearch(); });
+
+        TextView newChatItem = drawerItem("＋", "New chat", null);
+        panel.addView(newChatItem);
+        newChatItem.setOnClickListener(v -> { drawer.dismiss(); newConversation(); });
+
+        addDrawerDivider(panel);
+        addDrawerSection(panel, "YOUR SPACE");
+        addDrawerRow(panel, drawer, "▧", "Images", "Images and generated artwork");
+        addDrawerRow(panel, drawer, "▤", "Library", "Files and saved material");
+        addDrawerRow(panel, drawer, "▱", "Projects", "Organize chats by project");
+        addDrawerRow(panel, drawer, "⌘", "Remote", "Remote tools and computer workflows");
+        addDrawerRow(panel, drawer, "◷", "Scheduled", "Reminders and scheduled tasks");
+        addDrawerRow(panel, drawer, "◉", "Plugins", "Connected tools and integrations");
+
+        addDrawerDivider(panel);
+        addDrawerSection(panel, "PINNED");
+        addDrawerRow(panel, drawer, "♡", "Prompts", "Prompt collection");
+        addDrawerRow(panel, drawer, "▱", "Education", "Study notes and learning");
+        addDrawerRow(panel, drawer, "◌", "Create Android App", "App-building workspace");
+        addDrawerRow(panel, drawer, "✦", "ARIA backend", "Backend status and settings");
+
+        addDrawerDivider(panel);
+        addDrawerSection(panel, "RECENTS");
+        TextView recent = drawerItem("◌", "New conversation", "This device · current session");
+        panel.addView(recent);
+        recent.setOnClickListener(v -> { drawer.dismiss(); toast("You are viewing the current conversation."); });
+
+        View spacer = new View(this);
+        panel.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(Color.argb(55, 255, 255, 255));
+        panel.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+        LinearLayout account = new LinearLayout(this);
+        account.setGravity(Gravity.CENTER_VERTICAL);
+        account.setPadding(dp(4), dp(12), dp(4), dp(4));
+        TextView avatar = label("S", 17, Color.WHITE, true);
+        avatar.setGravity(Gravity.CENTER);
+        avatar.setBackground(round(Color.rgb(217, 112, 99), 40));
+        account.addView(avatar, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        LinearLayout accountText = new LinearLayout(this);
+        accountText.setOrientation(LinearLayout.VERTICAL);
+        accountText.setPadding(dp(10), 0, 0, 0);
+        accountText.addView(label("ARIA Personal", 14, TEXT, true));
+        accountText.addView(label("Profile and settings", 11, MUTED, false));
+        account.addView(accountText, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView more = label("•••", 18, MUTED, true);
+        account.addView(more);
+        account.setOnClickListener(v -> { drawer.dismiss(); showProfile(); });
+        more.setOnClickListener(v -> { drawer.dismiss(); showSettings(); });
+        panel.addView(account);
+
+        ScrollView drawerScroll = new ScrollView(this);
+        drawerScroll.setFillViewport(true);
+        drawerScroll.setVerticalScrollBarEnabled(false);
+        drawerScroll.setBackgroundColor(Color.TRANSPARENT);
+        drawerScroll.addView(panel, new ScrollView.LayoutParams(-1, -2));
+        drawer.setContentView(drawerScroll);
+        Window window = drawer.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.width = Math.min((int)(getResources().getDisplayMetrics().widthPixels * 0.86f), dp(360));
+            lp.height = WindowManager.LayoutParams.MATCH_PARENT;
+            lp.gravity = Gravity.START;
+            lp.dimAmount = 0.58f;
+            window.setAttributes(lp);
+            window.setWindowAnimations(android.R.style.Animation_Activity);
+        }
+        drawer.setCanceledOnTouchOutside(true);
+        drawer.show();
+        if (window != null) {
+            window.setLayout(Math.min((int)(getResources().getDisplayMetrics().widthPixels * 0.86f), dp(360)),
+                    WindowManager.LayoutParams.MATCH_PARENT);
+            window.setGravity(Gravity.START);
+        }
+    }
+
+    private TextView drawerItem(String symbol, String title, String subtitle) {
+        String text = symbol + "    " + title + (subtitle == null ? "" : "\n        " + subtitle);
+        TextView row = label(text, 14, TEXT, false);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(11), dp(8), dp(11));
+        row.setBackground(round(Color.TRANSPARENT, 12));
+        row.setOnTouchListener((v, event) -> {
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN)
+                v.setBackground(round(Color.argb(35, 255, 255, 255), 12));
+            if (event.getAction() == android.view.MotionEvent.ACTION_UP ||
+                    event.getAction() == android.view.MotionEvent.ACTION_CANCEL)
+                v.setBackground(round(Color.TRANSPARENT, 12));
+            return false;
+        });
+        return row;
+    }
+
+    private void addDrawerSection(LinearLayout panel, String title) {
+        TextView section = label(title, 10, Color.rgb(143, 148, 158), true);
+        section.setLetterSpacing(0.12f);
+        section.setPadding(dp(10), dp(12), 0, dp(5));
+        panel.addView(section);
+    }
+
+    private void addDrawerDivider(LinearLayout panel) {
+        View divider = new View(this);
+        divider.setBackgroundColor(Color.argb(38, 255, 255, 255));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(1));
+        p.topMargin = dp(8);
+        p.bottomMargin = dp(5);
+        panel.addView(divider, p);
+    }
+
+    private void addDrawerRow(LinearLayout panel, Dialog drawer, String symbol, String title, String description) {
+        TextView row = label(symbol + "    " + title, 14, TEXT, false);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(11), dp(8), dp(11));
+        row.setBackground(round(Color.TRANSPARENT, 10));
+        panel.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        row.setOnClickListener(v -> {
+            drawer.dismiss();
+            if ("ARIA backend".equals(title)) showSettings();
+            else if ("Projects".equals(title)) showFeaturePanel(title, "Organize related conversations, files, and instructions into a focused workspace.");
+            else if ("Scheduled".equals(title)) showFeaturePanel(title, "Scheduled reminders will appear here when task scheduling is connected.");
+            else if ("Images".equals(title)) showFeaturePanel(title, "Your image workspace. Image generation and image history require an image-capable backend.");
+            else if ("Library".equals(title)) showFeaturePanel(title, "Saved files and documents will appear here when library storage is connected.");
+            else if ("Remote".equals(title)) showFeaturePanel(title, "Remote computer control is not connected in this Android build.");
+            else if ("Plugins".equals(title)) showFeaturePanel(title, "Tool integrations and plugins will appear here when configured.");
+            else if ("Prompts".equals(title)) showFeaturePanel(title, "Save reusable prompts here. Prompt storage is not yet connected.");
+            else if ("Education".equals(title)) showFeaturePanel(title, "Study mode, quizzes, and learning projects are planned for ARIA.");
+            else if ("Create Android App".equals(title)) showFeaturePanel(title, "Use ARIA to plan Android app screens, architecture, and implementation steps.");
+            else showFeaturePanel(title, description);
+        });
+    }
+
+    private void showFeaturePanel(String title, String message) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(8), dp(18), dp(8));
+        TextView icon = label("✦", 24, ACCENT, true);
+        icon.setPadding(0, 0, 0, dp(12));
+        content.addView(icon);
+        TextView body = label(message, 14, MUTED, false);
+        body.setLineSpacing(dp(4), 1f);
+        content.addView(body);
+        dialogBuilder().setTitle(title).setView(content)
+                .setPositiveButton("Done", null)
+                .setNeutralButton("Explore ARIA features", (d, w) -> showFeatureDirectory())
+                .show();
+    }
+
+    private void showHistorySearch() {
+        EditText query = new EditText(this);
+        query.setSingleLine(true);
+        query.setTextColor(TEXT);
+        query.setHintTextColor(MUTED);
+        query.setHint("Search conversations");
+        query.setPadding(dp(12), dp(8), dp(12), dp(8));
+        query.setBackground(glassBackground());
+        dialogBuilder().setTitle("Search chats").setView(query)
+                .setPositiveButton("Search", (d, w) -> {
+                    String q = query.getText().toString().trim();
+                    if (q.isEmpty()) toast("Enter a search term.");
+                    else toast("Persistent chat history is not connected yet.");
+                })
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void newConversation() {
