@@ -3,7 +3,6 @@ package com.aria.assistant;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Notification;
-import android.app.Dialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -17,8 +16,6 @@ import android.text.SpannableString;
 import android.text.style.StyleSpan;
 import android.text.style.RelativeSizeSpan;
 import android.view.Gravity;
-import android.view.Window;
-import android.view.WindowManager;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
@@ -50,8 +47,7 @@ public class MainActivity extends Activity {
     private static final int BG = Color.rgb(9, 12, 20), PANEL = Color.argb(178, 28, 35, 52), PANEL2 = Color.argb(220, 49, 61, 87);
     private static final int TEXT = Color.rgb(242, 245, 252), MUTED = Color.rgb(165, 176, 197), ACCENT = Color.rgb(127, 155, 255);
     private static final String DEFAULT_SERVER = "https://aria-ai-s5go.onrender.com";
-    private final ExecutorService executor = Executors.newFixedThreadPool(2);
-    private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final String sessionId = "android-" + java.util.UUID.randomUUID();
     private volatile boolean appVisible = false;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 7401;
@@ -113,7 +109,7 @@ public class MainActivity extends Activity {
             PendingIntent.FLAG_UPDATE_CURRENT | (android.os.Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         Notification.Builder builder = android.os.Build.VERSION.SDK_INT >= 26
             ? new Notification.Builder(this, NOTIFICATION_CHANNEL_ID) : new Notification.Builder(this);
-        builder.setSmallIcon(android.R.drawable.stat_notify_chat)
+        builder.setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("ARIA response ready")
             .setContentText("Your answer is ready. Tap to return to ARIA.")
             .setContentIntent(pending).setAutoCancel(true);
@@ -122,7 +118,7 @@ public class MainActivity extends Activity {
     }
 
     private void checkForUpdates() {
-        updateExecutor.execute(() -> {
+        executor.execute(() -> {
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection)new URL("https://github.com/28vishnu/ARIA/releases/latest/download/version.json").openConnection();
@@ -244,8 +240,35 @@ public class MainActivity extends Activity {
         root.addView(composer, cp);
         TextView disclaimer = label("ARIA may make mistakes. Verify important information.", 10, MUTED, false);
         disclaimer.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(-1, dp(23));
-        root.addView(disclaimer, dp);
+        LinearLayout.LayoutParams disclaimerParams = new LinearLayout.LayoutParams(-1, dp(20));
+        root.addView(disclaimer, disclaimerParams);
+
+        // Persistent bottom-left profile/settings dock, matching the rest of the ARIA glass UI.
+        LinearLayout dock = new LinearLayout(this);
+        dock.setOrientation(LinearLayout.HORIZONTAL);
+        dock.setGravity(Gravity.CENTER_VERTICAL);
+        dock.setPadding(dp(8), dp(5), dp(8), dp(5));
+        dock.setBackground(glassBackground());
+        TextView avatar = label("A", 15, Color.WHITE, true);
+        avatar.setGravity(Gravity.CENTER);
+        avatar.setBackground(glassAccent());
+        dock.addView(avatar, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        TextView profile = label("  Profile", 13, TEXT, true);
+        dock.addView(profile, new LinearLayout.LayoutParams(-2, dp(38)));
+        profile.setGravity(Gravity.CENTER_VERTICAL);
+        profile.setOnClickListener(v -> showProfile());
+        avatar.setOnClickListener(v -> showProfile());
+        View dockSpacer = new View(this);
+        dock.addView(dockSpacer, new LinearLayout.LayoutParams(0, 1, 1));
+        TextView settings = label("⚙  Settings", 13, MUTED, true);
+        settings.setGravity(Gravity.CENTER);
+        settings.setPadding(dp(12), 0, dp(8), 0);
+        dock.addView(settings, new LinearLayout.LayoutParams(-2, dp(38)));
+        settings.setOnClickListener(v -> showSettings());
+        LinearLayout.LayoutParams dockParams = new LinearLayout.LayoutParams(-1, dp(44));
+        dockParams.topMargin = dp(4);
+        root.addView(dock, dockParams);
+
         sendButton.setOnClickListener(v -> sendMessage());
         input.setOnEditorActionListener((v, action, event) -> {
             if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER && !event.isShiftPressed()) { sendMessage(); return true; }
@@ -255,64 +278,14 @@ public class MainActivity extends Activity {
     }
 
     private void showAppMenu() {
-        final Dialog drawer = new Dialog(this);
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(18), dp(24), dp(14), dp(18));
-        panel.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.rgb(20, 25, 39), Color.rgb(10, 13, 22)}));
-
-        LinearLayout brand = new LinearLayout(this);
-        brand.setGravity(Gravity.CENTER_VERTICAL);
-        TextView logo = label("◉", 25, Color.WHITE, true);
-        logo.setGravity(Gravity.CENTER);
-        logo.setBackground(glassAccent());
-        brand.addView(logo, new LinearLayout.LayoutParams(dp(42), dp(42)));
-        LinearLayout brandText = new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL);
-        TextView name = label("ARIA", 19, TEXT, true);
-        TextView caption = label("PERSONAL AI", 10, MUTED, true);
-        brandText.addView(name); brandText.addView(caption);
-        LinearLayout.LayoutParams bt = new LinearLayout.LayoutParams(0, -2, 1); bt.leftMargin = dp(12); brand.addView(brandText, bt);
-        panel.addView(brand);
-        View line = new View(this); line.setBackgroundColor(Color.argb(45,255,255,255)); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(1)); lp.topMargin=dp(20); lp.bottomMargin=dp(14); panel.addView(line,lp);
-
-        addDrawerItem(panel, "＋", "New chat", () -> { drawer.dismiss(); newConversation(); });
-        addDrawerItem(panel, "◷", "Chat history", () -> { drawer.dismiss(); showHistory(); });
-        addDrawerItem(panel, "✧", "Explore ARIA", () -> { drawer.dismiss(); showFeatureDirectory(); });
-        View spacer = new View(this); panel.addView(spacer, new LinearLayout.LayoutParams(1,0,1));
-        View line2 = new View(this); line2.setBackgroundColor(Color.argb(45,255,255,255)); LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(-1, dp(1)); lp2.bottomMargin=dp(12); panel.addView(line2,lp2);
-        addDrawerItem(panel, "◉", "Profile", () -> { drawer.dismiss(); showProfile(); });
-        addDrawerItem(panel, "⚙", "Settings", () -> { drawer.dismiss(); showSettings(); });
-        TextView version = label("ARIA  ·  Android", 11, MUTED, false); version.setPadding(dp(12),dp(14),0,0); panel.addView(version);
-
-        drawer.setContentView(panel);
-        Window window = drawer.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawableResource(android.R.color.transparent);
-            window.setDimAmount(0.55f);
-            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-            window.setLayout(dp(300), WindowManager.LayoutParams.MATCH_PARENT);
-            window.setGravity(Gravity.START);
-        }
-        drawer.show();
-        if (drawer.getWindow() != null) drawer.getWindow().setLayout(dp(300), WindowManager.LayoutParams.MATCH_PARENT);
-    }
-
-    private void addDrawerItem(LinearLayout panel, String iconText, String title, Runnable action) {
-        LinearLayout item = new LinearLayout(this); item.setGravity(Gravity.CENTER_VERTICAL); item.setPadding(dp(12),0,dp(10),0); item.setBackground(round(Color.TRANSPARENT,14));
-        TextView glyph = label(iconText,20,ACCENT,true); glyph.setGravity(Gravity.CENTER); item.addView(glyph,new LinearLayout.LayoutParams(dp(32),dp(48)));
-        TextView text = label(title,15,TEXT,false); LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(0,dp(48),1); tp.leftMargin=dp(8); item.addView(text,tp);
-        LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(-1,dp(48)); ip.bottomMargin=dp(4); panel.addView(item,ip);
-        item.setOnClickListener(v -> action.run());
-    }
-
-    private void showProfile() {
-        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL); content.setPadding(dp(22),dp(16),dp(22),dp(12));
-        TextView avatar=label("◉",32,Color.WHITE,true); avatar.setGravity(Gravity.CENTER); avatar.setBackground(glassAccent()); content.addView(avatar,new LinearLayout.LayoutParams(dp(68),dp(68)));
-        TextView title=label("ARIA Profile",19,TEXT,true); title.setGravity(Gravity.CENTER); title.setPadding(0,dp(12),0,dp(4)); content.addView(title);
-        TextView info=label("Personal assistant
-Connected to your configured ARIA backend",13,MUTED,false); info.setGravity(Gravity.CENTER); content.addView(info);
-        dialogBuilder().setTitle("Profile").setView(content).setNegativeButton("Close",null).setPositiveButton("Settings",(d,w)->showSettings()).show();
+        String[] options = {"New chat", "Chat history", "Explore ARIA features", "Settings", "About ARIA"};
+        dialogBuilder().setTitle("ARIA").setItems(options, (dialog, which) -> {
+            if (which == 0) newConversation();
+            else if (which == 1) showHistory();
+            else if (which == 2) showFeatureDirectory();
+            else if (which == 3) showSettings();
+            else dialogBuilder().setTitle("About ARIA").setMessage("ARIA is your personal AI assistant, currently connected to your configured backend. Some advanced features are planned and are not active yet.").setPositiveButton("OK", null).show();
+        }).show();
     }
 
     private void newConversation() {
@@ -332,12 +305,26 @@ Connected to your configured ARIA backend",13,MUTED,false); info.setGravity(Grav
         welcome.addView(suggestions, new LinearLayout.LayoutParams(-1, -2)); transcript.addView(welcome, new LinearLayout.LayoutParams(-1, -1));
     }
 
+    private void showProfile() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), dp(4));
+        TextView name = label("ARIA Personal Assistant", 16, TEXT, true);
+        content.addView(name);
+        TextView info = label("Connected to your ARIA backend\n\nProfile and chat history are stored locally only where implemented. This build does not sync a personal profile to a cloud account.", 13, MUTED, false);
+        info.setPadding(0, dp(10), 0, dp(4));
+        content.addView(info);
+        dialogBuilder().setTitle("Profile").setView(content)
+            .setNeutralButton("Settings", (d, w) -> showSettings())
+            .setPositiveButton("Done", null).show();
+    }
+
     private void showSettings() {
         LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(20), dp(8), dp(20), dp(4));
         TextView backendLabel = label("Backend URL", 13, MUTED, true); content.addView(backendLabel);
         EditText backend = new EditText(this); backend.setSingleLine(true); backend.setText(serverInput.getText().toString()); backend.setTextColor(TEXT); backend.setHintTextColor(MUTED); backend.setTextSize(14); backend.setSelectAllOnFocus(true); content.addView(backend);
         TextView note = label("Render hosting is fine. A free service may take time to wake up after inactivity.", 12, MUTED, false); note.setPadding(0,dp(8),0,0); content.addView(note);
-        dialogBuilder().setTitle("Settings").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> { String url=backend.getText().toString().trim().replaceAll("/+$", ""); if (url.startsWith("https://") && url.length() > 12) { serverInput.setText(url); toast("Backend URL saved for this session."); } else toast("Use a valid HTTPS URL."); }).show();
+        dialogBuilder().setTitle("Settings").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> { String url=backend.getText().toString().trim().replaceAll("/+$", ""); if (url.startsWith("https://")) serverInput.setText(url); else toast("Use a valid HTTPS URL."); }).show();
     }
 
     private void showHistory() {
@@ -389,24 +376,17 @@ Connected to your configured ARIA backend",13,MUTED,false); info.setGravity(Grav
             String reply; ArrayList<SourceItem> sources = new ArrayList<>();
             try {
                 HttpURLConnection conn = (HttpURLConnection)new URL(base + "/chat").openConnection();
-                conn.setRequestMethod("POST"); conn.setConnectTimeout(20000); conn.setReadTimeout(90000); conn.setRequestProperty("Content-Type", "application/json; charset=utf-8"); conn.setDoOutput(true);
+                conn.setRequestMethod("POST"); conn.setConnectTimeout(30000); conn.setReadTimeout(180000); conn.setRequestProperty("Accept", "application/json"); conn.setRequestProperty("Content-Type", "application/json; charset=utf-8"); conn.setDoOutput(true);
                 JSONObject payload = new JSONObject(); payload.put("message", message); payload.put("session_id", sessionId);
                 try (OutputStream os = conn.getOutputStream()) { os.write(payload.toString().getBytes(StandardCharsets.UTF_8)); }
                 int code = conn.getResponseCode(); InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream(); StringBuilder body = new StringBuilder();
                 if (stream != null) try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = reader.readLine()) != null) body.append(line).append('\n'); }
                 if (code >= 200 && code < 300) {
-                    JSONObject response = new JSONObject(body.toString()); reply = response.optString("reply", response.optString("answer", "The server returned no reply."));
+                    JSONObject response = new JSONObject(body.toString()); reply = response.optString("reply", response.optString("answer", "")).trim(); if (reply.isEmpty()) reply = "The ARIA backend returned an empty response. Check the backend logs and try again.";
                     collectSources(response, sources); if (!response.optBoolean("success", true)) reply = "Request did not complete: " + reply;
-                } else {
-                    String detail = body.toString().trim();
-                    if (detail.length() > 280) detail = detail.substring(0, 280) + "…";
-                    reply = "ARIA server returned HTTP " + code + (detail.isEmpty() ? "." : ": " + detail) + "\n\nPlease check Settings → Backend URL and try again.";
-                }
+                } else { String detail = body.toString().trim(); if (detail.length() > 700) detail = detail.substring(0, 700); reply = "The ARIA server returned HTTP " + code + (detail.isEmpty() ? ". Please try again shortly." : ".\n\nServer detail: " + detail); }
                 conn.disconnect();
-            } catch (Exception ex) {
-                String reason = ex.getClass().getSimpleName();
-                reply = "Could not connect to ARIA (" + reason + ").\n\nThe server may be waking up, or your connection may be unavailable. Wait a moment and try again. If this repeats, open ☰ → Settings and check the backend URL.";
-            }
+            } catch (java.net.SocketTimeoutException ex) { reply = "ARIA is taking longer than expected. The request timed out. Please try again; a sleeping free Render service may need time to wake up."; } catch (Exception ex) { reply = "I couldn't reach the ARIA backend (" + ex.getClass().getSimpleName() + "). Check your internet connection and confirm the backend is online."; }
             final String finalReply = reply; final ArrayList<SourceItem> finalSources = sources;
             runOnUiThread(() -> { setThinking(false); addAssistantMessage(cleanAnswer(finalReply), finalSources); sendButton.setEnabled(true); sendButton.setAlpha(1f); if (!appVisible) notifyResponseReady(); });
         });
@@ -570,5 +550,5 @@ Connected to your configured ARIA backend",13,MUTED,false); info.setGravity(Grav
     private int dp(int v) { return (int)(v*getResources().getDisplayMetrics().density+0.5f); }
     private void scrollDown(ScrollView s) { s.post(() -> s.fullScroll(View.FOCUS_DOWN)); }
     private void toast(String msg) { Toast.makeText(this,msg,Toast.LENGTH_SHORT).show(); }
-    @Override protected void onDestroy() { super.onDestroy(); executor.shutdownNow(); updateExecutor.shutdownNow(); }
+    @Override protected void onDestroy() { super.onDestroy(); executor.shutdownNow(); }
 }
