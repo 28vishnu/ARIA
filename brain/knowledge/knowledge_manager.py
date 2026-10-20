@@ -1277,7 +1277,104 @@ class KnowledgeManager:
             await self.search_open_knowledge(question)
         )
 
+        # Provenance-aware structured facts are an optional additional source.
+        # The reader is strictly read-only and only returns explicitly verified facts.
+        normalized.extend(await self.search_structured_facts(question))
+
         return normalized
+
+    async def search_structured_facts(
+        self,
+        question: str,
+    ) -> List[Dict[str, Any]]:
+        """Read matching verified structured facts from the existing ARIA SQLite DB.
+
+        This method never creates a database or tables. It is deliberately
+        fail-closed: absent schema, missing DB, or SQL errors yield no evidence.
+        """
+        db_value = os.environ.get("ARIA_OPEN_KNOWLEDGE_DB", "data/aria_open_knowledge.sqlite3")
+        db_path = Path(db_value).expanduser()
+        if not db_path.is_file():
+            return []
+
+        stop_words = {
+            "what", "who", "where", "when", "why", "how", "does", "did",
+            "the", "and", "for", "from", "with", "that", "this", "are",
+            "was", "were", "is", "about", "tell", "explain", "define",
+            "give", "show", "please", "using", "simple", "words",
+        }
+        tokens = [
+            token for token in re.findall(r"[a-z0-9]+", str(question or "").casefold())
+            if len(token) > 2 and token not in stop_words
+        ]
+        if not tokens:
+            return []
+
+        conn = None
+        try:
+            uri = db_path.resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            required = {"structured_entities", "structured_facts", "structured_fact_sources"}
+            if not required.issubset(tables):
+                return []
+
+            clauses = []
+            params: List[Any] = []
+            for token in tokens[:8]:
+                clauses.append("(lower(subject.canonical_name) LIKE ? OR lower(object.canonical_name) LIKE ?)")
+                pattern = f"%{token}%"
+                params.extend([pattern, pattern])
+            sql = (
+                "SELECT subject.canonical_name AS subject, facts.relation, "
+                "object.canonical_name AS object, facts.confidence, facts.status, "
+                "sources.source_name, sources.source_url, sources.license, sources.evidence "
+                "FROM structured_facts AS facts "
+                "JOIN structured_entities AS subject ON subject.id=facts.subject_id "
+                "JOIN structured_entities AS object ON object.id=facts.object_id "
+                "JOIN structured_fact_sources AS sources ON sources.fact_id=facts.id "
+                "WHERE facts.status='verified' AND (" + " OR ".join(clauses) + ") "
+                "ORDER BY facts.confidence DESC, facts.id ASC LIMIT 8"
+            )
+            rows = conn.execute(sql, params).fetchall()
+            results: List[Dict[str, Any]] = []
+            seen = set()
+            for row in rows:
+                identity = (row["subject"], row["relation"], row["object"], row["source_url"])
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                statement = f"{row['subject']} {row['relation'].replace('_', ' ')} {row['object']}."
+                evidence = str(row["evidence"] or "").strip()
+                if evidence:
+                    statement += " Source evidence: " + evidence[:1200]
+                results.append({
+                    "source": "structured_facts",
+                    "title": f"{row['subject']} — {row['relation'].replace('_', ' ')}",
+                    "content": statement,
+                    "url": row["source_url"],
+                    "source_name": row["source_name"],
+                    "license": row["license"],
+                    "confidence": float(row["confidence"]),
+                    "importance": 75,
+                    "relevance": 0.8,
+                    "freshness": 0.7,
+                    "verified": True,
+                    "evidence_type": "provenance_aware_structured_fact",
+                    "local_knowledge": True,
+                })
+            return results
+        except (sqlite3.Error, OSError, ValueError):
+            logger.debug("[KnowledgeManager] Structured fact retrieval unavailable.", exc_info=True)
+            return []
+        finally:
+            if conn is not None:
+                conn.close()
 
     async def search_graph(
         self,
