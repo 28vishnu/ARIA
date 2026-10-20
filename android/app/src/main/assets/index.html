@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>AURA AI Super-App</title>
+    <title>ARIA Glass AI</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
@@ -13,11 +13,10 @@
             theme: {
                 extend: {
                     colors: {
-                        obsidian: '#08090E',
-                        gold: '#E5C158',
-                        'gold-dark': '#C49A2D',
-                        'gold-light': '#F6E4A8',
-                        'glass-bg': 'rgba(16, 19, 31, 0.72)',
+                        obsidian: '#06070B',
+                        gold: '#D4AF37',
+                        'gold-light': '#F3E5AB',
+                        'glass-bg': 'rgba(18, 22, 34, 0.72)',
                         'glass-card': 'rgba(255, 255, 255, 0.04)',
                         'glass-input': 'rgba(255, 255, 255, 0.07)',
                     },
@@ -25,10 +24,10 @@
                         ios: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"SF Pro Text"', 'system-ui', 'sans-serif'],
                     },
                     boxShadow: {
-                        'glass-glow': '0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(229, 193, 88, 0.12)',
-                        'drawer-glow': '25px 0 60px rgba(0, 0, 0, 0.85), 10px 0 30px rgba(123, 44, 191, 0.15)',
-                        'gold-sm': '0 0 15px rgba(229, 193, 88, 0.3)',
-                        'cyan-sm': '0 0 15px rgba(0, 245, 212, 0.3)',
+                        'glass-glow': '0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(212, 175, 55, 0.08)',
+                        'drawer-glow': '25px 0 60px rgba(0, 0, 0, 0.8), 10px 0 30px rgba(123, 44, 191, 0.15)',
+                        'gold-sm': '0 0 15px rgba(212, 175, 55, 0.25)',
+                        'cyan-sm': '0 0 15px rgba(0, 245, 212, 0.25)',
                     }
                 }
             }
@@ -37,7 +36,7 @@
     <style>
         /* Custom Native iOS Glassmorphism Styles */
         body {
-            background-color: #08090E;
+            background-color: #06070B;
             color: #F3F4F6;
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
             overflow: hidden;
@@ -47,39 +46,39 @@
 
         /* High Intensity iOS Glassmorphism */
         .ios-glass {
-            background: rgba(16, 19, 31, 0.75);
-            backdrop-filter: blur(28px) saturate(200%);
-            -webkit-backdrop-filter: blur(28px) saturate(200%);
+            background: rgba(18, 22, 34, 0.72);
+            backdrop-filter: blur(30px) saturate(210%);
+            -webkit-backdrop-filter: blur(30px) saturate(210%);
         }
 
         .ios-glass-card {
-            background: rgba(255, 255, 255, 0.04);
+            background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .ios-glass-pill {
-            background: rgba(255, 255, 255, 0.07);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
             border: 1px solid rgba(255, 255, 255, 0.12);
         }
 
         .ios-glass-menu {
-            background: rgba(20, 24, 38, 0.92);
+            background: rgba(22, 26, 40, 0.88);
             backdrop-filter: blur(35px) saturate(220%);
             -webkit-backdrop-filter: blur(35px) saturate(220%);
-            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(229, 193, 88, 0.15);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7), 0 0 40px rgba(212, 175, 55, 0.12);
         }
 
-        /* SAFE AREA INSETS FOR ALL NOTCHES / DYNAMIC ISLANDS */
+        /* Safe Notch Margins */
         .safe-notch-top {
-            padding-top: max(38px, env(safe-area-inset-top, 38px));
+            padding-top: max(20px, env(safe-area-inset-top));
         }
 
         .safe-notch-bottom {
-            padding-bottom: max(18px, env(safe-area-inset-bottom, 18px));
+            padding-bottom: max(16px, env(safe-area-inset-bottom));
         }
 
         /* Ambient Glow Background Orbs */
@@ -87,10 +86,10 @@
             position: absolute;
             top: -10%;
             left: -10%;
-            width: 60vw;
-            height: 60vw;
-            background: radial-gradient(circle, rgba(123, 44, 191, 0.22) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(70px);
+            width: 50vw;
+            height: 50vw;
+            background: radial-gradient(circle, rgba(123, 44, 191, 0.25) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(60px);
             pointer-events: none;
             z-index: 0;
         }
@@ -99,10 +98,10 @@
             position: absolute;
             bottom: -10%;
             right: -10%;
-            width: 70vw;
-            height: 70vw;
-            background: radial-gradient(circle, rgba(229, 193, 88, 0.15) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(80px);
+            width: 60vw;
+            height: 60vw;
+            background: radial-gradient(circle, rgba(212, 175, 55, 0.15) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(70px);
             pointer-events: none;
             z-index: 0;
         }
@@ -111,9 +110,9 @@
             position: absolute;
             top: 40%;
             right: -20%;
-            width: 50vw;
-            height: 50vw;
-            background: radial-gradient(circle, rgba(0, 245, 212, 0.1) 0%, rgba(0,0,0,0) 70%);
+            width: 45vw;
+            height: 45vw;
+            background: radial-gradient(circle, rgba(0, 245, 212, 0.12) 0%, rgba(0,0,0,0) 70%);
             filter: blur(80px);
             pointer-events: none;
             z-index: 0;
@@ -121,7 +120,7 @@
 
         /* Custom Scrollbars */
         ::-webkit-scrollbar {
-            width: 3px;
+            width: 4px;
         }
         ::-webkit-scrollbar-track {
             background: transparent;
@@ -131,13 +130,14 @@
             border-radius: 10px;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: rgba(229, 193, 88, 0.4);
+            background: rgba(212, 175, 55, 0.4);
         }
 
         /* Sidebar Transition Logic */
         #sidebar-drawer {
             transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
             box-shadow: 25px 0 60px rgba(0, 0, 0, 0.85);
+            /* CRITICAL: NO BORDER HERE AS REQUESTED */
             border: none !important;
         }
 
@@ -151,14 +151,14 @@
 
         /* Pulse animation for voice mode */
         @keyframes pulse-gold {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(229, 193, 88, 0.4); }
-            50% { transform: scale(1.06); box-shadow: 0 0 25px rgba(229, 193, 88, 0.8); }
+            0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(212, 175, 55, 0.4); }
+            50% { transform: scale(1.08); box-shadow: 0 0 30px rgba(212, 175, 55, 0.8); }
         }
 
         .voice-active {
             animation: pulse-gold 1.8s infinite ease-in-out;
-            background: linear-gradient(135deg, #E5C158, #F6E4A8) !important;
-            color: #08090E !important;
+            background: linear-gradient(135deg, #D4AF37, #F3E5AB) !important;
+            color: #06070B !important;
         }
     </style>
 </head>
@@ -172,82 +172,50 @@
     <!-- MAIN ROOT CONTAINER -->
     <div id="app-root" class="relative w-full h-full flex flex-col z-10 overflow-hidden">
 
-        <!-- FIXED TOP HEADER (With generous notch & camera cutout safe-area gap) -->
+        <!-- FIXED TOP HEADER (Non-Scrolling with Notch Inset) -->
         <header id="main-header" class="safe-notch-top fixed top-0 left-0 right-0 z-30 ios-glass border-b border-white/5 px-4 pb-3 flex items-center justify-between">
             
-            <!-- Left: iOS Hamburger Button -->
-            <button id="btn-open-sidebar" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10 flex-shrink-0" aria-label="Open Sidebar">
+            <!-- Left: 3-Line iOS Hamburger Button -->
+            <button id="btn-open-sidebar" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" aria-label="Open Sidebar">
                 <i data-lucide="menu" class="w-5 h-5"></i>
             </button>
 
             <!-- Center: Model Selector Pill -->
             <div class="relative">
-                <button id="btn-model-selector" class="ios-glass-pill px-4 py-1.5 rounded-full flex items-center gap-2 text-xs font-semibold tracking-wide text-white/90 hover:border-gold/40 transition-all shadow-sm">
+                <button id="btn-model-selector" class="ios-glass-pill px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs font-semibold tracking-wide text-white/90 hover:border-gold/40 transition-all">
                     <span id="active-model-icon" class="text-gold"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i></span>
-                    <span id="active-model-name" class="font-bold text-white tracking-tight">ChatGPT-4o</span>
+                    <span id="active-model-name" class="font-bold text-white">ARIA Backend</span>
                     <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-white/50"></i>
                 </button>
 
-                <!-- Model Picker Dropdown -->
-                <div id="model-dropdown" class="hidden absolute top-12 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-2 z-50 border border-white/10 text-xs">
-                    <div class="text-[10px] uppercase font-bold text-white/40 px-3 py-1.5 tracking-wider">AI Engines</div>
-                    
-                    <button onclick="switchEngine('chatgpt-4o', 'ChatGPT-4o', 'sparkles', '#E5C158')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
-                        <div class="flex items-center gap-2.5">
-                            <div class="p-1.5 rounded-lg bg-amber-500/20 text-gold"><i data-lucide="sparkles" class="w-4 h-4"></i></div>
-                            <div>
-                                <div class="font-bold text-white">ChatGPT-4o</div>
-                                <div class="text-[10px] text-white/50">Omni multimodal reasoning</div>
-                            </div>
-                        </div>
-                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon" id="check-chatgpt-4o"></i>
-                    </button>
-
-                    <button onclick="switchEngine('gemini-1.5', 'Gemini 1.5 Pro', 'cpu', '#00F5D4')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
-                        <div class="flex items-center gap-2.5">
-                            <div class="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400"><i data-lucide="cpu" class="w-4 h-4"></i></div>
-                            <div>
-                                <div class="font-bold text-white">Gemini 1.5 Pro</div>
-                                <div class="text-[10px] text-white/50">1M Token context & vision</div>
-                            </div>
-                        </div>
-                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon hidden" id="check-gemini-1.5"></i>
-                    </button>
-
-                    <button onclick="switchEngine('perplexity-pro', 'Perplexity Pro', 'globe', '#9D4EDD')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
-                        <div class="flex items-center gap-2.5">
-                            <div class="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><i data-lucide="globe" class="w-4 h-4"></i></div>
-                            <div>
-                                <div class="font-bold text-white">Perplexity Pro</div>
-                                <div class="text-[10px] text-white/50">Live web & citation research</div>
-                            </div>
-                        </div>
-                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon hidden" id="check-perplexity-pro"></i>
-                    </button>
+                <!-- The deployed ARIA API exposes one assistant endpoint; it does not expose client-side provider switching. -->
+                <div id="model-dropdown" class="hidden absolute top-12 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-3 z-50 border border-white/10 text-xs">
+                    <div class="font-bold text-white mb-1">ARIA Backend</div>
+                    <p class="text-white/60 leading-relaxed">Messages are sent to your configured ARIA server. Provider selection is controlled by the backend; this interface will not pretend to switch providers.</p>
                 </div>
             </div>
 
             <!-- Right: New Chat Fast Action Button -->
-            <button onclick="startNewChat()" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10 flex-shrink-0" title="New Chat">
+            <button onclick="startNewChat()" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" title="New Chat">
                 <i data-lucide="square-pen" class="w-5 h-5"></i>
             </button>
         </header>
 
-        <!-- CHAT MESSAGES SCROLL AREA -->
-        <main id="chat-scroll-area" class="flex-1 overflow-y-auto px-4 pt-32 pb-40 space-y-6">
+        <!-- CHAT MESSAGES SCROLL AREA (Only middle container scrolls) -->
+        <main id="chat-scroll-area" class="flex-1 overflow-y-auto px-4 pt-24 pb-36 space-y-6">
             
-            <!-- WELCOME SCREEN -->
-            <div id="welcome-container" class="h-full flex flex-col items-center justify-center text-center px-4 max-w-lg mx-auto py-8">
-                <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-5 border border-gold/30">
+            <!-- WELCOME SCREEN (Shown when activeChat is empty) -->
+            <div id="welcome-container" class="h-full flex flex-col items-center justify-center text-center px-4 max-w-lg mx-auto py-12">
+                <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-6 border border-gold/30">
                     <i data-lucide="bot" class="w-8 h-8"></i>
                 </div>
-                <h1 class="text-2xl font-black tracking-tight text-white mb-2">AURA Intelligence</h1>
-                <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed font-medium">
-                    Unified Super-App powered by OpenAI, Google Gemini & Perplexity Deep Research.
+                <h1 class="text-2xl font-black tracking-tight text-white mb-2">ARIA Intelligence</h1>
+                <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed">
+                    Your private assistant, connected to the ARIA backend. Sign in to send real requests.
                 </p>
 
                 <!-- Feature Quick Toggles Grid -->
-                <div class="grid grid-cols-2 gap-3 w-full mb-4">
+                <div class="grid grid-cols-2 gap-3 w-full mb-6">
                     <button onclick="quickPrompt('Perform deep research on quantum computing advancements in 2026')" class="ios-glass-card p-3.5 rounded-2xl text-left hover:border-gold/40 transition-all group">
                         <div class="flex items-center gap-2 text-purple-400 font-bold text-xs mb-1">
                             <i data-lucide="search" class="w-3.5 h-3.5"></i> Deep Research
@@ -284,47 +252,47 @@
             </div>
         </main>
 
-        <!-- FLOATING BOTTOM GLASS INPUT BAR (PERFECT FIT FOR ALL SCREEN WIDTHS & NO CUTOFFS) -->
-        <div class="fixed bottom-0 left-0 right-0 z-20 px-3 pb-2 safe-notch-bottom pointer-events-none">
-            <div class="max-w-xl mx-auto w-full pointer-events-auto box-border">
+        <!-- FLOATING BOTTOM GLASS INPUT BAR -->
+        <div class="fixed bottom-0 left-0 right-0 z-20 px-3 safe-notch-bottom pointer-events-none">
+            <div class="max-w-2xl mx-auto pointer-events-auto">
                 
-                <!-- Perplexity Search Bar Mode Indicator -->
+                <!-- Perplexity Search Bar Mode Indicator (Hidden by default) -->
                 <div id="perplexity-badge" class="hidden mb-2 px-3 py-1 rounded-full ios-glass-pill w-max flex items-center gap-2 text-[11px] text-purple-300 font-bold border border-purple-500/30">
                     <i data-lucide="globe" class="w-3.5 h-3.5 text-purple-400"></i>
                     <span>Pro Search / Deep Web Grounding Active</span>
                     <button onclick="toggleProSearch()" class="ml-1 text-white/40 hover:text-white"><i data-lucide="x" class="w-3 h-3"></i></button>
                 </div>
 
-                <!-- Main Glass Input Capsule - Fully Compact & Responsive -->
-                <div class="ios-glass p-1.5 pl-2.5 rounded-full border border-white/10 shadow-glass-glow flex items-center gap-1.5 w-full box-border">
+                <!-- Main Glass Input Capsule -->
+                <div class="ios-glass p-2 rounded-3xl border border-white/10 shadow-glass-glow flex items-center gap-2">
                     
                     <!-- File / Attachment Plus Button -->
-                    <button onclick="triggerFileUpload()" class="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all active:scale-95 flex-shrink-0" title="Attach file or image">
-                        <i data-lucide="plus" class="w-4 h-4"></i>
+                    <button onclick="triggerFileUpload()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all active:scale-95" title="Attach file or image">
+                        <i data-lucide="plus" class="w-5 h-5"></i>
                     </button>
                     <input type="file" id="file-input" class="hidden" onchange="handleFileSelect(event)">
 
                     <!-- Perplexity Deep Research Toggle Button -->
-                    <button id="btn-pro-search" onclick="toggleProSearch()" class="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-purple-400 transition-all active:scale-95 flex-shrink-0" title="Toggle Perplexity Deep Research">
-                        <i data-lucide="globe" class="w-4 h-4"></i>
+                    <button id="btn-pro-search" onclick="toggleProSearch()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-purple-400 transition-all active:scale-95" title="Toggle Perplexity Deep Research">
+                        <i data-lucide="globe" class="w-5 h-5"></i>
                     </button>
 
                     <!-- Text Input -->
-                    <input type="text" id="user-input" placeholder="Ask AURA anything..." class="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm text-white placeholder-white/40 px-1 font-medium" onkeydown="handleKeyPress(event)">
+                    <input type="text" id="user-input" placeholder="Ask ARIA anything..." class="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/40 px-2 font-medium" onkeydown="handleKeyPress(event)">
 
-                    <!-- Voice Mode Button (STRICTLY VISIBLE & COMPACT) -->
-                    <button id="btn-voice-mode" onclick="toggleVoiceMode()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/80 hover:text-gold transition-all active:scale-95 flex-shrink-0" title="Voice Mode">
-                        <i data-lucide="mic" class="w-4 h-4"></i>
+                    <!-- Voice Mode Button -->
+                    <button id="btn-voice-mode" onclick="toggleVoiceMode()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-gold transition-all active:scale-95" title="Voice Conversation">
+                        <i data-lucide="mic" class="w-5 h-5"></i>
                     </button>
 
-                    <!-- Send Button (STRICTLY VISIBLE & COMPACT) -->
-                    <button onclick="sendMessage()" class="p-2.5 rounded-full bg-gradient-to-r from-gold to-amber-300 text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center flex-shrink-0">
-                        <i data-lucide="arrow-up" class="w-4 h-4 stroke-[2.5]"></i>
+                    <!-- Send Button -->
+                    <button onclick="sendMessage()" class="p-2.5 rounded-full bg-gold text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
+                        <i data-lucide="arrow-up" class="w-5 h-5 stroke-[2.5]"></i>
                     </button>
                 </div>
 
-                <div class="text-center text-[10px] text-white/30 mt-1.5 font-medium tracking-wide">
-                    AURA Super-App • GPT-4o, Gemini 1.5 & Perplexity Engine
+                <div class="text-center text-[10px] text-white/30 mt-2 font-medium">
+                    ARIA Super-App • ARIA Backend • Real requests
                 </div>
             </div>
         </div>
@@ -332,17 +300,19 @@
         <!-- SIDEBAR DRAWER OVERLAY BACKDROP -->
         <div id="sidebar-overlay" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity opacity-0" onclick="closeSidebar()"></div>
 
-        <!-- SLIDING SIDEBAR DRAWER -->
+        <!-- SLIDING SIDEBAR DRAWER (No border, rich glass shadow) -->
         <aside id="sidebar-drawer" class="sidebar-closed fixed top-0 bottom-0 left-0 w-[82vw] max-w-xs ios-glass z-50 flex flex-col justify-between safe-notch-top safe-notch-bottom">
             
-            <!-- TOP SECTION -->
+            <!-- TOP SECTION (Fixed Search & New Chat) -->
             <div class="p-4 space-y-3 flex-shrink-0">
-                <div class="flex items-center justify-between pb-1">
+                
+                <!-- Sidebar Top Title & Close Button -->
+                <div class="flex items-center justify-between pb-2">
                     <div class="flex items-center gap-2">
                         <div class="w-7 h-7 rounded-xl bg-gold/20 flex items-center justify-center text-gold border border-gold/30">
                             <i data-lucide="bot" class="w-4 h-4"></i>
                         </div>
-                        <span class="font-black text-base tracking-tight text-white">AURA</span>
+                        <span class="font-black text-base tracking-tight text-white">ARIA</span>
                     </div>
                     <button onclick="closeSidebar()" class="p-1.5 rounded-full bg-white/5 text-white/60 hover:text-white">
                         <i data-lucide="x" class="w-4 h-4"></i>
@@ -362,24 +332,31 @@
                 </button>
             </div>
 
-            <!-- MIDDLE SECTION (SCROLLABLE CHATS) -->
+            <!-- MIDDLE SECTION (INDEPENDENTLY SCROLLABLE CHATS) -->
             <div id="sidebar-chats-scroll" class="flex-1 overflow-y-auto px-4 py-2 space-y-4">
+                
+                <!-- PINNED CHATS SECTION -->
                 <div id="pinned-chats-wrapper" class="space-y-1">
                     <div class="text-[10px] uppercase font-bold text-white/40 tracking-wider px-2 py-1 flex items-center gap-1.5">
                         <i data-lucide="pin" class="w-3 h-3 text-gold"></i> Pinned Chats
                     </div>
-                    <div id="pinned-chats-list" class="space-y-1"></div>
+                    <div id="pinned-chats-list" class="space-y-1">
+                        <!-- Pinned chat items inserted here dynamically -->
+                    </div>
                 </div>
 
+                <!-- RECENT CHATS SECTION -->
                 <div class="space-y-1">
                     <div class="text-[10px] uppercase font-bold text-white/40 tracking-wider px-2 py-1 flex items-center gap-1.5">
                         <i data-lucide="clock" class="w-3 h-3 text-cyan-400"></i> Recents
                     </div>
-                    <div id="recent-chats-list" class="space-y-1"></div>
+                    <div id="recent-chats-list" class="space-y-1">
+                        <!-- Recent chat items inserted here dynamically -->
+                    </div>
                 </div>
             </div>
 
-            <!-- BOTTOM USER PROFILE CARD -->
+            <!-- BOTTOM USER PROFILE CARD (STRICTLY PINNED AT BOTTOM) -->
             <div class="p-4 border-t border-white/5 flex-shrink-0 bg-black/20">
                 <div class="ios-glass-card p-3 rounded-2xl flex items-center justify-between">
                     <div class="flex items-center gap-3">
@@ -388,7 +365,7 @@
                         </div>
                         <div>
                             <div class="text-xs font-bold text-white">ARIA Personal</div>
-                            <div class="text-[10px] text-white/50">Pro Subscriber • Unlimited</div>
+                            <div class="text-[10px] text-white/50">Private ARIA • Backend connected</div>
                         </div>
                     </div>
                     <button class="text-white/40 hover:text-white p-1.5 rounded-lg hover:bg-white/5">
@@ -398,7 +375,7 @@
             </div>
         </aside>
 
-        <!-- TOP-LEVEL CHAT CONTEXT MENU POPUP -->
+        <!-- CRITICAL Z-INDEX FIX: TOP-LEVEL CHAT CONTEXT MENU POPUP (Z-INDEX 9999) -->
         <div id="chat-context-menu" class="hidden fixed w-52 ios-glass-menu rounded-2xl p-2 text-xs border border-white/15 z-[9999] shadow-glass-glow">
             <div id="context-chat-title" class="px-3 py-1.5 font-bold text-white/90 border-b border-white/10 mb-1 truncate">Chat Options</div>
             
@@ -427,34 +404,37 @@
 
     </div>
 
-    <!-- JAVASCRIPT APP LOGIC -->
+    <!-- JAVASCRIPT APP LOGIC & GESTURES -->
     <script>
-        let currentEngine = 'chatgpt-4o';
+        // APP STATE MANAGEMENT
+        let currentEngine = 'aria-backend'; // 'chatgpt-4o', 'gemini-1.5', 'perplexity-pro'
         let isProSearch = false;
         let isVoiceActive = false;
-        let activeChatId = null;
+        let activeChatId = null; // null represents fresh new chat state
         let contextTargetChatId = null;
 
-        let chatsDatabase = [
-            { id: 'c1', title: 'Photosynthesis & Light Reactions', pinned: true, engine: 'chatgpt-4o', updated: '2h ago', messages: [
-                { role: 'user', text: 'Photosynthesis process' },
-                { role: 'assistant', text: 'Photosynthesis is the biological process by which autotrophic organisms convert light energy into chemical energy to fuel their metabolism.', sources: [] }
-            ]},
-            { id: 'c2', title: 'Quantum Computing Breakthroughs', pinned: false, engine: 'perplexity-pro', updated: 'Yesterday', messages: [
-                { role: 'user', text: 'What are recent quantum computing milestones?' },
-                { role: 'assistant', text: 'Recent quantum breakthroughs include fault-tolerant logical qubits demonstrated with over 99.9% fidelity.', sources: [
-                    { title: 'Nature Physics', url: 'https://nature.com' },
-                    { title: 'MIT Tech Review', url: 'https://technologyreview.com' }
-                ]}
-            ]},
-            { id: 'c3', title: 'React Canvas Code Review', pinned: false, engine: 'gemini-1.5', updated: '3 days ago', messages: [] }
-        ];
+        // MOCK CHATS DATABASE
+        let chatsDatabase = loadSavedChats();
 
+        function loadSavedChats() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('aria_glass_chats') || '[]');
+                return Array.isArray(saved) ? saved.filter(c => c && typeof c.id === 'string' && Array.isArray(c.messages)) : [];
+            } catch (_) { return []; }
+        }
+
+        function saveChats() {
+            try { localStorage.setItem('aria_glass_chats', JSON.stringify(chatsDatabase)); }
+            catch (_) { showNotice('Could not save chat history on this device.'); }
+        }
+
+        // INITIALIZATION
         window.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
             renderSidebarChats();
             initGestureListeners();
 
+            // Handle Model Dropdown Toggle
             const modelBtn = document.getElementById('btn-model-selector');
             const modelDropdown = document.getElementById('model-dropdown');
             
@@ -468,9 +448,11 @@
                 hideContextMenu();
             });
 
+            // Prevent closing when clicking inside dropdown
             modelDropdown.addEventListener('click', (e) => e.stopPropagation());
         });
 
+        // RESTART / NEW CHAT STATE FIX
         function startNewChat() {
             activeChatId = null;
             document.getElementById('messages-container').innerHTML = '';
@@ -480,6 +462,7 @@
             renderSidebarChats();
         }
 
+        // LOAD AN EXISTING CHAT
         function loadChat(chatId) {
             activeChatId = chatId;
             const chat = chatsDatabase.find(c => c.id === chatId);
@@ -499,56 +482,130 @@
             closeSidebar();
         }
 
+        // SEND MESSAGE & AI RESPONSE LOGIC
+        let pendingRequests = new Map();
+        let requestCounter = 0;
+        let isSignedIn = false;
+
+        function escapeHTML(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        }
+
+        function showNotice(message) {
+            const node = document.createElement('div');
+            node.className = 'fixed top-20 left-1/2 -translate-x-1/2 z-[10000] max-w-[90vw] ios-glass-card border border-white/15 rounded-2xl px-4 py-3 text-xs text-white shadow-glass-glow';
+            node.textContent = message;
+            document.body.appendChild(node);
+            setTimeout(() => node.remove(), 3600);
+        }
+
+        function ensureLoginDialog() {
+            if (document.getElementById('aria-login-overlay')) return;
+            const overlay = document.createElement('div');
+            overlay.id = 'aria-login-overlay';
+            overlay.className = 'fixed inset-0 z-[10001] flex items-center justify-center p-5 bg-black/75 backdrop-blur-md';
+            overlay.innerHTML = `<div class="ios-glass-card w-full max-w-sm rounded-3xl p-6 border border-white/15 shadow-glass-glow">
+                <div class="w-12 h-12 rounded-2xl bg-amber-300/15 border border-amber-200/20 flex items-center justify-center text-gold mb-4"><i data-lucide="shield-check" class="w-6 h-6"></i></div>
+                <h2 class="text-lg font-black text-white">Sign in to private ARIA</h2>
+                <p class="text-xs leading-relaxed text-white/60 mt-2 mb-5">Your credentials are sent to the ARIA HTTPS login endpoint. The password is not saved in this page.</p>
+                <label for="aria-login-password" class="block text-xs text-white/70 mb-2">Private app password</label>
+                <input id="aria-login-password" type="password" autocomplete="current-password" class="w-full bg-white/5 border border-white/15 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-amber-200/50" placeholder="Enter your app password">
+                <p id="aria-login-error" class="hidden text-xs text-red-300 mt-3"></p>
+                <button id="aria-login-submit" class="w-full mt-4 rounded-xl py-3 bg-gradient-to-r from-gold to-amber-200 text-obsidian font-bold text-sm">Sign in securely</button>
+            </div>`;
+            document.body.appendChild(overlay);
+            lucide.createIcons();
+            const password = overlay.querySelector('#aria-login-password');
+            const submit = overlay.querySelector('#aria-login-submit');
+            const error = overlay.querySelector('#aria-login-error');
+            const doLogin = () => {
+                const secret = password.value;
+                if (!secret) { error.textContent = 'Enter your private app password.'; error.classList.remove('hidden'); return; }
+                if (!window.AriaNative || typeof window.AriaNative.signIn !== 'function') {
+                    error.textContent = 'Native ARIA bridge is missing. Install the updated Android app files.'; error.classList.remove('hidden'); return;
+                }
+                submit.disabled = true; submit.textContent = 'Signing in…'; error.classList.add('hidden');
+                window.AriaNative.signIn(secret); password.value = '';
+            };
+            submit.addEventListener('click', doLogin);
+            password.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+        }
+
+        window.onAriaLoginResult = function(result) {
+            const submit = document.getElementById('aria-login-submit');
+            const error = document.getElementById('aria-login-error');
+            if (submit) { submit.disabled = false; submit.textContent = 'Sign in securely'; }
+            if (result && result.success) {
+                isSignedIn = true;
+                const overlay = document.getElementById('aria-login-overlay'); if (overlay) overlay.remove();
+                showNotice('Connected securely to ARIA backend.');
+            } else if (error) {
+                error.textContent = (result && result.message) || 'Sign-in failed. Check your password and backend configuration.';
+                error.classList.remove('hidden');
+            }
+        };
+
+        window.onAriaChatResult = function(result) {
+            const id = String(result && result.requestId || '');
+            if (!pendingRequests.has(id)) return;
+            const responseChatId = pendingRequests.get(id);
+            pendingRequests.delete(id);
+            const currentChat = chatsDatabase.find(c => c.id === responseChatId);
+            const reply = result && result.reply ? String(result.reply) : 'ARIA returned an empty response.';
+            const sources = extractRealUrls(reply).map(url => ({title: new URL(url).hostname, url}));
+            if (activeChatId === responseChatId) appendMessageToUI('assistant', reply, sources);
+            if (currentChat) {
+                currentChat.messages.push({ role: 'assistant', text: reply, sources });
+                currentChat.updated = 'Just now';
+                saveChats();
+                renderSidebarChats();
+            }
+            const indicator = document.getElementById('aria-thinking-indicator'); if (indicator) indicator.remove();
+            if (result && result.authRequired) {
+                isSignedIn = false; ensureLoginDialog();
+            }
+            if (result && result.success === false) showNotice(result.message || 'ARIA request failed.');
+        };
+
+        function extractRealUrls(text) {
+            const found = String(text || '').match(/https?:\/\/[^\s)\]}>"']+/gi) || [];
+            return [...new Set(found.map(u => u.replace(/[.,;]+$/, '')).filter(u => { try { const x = new URL(u); return x.protocol === 'https:' || x.protocol === 'http:'; } catch (_) { return false; } }))];
+        }
+
         function sendMessage() {
             const input = document.getElementById('user-input');
             const text = input.value.trim();
             if (!text) return;
-
+            if (!window.AriaNative || typeof window.AriaNative.chat !== 'function') {
+                showNotice('Backend bridge is not installed. Add the updated AriaGlassActivity.java.'); return;
+            }
+            if (!isSignedIn && typeof window.AriaNative.isSignedIn === 'function' && !window.AriaNative.isSignedIn()) {
+                ensureLoginDialog(); return;
+            }
             if (!activeChatId) {
                 const newId = 'c_' + Date.now();
-                const newChat = {
-                    id: newId,
-                    title: text.length > 26 ? text.substring(0, 26) + '...' : text,
-                    pinned: false,
-                    engine: currentEngine,
-                    updated: 'Just now',
-                    messages: []
-                };
-                chatsDatabase.unshift(newChat);
+                chatsDatabase.unshift({ id:newId, title:text.length > 26 ? text.substring(0,26)+'...' : text, pinned:false, archived:false, engine:'aria-backend', updated:'Just now', messages:[] });
+                saveChats();
                 activeChatId = newId;
             }
-
             const currentChat = chatsDatabase.find(c => c.id === activeChatId);
-
             document.getElementById('welcome-container').classList.add('hidden');
             document.getElementById('messages-container').classList.remove('hidden');
-
             appendMessageToUI('user', text);
-            currentChat.messages.push({ role: 'user', text: text });
+            if (currentChat) currentChat.messages.push({role:'user',text});
+            saveChats();
             input.value = '';
-
-            setTimeout(() => {
-                let aiResponse = "";
-                let sources = [];
-
-                if (isProSearch || currentEngine === 'perplexity-pro') {
-                    aiResponse = `Deep search complete for: "${text}". Grounded live web sources:`;
-                    sources = [
-                        { title: 'Global Tech Index 2026', url: 'https://arxiv.org' },
-                        { title: 'AI Research Papers', url: 'https://deepmind.google' }
-                    ];
-                } else if (currentEngine === 'gemini-1.5') {
-                    aiResponse = `[Gemini 1.5 Pro]\nProcessed query in 120ms with 1M context window capacity regarding "${text}".`;
-                } else {
-                    aiResponse = `[ChatGPT-4o Omni]\nI've analyzed your query regarding "${text}". Here is a concise summary and next steps.`;
-                }
-
-                appendMessageToUI('assistant', aiResponse, sources);
-                currentChat.messages.push({ role: 'assistant', text: aiResponse, sources: sources });
-                renderSidebarChats();
-            }, 700);
+            const requestId = String(++requestCounter) + '_' + Date.now();
+            pendingRequests.set(requestId, activeChatId);
+            const indicator = document.createElement('div');
+            indicator.id = 'aria-thinking-indicator';
+            indicator.className = 'max-w-[85%] ios-glass-card rounded-2xl px-4 py-3 text-xs text-white/60';
+            indicator.textContent = 'ARIA is thinking…';
+            document.getElementById('messages-container').appendChild(indicator);
+            scrollToBottom();
+            window.AriaNative.chat(requestId, text, activeChatId);
+            renderSidebarChats();
         }
-
         function quickPrompt(promptText) {
             document.getElementById('user-input').value = promptText;
             sendMessage();
@@ -558,6 +615,7 @@
             if (e.key === 'Enter') sendMessage();
         }
 
+        // RENDER MESSAGES TO CHAT FEED
         function appendMessageToUI(role, text, sources = []) {
             const container = document.getElementById('messages-container');
             const isUser = role === 'user';
@@ -574,8 +632,8 @@
                         </div>
                         <div class="flex flex-wrap gap-2">
                             ${sources.map(s => `
-                                <a href="${s.url}" target="_blank" class="ios-glass-pill px-2.5 py-1 rounded-lg text-[10px] text-white/80 hover:text-gold flex items-center gap-1 transition-all">
-                                    <i data-lucide="external-link" class="w-2.5 h-2.5"></i> ${s.title}
+                                <a href="${escapeHTML(s.url)}" target="_blank" class="ios-glass-pill px-2.5 py-1 rounded-lg text-[10px] text-white/80 hover:text-gold flex items-center gap-1 transition-all">
+                                    <i data-lucide="external-link" class="w-2.5 h-2.5"></i> ${escapeHTML(s.title)}
                                 </a>
                             `).join('')}
                         </div>
@@ -584,18 +642,18 @@
             }
 
             wrapper.innerHTML = `
-                <div class="max-w-[85%] sm:max-w-[75%] p-3.5 sm:p-4 rounded-3xl ${
+                <div class="max-w-[85%] sm:max-w-[75%] p-4 rounded-3xl ${
                     isUser 
                     ? 'bg-gradient-to-r from-gold to-amber-300 text-obsidian font-semibold rounded-br-none shadow-gold-sm' 
                     : 'ios-glass-card text-white rounded-bl-none border border-white/10'
                 }">
                     ${!isUser ? `
-                        <div class="flex items-center gap-2 mb-1.5 text-gold font-bold text-xs">
-                            <i data-lucide="bot" class="w-3.5 h-3.5"></i>
-                            <span>AURA Engine</span>
+                        <div class="flex items-center gap-2 mb-2 text-gold font-bold text-xs">
+                            <i data-lucide="bot" class="w-4 h-4"></i>
+                            <span>ARIA Assistant</span>
                         </div>
                     ` : ''}
-                    <p class="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">${text}</p>
+                    <p class="text-sm leading-relaxed whitespace-pre-wrap">${escapeHTML(text)}</p>
                     ${sourcesHTML}
                 </div>
             `;
@@ -610,6 +668,7 @@
             scrollArea.scrollTop = scrollArea.scrollHeight;
         }
 
+        // SIDEBAR CHATS RENDERING
         function renderSidebarChats() {
             const pinnedList = document.getElementById('pinned-chats-list');
             const recentList = document.getElementById('recent-chats-list');
@@ -617,8 +676,9 @@
             pinnedList.innerHTML = '';
             recentList.innerHTML = '';
 
-            const pinned = chatsDatabase.filter(c => c.pinned);
-            const recents = chatsDatabase.filter(c => !c.pinned);
+            const visibleChats = chatsDatabase.filter(c => !c.archived);
+            const pinned = visibleChats.filter(c => c.pinned);
+            const recents = visibleChats.filter(c => !c.pinned);
 
             if (pinned.length === 0) {
                 pinnedList.innerHTML = `<div class="text-[11px] text-white/30 italic px-2 py-1">No pinned chats</div>`;
@@ -646,9 +706,10 @@
             div.innerHTML = `
                 <div class="flex items-center gap-2.5 truncate cursor-pointer flex-1" onclick="loadChat('${chat.id}')">
                     <i data-lucide="${chat.pinned ? 'pin' : 'message-square'}" class="w-3.5 h-3.5 ${chat.pinned ? 'text-gold' : 'text-white/40'} flex-shrink-0"></i>
-                    <span class="text-xs truncate">${chat.title}</span>
+                    <span class="text-xs truncate">${escapeHTML(chat.title)}</span>
                 </div>
                 
+                <!-- Context Menu Trigger Button -->
                 <button onclick="openContextMenu(event, '${chat.id}')" class="p-1 rounded-lg hover:bg-white/15 text-white/40 hover:text-white transition-all opacity-0 group-hover:opacity-100" title="Options">
                     <i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>
                 </button>
@@ -657,6 +718,7 @@
             return div;
         }
 
+        // CRITICAL Z-INDEX & CONTEXT MENU FIX
         function openContextMenu(e, chatId) {
             e.stopPropagation();
             e.preventDefault();
@@ -668,10 +730,11 @@
             document.getElementById('context-chat-title').innerText = chat ? chat.title : 'Chat Options';
             document.getElementById('context-pin-text').innerText = chat && chat.pinned ? 'Unpin chat' : 'Pin chat';
 
+            // Calculate Optimal Screen Positioning
             const clickX = e.clientX;
             const clickY = e.clientY;
             
-            const menuWidth = 208;
+            const menuWidth = 208; // w-52 = 13rem = 208px
             const menuHeight = 180;
 
             let posX = clickX;
@@ -683,6 +746,7 @@
             menu.style.left = `${posX}px`;
             menu.style.top = `${posY}px`;
             
+            // Unhide context menu (z-index 9999 ensures it's above everything)
             menu.classList.remove('hidden');
         }
 
@@ -697,12 +761,20 @@
 
             if (action === 'pin') {
                 chat.pinned = !chat.pinned;
+                saveChats();
             } else if (action === 'rename') {
                 const newTitle = prompt('Enter new chat title:', chat.title);
-                if (newTitle) chat.title = newTitle.trim();
+                if (newTitle && newTitle.trim()) { chat.title = newTitle.trim(); saveChats(); }
             } else if (action === 'delete') {
                 chatsDatabase = chatsDatabase.filter(c => c.id !== contextTargetChatId);
+                saveChats();
                 if (activeChatId === contextTargetChatId) startNewChat();
+            } else if (action === 'archive') {
+                chat.archived = !chat.archived;
+                chat.pinned = false;
+                saveChats();
+                if (chat.archived && activeChatId === chat.id) startNewChat();
+                showNotice(chat.archived ? 'Conversation archived on this device.' : 'Conversation restored.');
             }
 
             hideContextMenu();
@@ -718,6 +790,7 @@
             });
         }
 
+        // SIDEBAR TOGGLE & SWIPE GESTURE PHYSICS
         const sidebar = document.getElementById('sidebar-drawer');
         const overlay = document.getElementById('sidebar-overlay');
 
@@ -737,6 +810,7 @@
 
         document.getElementById('btn-open-sidebar').addEventListener('click', openSidebar);
 
+        // EDGE SWIPE GESTURE LISTENERS
         let touchStartX = 0;
         let touchStartY = 0;
 
@@ -753,54 +827,33 @@
                 const deltaX = touchEndX - touchStartX;
                 const deltaY = touchEndY - touchStartY;
 
+                // Ensure horizontal swipe dominant over vertical scroll
                 if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+                    // Edge Swipe Right to Open (Touch started near left edge < 35px)
                     if (deltaX > 0 && touchStartX < 35) {
                         openSidebar();
-                    } else if (deltaX < 0 && sidebar.classList.contains('sidebar-open')) {
+                    }
+                    // Swipe Left to Close Sidebar
+                    else if (deltaX < 0 && sidebar.classList.contains('sidebar-open')) {
                         closeSidebar();
                     }
                 }
             }, { passive: true });
         }
 
+        // ENGINE & TOGGLE FEATURES
         function switchEngine(id, name, icon, colorHex) {
-            currentEngine = id;
-            document.getElementById('active-model-name').innerText = name;
-            
-            const iconContainer = document.getElementById('active-model-icon');
-            iconContainer.style.color = colorHex;
-            iconContainer.innerHTML = `<i data-lucide="${icon}" class="w-3.5 h-3.5"></i>`;
-
-            document.querySelectorAll('.check-icon').forEach(el => el.classList.add('hidden'));
-            document.getElementById(`check-${id}`).classList.remove('hidden');
-
             document.getElementById('model-dropdown').classList.add('hidden');
-            lucide.createIcons();
+            document.getElementById('active-model-name').innerText = 'ARIA Backend';
+            showNotice('Provider switching is not exposed by the current ARIA /chat API. Your request will use the backend configuration.');
         }
 
         function toggleProSearch() {
-            isProSearch = !isProSearch;
-            const badge = document.getElementById('perplexity-badge');
-            const btn = document.getElementById('btn-pro-search');
-
-            if (isProSearch) {
-                badge.classList.remove('hidden');
-                btn.classList.add('text-purple-400');
-            } else {
-                badge.classList.add('hidden');
-                btn.classList.remove('text-purple-400');
-            }
+            showNotice('A separate deep-research toggle is not exposed by the current ARIA API. Ask ARIA to research your topic in the message itself.');
         }
 
         function toggleVoiceMode() {
-            isVoiceActive = !isVoiceActive;
-            const btn = document.getElementById('btn-voice-mode');
-
-            if (isVoiceActive) {
-                btn.classList.add('voice-active');
-            } else {
-                btn.classList.remove('voice-active');
-            }
+            showNotice('Live voice is not connected to the current backend. The microphone button is a UI placeholder until a speech/voice API is implemented.');
         }
 
         function triggerFileUpload() {
@@ -808,12 +861,21 @@
         }
 
         function handleFileSelect(e) {
-            const file = e.target.files[0];
+            const file = e.target.files && e.target.files[0];
             if (file) {
-                const input = document.getElementById('user-input');
-                input.value = `[Attached: ${file.name}] ` + input.value;
+                showNotice('File selected: ' + file.name + '. The current /chat API has no upload endpoint, so this file was not sent to ARIA.');
+                e.target.value = '';
             }
         }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            if (window.AriaNative && typeof window.AriaNative.isSignedIn === 'function' && window.AriaNative.isSignedIn()) {
+                isSignedIn = true;
+            } else {
+                ensureLoginDialog();
+            }
+        });
+
     </script>
 </body>
 </html>
