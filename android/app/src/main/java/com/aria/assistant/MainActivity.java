@@ -247,7 +247,6 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(Color.rgb(12, 16, 28));
         getWindow().getDecorView().setSystemUiVisibility(0);
         root = new LinearLayout(this);
-        hintViewRefreshRate(root);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{Color.rgb(11, 15, 28), Color.rgb(7, 9, 17)}));
         root.setPadding(dp(16), dp(6), dp(16), dp(6));
