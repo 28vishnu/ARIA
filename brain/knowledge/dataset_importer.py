@@ -428,6 +428,34 @@ def _file_fingerprint(path: Path) -> dict:
     return {"kind": "directory", "path": str(path.resolve()), "file_count": len(files), "metadata_sha256": hashlib.sha256(encoded).hexdigest()}
 
 
+def _find_unchanged_import(db_path: str, source: str, path: Path) -> dict | None:
+    """Return the latest matching completed import, if the input fingerprint is unchanged."""
+    fingerprint = _file_fingerprint(path)
+    if not Path(db_path).exists():
+        return None
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dataset_import_runs'").fetchone()
+        if not table:
+            return None
+        row = conn.execute(
+            "SELECT fingerprint_json, result_json FROM dataset_import_runs "
+            "WHERE source=? AND input_path=? ORDER BY id DESC LIMIT 1",
+            (source, str(path.resolve())),
+        ).fetchone()
+        if not row or row[0] != json.dumps(fingerprint, ensure_ascii=False, sort_keys=True):
+            return None
+        try:
+            previous = json.loads(row[1])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if previous.get("status") == "failed" or previous.get("dry_run") is True:
+            return None
+        return previous
+    finally:
+        conn.close()
+
+
 def _record_import_run(db_path: str, source: str, path: Path, result: dict, limit) -> None:
     """Record successful imports; this never skips or alters document records."""
     fingerprint = _file_fingerprint(path)
@@ -463,6 +491,7 @@ def main(argv=None) -> int:
     imp.add_argument("--limit", type=int, default=None)
     imp.add_argument("--batch-size", type=int, default=250)
     imp.add_argument("--dry-run", action="store_true", help="Preview records without writing to the database")
+    imp.add_argument("--skip-unchanged", action="store_true", help="Skip import if the same source and input fingerprint were imported previously")
     imp.add_argument("--preview-count", type=int, default=10, help="Maximum records inspected during --dry-run (1-100)")
     imp.add_argument("--base-url", default="", help="Canonical base URL for codingdocs imports, e.g. https://docs.python.org/3/")
     args = parser.parse_args(argv)
@@ -482,6 +511,23 @@ def main(argv=None) -> int:
             raise ValueError("--batch-size must be at least 1")
         if args.limit is not None and args.limit < 0:
             raise ValueError("--limit must be zero or greater")
+
+        if args.skip_unchanged and not args.dry_run:
+            previous = _find_unchanged_import(args.db, args.source, path)
+            if previous is not None:
+                result = {
+                    "dry_run": False,
+                    "skipped": True,
+                    "reason": "unchanged_input_fingerprint",
+                    "source": args.source,
+                    "input_file": str(path.resolve()),
+                    "previous_processed_records": int(previous.get("processed", previous.get("processed_records", 0)) or 0),
+                    "database_written": False,
+                    "manifest_recorded": False,
+                    "note": "Input file metadata matches the most recent recorded import. Use without --skip-unchanged to force a re-import.",
+                }
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
 
         records = records_for(args.source, path, base_url=args.base_url)
         if args.dry_run:
