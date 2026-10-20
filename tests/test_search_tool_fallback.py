@@ -39,3 +39,40 @@ def test_results_are_deduplicated_and_bounded():
 
 def test_wikipedia_snippet_html_is_removed():
     assert SearchTool._strip_html("plant <span class='searchmatch'>growth</span> &amp; energy") == "plant growth & energy"
+
+
+def test_successful_results_are_cached(monkeypatch):
+    monkeypatch.setenv("ARIA_SEARCH_CACHE_TTL", "60")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("ARIA_DISABLE_WIKIPEDIA_FALLBACK", raising=False)
+    tool = SearchTool()
+    payload = {"results": [{"title": "Photosynthesis", "url": "https://en.wikipedia.org/wiki/Photosynthesis", "snippet": "Plants make food."}]}
+    with patch.object(tool, "_wikipedia_search", return_value=payload) as search:
+        first = asyncio.run(tool.execute("photosynthesis"))
+        second = asyncio.run(tool.execute("  PHOTOSYNTHESIS  "))
+    assert first["success"] is True
+    assert second["cached"] is True
+    assert second["provider"] == "wikipedia"
+    assert search.call_count == 1
+
+
+def test_invalid_url_schemes_are_rejected():
+    tool = SearchTool()
+    normalized = tool._normalize_results({"results": [
+        {"title": "Bad", "url": "javascript:alert(1)", "snippet": "ignore"},
+        {"title": "Good", "url": "https://example.com", "snippet": "valid"},
+    ]})
+    assert len(normalized) == 1
+    assert normalized[0]["title"] == "Good"
+
+
+def test_zero_cache_ttl_disables_cache(monkeypatch):
+    monkeypatch.setenv("ARIA_SEARCH_CACHE_TTL", "0")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("ARIA_DISABLE_WIKIPEDIA_FALLBACK", raising=False)
+    tool = SearchTool()
+    payload = {"results": [{"title": "Photosynthesis", "url": "https://en.wikipedia.org/wiki/Photosynthesis", "snippet": "Plants make food."}]}
+    with patch.object(tool, "_wikipedia_search", return_value=payload) as search:
+        asyncio.run(tool.execute("photosynthesis"))
+        asyncio.run(tool.execute("photosynthesis"))
+    assert search.call_count == 2
