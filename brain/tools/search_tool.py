@@ -8,12 +8,13 @@ for a dedicated real-time news provider.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from brain.tools.base_tool import BaseTool
@@ -46,6 +47,11 @@ class SearchTool(BaseTool):
         self.max_results = max(1, min(int(max_results), 10))
         self.timeout = max(3.0, float(timeout))
         self._client = None
+        self._cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+        try:
+            self.cache_ttl = max(0, min(int(os.getenv("ARIA_SEARCH_CACHE_TTL", "60")), 3600))
+        except (TypeError, ValueError):
+            self.cache_ttl = 60
         if self.api_key and TavilyClient is not None:
             try:
                 self._client = TavilyClient(api_key=self.api_key)
@@ -78,6 +84,18 @@ class SearchTool(BaseTool):
         if not query:
             return self._error("Search query is empty.", started)
 
+        cache_key = " ".join(query.casefold().split())
+        cached = self._cache.get(cache_key)
+        now = time.monotonic()
+        if cached and self.cache_ttl > 0 and now - cached[0] <= self.cache_ttl:
+            result = copy.deepcopy(cached[1])
+            result["cached"] = True
+            result["cache_age_seconds"] = round(now - cached[0], 2)
+            result["duration_ms"] = round((now - started) * 1000, 2)
+            return result
+        if cached:
+            self._cache.pop(cache_key, None)
+
         errors: list[str] = []
         if self._client is not None:
             try:
@@ -91,7 +109,9 @@ class SearchTool(BaseTool):
                 ), timeout=self.timeout)
                 results = self._normalize_results(response)
                 if results:
-                    return self._success(query, results, "tavily", started)
+                    result = self._success(query, results, "tavily", started)
+                    self._remember(cache_key, result)
+                    return result
                 errors.append("Tavily returned no usable results")
             except asyncio.TimeoutError:
                 errors.append("Tavily search timed out")
@@ -109,8 +129,10 @@ class SearchTool(BaseTool):
                 )
                 results = self._normalize_results(response)
                 if results:
-                    return self._success(query, results, "wikipedia", started,
-                                         warning="Limited background/context fallback; not a dedicated live-news source.")
+                    result = self._success(query, results, "wikipedia", started,
+                                           warning="Limited background/context fallback; not a dedicated live-news source.")
+                    self._remember(cache_key, result)
+                    return result
                 errors.append("Wikipedia returned no usable results")
             except asyncio.TimeoutError:
                 errors.append("Wikipedia fallback timed out")
@@ -168,11 +190,26 @@ class SearchTool(BaseTool):
             if not (url or title or snippet) or (url and url in seen_urls):
                 continue
             if url:
+                parsed = urlparse(url)
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    continue
                 seen_urls.add(url)
             normalized.append({"title": title, "url": url, "snippet": snippet, "score": item.get("score")})
             if len(normalized) >= self.max_results:
                 break
         return normalized
+
+    def _remember(self, key: str, result: Dict[str, Any]) -> None:
+        if self.cache_ttl <= 0 or not result.get("success"):
+            return
+        # Bound memory use; keep at most 128 successful query results.
+        if len(self._cache) >= 128:
+            oldest = min(self._cache, key=lambda item: self._cache[item][0])
+            self._cache.pop(oldest, None)
+        stored = copy.deepcopy(result)
+        stored.pop("cached", None)
+        stored.pop("cache_age_seconds", None)
+        self._cache[key] = (time.monotonic(), stored)
 
     def _success(self, query: str, results: List[Dict[str, Any]], provider: str, started: float, warning: str | None = None) -> Dict[str, Any]:
         output = {"success": True, "tool": self.name, "query": query, "results": results[:self.max_results], "count": min(len(results), self.max_results), "provider": provider, "duration_ms": round((time.monotonic() - started) * 1000, 2)}
