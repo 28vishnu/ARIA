@@ -100,10 +100,6 @@ public class MainActivity extends Activity {
         }
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         createNotificationChannel();
-        String savedBackend = getSharedPreferences("aria_settings", MODE_PRIVATE).getString("backend_url", DEFAULT_SERVER);
-        if (savedBackend != null && savedBackend.startsWith("https://")) {
-            // The sign-in screen also uses this configured HTTPS endpoint.
-        }
         if (getSharedPreferences("aria_auth", MODE_PRIVATE).getString("access_token", "").isEmpty()) {
             buildSignInUi();
             return;
@@ -276,9 +272,7 @@ public class MainActivity extends Activity {
         // Keep configuration out of the conversation view; accessible through the menu.
         serverInput = new EditText(this);
         serverInput.setSingleLine(true);
-        String savedBackend = getSharedPreferences("aria_settings", MODE_PRIVATE)
-                .getString("backend_url", DEFAULT_SERVER);
-        serverInput.setText(savedBackend);
+        serverInput.setText(DEFAULT_SERVER);
 
         transcriptScroll = new ScrollView(this);
         transcriptScroll.setFillViewport(true);
@@ -596,11 +590,25 @@ public class MainActivity extends Activity {
     // Owner-only sign-in: the Telegram ID is fixed to the owner, while the secret is
     // validated by the backend. The secret itself is never stored on the device.
     private void buildSignInUi() {
-        String saved = getSharedPreferences("aria_settings", MODE_PRIVATE).getString("backend_url", DEFAULT_SERVER);
+        // Backend endpoint is an internal app configuration, never displayed in the UI.
         serverInput = new EditText(this);
         serverInput.setSingleLine(true);
-        serverInput.setText(saved);
+        serverInput.setText(DEFAULT_SERVER);
         showSignInUi();
+    }
+
+    private String backendBaseUrl() {
+        return DEFAULT_SERVER.replaceAll("/+$", "");
+    }
+
+    private String getOrCreateDeviceId() {
+        android.content.SharedPreferences prefs = getSharedPreferences("aria_device", MODE_PRIVATE);
+        String id = prefs.getString("device_id", "");
+        if (id == null || id.trim().isEmpty()) {
+            id = java.util.UUID.randomUUID().toString();
+            prefs.edit().putString("device_id", id).apply();
+        }
+        return id;
     }
 
     private void showSignInUi() {
@@ -643,18 +651,6 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams secretP = new LinearLayout.LayoutParams(-1, -2);
         secretP.topMargin = dp(12);
         root.addView(secret, secretP);
-        EditText backend = new EditText(this);
-        backend.setSingleLine(true);
-        backend.setText(getSharedPreferences("aria_settings", MODE_PRIVATE).getString("backend_url", DEFAULT_SERVER));
-        backend.setHint("HTTPS backend URL");
-        backend.setTextColor(MUTED);
-        backend.setHintTextColor(MUTED);
-        backend.setTextSize(12);
-        backend.setPadding(dp(12), dp(9), dp(12), dp(9));
-        backend.setBackground(glassBackground());
-        LinearLayout.LayoutParams backendP = new LinearLayout.LayoutParams(-1, -2);
-        backendP.topMargin = dp(12);
-        root.addView(backend, backendP);
         Button signIn = new Button(this);
         signIn.setText("Sign in securely");
         signIn.setAllCaps(false);
@@ -669,11 +665,11 @@ public class MainActivity extends Activity {
         root.addView(privacy);
         setContentView(root);
         signIn.setOnClickListener(v -> {
-            String base = backend.getText().toString().trim().replaceAll("/+$", "");
+            String base = backendBaseUrl();
             String ownerId = telegramId.getText().toString().trim();
             String password = secret.getText().toString();
-            if (!base.startsWith("https://") || password.length() < 1) {
-                toast("Enter the HTTPS backend and your private sign-in secret.");
+            if (password.isEmpty()) {
+                toast("Enter your private app password.");
                 return;
             }
             signIn.setEnabled(false);
@@ -691,6 +687,7 @@ public class MainActivity extends Activity {
                     JSONObject body = new JSONObject();
                     body.put("telegram_id", ownerId);
                     body.put("secret", password);
+                    body.put("device_id", getOrCreateDeviceId());
                     try (OutputStream os = conn.getOutputStream()) { os.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
                     int status = conn.getResponseCode();
                     InputStream stream = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream();
@@ -706,7 +703,6 @@ public class MainActivity extends Activity {
                     signIn.setEnabled(true);
                     signIn.setText("Sign in securely");
                     if (tokenResult.isEmpty()) { toast(errorResult); return; }
-                    getSharedPreferences("aria_settings", MODE_PRIVATE).edit().putString("backend_url", base).apply();
                     getSharedPreferences("aria_auth", MODE_PRIVATE).edit().putString("access_token", tokenResult).apply();
                     recreate();
                 });
@@ -995,11 +991,97 @@ public class MainActivity extends Activity {
     }
 
     private void showSettings() {
-        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(20), dp(8), dp(20), dp(4));
-        TextView backendLabel = label("Backend URL", 13, MUTED, true); content.addView(backendLabel);
-        EditText backend = new EditText(this); backend.setSingleLine(true); backend.setText(serverInput.getText().toString()); backend.setTextColor(TEXT); backend.setHintTextColor(MUTED); backend.setTextSize(14); backend.setSelectAllOnFocus(true); content.addView(backend);
-        TextView note = label("Render hosting is fine. A free service may take time to wake up after inactivity.", 12, MUTED, false); note.setPadding(0,dp(8),0,0); content.addView(note);
-        dialogBuilder().setTitle("Settings").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> { String url=backend.getText().toString().trim().replaceAll("/+$", ""); if (url.startsWith("https://")) { serverInput.setText(url); getSharedPreferences("aria_settings", MODE_PRIVATE).edit().putString("backend_url", url).apply(); toast("Backend URL saved"); } else toast("Use a valid HTTPS URL."); }).show();
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), dp(4));
+        TextView title = label("Privacy & security", 15, TEXT, true);
+        content.addView(title);
+        TextView description = label("Your ARIA connection is managed securely in the app. The server address is not displayed here.", 12, MUTED, false);
+        description.setPadding(0, dp(6), 0, dp(14));
+        content.addView(description);
+        Button changePassword = new Button(this);
+        changePassword.setText("Change app password");
+        changePassword.setAllCaps(false);
+        changePassword.setTextColor(Color.WHITE);
+        changePassword.setBackground(glassAccent());
+        content.addView(changePassword, new LinearLayout.LayoutParams(-1, dp(48)));
+        changePassword.setOnClickListener(v -> showChangePassword());
+        dialogBuilder().setTitle("Settings").setView(content)
+                .setNegativeButton("Close", null)
+                .setNeutralButton("Sign out", (d, w) -> signOut())
+                .show();
+    }
+
+    private void showChangePassword() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(6), dp(18), dp(4));
+        EditText current = new EditText(this);
+        current.setSingleLine(true);
+        current.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        current.setHint("Current password");
+        current.setTextColor(TEXT); current.setHintTextColor(MUTED); current.setPadding(dp(14), dp(10), dp(14), dp(10)); current.setBackground(glassBackground());
+        content.addView(current, new LinearLayout.LayoutParams(-1, -2));
+        EditText next = new EditText(this);
+        next.setSingleLine(true);
+        next.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        next.setHint("New password (your choice)");
+        next.setTextColor(TEXT); next.setHintTextColor(MUTED); next.setPadding(dp(14), dp(10), dp(14), dp(10)); next.setBackground(glassBackground());
+        LinearLayout.LayoutParams nextP = new LinearLayout.LayoutParams(-1, -2); nextP.topMargin = dp(10); content.addView(next, nextP);
+        EditText confirm = new EditText(this);
+        confirm.setSingleLine(true);
+        confirm.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        confirm.setHint("Confirm new password");
+        confirm.setTextColor(TEXT); confirm.setHintTextColor(MUTED); confirm.setPadding(dp(14), dp(10), dp(14), dp(10)); confirm.setBackground(glassBackground());
+        LinearLayout.LayoutParams confirmP = new LinearLayout.LayoutParams(-1, -2); confirmP.topMargin = dp(10); content.addView(confirm, confirmP);
+        TextView warning = label("Choose a unique password. Very short passwords are easier to guess.", 11, MUTED, false);
+        warning.setPadding(0, dp(10), 0, 0); content.addView(warning);
+        dialogBuilder().setTitle("Change app password").setView(content)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Update password", (d, w) -> {
+                    String oldPassword = current.getText().toString();
+                    String newPassword = next.getText().toString();
+                    String confirmPassword = confirm.getText().toString();
+                    if (oldPassword.isEmpty() || newPassword.isEmpty()) { toast("Enter your current and new passwords."); return; }
+                    if (!newPassword.equals(confirmPassword)) { toast("New passwords do not match."); return; }
+                    changePasswordRequest(oldPassword, newPassword);
+                }).show();
+    }
+
+    private void changePasswordRequest(String currentPassword, String newPassword) {
+        executor.execute(() -> {
+            String error = "Password could not be changed. Please try again.";
+            boolean success = false;
+            HttpURLConnection conn = null;
+            try {
+                conn = (HttpURLConnection) new URL(backendBaseUrl() + "/app/change-password").openConnection();
+                conn.setRequestMethod("POST"); conn.setConnectTimeout(15000); conn.setReadTimeout(20000);
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                String accessToken = getSharedPreferences("aria_auth", MODE_PRIVATE).getString("access_token", "");
+                if (!accessToken.isEmpty()) conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+                conn.setDoOutput(true);
+                JSONObject body = new JSONObject(); body.put("current_password", currentPassword); body.put("new_password", newPassword);
+                try (OutputStream os = conn.getOutputStream()) { os.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
+                int status = conn.getResponseCode();
+                InputStream stream = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream();
+                StringBuilder response = new StringBuilder();
+                if (stream != null) try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = reader.readLine()) != null) response.append(line); }
+                success = status >= 200 && status < 300;
+                if (!success) {
+                    try { error = new JSONObject(response.toString()).optString("detail", error); } catch (Exception ignored) { }
+                }
+            } catch (Exception ignored) { error = "Could not reach ARIA securely. Check your connection and try again."; }
+            finally { if (conn != null) conn.disconnect(); }
+            final boolean changed = success; final String message = error;
+            runOnUiThread(() -> {
+                if (changed) {
+                    // Password change increments the backend token version, so all devices sign in again.
+                    getSharedPreferences("aria_auth", MODE_PRIVATE).edit().clear().apply();
+                    toast("Password changed. Sign in again with your new password.");
+                    recreate();
+                } else toast(message);
+            });
+        });
     }
 
     private void showHistory() {
@@ -1042,9 +1124,8 @@ public class MainActivity extends Activity {
 
     private void sendMessage() {
         final String message = input.getText().toString().trim();
-        final String base = serverInput.getText().toString().trim().replaceAll("/+$", "");
+        final String base = backendBaseUrl();
         if (message.isEmpty()) return;
-        if (!base.startsWith("https://")) { toast("Please use an HTTPS backend URL."); return; }
         input.setText(""); ((InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(), 0);
         showTab(false); addUserMessage(message); setThinking(true); sendButton.setEnabled(false); sendButton.setAlpha(0.55f);
         executor.execute(() -> {
