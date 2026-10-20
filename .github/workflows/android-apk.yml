@@ -4,8 +4,7 @@ name: Build and publish ARIA Android APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'android/**'
       - '.github/workflows/android-apk.yml'
@@ -21,7 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -29,11 +28,24 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager -print -quit)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: Android sdkmanager was not found."
+            exit 1
+          fi
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -79,7 +91,7 @@ jobs:
             ARIA_KEY_PASSWORD
           do
             if [ -z "${!name}" ]; then
-              echo "ERROR: Required GitHub secret is missing or empty: $name"
+              echo "ERROR: Required secret is missing or empty: $name"
               exit 1
             fi
             echo "$name is present"
@@ -95,12 +107,8 @@ jobs:
           printf '%s' "$ARIA_KEYSTORE_BASE64" \
             | base64 --decode > "$RUNNER_TEMP/aria-upload-key.jks"
 
-          test -s "$RUNNER_TEMP/aria-upload-key.jks" || {
-            echo "ERROR: Restored keystore is empty."
-            exit 1
-          }
-
-          echo "Keystore file restored."
+          test -s "$RUNNER_TEMP/aria-upload-key.jks"
+          echo "Keystore restored."
 
       - name: Diagnose signing configuration
         shell: bash
@@ -156,26 +164,14 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/release-output"
           cp "$APK_PATH" "$GITHUB_WORKSPACE/release-output/aria.apk"
 
-          echo "Release APK generated successfully."
-
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="release-output/aria.apk"
-
-          test -s "$APK" || {
-            echo "ERROR: APK is missing or empty."
-            exit 1
-          }
-
-          if ! unzip -t "$APK" >/dev/null; then
-            echo "ERROR: APK archive validation failed."
-            exit 1
-          fi
-
-          sha256sum "$APK"
+          test -s release-output/aria.apk
+          unzip -t release-output/aria.apk >/dev/null
+          sha256sum release-output/aria.apk
 
       - name: Create version metadata
         shell: bash
@@ -192,11 +188,7 @@ jobs:
         with:
           tag_name: android-build-${{ github.run_number }}
           name: ARIA Android 1.0.${{ github.run_number }}
-          body: |
-            Automated ARIA Android release.
-
-            APK archive validation passed in GitHub Actions.
-            Install only after reviewing and testing the release.
+          body: 'Automated ARIA Android release. APK archive validation passed.'
           make_latest: true
           files: |
             release-output/aria.apk
