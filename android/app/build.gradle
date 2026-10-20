@@ -3,8 +3,8 @@ plugins {
     id 'com.android.application'
 }
 
-def envValue = { String name ->
-    def value = System.getenv(name)
+def readEnv = { String name ->
+    String value = System.getenv(name)
     return value == null ? '' : value.trim()
 }
 
@@ -16,24 +16,36 @@ android {
         applicationId 'com.aria.assistant'
         minSdk 23
         targetSdk 35
-        versionCode (envValue('VERSION_CODE') ?: '1').toInteger()
-        versionName envValue('VERSION_NAME') ?: '1.0.0'
+
+        versionCode (readEnv('VERSION_CODE') ?: '1').toInteger()
+        versionName readEnv('VERSION_NAME') ?: '1.0.0'
     }
 
-    def storeFilePath = envValue('ARIA_KEYSTORE_PATH')
-    def storePasswordValue = envValue('ARIA_KEYSTORE_PASSWORD')
-    def keyAliasValue = envValue('ARIA_KEY_ALIAS')
-    def keyPasswordValue = envValue('ARIA_KEY_PASSWORD')
-
     signingConfigs {
-        if (storeFilePath && storePasswordValue &&
-            keyAliasValue && keyPasswordValue) {
-            release {
-                storeFile file(storeFilePath)
-                storePassword storePasswordValue
-                keyAlias keyAliasValue
-                keyPassword keyPasswordValue
+        release {
+            def storePath = readEnv('ARIA_KEYSTORE_PATH')
+            def storePass = readEnv('ARIA_KEYSTORE_PASSWORD')
+            def aliasValue = readEnv('ARIA_KEY_ALIAS')
+            def keyPass = readEnv('ARIA_KEY_PASSWORD')
+
+            if (!storePath || !storePass || !aliasValue || !keyPass) {
+                throw new GradleException(
+                    'Release signing is incomplete. Check ARIA_KEYSTORE_PATH, ARIA_KEYSTORE_PASSWORD, ARIA_KEY_ALIAS and ARIA_KEY_PASSWORD.'
+                )
             }
+
+            def keyFile = file(storePath)
+
+            if (!keyFile.exists() || !keyFile.isFile()) {
+                throw new GradleException(
+                    'The release keystore file does not exist at ARIA_KEYSTORE_PATH.'
+                )
+            }
+
+            storeFile keyFile
+            storePassword storePass
+            keyAlias aliasValue
+            keyPassword keyPass
         }
     }
 
@@ -43,15 +55,7 @@ android {
 
         release {
             minifyEnabled false
-
-            if (storeFilePath && storePasswordValue &&
-                keyAliasValue && keyPasswordValue) {
-                signingConfig signingConfigs.release
-            } else {
-                throw new GradleException(
-                    'Release signing configuration is incomplete. Check the four ARIA signing secrets in GitHub Actions.'
-                )
-            }
+            signingConfig signingConfigs.release
         }
     }
 }
