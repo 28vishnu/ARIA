@@ -30,6 +30,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.ProgressBar;
+import android.widget.PopupWindow;
 import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -319,7 +320,7 @@ public class MainActivity extends Activity {
         TextView add = label("＋", 24, MUTED, false);
         add.setGravity(Gravity.CENTER);
         composer.addView(add, new LinearLayout.LayoutParams(dp(38), dp(42)));
-        add.setOnClickListener(v -> showAttachmentMenu());
+        add.setOnClickListener(v -> showAttachmentMenu(v));
         input = new EditText(this);
         input.setTextColor(TEXT);
         input.setHintTextColor(Color.rgb(158, 160, 166));
@@ -820,7 +821,7 @@ public class MainActivity extends Activity {
             row.setPadding(dp(12), dp(12), dp(12), dp(12));
             list.addView(row);
             row.setOnClickListener(v -> { activeChatId = c.id; restoreActiveChat(); });
-            row.setOnLongClickListener(v -> { showChatActions(c); return true; });
+            row.setOnLongClickListener(v -> { showChatActions(c, row); return true; });
         }
         if (count == 0) list.addView(label("No chats in this project yet.", 13, MUTED, false));
         dialogBuilder().setTitle(project).setView(list).setPositiveButton("Done", null)
@@ -922,38 +923,32 @@ public class MainActivity extends Activity {
         TextView name=label(chat.title,14,TEXT,false);name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);row.addView(name,new LinearLayout.LayoutParams(0,-2,1));
         TextView more=label("⋯",22,MUTED,true);more.setGravity(Gravity.CENTER);row.addView(more,new LinearLayout.LayoutParams(dp(32),dp(34)));
         panel.addView(row,new LinearLayout.LayoutParams(-1,-2));
-        row.setOnClickListener(v->{drawer.dismiss();if(chat.archived){showChatActions(chat);}else{activeChatId=chat.id;restoreActiveChat();}});
-        more.setOnClickListener(v->{drawer.dismiss();showChatActions(chat);});row.setOnLongClickListener(v->{drawer.dismiss();showChatActions(chat);return true;});
+        row.setOnClickListener(v->{drawer.dismiss();if(chat.archived){showChatActions(chat, item);}else{activeChatId=chat.id;restoreActiveChat();}});
+        more.setOnClickListener(v -> showChatActions(chat, more));row.setOnLongClickListener(v -> { showChatActions(chat, row); return true; });
     }
-    private void showChatActions(ChatRecord chat) {
+    private void showChatActions(ChatRecord chat, View anchor) {
         String[] actions = new String[]{
-                chat.pinned ? "Unpin" : "Pin",
-                "Rename",
-                "Add to project",
-                chat.archived ? "Unarchive" : "Archive",
-                "Delete"
+            chat.pinned ? "★  Unpin chat" : "☆  Pin chat",
+            "✎  Rename chat",
+            "▦  Add to project",
+            chat.archived ? "↩  Unarchive" : "▣  Archive chat",
+            "⌫  Delete chat"
         };
-        dialogBuilder().setTitle(chat.title).setItems(actions, (d, w) -> {
-            if (w == 0) {
-                chat.pinned = !chat.pinned;
-                chat.updatedAt = System.currentTimeMillis();
-                saveChatHistory();
+        showAnchoredMenu(anchor, chat.title, actions, index -> {
+            if (index == 0) {
+                chat.pinned = !chat.pinned; chat.updatedAt = System.currentTimeMillis(); saveChatHistory();
                 toast(chat.pinned ? "Chat pinned" : "Chat unpinned");
-            } else if (w == 1) {
-                renameChat(chat);
-            } else if (w == 2) {
-                showAddToProject(chat);
-            } else if (w == 3) {
-                chat.archived = !chat.archived;
-                if (chat.archived) chat.pinned = false;
-                chat.updatedAt = System.currentTimeMillis();
-                saveChatHistory();
+                if (chat.pinned) showSideDrawer();
+            } else if (index == 1) renameChat(chat);
+            else if (index == 2) showAddToProject(chat);
+            else if (index == 3) {
+                chat.archived = !chat.archived; if (chat.archived) chat.pinned = false;
+                chat.updatedAt = System.currentTimeMillis(); saveChatHistory();
                 if (chat.archived && chat.id.equals(activeChatId)) newConversation();
                 toast(chat.archived ? "Chat archived" : "Chat restored");
-            } else {
-                deleteChat(chat);
-            }
-        }).show();
+                showSideDrawer();
+            } else if (index == 4) deleteChat(chat);
+        });
     }
 
     private void renameChat(ChatRecord chat) {
@@ -977,7 +972,7 @@ public class MainActivity extends Activity {
         for(ChatRecord chat:chatHistory){
             boolean match=chat.title.toLowerCase(java.util.Locale.ROOT).contains(q);
             for(int i=0;!match&&i<chat.messages.length();i++){JSONObject m=chat.messages.optJSONObject(i);match=m!=null&&m.optString("content","").toLowerCase(java.util.Locale.ROOT).contains(q);}
-            if(match){count++;TextView item=label((chat.archived?"▣  ":chat.pinned?"★  ":"")+chat.title,14,TEXT,false);item.setPadding(dp(12),dp(12),dp(12),dp(12));results.addView(item);item.setOnClickListener(v->{if(chat.archived){showChatActions(chat);}else{activeChatId=chat.id;restoreActiveChat();}});}
+            if(match){count++;TextView item=label((chat.archived?"▣  ":chat.pinned?"★  ":"")+chat.title,14,TEXT,false);item.setPadding(dp(12),dp(12),dp(12),dp(12));results.addView(item);item.setOnClickListener(v->{if(chat.archived){showChatActions(chat, item);}else{activeChatId=chat.id;restoreActiveChat();}});}
         }
         if(count==0)results.addView(label("No matching conversations",13,MUTED,false));
         dialogBuilder().setTitle("Search results").setView(scroll).setPositiveButton("Done",null).show();
@@ -1108,8 +1103,100 @@ public class MainActivity extends Activity {
         showSideDrawer();
     }
 
-    private void showAttachmentMenu() {
-        dialogBuilder().setTitle("Add to ARIA").setItems(new String[]{"Upload a file (coming soon)", "Take a photo (coming soon)", "Voice input (coming soon)"}, (d,w) -> toast("This feature is not connected yet.")).show();
+    private void showAttachmentMenu(View anchor) {
+        String[] items = {"＋  Add photos & files", "▧  Take a photo", "♬  Voice input"};
+        showAnchoredMenu(anchor, "Add to ARIA", items, index -> {
+            if (index == 0) launchFilePicker();
+            else if (index == 1) toast("Camera input needs a camera permission and image-analysis endpoint; it is not connected yet.");
+            else if (index == 2) startVoiceInput();
+        });
+    }
+
+    private interface MenuAction { void onSelect(int index); }
+
+    /** Compact, anchor-relative glass menu: it follows the control instead of opening a centered dialog. */
+    private void showAnchoredMenu(View anchor, String title, String[] items, MenuAction action) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(7), dp(8), dp(7), dp(8));
+        card.setBackground(glassDialogBackground());
+        card.setElevation(dp(18));
+        TextView heading = label(title, 12, MUTED, true);
+        heading.setPadding(dp(11), dp(7), dp(11), dp(9));
+        heading.setMaxLines(1);
+        card.addView(heading, new LinearLayout.LayoutParams(-1, -2));
+        PopupWindow popup = new PopupWindow(card, dp(248), -2, true);
+        popup.setBackgroundDrawable(round(Color.TRANSPARENT, 22));
+        popup.setOutsideTouchable(true);
+        popup.setElevation(dp(18));
+        for (int i = 0; i < items.length; i++) {
+            final int index = i;
+            TextView item = label(items[i], 14, TEXT, false);
+            item.setGravity(Gravity.CENTER_VERTICAL);
+            item.setPadding(dp(12), dp(12), dp(12), dp(12));
+            item.setBackground(round(Color.TRANSPARENT, 12));
+            card.addView(item, new LinearLayout.LayoutParams(-1, -2));
+            item.setOnClickListener(v -> { popup.dismiss(); action.onSelect(index); });
+            item.setOnTouchListener((v, event) -> {
+                if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) v.setBackground(round(Color.argb(55, 170, 190, 255), 12));
+                else if (event.getAction() == android.view.MotionEvent.ACTION_UP || event.getAction() == android.view.MotionEvent.ACTION_CANCEL) v.setBackground(round(Color.TRANSPARENT, 12));
+                return false;
+            });
+        }
+        int[] loc = new int[2]; anchor.getLocationOnScreen(loc);
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int x = Math.max(dp(8), Math.min(loc[0], screenWidth - dp(256)));
+        // Measure first so the menu can open above the composer or below a sidebar row as space allows.
+        card.measure(View.MeasureSpec.makeMeasureSpec(dp(248), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int popupHeight = card.getMeasuredHeight();
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int y;
+        if (loc[1] + anchor.getHeight() + popupHeight + dp(12) < screenHeight - dp(28)) {
+            y = loc[1] + anchor.getHeight() + dp(6);
+        } else {
+            y = Math.max(dp(28), loc[1] - popupHeight - dp(6));
+        }
+        popup.setWidth(dp(248));
+        popup.setHeight(-2);
+        popup.showAtLocation(root, Gravity.TOP | Gravity.LEFT, x, y);
+    }
+
+    private void launchFilePicker() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.setType("*/*"); intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            startActivityForResult(intent, 7402);
+        } catch (Exception e) { toast("File picker could not be opened."); }
+    }
+
+    private void startVoiceInput() {
+        try {
+            Intent intent = new Intent("android.speech.action.RECOGNIZE_SPEECH");
+            intent.putExtra("android.speech.extra.LANGUAGE_MODEL", "free_form");
+            intent.putExtra("android.speech.extra.PROMPT", "Speak to ARIA");
+            startActivityForResult(intent, 7403);
+        } catch (Exception e) { toast("Voice input is unavailable on this device."); }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null) return;
+        if (requestCode == 7402) {
+            ArrayList<Uri> selected = new ArrayList<>();
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) selected.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) selected.add(data.getData());
+            if (!selected.isEmpty()) {
+                StringBuilder names = new StringBuilder("Selected file(s): ");
+                for (int i = 0; i < selected.size(); i++) { if (i > 0) names.append(", "); names.append(selected.get(i).getLastPathSegment()); }
+                if (input != null) { String old = input.getText().toString().trim(); input.setText(old.isEmpty() ? names.toString() : old + "\n" + names); input.setSelection(input.length()); }
+                toast("Files selected. ARIA's current backend does not yet upload/analyze their contents.");
+            }
+        } else if (requestCode == 7403) {
+            ArrayList<String> results = data.getStringArrayListExtra("android.speech.extra.RESULTS");
+            if (results != null && !results.isEmpty() && input != null) { input.setText(results.get(0)); input.setSelection(input.length()); }
+        }
     }
 
     private void showFeatureDirectory() {
