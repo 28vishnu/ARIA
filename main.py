@@ -3551,9 +3551,11 @@ async def health(
     req: Request,
 ):
 
-    registry = req.app.state.registry
+    # Startup can be incomplete during import-time smoke tests or an early
+    # boot failure. Keep the public liveness endpoint useful in that state.
+    registry = getattr(req.app.state, "registry", None)
 
-    if not registry.has(
+    if registry is None or not registry.has(
         "health_checker"
     ):
 
