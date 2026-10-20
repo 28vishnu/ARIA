@@ -1,5 +1,19 @@
 class GreetingHandler:
 
+    GREETINGS = {
+        "hi", "hello", "hey", "hiya", "good morning",
+        "good afternoon", "good evening", "hello aria",
+        "hi aria", "hey aria",
+    }
+
+    def can_handle(self, text):
+        """Return True for a simple greeting without matching arbitrary text."""
+        if not isinstance(text, str):
+            return False
+        normalized = " ".join(text.casefold().strip().split())
+        normalized = normalized.strip("!.,?;:")
+        return normalized in self.GREETINGS
+
     async def handle(self, text, context):
         return None
 
