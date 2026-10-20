@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core.logging_config import setup_logging
-from core.bootstrap import bootstrap_application
+from core.route_handlers import GreetingHandler
 from core.dependency_injection import RequestContext
 from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
@@ -342,6 +342,9 @@ pending_document_actions = {}
 async def lifespan(
     app: FastAPI,
 ):
+
+    # Delay heavyweight optional service imports until the application starts.
+    from core.bootstrap import bootstrap_application
 
     registry = await bootstrap_application()
 
