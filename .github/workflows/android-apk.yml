@@ -1,4 +1,4 @@
-name: Build and publish ARIA APK
+name: Build and publish ARIA Android APK
 
 on:
   workflow_dispatch:
@@ -12,58 +12,65 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Set release version
+      - name: Check release-signing secrets
         shell: bash
         run: |
-          VERSION_CODE="${GITHUB_RUN_NUMBER}"
-          VERSION_NAME="1.0.${GITHUB_RUN_NUMBER}"
-          sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode ${VERSION_CODE}/" android/app/build.gradle
-          sed -i -E "s/versionName[[:space:]]+'[^']+'/versionName '${VERSION_NAME}'/" android/app/build.gradle
-          echo "VERSION_CODE=${VERSION_CODE}" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
+          test -n "$ARIA_KEYSTORE_BASE64" || (echo 'Missing repository secret ARIA_KEYSTORE_BASE64' && exit 1)
+          test -n "$ARIA_KEYSTORE_PASSWORD" || (echo 'Missing repository secret ARIA_KEYSTORE_PASSWORD' && exit 1)
+          test -n "$ARIA_KEY_ALIAS" || (echo 'Missing repository secret ARIA_KEY_ALIAS' && exit 1)
+          test -n "$ARIA_KEY_PASSWORD" || (echo 'Missing repository secret ARIA_KEY_PASSWORD' && exit 1)
+        env:
+          ARIA_KEYSTORE_BASE64: ${{ secrets.ARIA_KEYSTORE_BASE64 }}
+          ARIA_KEYSTORE_PASSWORD: ${{ secrets.ARIA_KEYSTORE_PASSWORD }}
+          ARIA_KEY_ALIAS: ${{ secrets.ARIA_KEY_ALIAS }}
+          ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
 
-      - name: Build debug APK
+      - name: Restore stable signing key
+        shell: bash
+        run: |
+          echo "$ARIA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aria-upload-key.jks"
+          test -s "$RUNNER_TEMP/aria-upload-key.jks"
+        env:
+          ARIA_KEYSTORE_BASE64: ${{ secrets.ARIA_KEYSTORE_BASE64 }}
+
+      - name: Build signed release APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+          ARIA_KEYSTORE_PATH: ${{ runner.temp }}/aria-upload-key.jks
+          ARIA_KEYSTORE_PASSWORD: ${{ secrets.ARIA_KEYSTORE_PASSWORD }}
+          ARIA_KEY_ALIAS: ${{ secrets.ARIA_KEY_ALIAS }}
+          ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon clean assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/aria.apk"
 
-      - name: Prepare direct APK and version metadata
+      - name: Create release metadata
         shell: bash
         run: |
-          mkdir -p release-assets
-          cp android/app/build/outputs/apk/debug/app-debug.apk release-assets/aria.apk
-          cat > release-assets/version.json <<EOF
-          {
-            "versionCode": ${VERSION_CODE},
-            "versionName": "${VERSION_NAME}",
-            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/aria.apk",
-            "releaseUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/latest"
-          }
-          EOF
+          printf '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/aria.apk"}\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" > version.json
 
-      - name: Publish GitHub Release with direct APK
+      - name: Publish direct APK download
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: aria-v${{ github.run_number }}
-          name: ARIA Android ${{ github.run_number }}
+          tag_name: android-build-${{ github.run_number }}
+          name: ARIA Android 1.0.${{ github.run_number }}
+          body: 'Automatically built ARIA Android APK. Install over the previous app when signed with the same release key.'
           make_latest: true
-          generate_release_notes: true
           files: |
-            release-assets/aria.apk
-            release-assets/version.json
+            aria.apk
+            version.json
