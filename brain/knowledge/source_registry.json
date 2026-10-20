@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "purpose": "Source-level provenance and rights-review registry for ARIA knowledge ingestion. This is an operational checklist, not legal advice or a substitute for checking current source terms.",
+  "sources": {
+    "wikipedia": {
+      "display_name": "Wikimedia Wikipedia dumps",
+      "catalog_url": "https://dumps.wikimedia.org/",
+      "license_status": "review_required",
+      "license_summary": "CC BY-SA and GFDL may apply; verify the exact dump and applicable terms.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Preserve attribution and license notices; check share-alike requirements for derivative content."
+    },
+    "wikidata": {
+      "display_name": "Wikidata dumps",
+      "catalog_url": "https://www.wikidata.org/wiki/Wikidata:Database_download",
+      "license_status": "review_required",
+      "license_summary": "Structured data is generally CC0; verify the exact dump and any non-data content terms.",
+      "attribution_required": false,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": false,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Record dump version/date and confirm terms for the downloaded artifact."
+    },
+    "stackexchange": {
+      "display_name": "Stack Exchange data dumps",
+      "catalog_url": "https://archive.org/details/stackexchange",
+      "license_status": "review_required",
+      "license_summary": "Content licensing can vary by post date and applicable terms; commonly CC BY-SA. Preserve post-level attribution.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Keep canonical post links and author attribution where supplied; verify applicable license version."
+    },
+    "openstax": {
+      "display_name": "OpenStax textbooks",
+      "catalog_url": "https://openstax.org/subjects",
+      "license_status": "record_specific_review",
+      "license_summary": "License varies by textbook and component; some works may have non-commercial restrictions.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Do not assume one license covers all books, figures, or third-party content."
+    },
+    "pubmed": {
+      "display_name": "PubMed citations and abstracts",
+      "catalog_url": "https://pubmed.ncbi.nlm.nih.gov/download/",
+      "license_status": "record_specific_review",
+      "license_summary": "Citation metadata and abstracts may have different rights; publisher full text is not automatically open licensed.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Do not treat PubMed indexing as permission to redistribute article full text."
+    },
+    "gutenberg": {
+      "display_name": "Project Gutenberg texts",
+      "catalog_url": "https://www.gutenberg.org/ebooks/",
+      "license_status": "jurisdiction_review_required",
+      "license_summary": "Public-domain status varies by work and jurisdiction; Project Gutenberg trademark and license notices may apply.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Verify each work's status in the intended jurisdiction and preserve required notices."
+    },
+    "openalex": {
+      "display_name": "OpenAlex scholarly metadata",
+      "catalog_url": "https://help.openalex.org/access/snapshot/",
+      "license_status": "terms_review_required",
+      "license_summary": "Check current OpenAlex terms and field-level rights; abstracts may originate from third parties.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Do not assume that access to metadata grants redistribution rights to every abstract."
+    },
+    "codingdocs": {
+      "display_name": "Developer documentation collections",
+      "catalog_url": "https://docs.python.org/3/download.html",
+      "license_status": "project_specific_review",
+      "license_summary": "License and attribution requirements vary by documentation project and version.",
+      "attribution_required": true,
+      "redistribution_review_required": true,
+      "commercial_use_review_required": true,
+      "source_url_required": true,
+      "record_level_license_required": true,
+      "notes": "Preserve per-project license files and version/canonical URL; third-party assets may have separate terms."
+    }
+  }
+}
