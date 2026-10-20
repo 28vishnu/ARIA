@@ -1,5 +1,9 @@
 import os
 import uuid
+import hmac
+import hashlib
+import base64
+import time
 import asyncio
 import logging
 import inspect
@@ -407,6 +411,61 @@ async def lifespan(
 
 
 # =========================================================
+# PRIVATE ANDROID APP AUTHENTICATION
+# =========================================================
+
+OWNER_ID_ENV = "ARIA_OWNER_TELEGRAM_ID"
+OWNER_SECRET_ENV = "ARIA_OWNER_APP_SECRET"
+TOKEN_SECRET_ENV = "ARIA_APP_TOKEN_SECRET"
+APP_TOKEN_TTL_SECONDS = 12 * 60 * 60
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _make_owner_token(owner_id: str) -> str:
+    signing_secret = os.getenv(TOKEN_SECRET_ENV, "")
+    if len(signing_secret) < 32:
+        raise RuntimeError(f"{TOKEN_SECRET_ENV} must be configured with at least 32 characters.")
+    expires = int(time.time()) + APP_TOKEN_TTL_SECONDS
+    payload = f"{owner_id}|{expires}".encode("utf-8")
+    encoded = _b64url(payload)
+    signature = hmac.new(signing_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    return encoded + "." + _b64url(signature)
+
+
+def _valid_owner_token(token: str) -> bool:
+    signing_secret = os.getenv(TOKEN_SECRET_ENV, "")
+    owner_id = os.getenv(OWNER_ID_ENV, "")
+    if len(signing_secret) < 32 or not owner_id or not token or "." not in token:
+        return False
+    try:
+        encoded, supplied_signature = token.split(".", 1)
+        expected_signature = _b64url(hmac.new(
+            signing_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).digest())
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            return False
+        padded = encoded + "=" * (-len(encoded) % 4)
+        owner, expiry = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8").rsplit("|", 1)
+        return hmac.compare_digest(owner, owner_id) and int(expiry) > int(time.time())
+    except (ValueError, UnicodeError, TypeError):
+        return False
+
+
+class OwnerLoginRequest(BaseModel):
+    telegram_id: str
+    secret: str
+
+
+class OwnerLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int = APP_TOKEN_TTL_SECONDS
+
+
+# =========================================================
 # FASTAPI APP
 # =========================================================
 
@@ -415,6 +474,23 @@ app = FastAPI(
     version="12.0.0",
     lifespan=lifespan,
 )
+
+@app.middleware("http")
+async def enforce_private_app_access(request: Request, call_next):
+    # Telegram webhook traffic remains available to Telegram; Android-facing and
+    # other HTTP API routes require a short-lived owner token. Health/root are public.
+    public_paths = {"/", "/health", "/app/login", "/telegram-webhook"}
+    if request.method == "OPTIONS" or request.url.path in public_paths:
+        return await call_next(request)
+    auth_header = request.headers.get("Authorization", "")
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not _valid_owner_token(token.strip()):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required. Sign in with the ARIA owner account."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
 
 
 app.add_middleware(
@@ -3502,6 +3578,29 @@ async def root():
         "status": "operational",
         "version": "12.0.0",
     }
+
+
+# =========================================================
+# OWNER LOGIN
+# =========================================================
+
+@app.post("/app/login", response_model=OwnerLoginResponse)
+async def app_owner_login(credentials: OwnerLoginRequest, request: Request):
+    expected_id = os.getenv(OWNER_ID_ENV, "").strip()
+    expected_secret = os.getenv(OWNER_SECRET_ENV, "")
+    token_secret = os.getenv(TOKEN_SECRET_ENV, "")
+    if not expected_id or len(expected_secret) < 24 or len(token_secret) < 32:
+        logger.error("Private app login is not configured: owner ID, a 24+ character app secret, and a 32+ character token secret are required.")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Private app authentication is not configured on the server."},
+        )
+    supplied_id = str(credentials.telegram_id).strip()
+    supplied_secret = str(credentials.secret)
+    if not hmac.compare_digest(supplied_id, expected_id) or not hmac.compare_digest(supplied_secret, expected_secret):
+        # Do not log submitted credentials.
+        return JSONResponse(status_code=401, content={"detail": "Invalid owner credentials."})
+    return OwnerLoginResponse(access_token=_make_owner_token(expected_id))
 
 
 # =========================================================
