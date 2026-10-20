@@ -15,6 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,22 +26,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Gradle Wrapper
-        id: gradle
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Check Android project
         shell: bash
         run: |
-          if [ -f android/gradlew ]; then
-            echo "working_dir=android" >> "$GITHUB_OUTPUT"
-            echo "wrapper=./gradlew" >> "$GITHUB_OUTPUT"
-          elif [ -f gradlew ]; then
-            echo "working_dir=." >> "$GITHUB_OUTPUT"
-            echo "wrapper=./gradlew" >> "$GITHUB_OUTPUT"
-          else
-            echo "ERROR: No Gradle Wrapper found."
-            echo "Expected android/gradlew or gradlew at repository root."
-            find . -maxdepth 4 \( -name gradlew -o -name gradlew.bat -o -name gradle-wrapper.properties \) -print
+          test -f android/settings.gradle -o -f android/settings.gradle.kts || {
+            echo "ERROR: android/settings.gradle or settings.gradle.kts is missing."
+            find android -maxdepth 3 -type f -print
             exit 1
-          fi
+          }
+          test -f android/app/build.gradle -o -f android/app/build.gradle.kts || {
+            echo "ERROR: Android app Gradle build file is missing."
+            exit 1
+          }
 
       - name: Check release-signing secrets
         shell: bash
@@ -50,21 +52,22 @@ jobs:
           ARIA_KEY_ALIAS: ${{ secrets.ARIA_KEY_ALIAS }}
           ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
         run: |
-          test -n "$ARIA_KEYSTORE_BASE64" || (echo 'Missing repository secret ARIA_KEYSTORE_BASE64' && exit 1)
-          test -n "$ARIA_KEYSTORE_PASSWORD" || (echo 'Missing repository secret ARIA_KEYSTORE_PASSWORD' && exit 1)
-          test -n "$ARIA_KEY_ALIAS" || (echo 'Missing repository secret ARIA_KEY_ALIAS' && exit 1)
-          test -n "$ARIA_KEY_PASSWORD" || (echo 'Missing repository secret ARIA_KEY_PASSWORD' && exit 1)
+          test -n "$ARIA_KEYSTORE_BASE64" || { echo "Missing ARIA_KEYSTORE_BASE64"; exit 1; }
+          test -n "$ARIA_KEYSTORE_PASSWORD" || { echo "Missing ARIA_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$ARIA_KEY_ALIAS" || { echo "Missing ARIA_KEY_ALIAS"; exit 1; }
+          test -n "$ARIA_KEY_PASSWORD" || { echo "Missing ARIA_KEY_PASSWORD"; exit 1; }
 
-      - name: Restore stable signing key
+      - name: Restore signing key
         shell: bash
         env:
           ARIA_KEYSTORE_BASE64: ${{ secrets.ARIA_KEYSTORE_BASE64 }}
         run: |
-          echo "$ARIA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aria-upload-key.jks"
+          printf '%s' "$ARIA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aria-upload-key.jks"
           test -s "$RUNNER_TEMP/aria-upload-key.jks"
 
-      - name: Build signed release APK
+      - name: Build signed APK
         shell: bash
+        working-directory: android
         env:
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
@@ -73,24 +76,23 @@ jobs:
           ARIA_KEY_ALIAS: ${{ secrets.ARIA_KEY_ALIAS }}
           ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
         run: |
-          chmod +x "${{ steps.gradle.outputs.working_dir }}/gradlew"
-          cd "${{ steps.gradle.outputs.working_dir }}"
-          ./gradlew --no-daemon clean assembleRelease
-          APK_PATH="$(find . -path '*/build/outputs/apk/release/*.apk' -type f | head -n 1)"
-          test -n "$APK_PATH" || (echo 'Release APK not found' && exit 1)
+          gradle --no-daemon clean assembleRelease
+          APK_PATH="$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          test -n "$APK_PATH" || { echo "ERROR: Release APK was not generated."; exit 1; }
           cp "$APK_PATH" "$GITHUB_WORKSPACE/aria.apk"
 
-      - name: Create release metadata
+      - name: Create version metadata
         shell: bash
         run: |
-          printf '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/aria.apk"}\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" > version.json
+          printf '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/aria.apk"}\n' \
+            "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" > version.json
 
-      - name: Publish direct APK download
+      - name: Publish APK release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-build-${{ github.run_number }}
           name: ARIA Android 1.0.${{ github.run_number }}
-          body: 'Automatically built ARIA Android APK. Install over the previous app only when signed with the same release key.'
+          body: 'Automatically built ARIA Android APK.'
           make_latest: true
           files: |
             aria.apk
