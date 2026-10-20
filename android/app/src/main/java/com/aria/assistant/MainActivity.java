@@ -51,7 +51,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final int BG = Color.rgb(9, 12, 20), PANEL = Color.argb(178, 28, 35, 52), PANEL2 = Color.argb(220, 49, 61, 87);
+    private static final int BG = Color.rgb(9, 12, 20), PANEL = Color.argb(154, 28, 35, 52), PANEL2 = Color.argb(194, 49, 61, 87);
     private static final int TEXT = Color.rgb(242, 245, 252), MUTED = Color.rgb(165, 176, 197), ACCENT = Color.rgb(127, 155, 255);
     private static final String DEFAULT_SERVER = "https://aria-ai-s5go.onrender.com";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -89,8 +89,38 @@ public class MainActivity extends Activity {
         SourceItem(String title, String url) { this.title = title; this.url = url; }
     }
 
+    /** Request the panel's highest practical refresh rate without assuming that
+     * the display can deliver it. The OS/device may cap this to 60/90 Hz. */
+    private void configureSmoothWindow() {
+        Window window = getWindow();
+        if (window == null) return;
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            WindowManager.LayoutParams attrs = window.getAttributes();
+            attrs.preferredRefreshRate = 120f;
+            window.setAttributes(attrs);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            try {
+                window.getDecorView().setFrameRate(120f,
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+            } catch (RuntimeException ignored) {
+                // Refresh-rate hints are advisory and vary by device/OS build.
+            }
+        }
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+    }
+
+    private void hintViewRefreshRate(View view) {
+        if (view != null && android.os.Build.VERSION.SDK_INT >= 30) {
+            try {
+                view.setFrameRate(120f, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+            } catch (RuntimeException ignored) { }
+        }
+    }
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        configureSmoothWindow();
         getWindow().setStatusBarColor(Color.rgb(12, 16, 28));
         getWindow().setNavigationBarColor(Color.rgb(12, 16, 28));
         getWindow().getDecorView().setSystemUiVisibility(0);
@@ -112,6 +142,12 @@ public class MainActivity extends Activity {
         checkForUpdates();
     }
 
+    @Override protected void onDestroy() {
+        appVisible = false;
+        executor.shutdownNow();
+        super.onDestroy();
+    }
+
     @Override protected void onResume() { super.onResume(); appVisible = true; }
     @Override protected void onStop() { appVisible = false; super.onStop(); }
 
@@ -130,7 +166,7 @@ public class MainActivity extends Activity {
                 dialog.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
                 if (android.os.Build.VERSION.SDK_INT >= 31) {
                     dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
-                    dialog.getWindow().setBackgroundBlurRadius(dp(24));
+                    dialog.getWindow().setBackgroundBlurRadius(dp(32));
                 }
                 android.view.WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
                 lp.dimAmount = 0.72f;
@@ -227,6 +263,7 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(Color.rgb(12, 16, 28));
         getWindow().getDecorView().setSystemUiVisibility(0);
         root = new LinearLayout(this);
+        hintViewRefreshRate(root);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{Color.rgb(11, 15, 28), Color.rgb(7, 9, 17)}));
         root.setPadding(dp(16), dp(6), dp(16), dp(6));
@@ -479,7 +516,7 @@ public class MainActivity extends Activity {
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             if (android.os.Build.VERSION.SDK_INT >= 31) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
-                window.setBackgroundBlurRadius(dp(28));
+                window.setBackgroundBlurRadius(dp(36));
             }
             WindowManager.LayoutParams lp = window.getAttributes();
             lp.width = Math.min((int)(getResources().getDisplayMetrics().widthPixels * 0.86f), dp(360));
