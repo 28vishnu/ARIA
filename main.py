@@ -417,52 +417,85 @@ async def lifespan(
 OWNER_ID_ENV = "ARIA_OWNER_TELEGRAM_ID"
 OWNER_SECRET_ENV = "ARIA_OWNER_APP_SECRET"
 TOKEN_SECRET_ENV = "ARIA_APP_TOKEN_SECRET"
-APP_TOKEN_TTL_SECONDS = 12 * 60 * 60
+# Long-lived owner session: sign in once per device; sessions survive app restarts.
+APP_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60
 
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
-def _make_owner_token(owner_id: str) -> str:
+def _security_collection(request: Request):
+    """Return Mongo-backed persistent app-security collection or None."""
+    try:
+        registry = getattr(request.app.state, "registry", None)
+        if registry is None or not registry.has("mongo_client"):
+            return None
+        return registry.get("mongo_client")["aria_db"]["app_security"]
+    except Exception:
+        return None
+
+
+def _password_hash(password: str, salt: bytes | None = None) -> tuple[str, str]:
+    salt = salt or os.urandom(16)
+    derived = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    return _b64url(salt), _b64url(derived)
+
+
+def _password_matches(password: str, record: dict) -> bool:
+    try:
+        salt = base64.urlsafe_b64decode(record["password_salt"] + "=" * (-len(record["password_salt"]) % 4))
+        supplied_salt, supplied_hash = _password_hash(password, salt)
+        return hmac.compare_digest(supplied_salt, record["password_salt"]) and hmac.compare_digest(supplied_hash, record["password_hash"])
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def _make_owner_token(owner_id: str, device_id: str, token_version: int) -> str:
     signing_secret = os.getenv(TOKEN_SECRET_ENV, "")
     if len(signing_secret) < 32:
-        raise RuntimeError(f"{TOKEN_SECRET_ENV} must be configured with at least 32 characters.")
+        raise RuntimeError(f"{TOKEN_SECRET_ENV} must contain at least 32 characters.")
     expires = int(time.time()) + APP_TOKEN_TTL_SECONDS
-    payload = f"{owner_id}|{expires}".encode("utf-8")
+    payload = f"{owner_id}|{device_id}|{expires}|{token_version}".encode("utf-8")
     encoded = _b64url(payload)
     signature = hmac.new(signing_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
     return encoded + "." + _b64url(signature)
 
 
-def _valid_owner_token(token: str) -> bool:
+def _decode_owner_token(token: str) -> dict | None:
     signing_secret = os.getenv(TOKEN_SECRET_ENV, "")
-    owner_id = os.getenv(OWNER_ID_ENV, "")
-    if len(signing_secret) < 32 or not owner_id or not token or "." not in token:
-        return False
+    owner_id = os.getenv(OWNER_ID_ENV, "").strip()
+    if not signing_secret or not owner_id or not token or "." not in token:
+        return None
     try:
         encoded, supplied_signature = token.split(".", 1)
-        expected_signature = _b64url(hmac.new(
-            signing_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
-        ).digest())
+        expected_signature = _b64url(hmac.new(signing_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest())
         if not hmac.compare_digest(supplied_signature, expected_signature):
-            return False
+            return None
         padded = encoded + "=" * (-len(encoded) % 4)
-        owner, expiry = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8").rsplit("|", 1)
-        return hmac.compare_digest(owner, owner_id) and int(expiry) > int(time.time())
+        owner, device_id, expiry, version = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8").rsplit("|", 3)
+        if not hmac.compare_digest(owner, owner_id) or not device_id or int(expiry) <= int(time.time()):
+            return None
+        return {"owner_id": owner, "device_id": device_id, "expires": int(expiry), "version": int(version)}
     except (ValueError, UnicodeError, TypeError):
-        return False
+        return None
 
 
 class OwnerLoginRequest(BaseModel):
     telegram_id: str
     secret: str
+    device_id: str
 
 
 class OwnerLoginResponse(BaseModel):
     access_token: str
     token_type: str = "Bearer"
     expires_in: int = APP_TOKEN_TTL_SECONDS
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 # =========================================================
@@ -477,21 +510,29 @@ app = FastAPI(
 
 @app.middleware("http")
 async def enforce_private_app_access(request: Request, call_next):
-    # Telegram webhook traffic remains available to Telegram; Android-facing and
-    # other HTTP API routes require a short-lived owner token. Health/root are public.
+    # Health/root, sign-in, and Telegram webhook are public; all other HTTP API routes
+    # require a signed owner session whose version still matches persistent Mongo state.
     public_paths = {"/", "/health", "/app/login", "/telegram-webhook"}
     if request.method == "OPTIONS" or request.url.path in public_paths:
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
     scheme, _, token = auth_header.partition(" ")
-    if scheme.lower() != "bearer" or not _valid_owner_token(token.strip()):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Authentication required. Sign in with the ARIA owner account."},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    claims = _decode_owner_token(token.strip()) if scheme.lower() == "bearer" else None
+    if claims is None:
+        return JSONResponse(status_code=401, content={"detail": "Authentication required. Sign in to ARIA."}, headers={"WWW-Authenticate": "Bearer"})
+    collection = _security_collection(request)
+    if collection is None:
+        return JSONResponse(status_code=503, content={"detail": "Persistent private-app security storage is unavailable."})
+    try:
+        record = await collection.find_one({"_id": claims["owner_id"]})
+    except Exception:
+        logger.exception("Could not verify ARIA app session against persistent storage")
+        return JSONResponse(status_code=503, content={"detail": "Private-app security storage is temporarily unavailable."})
+    if not record or int(record.get("token_version", 0)) != claims["version"]:
+        return JSONResponse(status_code=401, content={"detail": "This ARIA session was revoked. Please sign in again."}, headers={"WWW-Authenticate": "Bearer"})
+    request.state.aria_owner = claims["owner_id"]
+    request.state.aria_device_id = claims["device_id"]
     return await call_next(request)
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -3587,21 +3628,75 @@ async def root():
 @app.post("/app/login", response_model=OwnerLoginResponse)
 async def app_owner_login(credentials: OwnerLoginRequest, request: Request):
     expected_id = os.getenv(OWNER_ID_ENV, "").strip()
-    expected_secret = os.getenv(OWNER_SECRET_ENV, "")
+    initial_password = os.getenv(OWNER_SECRET_ENV, "")
     token_secret = os.getenv(TOKEN_SECRET_ENV, "")
-    if not expected_id or len(expected_secret) < 24 or len(token_secret) < 32:
-        logger.error("Private app login is not configured: owner ID, a 24+ character app secret, and a 32+ character token secret are required.")
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Private app authentication is not configured on the server."},
-        )
-    supplied_id = str(credentials.telegram_id).strip()
-    supplied_secret = str(credentials.secret)
-    if not hmac.compare_digest(supplied_id, expected_id) or not hmac.compare_digest(supplied_secret, expected_secret):
-        # Do not log submitted credentials.
+    device_id = str(credentials.device_id).strip()
+    if not expected_id or not initial_password or len(token_secret) < 32:
+        return JSONResponse(status_code=503, content={"detail": "Private ARIA sign-in is not configured. Set the owner ID, initial app password, and a 32+ character token-signing secret."})
+    if not device_id or len(device_id) > 128:
+        return JSONResponse(status_code=400, content={"detail": "A valid device identifier is required."})
+    if not hmac.compare_digest(str(credentials.telegram_id).strip(), expected_id):
         return JSONResponse(status_code=401, content={"detail": "Invalid owner credentials."})
-    return OwnerLoginResponse(access_token=_make_owner_token(expected_id))
+    collection = _security_collection(request)
+    if collection is None:
+        return JSONResponse(status_code=503, content={"detail": "Persistent security storage is required. Configure MONGODB_URI and redeploy."})
+    try:
+        record = await collection.find_one({"_id": expected_id})
+        if record and record.get("password_hash"):
+            valid = _password_matches(str(credentials.secret), record)
+        else:
+            # First sign-in bootstraps a persistent scrypt hash from the Render secret.
+            valid = hmac.compare_digest(str(credentials.secret), initial_password)
+            if valid:
+                salt, digest = _password_hash(str(credentials.secret))
+                await collection.update_one({"_id": expected_id}, {"$set": {
+                    "password_salt": salt, "password_hash": digest,
+                    "token_version": int((record or {}).get("token_version", 1)),
+                    "created_at": int((record or {}).get("created_at", time.time())),
+                }}, upsert=True)
+                record = await collection.find_one({"_id": expected_id})
+        if not valid:
+            return JSONResponse(status_code=401, content={"detail": "Invalid owner credentials."})
+        record = record or await collection.find_one({"_id": expected_id}) or {"token_version": 1}
+        version = int(record.get("token_version", 1))
+        token = _make_owner_token(expected_id, device_id, version)
+        # Record active device metadata without storing the bearer token itself.
+        await collection.update_one({"_id": expected_id}, {"$set": {f"devices.{hashlib.sha256(device_id.encode()).hexdigest()[:32]}": {
+            "device_id": device_id, "last_sign_in": int(time.time())
+        }}}, upsert=True)
+        return OwnerLoginResponse(access_token=token)
+    except Exception:
+        logger.exception("ARIA owner sign-in failed due to persistent security storage error")
+        return JSONResponse(status_code=503, content={"detail": "Could not complete secure sign-in. Check database connectivity."})
 
+
+@app.post("/app/change-password")
+async def app_change_password(payload: ChangePasswordRequest, request: Request):
+    owner_id = os.getenv(OWNER_ID_ENV, "").strip()
+    collection = _security_collection(request)
+    if not owner_id or collection is None:
+        return JSONResponse(status_code=503, content={"detail": "Persistent private-app security storage is unavailable."})
+    current = str(payload.current_password)
+    new = str(payload.new_password)
+    if not current or not new:
+        return JSONResponse(status_code=400, content={"detail": "Current and new passwords are required."})
+    if len(new) > 1024:
+        return JSONResponse(status_code=400, content={"detail": "New password is too long."})
+    try:
+        record = await collection.find_one({"_id": owner_id})
+        if not record or not _password_matches(current, record):
+            return JSONResponse(status_code=401, content={"detail": "Current password is incorrect."})
+        salt, digest = _password_hash(new)
+        await collection.update_one({"_id": owner_id}, {"$set": {
+            "password_salt": salt,
+            "password_hash": digest,
+            "token_version": int(record.get("token_version", 1)) + 1,
+            "password_changed_at": int(time.time()),
+        }})
+        return {"success": True, "message": "Password changed. Sign in again on your devices."}
+    except Exception:
+        logger.exception("ARIA owner password change failed")
+        return JSONResponse(status_code=503, content={"detail": "Could not save the new password. Try again later."})
 
 # =========================================================
 # WEB CHAT
