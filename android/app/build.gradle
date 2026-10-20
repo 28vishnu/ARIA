@@ -1,3 +1,4 @@
+
 plugins {
     id 'com.android.application'
 }
@@ -14,26 +15,47 @@ android {
         versionName System.getenv('VERSION_NAME') ?: '1.0.0'
     }
 
-    signingConfigs {
-        release {
-            def storeFilePath = System.getenv('ARIA_KEYSTORE_PATH')
-            if (storeFilePath != null && !storeFilePath.isEmpty()) {
-                storeFile file(storeFilePath)
-                storePassword System.getenv('ARIA_KEYSTORE_PASSWORD')
-                keyAlias System.getenv('ARIA_KEY_ALIAS')
-                keyPassword System.getenv('ARIA_KEY_PASSWORD')
-            }
-        }
-    }
-
     buildTypes {
         debug {
-            // Debug builds remain for local testing; published APKs use the stable release key.
+            // Debug builds use the default debug signing configuration.
         }
+
         release {
             minifyEnabled false
-            if (System.getenv('ARIA_KEYSTORE_PATH') != null) {
+
+            def storeFilePath = System.getenv('ARIA_KEYSTORE_PATH')
+            def storePasswordValue = System.getenv('ARIA_KEYSTORE_PASSWORD')
+            def keyAliasValue = System.getenv('ARIA_KEY_ALIAS')
+            def keyPasswordValue = System.getenv('ARIA_KEY_PASSWORD')
+
+            if (storeFilePath) {
+                if (!storePasswordValue || !keyAliasValue || !keyPasswordValue) {
+                    throw new GradleException(
+                        'Release signing is enabled, but one or more signing environment variables are missing.'
+                    )
+                }
+
+                def signingFile = file(storeFilePath)
+                if (!signingFile.exists() || !signingFile.isFile()) {
+                    throw new GradleException(
+                        'Release keystore file was not found at ARIA_KEYSTORE_PATH.'
+                    )
+                }
+
+                signingConfigs {
+                    release {
+                        storeFile signingFile
+                        storePassword storePasswordValue
+                        keyAlias keyAliasValue
+                        keyPassword keyPasswordValue
+                    }
+                }
+
                 signingConfig signingConfigs.release
+            } else {
+                throw new GradleException(
+                    'ARIA_KEYSTORE_PATH is missing. Configure the four GitHub Actions signing secrets before building a release APK.'
+                )
             }
         }
     }
