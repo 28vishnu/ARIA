@@ -1,95 +1,809 @@
-# Add one topic/article title per line. These are appended to built-in starter topics.
-Photosynthesis
-Cellular respiration
-Chloroplast
-Mitosis
-Meiosis
-Genetics
-Natural selection
-Biodiversity
-Ecology
-Water cycle
-Carbon cycle
-Periodic table
-Chemical reaction
-Atomic theory
-Quantum mechanics
-Relativity
-Thermodynamics
-Electromagnetism
-Calculus
-Linear algebra
-Probability theory
-Graph theory
+# ARIA broad starter-topic catalog
+# One topic/article title per line. Section headers are comments and are ignored by read_topics_file().
+# This catalog defines candidate acquisition topics; it does NOT mean they are already stored.
+# Use bounded batches and inspect failed_topics before assuming coverage.
+
+# ===== COMPUTER SCIENCE AND SOFTWARE ENGINEERING =====
+Algorithms and data structures
+Algorithm analysis
 Big O notation
+Big Theta notation
+Big Omega notation
+Amortized analysis
+Recursion
+Dynamic programming
+Greedy algorithm
+Backtracking
+Divide and conquer
 Binary search
+Linear search
 Sorting algorithm
+Merge sort
+Quick sort
+Heap sort
+Graph traversal
+Breadth-first search
+Depth-first search
+Dijkstra algorithm
+A* search algorithm
+Minimum spanning tree
+Topological sorting
+Hash table
+Hash function
+Collision resolution
 Linked list
 Stack (abstract data type)
 Queue (abstract data type)
-Hash table
-Tree (data structure)
-Graph (abstract data type)
+Priority queue
+Binary tree
+Binary search tree
+AVL tree
+Red-black tree
+B-tree
+Trie
+Disjoint-set data structure
+Bloom filter
+Computational complexity theory
+P versus NP problem
+Finite-state machine
+Regular expression
+Context-free grammar
+Automata theory
 Compiler
+Lexical analysis
+Parsing
+Abstract syntax tree
+Intermediate representation
+Code generation
+Interpreter (computing)
+Programming language theory
+Type system
+Static typing
+Dynamic typing
+Functional programming
+Object-oriented programming
+Procedural programming
+Concurrency (computer science)
+Parallel computing
+Race condition
+Deadlock
+Mutex
+Semaphore (programming)
 Operating system
 Process (computing)
 Thread (computing)
-Computer memory
-Computer security
-Computer virus
-Machine learning
-Deep learning
-Natural language processing
-Large language model
-Robotics
-Computer vision
+Virtual memory
+Paging
+File system
+Kernel (operating system)
+System call
+Computer architecture
+Instruction set architecture
+Central processing unit
+Graphics processing unit
+Cache (computing)
+Assembly language
+Digital logic
+Boolean algebra
+Database
+Relational database
+Relational model
+SQL
+Database normalization
+Database index
+Transaction processing
+ACID
+Query optimization
+PostgreSQL
+SQLite
+MySQL
+MongoDB
+Redis
+Distributed database
+Database replication
+Database sharding
+Distributed computing
+Consensus (computer science)
+Raft (algorithm)
+CAP theorem
+Microservices
+Monolithic application
+Event-driven architecture
+Domain-driven design
+Design pattern (computer science)
+SOLID
+Unit testing
+Integration testing
+End-to-end testing
+Property-based testing
+Test-driven development
+Continuous integration
+Continuous delivery
 Version control
 Git
 GitHub
+Linux
+Shell script
+Command-line interface
+HTTP
+HTTPS
 REST
-API
-JSON
-Python (programming language)
-C (programming language)
-C++
-Java (programming language)
+GraphQL
+WebSocket
+DNS
+TCP/IP
+Transmission Control Protocol
+User Datagram Protocol
+Internet Protocol
+OSI model
+Routing
+Load balancing (computing)
+Reverse proxy
+Content delivery network
+OAuth
+OpenID Connect
+JSON Web Token
+Cryptography
+Public-key cryptography
+Digital signature
+TLS
+Computer security
+Threat modeling
+SQL injection
+Cross-site scripting
+Cross-site request forgery
+Buffer overflow
+Malware
+Computer virus
+Ransomware
+Phishing
+Zero-day (computing)
+Secure coding
+Web development
+HTML
+CSS
+JavaScript
 TypeScript
 React (JavaScript library)
 Node.js
-MongoDB
-SQLite
-PostgreSQL
-TCP/IP
-OSI model
-Ethernet
-Wi-Fi
-HTTP
-HTTPS
-DNS
-IP address
-Encryption
-Public-key cryptography
-Blockchain
-Solar energy
-Wind power
-Nuclear power
-Electric vehicle
+Next.js
+Angular (web framework)
+Vue.js
+Svelte
+Django (web framework)
+Flask (web framework)
+FastAPI
+Spring Framework
+Java (programming language)
+Python (programming language)
+C (programming language)
+C++
+C Sharp (programming language)
+Go (programming language)
+Rust (programming language)
+Ruby (programming language)
+PHP
+Kotlin (programming language)
+Swift (programming language)
+SQLAlchemy
+Docker (software)
+Kubernetes
+Terraform (software)
+Amazon Web Services
+Microsoft Azure
+Google Cloud Platform
+Cloud computing
+Infrastructure as code
+Observability
+Logging (software)
+Distributed tracing
+Software architecture
+System design
+API design
+Accessibility
+Web performance
+Unicode
+Internationalization and localization
+
+# ===== AI MACHINE LEARNING AND DATA SCIENCE =====
+Artificial intelligence
+Machine learning
+Supervised learning
+Unsupervised learning
+Semi-supervised learning
+Self-supervised learning
+Reinforcement learning
+Deep learning
+Neural network (machine learning)
+Perceptron
+Convolutional neural network
+Recurrent neural network
+Long short-term memory
+Transformer (deep learning architecture)
+Attention (machine learning)
+Embedding (machine learning)
+Tokenization (natural language processing)
+Natural language processing
+Large language model
+Retrieval-augmented generation
+Information retrieval
+Semantic search
+Vector database
+Knowledge graph
+Ontology (information science)
+Named-entity recognition
+Text classification
+Machine translation
+Speech recognition
+Text-to-speech
+Computer vision
+Image classification
+Object detection
+Image segmentation
+Generative adversarial network
+Diffusion model
+Autoencoder
+Decision tree learning
+Random forest
+Gradient boosting
+Support-vector machine
+K-nearest neighbors algorithm
+Naive Bayes classifier
+Linear regression
+Logistic regression
+Clustering
+K-means clustering
+Principal component analysis
+Feature engineering
+Feature selection
+Cross-validation (statistics)
+Overfitting
+Regularization (mathematics)
+Bias–variance tradeoff
+Confusion matrix
+Precision and recall
+F1 score
+Receiver operating characteristic
+Model calibration
+Explainable artificial intelligence
+AI alignment
+AI safety
+AI agent
+Multi-agent system
+Automated planning and scheduling
+Robotics
+Reinforcement learning from human feedback
+Prompt engineering
+Model evaluation
+Machine learning operations
+Data science
+Data mining
+Data warehouse
+Data lake
+Extract, transform, load
+Apache Spark
+Apache Kafka
+Pandas (software)
+NumPy
+SciPy
+Jupyter
+R (programming language)
+Statistical inference
+Bayesian statistics
+Causal inference
+Time series
+Anomaly detection
+Data visualization
+Experimental design
+Reproducible research
+
+# ===== MATHEMATICS AND STATISTICS =====
+Mathematics
+Arithmetic
+Number theory
+Prime number
+Greatest common divisor
+Modular arithmetic
+Algebra
+Linear algebra
+Matrix (mathematics)
+Eigenvalues and eigenvectors
+Vector space
+Calculus
+Differential calculus
+Integral calculus
+Multivariable calculus
+Differential equation
+Partial differential equation
+Numerical analysis
+Real analysis
+Complex analysis
+Geometry
+Euclidean geometry
+Analytic geometry
+Trigonometry
+Topology
+Set theory
+Mathematical logic
+Proof (mathematics)
+Discrete mathematics
+Combinatorics
+Graph theory
+Game theory
+Optimization (mathematics)
+Linear programming
+Convex optimization
+Probability theory
+Conditional probability
+Bayes theorem
+Random variable
+Probability distribution
+Normal distribution
+Binomial distribution
+Poisson distribution
+Statistics
+Descriptive statistics
+Statistical hypothesis testing
+Confidence interval
+Correlation
+Regression analysis
+Sampling (statistics)
+Markov chain
+Information theory
+Entropy (information theory)
+Cryptographic hash function
+Fuzzy logic
+Operations research
+Mathematical modeling
+Fractal
+Chaos theory
+Fourier transform
+Laplace transform
+Monte Carlo method
+Numerical integration
+Units of measurement
+Dimensional analysis
+
+# ===== PHYSICS CHEMISTRY BIOLOGY AND EARTH SCIENCE =====
+Physics
+Classical mechanics
+Newton laws of motion
+Gravity
+Electromagnetism
+Electricity
+Magnetism
+Electric circuit
+Ohm law
+Thermodynamics
+Heat transfer
+Statistical mechanics
+Quantum mechanics
+Quantum field theory
+Special relativity
+General relativity
+Optics
+Wave
+Sound
+Acoustics
+Fluid mechanics
+Solid mechanics
+Nuclear physics
+Particle physics
+Atomic physics
+Condensed matter physics
+Plasma (physics)
+Physics of semiconductors
+Chemistry
+Atomic theory
+Chemical bond
+Chemical reaction
+Chemical equilibrium
+Acid-base reaction
+Oxidation-reduction reaction
+Organic chemistry
+Inorganic chemistry
+Physical chemistry
+Analytical chemistry
+Biochemistry
+Electrochemistry
+Periodic table
+Chemical element
+Stoichiometry
+Chemical kinetics
+Catalysis
+Polymer chemistry
+Materials science
+Nanotechnology
+Biology
+Cell biology
+Cell (biology)
+DNA
+RNA
+Genetics
+Epigenetics
+Evolution
+Natural selection
+Ecology
+Biodiversity
+Microbiology
+Virology
+Immunology
+Anatomy
+Physiology
+Neuroscience
+Human brain
 Human heart
 Blood
 Immune system
 Digestive system
 Respiratory system
-Sleep
-Balanced diet
-Mental health
+Endocrinology
+Microbiome
+Photosynthesis
+Cellular respiration
+Mitosis
+Meiosis
+Protein
+Enzyme
+Metabolism
+Genomics
+Biotechnology
+CRISPR
+Plant physiology
+Zoology
+Botany
+Marine biology
+Conservation biology
+Climate science
+Climate change
+Atmosphere
+Weather
+Water cycle
+Carbon cycle
+Oceanography
+Geology
+Plate tectonics
+Earthquake
+Volcano
+Mineralogy
+Paleontology
+Soil science
+Hydrology
+Glaciology
+Environmental science
+Renewable energy
+Solar energy
+Wind power
+Hydroelectricity
+Nuclear power
+Energy storage
+Electric vehicle
+Astronomy
+Solar System
+Sun
+Moon
+Planet
+Exoplanet
+Star
+Galaxy
+Black hole
+Cosmology
+Big Bang
+Space exploration
+Satellite
+Orbital mechanics
+Astrobiology
+Scientific method
+Research ethics
+Laboratory safety
+
+# ===== ENGINEERING AND APPLIED TECHNOLOGY =====
+Engineering
+Electrical engineering
+Electronics
+Circuit design
+Embedded system
+Microcontroller
+Arduino
+Raspberry Pi
+Signal processing
+Control theory
+Power engineering
+Telecommunications engineering
+Radio frequency engineering
+Mechanical engineering
+Thermodynamics engineering
+Fluid dynamics
+Robotics engineering
+Mechatronics
+Computer-aided design
+Finite element method
+Manufacturing engineering
+Additive manufacturing
+Industrial engineering
+Operations management
+Civil engineering
+Structural engineering
+Geotechnical engineering
+Transportation engineering
+Water resources engineering
+Environmental engineering
+Chemical engineering
+Process engineering
+Biomedical engineering
+Medical device
+Aerospace engineering
+Aerodynamics
+Avionics
+Automotive engineering
+Battery technology
+Energy engineering
+Nuclear engineering
+Materials engineering
+Semiconductor device
+Photovoltaics
+Building information modeling
+Safety engineering
+Reliability engineering
+Systems engineering
+Human factors and ergonomics
+
+# ===== HUMANITIES SOCIETY BUSINESS AND CULTURE =====
+World history
+Ancient history
+Medieval history
+Modern history
+World War I
 World War II
 Industrial Revolution
+Indian history
 Indian independence movement
 Constitution of India
+Government of India
+Indian Parliament
+Supreme Court of India
+Fundamental rights in India
 United Nations
-Climate
-Weather
+International relations
+Political science
+Democracy
+Public policy
+Civics
+Law
+Constitutional law
+International law
+Human rights
+Criminal law
+Civil law (common law)
+Intellectual property
+Copyright
+Patent
+Trademark
+Privacy law
+Cyberlaw
+Economics
+Microeconomics
+Macroeconomics
+Inflation
+Interest rate
+Monetary policy
+Fiscal policy
+International trade
+Development economics
+Behavioral economics
+Personal finance
+Budgeting
+Compound interest
+Taxation
+Accounting
+Financial statement
+Entrepreneurship
+Business model
+Marketing
+Management
+Supply chain management
+Project management
+Negotiation
+Organizational behavior
+Psychology
+Cognitive psychology
+Social psychology
+Developmental psychology
+Mental health
+Sociology
+Anthropology
+Archaeology
+Philosophy
+Ethics
+Logic
+Epistemology
+Linguistics
+Language
+Translation
+Literature
+World literature
+Poetry
+Rhetoric
+Art history
+Music theory
+Film studies
+Media studies
+Religious studies
+Cultural heritage
+Geography
+Physical geography
+Human geography
+Cartography
+World map
 Ocean
-Plate tectonics
-Volcano
-Earthquake
+Continent
+Country
+Population
+Urbanization
+Migration
+Agriculture
+Food security
+Public administration
+International development
+Tourism
+Sports science
+Critical thinking
+Scientific literacy
+Information literacy
+Media literacy
+
+# ===== EDUCATION RESEARCH AND LEARNING =====
+Education
+Open educational resources
+Open textbook
+Pedagogy
+Andragogy
+Learning theory
+Constructivism (learning theory)
+Cognitive load
+Spaced repetition
+Retrieval practice
+Active learning
+Project-based learning
+Problem-based learning
+Assessment
+Formative assessment
+Summative assessment
+Curriculum
+Lesson planning
+Instructional design
+Educational technology
+Distance education
+Online learning
+Computer science education
+Mathematics education
+Science education
+Academic writing
+Research methods
+Research design
+Literature review
+Systematic review
+Meta-analysis
+Citation
+APA style
+IEEE style
+Academic integrity
+Plagiarism
+Peer review
+Scientific publishing
+Open access
+Data literacy
+Study skills
+Note-taking
+Exam preparation
+Library science
+Special education
+Inclusive education
+Language acquisition
+Second-language acquisition
+Educational psychology
+
+# ===== HEALTH NUTRITION AND EVERYDAY KNOWLEDGE =====
+Human body
+Human anatomy
+Human physiology
+Nutrition
+Balanced diet
+Macronutrient
+Micronutrient
+Protein (nutrient)
+Carbohydrate
+Dietary fat
+Dietary fiber
+Hydration
+Food safety
+Food microbiology
+Sleep
+Exercise physiology
+Physical fitness
+First aid
+Infection
+Vaccination
+Antibiotic resistance
+Public health
+Epidemiology
+Health information literacy
+Stress management
+Oral hygiene
+Skin
+Personal hygiene
+Reproductive health education
+Aging
+Disability
+Assistive technology
+Emergency preparedness
+Fire safety
+Road safety
+Consumer protection
+Home energy efficiency
+Waste management
+Recycling
+Water purification
+Sanitation
+Disaster risk reduction
+Earthquake preparedness
+Cyclone preparedness
+Weather forecasting
+Time management
+Decision-making
+Problem solving
+Communication
+Conflict resolution
+
+# ===== CURRENT KNOWLEDGE AND DIGITAL SAFETY =====
+Technology news
+Artificial intelligence research
+Scientific discovery
+Software release
+Cybersecurity advisory
+Common Vulnerabilities and Exposures
+Computer security incident response team
+Security patch
+Software versioning
+Semantic versioning
+Deprecation (computing)
+End-of-life (product)
+Official documentation
+API reference
+Release notes
+Changelog
+Standards organization
+Internet Engineering Task Force
+World Wide Web Consortium
+Institute of Electrical and Electronics Engineers
+International Organization for Standardization
+World Health Organization
+United Nations Development Programme
+World Bank
+International Monetary Fund
+NASA
+European Space Agency
+Indian Space Research Organisation
+National Institute of Standards and Technology
+National Informatics Centre (India)
+Government Open Data
+Open data
+Data provenance
+Data quality
+Fact-checking
+Misinformation
+Disinformation
+Source evaluation
+Digital privacy
+Data protection
+Identity theft
+Password manager
+Multi-factor authentication
+Backup
+Business continuity
+Climate report
+Public health advisory
+Election information
+Economic indicators
+Scientific preprint
+Research retraction
