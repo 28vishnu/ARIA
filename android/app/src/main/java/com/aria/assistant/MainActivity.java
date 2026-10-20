@@ -147,7 +147,7 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(0);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(12, 16, 28));
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{Color.rgb(11, 15, 28), Color.rgb(7, 9, 17)}));
         root.setPadding(dp(14), dp(8), dp(14), dp(8));
 
         // Compact ChatGPT-inspired header: navigation, brand, and new-chat action.
@@ -243,31 +243,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams disclaimerParams = new LinearLayout.LayoutParams(-1, dp(20));
         root.addView(disclaimer, disclaimerParams);
 
-        // Persistent bottom-left profile/settings dock, matching the rest of the ARIA glass UI.
-        LinearLayout dock = new LinearLayout(this);
-        dock.setOrientation(LinearLayout.HORIZONTAL);
-        dock.setGravity(Gravity.CENTER_VERTICAL);
-        dock.setPadding(dp(8), dp(5), dp(8), dp(5));
-        dock.setBackground(glassBackground());
-        TextView avatar = label("A", 15, Color.WHITE, true);
-        avatar.setGravity(Gravity.CENTER);
-        avatar.setBackground(glassAccent());
-        dock.addView(avatar, new LinearLayout.LayoutParams(dp(34), dp(34)));
-        TextView profile = label("  Profile", 13, TEXT, true);
-        dock.addView(profile, new LinearLayout.LayoutParams(-2, dp(38)));
-        profile.setGravity(Gravity.CENTER_VERTICAL);
-        profile.setOnClickListener(v -> showProfile());
-        avatar.setOnClickListener(v -> showProfile());
-        View dockSpacer = new View(this);
-        dock.addView(dockSpacer, new LinearLayout.LayoutParams(0, 1, 1));
-        TextView settings = label("⚙  Settings", 13, MUTED, true);
-        settings.setGravity(Gravity.CENTER);
-        settings.setPadding(dp(12), 0, dp(8), 0);
-        dock.addView(settings, new LinearLayout.LayoutParams(-2, dp(38)));
-        settings.setOnClickListener(v -> showSettings());
-        LinearLayout.LayoutParams dockParams = new LinearLayout.LayoutParams(-1, dp(44));
-        dockParams.topMargin = dp(4);
-        root.addView(dock, dockParams);
+        // Profile and settings live in the navigation drawer, not in a permanent bottom dock.
 
         sendButton.setOnClickListener(v -> sendMessage());
         input.setOnEditorActionListener((v, action, event) -> {
@@ -297,11 +273,11 @@ public class MainActivity extends Activity {
         LinearLayout welcome = new LinearLayout(this); welcome.setOrientation(LinearLayout.VERTICAL); welcome.setGravity(Gravity.CENTER); welcome.setPadding(dp(10), dp(20), dp(10), dp(24));
         TextView icon = label("✦", 32, Color.WHITE, true); icon.setGravity(Gravity.CENTER); icon.setBackground(glassAccent());
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(58), dp(58)); ip.bottomMargin = dp(18); welcome.addView(icon, ip);
-        TextView heading = label("What can I help with?", 25, TEXT, true); heading.setGravity(Gravity.CENTER); welcome.addView(heading);
-        TextView sub = label("Ask a question, explore an idea, or work through a problem.", 14, MUTED, false); sub.setGravity(Gravity.CENTER); sub.setPadding(dp(16), dp(9), dp(16), dp(18)); welcome.addView(sub);
+        TextView heading = label("What can I help with?", 26, TEXT, true); heading.setGravity(Gravity.CENTER); welcome.addView(heading);
+        TextView sub = label("Ask anything, explore an idea, or work through a problem.", 15, MUTED, false); sub.setGravity(Gravity.CENTER); sub.setPadding(dp(16), dp(9), dp(16), dp(18)); welcome.addView(sub);
         LinearLayout suggestions = new LinearLayout(this); suggestions.setOrientation(LinearLayout.VERTICAL);
         String[] prompts = {"Explain something clearly", "Help me write or improve code", "Explore an idea with me"};
-        for (String prompt : prompts) { TextView item = label("✧   " + prompt, 13, TEXT, false); item.setPadding(dp(14), dp(12), dp(14), dp(12)); item.setBackground(glassBackground()); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8); suggestions.addView(item,p); item.setOnClickListener(v -> { input.setText(prompt); input.setSelection(input.length()); input.requestFocus(); }); }
+        for (String prompt : prompts) { TextView item = label("✧    " + prompt, 14, TEXT, false); item.setPadding(dp(16), dp(15), dp(16), dp(15)); item.setBackground(glassBackground()); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8); suggestions.addView(item,p); item.setOnClickListener(v -> { input.setText(prompt); input.setSelection(input.length()); input.requestFocus(); }); }
         welcome.addView(suggestions, new LinearLayout.LayoutParams(-1, -2)); transcript.addView(welcome, new LinearLayout.LayoutParams(-1, -1));
     }
 
@@ -528,9 +504,9 @@ public class MainActivity extends Activity {
     private GradientDrawable round(int color,int radius) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
     private GradientDrawable glassBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.rgb(27, 30, 36), Color.rgb(21, 23, 28)});
+            new int[]{Color.rgb(31, 37, 54), Color.rgb(18, 23, 37)});
         d.setCornerRadius(dp(18));
-        d.setStroke(dp(1), Color.argb(45, 210, 220, 240));
+        d.setStroke(dp(1), Color.argb(65, 190, 205, 245));
         return d;
     }
     private GradientDrawable glassAccent() {
