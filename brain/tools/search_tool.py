@@ -1,18 +1,20 @@
-"""
-ARIA Search Tool
-----------------
-A provider-agnostic web search tool for ARIA.
+"""Provider-agnostic, bounded web search for ARIA.
 
-The tool prefers an explicitly configured search provider and can use
-Tavily when TAVILY_API_KEY is available. It returns structured results
-without inventing information when the provider is unavailable.
+Tavily is preferred when configured. If it is unavailable or fails, the tool
+uses Wikipedia's public MediaWiki search API as a limited no-key fallback.
+The fallback is useful for background/context research; it is not a substitute
+for a dedicated real-time news provider.
 """
+from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from brain.tools.base_tool import BaseTool
 
@@ -25,25 +27,25 @@ except ImportError:
 
 
 class SearchTool(BaseTool):
-    """Search the public web and return structured source results."""
+    """Search the public web and return normalized structured results."""
 
     name = "search"
     description = (
         "Search the web for current or factual information and return "
         "structured results with titles, URLs, snippets, and optional content."
     )
+    WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         max_results: int = 5,
         timeout: float = 20.0,
-    ):
+    ) -> None:
         self.api_key = api_key or os.getenv("TAVILY_API_KEY")
         self.max_results = max(1, min(int(max_results), 10))
         self.timeout = max(3.0, float(timeout))
         self._client = None
-
         if self.api_key and TavilyClient is not None:
             try:
                 self._client = TavilyClient(api_key=self.api_key)
@@ -51,162 +53,136 @@ class SearchTool(BaseTool):
                 logger.exception("[SearchTool] Failed to initialize Tavily client")
 
     def is_available(self) -> bool:
-        return self._client is not None
+        # The fallback requires no API key. Actual network availability is
+        # established by execute(), not by this configuration-level check.
+        return self._client is not None or os.getenv("ARIA_DISABLE_WIKIPEDIA_FALLBACK", "0").strip().lower() not in {"1", "true", "yes", "on"}
 
-    async def can_handle(
-        self,
-        query: str,
-        context: Dict[str, Any],
-    ) -> float:
+    async def can_handle(self, query: str, context: Dict[str, Any]) -> float:
         if not query or not query.strip():
             return 0.0
-
         text = query.lower().strip()
-
-        explicit = (
-            "search the web",
-            "search online",
-            "web search",
-            "look up",
-            "look it up",
-            "find online",
-            "find on the internet",
-            "browse the web",
-            "latest",
-            "current news",
-            "recent news",
-            "today's news",
-            "what happened today",
-        )
-
-        current = (
-            "today",
-            "latest",
-            "current",
-            "recent",
-            "this week",
-            "this month",
-            "price",
-            "weather",
-            "stock",
-            "news",
-        )
-
+        explicit = ("search the web", "search online", "web search", "look up", "look it up", "find online", "find on the internet", "browse the web", "latest", "current news", "recent news", "today's news", "what happened today")
+        current = ("today", "latest", "current", "recent", "this week", "this month", "price", "weather", "stock", "news")
         if any(term in text for term in explicit):
             return 0.98
-
         if any(term in text for term in current):
             return 0.82
-
         if context.get("requires_web") or context.get("web_search"):
             return 0.95
-
         return 0.0
 
-    async def execute(
-        self,
-        query: str,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    async def execute(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         started = time.monotonic()
         context = context or {}
-
-        query = (query or "").strip()
+        query = str(query or "").strip()
         if not query:
             return self._error("Search query is empty.", started)
 
-        if not self.is_available():
-            return self._error(
-                "Web search is unavailable. Configure TAVILY_API_KEY "
-                "and install the optional Tavily client.",
-                started,
-            )
-
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
+        errors: list[str] = []
+        if self._client is not None:
+            try:
+                response = await asyncio.wait_for(asyncio.to_thread(
                     self._client.search,
                     query=query,
                     max_results=self.max_results,
                     search_depth=context.get("search_depth", "advanced"),
                     include_answer=False,
                     include_raw_content=False,
-                ),
-                timeout=self.timeout,
-            )
+                ), timeout=self.timeout)
+                results = self._normalize_results(response)
+                if results:
+                    return self._success(query, results, "tavily", started)
+                errors.append("Tavily returned no usable results")
+            except asyncio.TimeoutError:
+                errors.append("Tavily search timed out")
+                logger.warning("[SearchTool] Tavily search timed out: %s", query)
+            except Exception as exc:
+                errors.append(f"Tavily failed: {type(exc).__name__}")
+                logger.exception("[SearchTool] Tavily search failed")
 
-            results = self._normalize_results(response)
+        fallback_disabled = os.getenv("ARIA_DISABLE_WIKIPEDIA_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if not fallback_disabled:
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(self._wikipedia_search, query),
+                    timeout=self.timeout,
+                )
+                results = self._normalize_results(response)
+                if results:
+                    return self._success(query, results, "wikipedia", started,
+                                         warning="Limited background/context fallback; not a dedicated live-news source.")
+                errors.append("Wikipedia returned no usable results")
+            except asyncio.TimeoutError:
+                errors.append("Wikipedia fallback timed out")
+            except Exception as exc:
+                errors.append(f"Wikipedia fallback failed: {type(exc).__name__}")
+                logger.exception("[SearchTool] Wikipedia fallback failed")
 
-            return {
-                "success": True,
-                "tool": self.name,
-                "query": query,
-                "results": results,
-                "count": len(results),
-                "duration_ms": round(
-                    (time.monotonic() - started) * 1000, 2
-                ),
-            }
+        return self._error("; ".join(errors) or "No search provider is available.", started)
 
-        except asyncio.TimeoutError:
-            logger.warning("[SearchTool] Search timed out: %s", query)
-            return self._error("Web search timed out.", started)
-
-        except Exception as exc:
-            logger.exception("[SearchTool] Search failed")
-            return self._error(
-                f"Web search failed: {type(exc).__name__}.",
-                started,
-            )
-
-    def _normalize_results(self, response: Any) -> List[Dict[str, Any]]:
-        raw_results = []
-
-        if isinstance(response, dict):
-            raw_results = response.get("results") or []
-        elif isinstance(response, list):
-            raw_results = response
-
-        normalized: List[Dict[str, Any]] = []
-
-        for item in raw_results[: self.max_results]:
+    def _wikipedia_search(self, query: str) -> Dict[str, Any]:
+        params = urlencode({
+            "action": "query", "list": "search", "srsearch": query,
+            "format": "json", "utf8": 1, "srlimit": self.max_results,
+        })
+        request = Request(
+            f"{self.WIKIPEDIA_API}?{params}",
+            headers={"User-Agent": "ARIA-PersonalAssistant/1.0 (public knowledge search)"},
+        )
+        with urlopen(request, timeout=self.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        raw = payload.get("query", {}).get("search", []) if isinstance(payload, dict) else []
+        results = []
+        for item in raw:
             if not isinstance(item, dict):
                 continue
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            page_title = title.replace(" ", "_")
+            results.append({
+                "title": title,
+                "url": "https://en.wikipedia.org/wiki/" + page_title,
+                "snippet": self._strip_html(str(item.get("snippet", ""))),
+            })
+        return {"results": results}
 
+    @staticmethod
+    def _strip_html(value: str) -> str:
+        # MediaWiki search snippets contain simple HTML markup. Remove tags and
+        # decode the few common entities without adding a heavy dependency.
+        import re
+        from html import unescape
+        return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]*>", " ", value))).strip()
+
+    def _normalize_results(self, response: Any) -> List[Dict[str, Any]]:
+        raw_results = response.get("results") or [] if isinstance(response, dict) else response if isinstance(response, list) else []
+        normalized: List[Dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
             url = str(item.get("url") or "").strip()
             title = str(item.get("title") or "").strip()
-            snippet = str(
-                item.get("content")
-                or item.get("snippet")
-                or ""
-            ).strip()
-
-            if not url and not title and not snippet:
+            snippet = str(item.get("content") or item.get("snippet") or "").strip()
+            if not (url or title or snippet) or (url and url in seen_urls):
                 continue
-
-            normalized.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "snippet": snippet,
-                    "score": item.get("score"),
-                }
-            )
-
+            if url:
+                seen_urls.add(url)
+            normalized.append({"title": title, "url": url, "snippet": snippet, "score": item.get("score")})
+            if len(normalized) >= self.max_results:
+                break
         return normalized
+
+    def _success(self, query: str, results: List[Dict[str, Any]], provider: str, started: float, warning: str | None = None) -> Dict[str, Any]:
+        output = {"success": True, "tool": self.name, "query": query, "results": results[:self.max_results], "count": min(len(results), self.max_results), "provider": provider, "duration_ms": round((time.monotonic() - started) * 1000, 2)}
+        if warning:
+            output["warning"] = warning
+        return output
 
     @staticmethod
     def _error(message: str, started: float) -> Dict[str, Any]:
-        return {
-            "success": False,
-            "tool": "search",
-            "results": [],
-            "count": 0,
-            "error": message,
-            "duration_ms": round(
-                (time.monotonic() - started) * 1000, 2
-            ),
-        }
+        return {"success": False, "tool": "search", "results": [], "count": 0, "error": message, "duration_ms": round((time.monotonic() - started) * 1000, 2)}
 
 
 WebSearchTool = SearchTool
