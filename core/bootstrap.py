@@ -2,8 +2,14 @@ import logging
 import os
 
 import httpx
-from motor.motor_asyncio import AsyncIOMotorClient
-import chromadb
+try:
+    from motor.motor_asyncio import AsyncIOMotorClient
+except ImportError:  # Allows import-time tooling/tests without optional runtime deps.
+    AsyncIOMotorClient = None
+try:
+    import chromadb
+except ImportError:  # Import-time tooling may run without vector-store extras.
+    chromadb = None
 
 from core.configuration import load_config
 from core.dependency_injection import ServiceRegistry
@@ -200,6 +206,12 @@ async def bootstrap_application() -> ServiceRegistry:
     db_inst = None
 
     if config.mongodb_uri:
+
+        if AsyncIOMotorClient is None:
+            raise RuntimeError(
+                "MongoDB support requires the `motor` package. "
+                "Install project dependencies with `pip install -r requirements.txt`."
+            )
 
         mongo_client = AsyncIOMotorClient(
             config.mongodb_uri
