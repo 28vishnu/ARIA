@@ -87,7 +87,7 @@ public class AriaGlassActivity extends Activity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    private String getDeviceId() {
+    private String getAriaDeviceId() {
         android.content.SharedPreferences prefs = getSharedPreferences(AUTH_PREFS, MODE_PRIVATE);
         String id = prefs.getString(DEVICE_KEY, "");
         if (id == null || id.trim().isEmpty()) {
@@ -156,7 +156,7 @@ public class AriaGlassActivity extends Activity {
                     JSONObject payload = new JSONObject();
                     payload.put("telegram_id", "7204704497");
                     payload.put("secret", password);
-                    payload.put("device_id", getDeviceId());
+                    payload.put("device_id", getAriaDeviceId());
                     JSONObject response = postJson("/app/login", payload, "");
                     int status = response.optInt("_http_status", 0);
                     String token = response.optString("access_token", "");
