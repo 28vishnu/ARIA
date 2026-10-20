@@ -42,6 +42,9 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.security.SecureRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
@@ -58,14 +61,14 @@ public class MainActivity extends Activity {
     private static final String CHAT_PREFS = "aria_chat_history";
     private static final String CHAT_LIST_KEY = "chats_json";
     private static class ChatRecord {
-        String id, title; boolean pinned; long updatedAt; JSONArray messages = new JSONArray();
+        String id, title, projectName = ""; boolean pinned, archived; long updatedAt; JSONArray messages = new JSONArray();
         ChatRecord(String id, String title) { this.id=id; this.title=title; updatedAt=System.currentTimeMillis(); }
         JSONObject toJson() throws Exception {
-            JSONObject o=new JSONObject(); o.put("id",id); o.put("title",title); o.put("pinned",pinned); o.put("updatedAt",updatedAt); o.put("messages",messages); return o;
+            JSONObject o=new JSONObject(); o.put("id",id); o.put("title",title); o.put("pinned",pinned); o.put("archived",archived); o.put("projectName",projectName); o.put("updatedAt",updatedAt); o.put("messages",messages); return o;
         }
         static ChatRecord fromJson(JSONObject o) {
             ChatRecord c=new ChatRecord(o.optString("id",java.util.UUID.randomUUID().toString()),o.optString("title","New chat"));
-            c.pinned=o.optBoolean("pinned",false); c.updatedAt=o.optLong("updatedAt",System.currentTimeMillis());
+            c.pinned=o.optBoolean("pinned",false); c.archived=o.optBoolean("archived",false); c.projectName=o.optString("projectName",""); c.updatedAt=o.optLong("updatedAt",System.currentTimeMillis());
             JSONArray a=o.optJSONArray("messages"); if(a!=null)c.messages=a; return c;
         }
     }
@@ -97,9 +100,16 @@ public class MainActivity extends Activity {
         }
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         createNotificationChannel();
+        String savedBackend = getSharedPreferences("aria_settings", MODE_PRIVATE).getString("backend_url", DEFAULT_SERVER);
+        if (savedBackend != null && savedBackend.startsWith("https://")) {
+            // The sign-in screen also uses this configured HTTPS endpoint.
+        }
+        if (getSharedPreferences("aria_auth", MODE_PRIVATE).getString("access_token", "").isEmpty()) {
+            buildSignInUi();
+            return;
+        }
         loadChatHistory();
-        if (chatHistory.isEmpty()) createChatRecord();
-        activeChatId = chatHistory.get(0).id;
+        activeChatId = chatHistory.isEmpty() ? "" : chatHistory.get(0).id;
         buildUi();
         restoreActiveChat();
         requestNotificationPermissionIfNeeded();
@@ -155,7 +165,7 @@ public class MainActivity extends Activity {
 
     private GradientDrawable glassDialogBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.argb(224, 54, 68, 102), Color.argb(208, 18, 25, 43)});
+                new int[]{Color.rgb(43, 52, 76), Color.rgb(24, 30, 47)});
         d.setCornerRadius(dp(24));
         d.setStroke(dp(1), Color.argb(155, 180, 204, 255));
         return d;
@@ -359,9 +369,9 @@ public class MainActivity extends Activity {
         if (statusBarRes > 0) statusBarHeight = getResources().getDimensionPixelSize(statusBarRes);
         panel.setPadding(dp(16), statusBarHeight + dp(12), dp(12), dp(12));
         GradientDrawable drawerGlass = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.argb(216, 53, 65, 96), Color.argb(188, 19, 26, 45)});
+                new int[]{Color.rgb(38, 45, 64), Color.rgb(24, 28, 41)});
         drawerGlass.setCornerRadius(dp(0));
-        drawerGlass.setStroke(dp(1), Color.argb(105, 205, 220, 255));
+        drawerGlass.setStroke(dp(1), Color.argb(175, 205, 220, 255));
         panel.setBackground(drawerGlass);
 
         LinearLayout top = new LinearLayout(this);
@@ -397,7 +407,7 @@ public class MainActivity extends Activity {
         ArrayList<ChatRecord> sorted = new ArrayList<>(chatHistory);
         Collections.sort(sorted, (x,y) -> Long.compare(y.updatedAt, x.updatedAt));
         boolean hasPinned = false;
-        for (ChatRecord chat : sorted) if (chat.pinned) { hasPinned=true; addChatHistoryRow(panel, drawer, chat, true); }
+        for (ChatRecord chat : sorted) if (chat.pinned && !chat.archived) { hasPinned=true; addChatHistoryRow(panel, drawer, chat, true); }
         if (!hasPinned) {
             TextView empty = label("No pinned chats yet", 12, MUTED, false);
             empty.setPadding(dp(10), dp(8), dp(8), dp(8)); panel.addView(empty);
@@ -405,10 +415,36 @@ public class MainActivity extends Activity {
         addDrawerDivider(panel);
         addDrawerSection(panel, "RECENTS");
         boolean hasRecent = false;
-        for (ChatRecord chat : sorted) if (!chat.pinned) { hasRecent=true; addChatHistoryRow(panel, drawer, chat, false); }
+        for (ChatRecord chat : sorted) if (!chat.pinned && !chat.archived) { hasRecent=true; addChatHistoryRow(panel, drawer, chat, false); }
         if (!hasRecent) {
             TextView empty = label("Your conversations will appear here", 12, MUTED, false);
             empty.setPadding(dp(10), dp(8), dp(8), dp(8)); panel.addView(empty);
+        }
+
+        addDrawerDivider(panel);
+        addDrawerSection(panel, "PROJECTS");
+        Set<String> projects = getProjectNames();
+        if (projects.isEmpty()) {
+            TextView emptyProjects = label("No projects yet", 12, MUTED, false);
+            emptyProjects.setPadding(dp(10), dp(8), dp(8), dp(8));
+            panel.addView(emptyProjects);
+        } else {
+            for (String project : projects) {
+                TextView projectRow = drawerItem("▱", project, null);
+                panel.addView(projectRow);
+                projectRow.setOnClickListener(v -> { drawer.dismiss(); showProjectChats(project); });
+            }
+        }
+        TextView createProject = drawerItem("＋", "Create project", null);
+        panel.addView(createProject);
+        createProject.setOnClickListener(v -> { drawer.dismiss(); promptCreateProject(null); });
+
+        boolean hasArchived = false;
+        for (ChatRecord c : sorted) if (c.archived) hasArchived = true;
+        if (hasArchived) {
+            addDrawerDivider(panel);
+            addDrawerSection(panel, "ARCHIVED");
+            for (ChatRecord c : sorted) if (c.archived) addChatHistoryRow(panel, drawer, c, false);
         }
 
         View spacer = new View(this);
@@ -510,7 +546,7 @@ public class MainActivity extends Activity {
         row.setOnClickListener(v -> {
             drawer.dismiss();
             if ("ARIA backend".equals(title)) showSettings();
-            else if ("Projects".equals(title)) showFeaturePanel(title, "Organize related conversations, files, and instructions into a focused workspace.");
+            else if ("Projects".equals(title)) showProjects();
             else if ("Scheduled".equals(title)) showFeaturePanel(title, "Scheduled reminders will appear here when task scheduling is connected.");
             else if ("Images".equals(title)) showFeaturePanel(title, "Your image workspace. Image generation and image history require an image-capable backend.");
             else if ("Library".equals(title)) showFeaturePanel(title, "Saved files and documents will appear here when library storage is connected.");
@@ -556,6 +592,250 @@ public class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null).show();
     }
 
+
+    // Owner-only sign-in: the Telegram ID is fixed to the owner, while the secret is
+    // validated by the backend. The secret itself is never stored on the device.
+    private void buildSignInUi() {
+        String saved = getSharedPreferences("aria_settings", MODE_PRIVATE).getString("backend_url", DEFAULT_SERVER);
+        serverInput = new EditText(this);
+        serverInput.setSingleLine(true);
+        serverInput.setText(saved);
+        showSignInUi();
+    }
+
+    private void showSignInUi() {
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(26), dp(24), dp(26), dp(24));
+        root.setBackgroundColor(BG);
+        TextView logo = label("✦", 34, Color.WHITE, true);
+        logo.setGravity(Gravity.CENTER);
+        logo.setBackground(glassAccent());
+        LinearLayout.LayoutParams logoP = new LinearLayout.LayoutParams(dp(72), dp(72));
+        logoP.bottomMargin = dp(22);
+        root.addView(logo, logoP);
+        TextView title = label("Private ARIA", 27, TEXT, true);
+        title.setGravity(Gravity.CENTER);
+        root.addView(title);
+        TextView subtitle = label("Sign in with the owner credentials to access your private assistant.", 14, MUTED, false);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(0, dp(10), 0, dp(22));
+        root.addView(subtitle);
+        EditText telegramId = new EditText(this);
+        telegramId.setSingleLine(true);
+        telegramId.setText("7204704497");
+        telegramId.setHint("Owner Telegram ID");
+        telegramId.setTextColor(TEXT);
+        telegramId.setHintTextColor(MUTED);
+        telegramId.setEnabled(false);
+        telegramId.setPadding(dp(16), dp(12), dp(16), dp(12));
+        telegramId.setBackground(glassBackground());
+        root.addView(telegramId, new LinearLayout.LayoutParams(-1, -2));
+        EditText secret = new EditText(this);
+        secret.setSingleLine(true);
+        secret.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        secret.setHint("Private sign-in secret");
+        secret.setTextColor(TEXT);
+        secret.setHintTextColor(MUTED);
+        secret.setPadding(dp(16), dp(12), dp(16), dp(12));
+        secret.setBackground(glassBackground());
+        LinearLayout.LayoutParams secretP = new LinearLayout.LayoutParams(-1, -2);
+        secretP.topMargin = dp(12);
+        root.addView(secret, secretP);
+        EditText backend = new EditText(this);
+        backend.setSingleLine(true);
+        backend.setText(getSharedPreferences("aria_settings", MODE_PRIVATE).getString("backend_url", DEFAULT_SERVER));
+        backend.setHint("HTTPS backend URL");
+        backend.setTextColor(MUTED);
+        backend.setHintTextColor(MUTED);
+        backend.setTextSize(12);
+        backend.setPadding(dp(12), dp(9), dp(12), dp(9));
+        backend.setBackground(glassBackground());
+        LinearLayout.LayoutParams backendP = new LinearLayout.LayoutParams(-1, -2);
+        backendP.topMargin = dp(12);
+        root.addView(backend, backendP);
+        Button signIn = new Button(this);
+        signIn.setText("Sign in securely");
+        signIn.setAllCaps(false);
+        signIn.setTextColor(Color.WHITE);
+        signIn.setBackground(glassAccent());
+        LinearLayout.LayoutParams signP = new LinearLayout.LayoutParams(-1, dp(52));
+        signP.topMargin = dp(18);
+        root.addView(signIn, signP);
+        TextView privacy = label("Only the server can authorize access. The Telegram ID alone is not a password.", 11, MUTED, false);
+        privacy.setGravity(Gravity.CENTER);
+        privacy.setPadding(0, dp(16), 0, 0);
+        root.addView(privacy);
+        setContentView(root);
+        signIn.setOnClickListener(v -> {
+            String base = backend.getText().toString().trim().replaceAll("/+$", "");
+            String ownerId = telegramId.getText().toString().trim();
+            String password = secret.getText().toString();
+            if (!base.startsWith("https://") || password.length() < 1) {
+                toast("Enter the HTTPS backend and your private sign-in secret.");
+                return;
+            }
+            signIn.setEnabled(false);
+            signIn.setText("Signing in…");
+            executor.execute(() -> {
+                String token = "";
+                String error = "Sign-in failed. Check your credentials and backend configuration.";
+                try {
+                    HttpURLConnection conn = (HttpURLConnection)new URL(base + "/app/login").openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(20000);
+                    conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                    conn.setDoOutput(true);
+                    JSONObject body = new JSONObject();
+                    body.put("telegram_id", ownerId);
+                    body.put("secret", password);
+                    try (OutputStream os = conn.getOutputStream()) { os.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
+                    int status = conn.getResponseCode();
+                    InputStream stream = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream();
+                    StringBuilder response = new StringBuilder();
+                    if (stream != null) try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = r.readLine()) != null) response.append(line); }
+                    if (status >= 200 && status < 300) token = new JSONObject(response.toString()).optString("access_token", "");
+                    else error = "Sign-in rejected by backend (HTTP " + status + "). Confirm the owner secrets are configured.";
+                    conn.disconnect();
+                } catch (Exception ex) { error = "Cannot reach the sign-in endpoint. Confirm backend deployment and HTTPS URL."; }
+                final String tokenResult = token;
+                final String errorResult = error;
+                runOnUiThread(() -> {
+                    signIn.setEnabled(true);
+                    signIn.setText("Sign in securely");
+                    if (tokenResult.isEmpty()) { toast(errorResult); return; }
+                    getSharedPreferences("aria_settings", MODE_PRIVATE).edit().putString("backend_url", base).apply();
+                    getSharedPreferences("aria_auth", MODE_PRIVATE).edit().putString("access_token", tokenResult).apply();
+                    recreate();
+                });
+            });
+        });
+    }
+
+    private void signOut() {
+        getSharedPreferences("aria_auth", MODE_PRIVATE).edit().clear().apply();
+        toast("Signed out");
+        recreate();
+    }
+
+    private Set<String> getProjectNames() {
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        String raw = getSharedPreferences(CHAT_PREFS, MODE_PRIVATE).getString("projects_json", "[]");
+        try {
+            JSONArray a = new JSONArray(raw);
+            for (int i=0;i<a.length();i++) {
+                String name = a.optString(i, "").trim();
+                if (!name.isEmpty()) result.add(name);
+            }
+        } catch (Exception ignored) {}
+        for (ChatRecord c : chatHistory) if (c.projectName != null && !c.projectName.trim().isEmpty()) result.add(c.projectName.trim());
+        return result;
+    }
+
+    private void saveProjectNames(Set<String> projects) {
+        JSONArray a = new JSONArray();
+        for (String project : projects) a.put(project);
+        getSharedPreferences(CHAT_PREFS, MODE_PRIVATE).edit().putString("projects_json", a.toString()).apply();
+    }
+
+    private void showProjects() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(8), dp(4), dp(8), dp(4));
+        Set<String> projects = getProjectNames();
+        if (projects.isEmpty()) content.addView(label("No projects yet. Create one to organize chats.", 13, MUTED, false));
+        for (String project : projects) {
+            TextView row = label("▱   " + project, 14, TEXT, false);
+            row.setPadding(dp(12), dp(12), dp(12), dp(12));
+            row.setBackground(glassBackground());
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+            rp.bottomMargin = dp(7);
+            content.addView(row, rp);
+            row.setOnClickListener(v -> showProjectChats(project));
+        }
+        dialogBuilder().setTitle("Projects").setView(content)
+                .setNeutralButton("Create project", (d,w) -> promptCreateProject(null))
+                .setPositiveButton("Done", null).show();
+    }
+
+    private void promptCreateProject(ChatRecord chat) {
+        EditText edit = new EditText(this);
+        edit.setSingleLine(true);
+        edit.setHint("Project name");
+        edit.setTextColor(TEXT);
+        edit.setHintTextColor(MUTED);
+        edit.setBackground(glassBackground());
+        edit.setPadding(dp(12), dp(10), dp(12), dp(10));
+        dialogBuilder().setTitle("Create project").setView(edit)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Create", (d,w) -> {
+                    String name = edit.getText().toString().trim();
+                    if (name.isEmpty()) { toast("Enter a project name."); return; }
+                    Set<String> projects = getProjectNames();
+                    projects.add(name);
+                    saveProjectNames(projects);
+                    if (chat != null) { chat.projectName = name; chat.updatedAt = System.currentTimeMillis(); saveChatHistory(); }
+                    toast("Project created");
+                }).show();
+    }
+
+    private void showAddToProject(ChatRecord chat) {
+        ArrayList<String> projects = new ArrayList<>(getProjectNames());
+        ArrayList<String> options = new ArrayList<>(projects);
+        options.add("＋ Create new project");
+        options.add("Remove from project");
+        String[] names = options.toArray(new String[0]);
+        dialogBuilder().setTitle("Add to project").setItems(names, (d,w) -> {
+            if (w == projects.size()) promptCreateProject(chat);
+            else if (w == projects.size()+1) { chat.projectName = ""; saveChatHistory(); toast("Removed from project"); }
+            else { chat.projectName = projects.get(w); chat.archived = false; chat.updatedAt = System.currentTimeMillis(); saveChatHistory(); toast("Added to " + chat.projectName); }
+        }).show();
+    }
+
+    private void showProjectChats(String project) {
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        int count = 0;
+        for (ChatRecord c : chatHistory) if (project.equals(c.projectName) && !c.archived) {
+            count++;
+            TextView row = label(c.title, 14, TEXT, false);
+            row.setPadding(dp(12), dp(12), dp(12), dp(12));
+            list.addView(row);
+            row.setOnClickListener(v -> { activeChatId = c.id; restoreActiveChat(); });
+            row.setOnLongClickListener(v -> { showChatActions(c); return true; });
+        }
+        if (count == 0) list.addView(label("No chats in this project yet.", 13, MUTED, false));
+        dialogBuilder().setTitle(project).setView(list).setPositiveButton("Done", null)
+                .setNeutralButton("Rename project", (d,w) -> renameProject(project))
+                .setNegativeButton("Delete project", (d,w) -> deleteProject(project)).show();
+    }
+
+    private void renameProject(String oldName) {
+        EditText edit = new EditText(this);
+        edit.setSingleLine(true); edit.setText(oldName); edit.setSelectAllOnFocus(true);
+        edit.setTextColor(TEXT); edit.setHintTextColor(MUTED); edit.setBackground(glassBackground());
+        dialogBuilder().setTitle("Rename project").setView(edit).setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (d,w) -> {
+                    String name = edit.getText().toString().trim();
+                    if (name.isEmpty()) { toast("Project name cannot be empty."); return; }
+                    Set<String> projects = getProjectNames(); projects.remove(oldName); projects.add(name); saveProjectNames(projects);
+                    for (ChatRecord c : chatHistory) if (oldName.equals(c.projectName)) c.projectName = name;
+                    saveChatHistory(); toast("Project renamed");
+                }).show();
+    }
+
+    private void deleteProject(String name) {
+        dialogBuilder().setTitle("Delete project?")
+                .setMessage("Chats will be kept. They will no longer belong to this project.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d,w) -> {
+                    Set<String> projects = getProjectNames(); projects.remove(name); saveProjectNames(projects);
+                    for (ChatRecord c : chatHistory) if (name.equals(c.projectName)) c.projectName = "";
+                    saveChatHistory(); toast("Project deleted");
+                }).show();
+    }
+
     private ChatRecord getActiveChat() {
         for (ChatRecord c : chatHistory) if (c.id.equals(activeChatId)) return c;
         return null;
@@ -564,7 +844,18 @@ public class MainActivity extends Activity {
         chatHistory.clear();
         String raw=getSharedPreferences(CHAT_PREFS,MODE_PRIVATE).getString(CHAT_LIST_KEY,"[]");
         try { JSONArray a=new JSONArray(raw); for(int i=0;i<a.length();i++){JSONObject o=a.optJSONObject(i);if(o!=null)chatHistory.add(ChatRecord.fromJson(o));} } catch(Exception ignored) {}
+        // Remove only untouched auto-created drafts left by older builds. Never fabricate
+        // sample chats, pinned items, or projects for a fresh install.
+        for (int i = chatHistory.size() - 1; i >= 0; i--) {
+            ChatRecord c = chatHistory.get(i);
+            if (c.messages.length() == 0 && "New chat".equals(c.title)
+                    && !c.pinned && !c.archived
+                    && (c.projectName == null || c.projectName.trim().isEmpty())) {
+                chatHistory.remove(i);
+            }
+        }
         Collections.sort(chatHistory,(x,y)->Long.compare(y.updatedAt,x.updatedAt));
+        saveChatHistory();
     }
     private void saveChatHistory() {
         JSONArray a=new JSONArray(); for(ChatRecord c:chatHistory)try{a.put(c.toJson());}catch(Exception ignored){}
@@ -575,10 +866,13 @@ public class MainActivity extends Activity {
         chatHistory.add(0,c); activeChatId=c.id; saveChatHistory(); return c;
     }
     private void newConversation() {
-        ChatRecord active=getActiveChat();
-        if(active==null || active.messages.length()>0) createChatRecord();
-        else { active.title="New chat"; active.pinned=false; active.updatedAt=System.currentTimeMillis(); saveChatHistory(); }
-        transcript.removeAllViews(); lastSources.clear(); renderSources(); addWelcome(); saveChatHistory();
+        // A blank draft is not saved as history. It becomes a real chat only when
+        // the user sends the first message, preventing fabricated "New conversation" rows.
+        activeChatId = "";
+        transcript.removeAllViews();
+        lastSources.clear();
+        renderSources();
+        addWelcome();
     }
     private void restoreActiveChat() {
         ChatRecord chat=getActiveChat(); transcript.removeAllViews(); lastSources.clear();
@@ -612,14 +906,40 @@ public class MainActivity extends Activity {
         TextView name=label(chat.title,14,TEXT,false);name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);row.addView(name,new LinearLayout.LayoutParams(0,-2,1));
         TextView more=label("⋯",22,MUTED,true);more.setGravity(Gravity.CENTER);row.addView(more,new LinearLayout.LayoutParams(dp(32),dp(34)));
         panel.addView(row,new LinearLayout.LayoutParams(-1,-2));
-        row.setOnClickListener(v->{drawer.dismiss();activeChatId=chat.id;restoreActiveChat();});
+        row.setOnClickListener(v->{drawer.dismiss();if(chat.archived){showChatActions(chat);}else{activeChatId=chat.id;restoreActiveChat();}});
         more.setOnClickListener(v->{drawer.dismiss();showChatActions(chat);});row.setOnLongClickListener(v->{drawer.dismiss();showChatActions(chat);return true;});
     }
     private void showChatActions(ChatRecord chat) {
-        dialogBuilder().setTitle(chat.title).setItems(new String[]{"Rename",chat.pinned?"Unpin chat":"Pin chat","Delete chat"},(d,w)->{
-            if(w==0)renameChat(chat);else if(w==1){chat.pinned=!chat.pinned;chat.updatedAt=System.currentTimeMillis();saveChatHistory();toast(chat.pinned?"Chat pinned":"Chat unpinned");}else deleteChat(chat);
+        String[] actions = new String[]{
+                chat.pinned ? "Unpin" : "Pin",
+                "Rename",
+                "Add to project",
+                chat.archived ? "Unarchive" : "Archive",
+                "Delete"
+        };
+        dialogBuilder().setTitle(chat.title).setItems(actions, (d, w) -> {
+            if (w == 0) {
+                chat.pinned = !chat.pinned;
+                chat.updatedAt = System.currentTimeMillis();
+                saveChatHistory();
+                toast(chat.pinned ? "Chat pinned" : "Chat unpinned");
+            } else if (w == 1) {
+                renameChat(chat);
+            } else if (w == 2) {
+                showAddToProject(chat);
+            } else if (w == 3) {
+                chat.archived = !chat.archived;
+                if (chat.archived) chat.pinned = false;
+                chat.updatedAt = System.currentTimeMillis();
+                saveChatHistory();
+                if (chat.archived && chat.id.equals(activeChatId)) newConversation();
+                toast(chat.archived ? "Chat archived" : "Chat restored");
+            } else {
+                deleteChat(chat);
+            }
         }).show();
     }
+
     private void renameChat(ChatRecord chat) {
         EditText edit=new EditText(this);edit.setSingleLine(true);edit.setText(chat.title);edit.setTextColor(TEXT);edit.setHintTextColor(MUTED);edit.setSelectAllOnFocus(true);edit.setBackground(glassBackground());edit.setPadding(dp(12),dp(10),dp(12),dp(10));
         dialogBuilder().setTitle("Rename chat").setView(edit).setNegativeButton("Cancel",null).setPositiveButton("Save",(d,w)->{
@@ -631,7 +951,7 @@ public class MainActivity extends Activity {
         dialogBuilder().setTitle("Delete chat?").setMessage("This removes the conversation from this device.")
             .setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->{
                 chatHistory.remove(chat);saveChatHistory();
-                if(chat.id.equals(activeChatId)){if(chatHistory.isEmpty())createChatRecord();else activeChatId=chatHistory.get(0).id;restoreActiveChat();}
+                if(chat.id.equals(activeChatId)){activeChatId=chatHistory.isEmpty()?"":chatHistory.get(0).id;restoreActiveChat();}
                 toast("Chat deleted");
             }).show();
     }
@@ -641,7 +961,7 @@ public class MainActivity extends Activity {
         for(ChatRecord chat:chatHistory){
             boolean match=chat.title.toLowerCase(java.util.Locale.ROOT).contains(q);
             for(int i=0;!match&&i<chat.messages.length();i++){JSONObject m=chat.messages.optJSONObject(i);match=m!=null&&m.optString("content","").toLowerCase(java.util.Locale.ROOT).contains(q);}
-            if(match){count++;TextView item=label((chat.pinned?"★  ":"")+chat.title,14,TEXT,false);item.setPadding(dp(12),dp(12),dp(12),dp(12));results.addView(item);item.setOnClickListener(v->{activeChatId=chat.id;restoreActiveChat();});}
+            if(match){count++;TextView item=label((chat.archived?"▣  ":chat.pinned?"★  ":"")+chat.title,14,TEXT,false);item.setPadding(dp(12),dp(12),dp(12),dp(12));results.addView(item);item.setOnClickListener(v->{if(chat.archived){showChatActions(chat);}else{activeChatId=chat.id;restoreActiveChat();}});}
         }
         if(count==0)results.addView(label("No matching conversations",13,MUTED,false));
         dialogBuilder().setTitle("Search results").setView(scroll).setPositiveButton("Done",null).show();
@@ -670,6 +990,7 @@ public class MainActivity extends Activity {
         content.addView(info);
         dialogBuilder().setTitle("Profile").setView(content)
             .setNeutralButton("Settings", (d, w) -> showSettings())
+            .setNegativeButton("Sign out", (d, w) -> signOut())
             .setPositiveButton("Done", null).show();
     }
 
@@ -730,7 +1051,10 @@ public class MainActivity extends Activity {
             String reply; ArrayList<SourceItem> sources = new ArrayList<>();
             try {
                 HttpURLConnection conn = (HttpURLConnection)new URL(base + "/chat").openConnection();
-                conn.setRequestMethod("POST"); conn.setConnectTimeout(30000); conn.setReadTimeout(180000); conn.setRequestProperty("Accept", "application/json"); conn.setRequestProperty("Content-Type", "application/json; charset=utf-8"); conn.setDoOutput(true);
+                conn.setRequestMethod("POST"); conn.setConnectTimeout(30000); conn.setReadTimeout(180000); conn.setRequestProperty("Accept", "application/json"); conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                String accessToken = getSharedPreferences("aria_auth", MODE_PRIVATE).getString("access_token", "");
+                if (!accessToken.isEmpty()) conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+                conn.setDoOutput(true);
                 JSONObject payload = new JSONObject(); payload.put("message", message); payload.put("session_id", activeChatId.isEmpty() ? "android-default" : activeChatId);
                 try (OutputStream os = conn.getOutputStream()) { os.write(payload.toString().getBytes(StandardCharsets.UTF_8)); }
                 int code = conn.getResponseCode(); InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream(); StringBuilder body = new StringBuilder();
@@ -738,7 +1062,10 @@ public class MainActivity extends Activity {
                 if (code >= 200 && code < 300) {
                     JSONObject response = new JSONObject(body.toString()); reply = response.optString("reply", response.optString("answer", "")).trim(); if (reply.isEmpty()) reply = "The ARIA backend returned an empty response. Check the backend logs and try again.";
                     collectSources(response, sources); if (!response.optBoolean("success", true)) reply = "Request did not complete: " + reply;
-                } else { String detail = body.toString().trim(); if (detail.length() > 700) detail = detail.substring(0, 700); reply = "The ARIA server returned HTTP " + code + (detail.isEmpty() ? ". Please try again shortly." : ".\n\nServer detail: " + detail); }
+                } else if (code == 401) {
+                    reply = "Your ARIA sign-in has expired or is invalid. Please sign in again.";
+                    runOnUiThread(() -> { getSharedPreferences("aria_auth", MODE_PRIVATE).edit().remove("access_token").apply(); showSignInUi(); });
+                } else { String detail = body.toString().trim(); if (detail.length() > 700) detail = detail.substring(0, 700); reply = "The ARIA server returned HTTP " + code + (detail.isEmpty() ? ". Please try again shortly." : ".\\n\\nServer detail: " + detail); }
                 conn.disconnect();
             } catch (java.net.SocketTimeoutException ex) { reply = "ARIA is taking longer than expected. The request timed out. Please try again; a sleeping free Render service may need time to wake up."; } catch (Exception ex) { reply = "I couldn't reach the ARIA backend (" + ex.getClass().getSimpleName() + "). Check your internet connection and confirm the backend is online."; }
             final String finalReply = reply; final ArrayList<SourceItem> finalSources = sources;
@@ -890,7 +1217,7 @@ public class MainActivity extends Activity {
     private GradientDrawable round(int color,int radius) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
     private GradientDrawable glassBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.argb(204, 63, 78, 116), Color.argb(172, 22, 31, 52)});
+            new int[]{Color.rgb(43, 52, 76), Color.rgb(24, 30, 47)});
         d.setCornerRadius(dp(22));
         d.setStroke(dp(1), Color.argb(145, 190, 210, 255));
         return d;
