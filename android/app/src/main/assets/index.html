@@ -473,20 +473,84 @@
         let currentEngine = 'aria-backend'; // UI label only; backend chooses its configured model
         let isProSearch = false;
         let isVoiceActive = false;
-        let activeChatId = null; // null represents fresh new chat state
         let contextTargetChatId = null;
 
-        // Local UI history only. New assistant replies always come from the authenticated ARIA backend.
-        let chatsDatabase = [];
+        // Durable on-device chat history. WebView DOM storage is enabled by the native activity.
+        // Chats and pin state survive app restarts; clearing app data/uninstalling removes local data.
+        const CHAT_STORAGE_KEY = 'aria_glass_chats_v2';
+        const LEGACY_CHAT_STORAGE_KEY = 'aria_glass_chats';
+        const ACTIVE_CHAT_STORAGE_KEY = 'aria_glass_active_chat';
+        let chatsDatabase = loadSavedChats();
         let pendingRequests = new Map();
         let requestCounter = 0;
+        let activeChatId = localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) || null;
         const sessionId = 'android-' + (localStorage.getItem('aria-session-id') || (() => { const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()); localStorage.setItem('aria-session-id', id); return id; })());
 
+        function loadSavedChats() {
+            try {
+                let raw = localStorage.getItem(CHAT_STORAGE_KEY);
+                if (!raw) raw = localStorage.getItem(LEGACY_CHAT_STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : [];
+                if (!Array.isArray(parsed)) return [];
+                return parsed.filter(c => c && typeof c.id === 'string' && Array.isArray(c.messages))
+                    .map(c => ({
+                        id: c.id,
+                        title: String(c.title || 'New conversation').slice(0, 160),
+                        pinned: Boolean(c.pinned),
+                        archived: Boolean(c.archived),
+                        engine: String(c.engine || 'aria-backend'),
+                        updated: String(c.updated || ''),
+                        messages: c.messages.filter(m => m && typeof m === 'object' && ['user','assistant'].includes(m.role))
+                            .map(m => ({ role: m.role, text: String(m.text ?? ''), sources: normalizeSources(m.sources || []) }))
+                    }));
+            } catch (error) {
+                console.error('Could not load saved ARIA chats', error);
+                return [];
+            }
+        }
+
+        function saveChats() {
+            try {
+                localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatsDatabase));
+                localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId || '');
+                return true;
+            } catch (error) {
+                console.error('Could not persist ARIA chats', error);
+                showStatus('Chat storage is full or unavailable. Export your important chats before clearing app data.');
+                return false;
+            }
+        }
+
+        function touchChat(chat) {
+            if (!chat) return;
+            chat.updated = new Date().toISOString();
+            saveChats();
+        }
+
+        function restoreLastChat() {
+            if (activeChatId && chatsDatabase.some(c => c.id === activeChatId && !c.archived)) {
+                loadChat(activeChatId, false);
+            } else {
+                activeChatId = null;
+                saveChats();
+                document.getElementById('messages-container').innerHTML = '';
+                document.getElementById('messages-container').classList.add('hidden');
+                document.getElementById('welcome-container').classList.remove('hidden');
+            }
+        }
+
+
+        // Flush the latest state when Android backgrounds the WebView.
+        window.addEventListener('pagehide', saveChats);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') saveChats();
+        });
 
         // INITIALIZATION
         window.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
             renderSidebarChats();
+            restoreLastChat();
             initGestureListeners();
             updateViewportLayout();
             window.addEventListener('resize', updateViewportLayout);
@@ -517,6 +581,7 @@
         // RESTART / NEW CHAT STATE FIX
         function startNewChat() {
             activeChatId = null;
+            saveChats();
             document.getElementById('messages-container').innerHTML = '';
             document.getElementById('messages-container').classList.add('hidden');
             document.getElementById('welcome-container').classList.remove('hidden');
@@ -525,10 +590,11 @@
         }
 
         // LOAD AN EXISTING CHAT
-        function loadChat(chatId) {
-            activeChatId = chatId;
-            const chat = chatsDatabase.find(c => c.id === chatId);
+        function loadChat(chatId, closeDrawer = true) {
+            const chat = chatsDatabase.find(c => c.id === chatId && !c.archived);
             if (!chat) return;
+            activeChatId = chatId;
+            saveChats();
 
             const container = document.getElementById('messages-container');
             container.innerHTML = '';
@@ -541,7 +607,7 @@
             container.classList.remove('hidden');
             scrollToBottom();
             renderSidebarChats();
-            closeSidebar();
+            if (closeDrawer) closeSidebar();
         }
 
         // Real backend request path through the native Android bridge (no simulated replies).
@@ -563,13 +629,14 @@
             }
             if (!activeChatId) {
                 activeChatId = 'c_' + Date.now();
-                chatsDatabase.unshift({ id:activeChatId, title:text.length > 36 ? text.slice(0,36)+'…' : text, pinned:false, engine:currentEngine, updated:'Just now', messages:[] });
+                chatsDatabase.unshift({ id:activeChatId, title:text.length > 36 ? text.slice(0,36)+'…' : text, pinned:false, archived:false, engine:currentEngine, updated:new Date().toISOString(), messages:[] });
             }
             const currentChat = chatsDatabase.find(c => c.id === activeChatId);
             document.getElementById('welcome-container').classList.add('hidden');
             document.getElementById('messages-container').classList.remove('hidden');
             appendMessageToUI('user', text);
-            currentChat.messages.push({role:'user', text});
+            currentChat.messages.push({role:'user', text, sources:[]});
+            touchChat(currentChat);
             input.value = '';
             input.style.height = '';
             const requestId = 'req_' + (++requestCounter) + '_' + Date.now();
@@ -591,28 +658,31 @@
 
         window.onAriaChatResult = function(result) {
             if (!result) return;
-            const pending = pendingRequests.get(result.requestId);
+            const pending = pendingRequests.get(String(result.requestId || ''));
             if (pending) {
                 if (pending.typing && pending.typing.parentNode) pending.typing.remove();
-                pendingRequests.delete(result.requestId);
+                pendingRequests.delete(String(result.requestId || ''));
             }
             setComposerBusy(pendingRequests.size > 0);
             if (result.authRequired) { showStatus(result.message || 'Please sign in again.'); return; }
             const chat = chatsDatabase.find(c => c.id === (pending && pending.chatId));
-            if (!result.success) {
-                appendMessageToUI('assistant', result.reply || result.message || 'The ARIA request failed.');
-                if (chat) chat.messages.push({role:'assistant', text:result.reply || result.message || 'The ARIA request failed.', sources:[]});
-                renderSidebarChats();
-                return;
-            }
+            if (!chat) { showStatus('The reply arrived, but its conversation no longer exists.'); return; }
             let reply = result.reply || result.answer || result.message || 'ARIA returned an empty response.';
-            const extracted = extractSourcesFromReply(reply);
-            reply = extracted.reply;
-            const sources = normalizeSources([...(Array.isArray(result.sources) ? result.sources : []), ...(Array.isArray(result.citations) ? result.citations : []), ...(Array.isArray(result.references) ? result.references : []), ...extracted.sources]);
-            const uniqueSources = [...new Map(sources.map(source => [source.url, source])).values()];
-            appendMessageToUI('assistant', reply, uniqueSources);
-            if (chat) chat.messages.push({role:'assistant', text:reply, sources:uniqueSources});
+            let sources = [];
+            if (result.success) {
+                const extracted = extractSourcesFromReply(reply);
+                reply = extracted.reply;
+                sources = normalizeSources([...(Array.isArray(result.sources) ? result.sources : []), ...(Array.isArray(result.citations) ? result.citations : []), ...(Array.isArray(result.references) ? result.references : []), ...extracted.sources]);
+                sources = [...new Map(sources.map(source => [source.url, source])).values()];
+            } else {
+                reply = String(result.reply || result.message || 'The ARIA request failed.');
+            }
+            chat.messages.push({role:'assistant', text:String(reply), sources});
+            touchChat(chat);
+            // Only render into the visible pane if the user is still viewing this conversation.
+            if (activeChatId === chat.id) appendMessageToUI('assistant', reply, sources);
             renderSidebarChats();
+            if (!result.success) showStatus(result.message || 'ARIA request failed.');
         };
 
         function extractSourcesFromReply(text) {
@@ -711,8 +781,9 @@
             pinnedList.innerHTML = '';
             recentList.innerHTML = '';
 
-            const pinned = chatsDatabase.filter(c => c.pinned);
-            const recents = chatsDatabase.filter(c => !c.pinned);
+            const visibleChats = chatsDatabase.filter(c => !c.archived);
+            const pinned = visibleChats.filter(c => c.pinned);
+            const recents = visibleChats.filter(c => !c.pinned);
 
             if (pinned.length === 0) {
                 pinnedList.innerHTML = `<div class="text-[11px] text-white/30 italic px-2 py-1">No pinned chats</div>`;
@@ -732,23 +803,26 @@
         function createChatItemElement(chat) {
             const div = document.createElement('div');
             const isActive = chat.id === activeChatId;
-
-            div.className = `group relative flex items-center justify-between p-2.5 rounded-xl transition-all ${
-                isActive ? 'bg-white/15 text-white font-bold' : 'text-white/70 hover:bg-white/5 hover:text-white'
-            }`;
-
-            div.innerHTML = `
-                <div class="flex items-center gap-2.5 truncate cursor-pointer flex-1" onclick="loadChat('${chat.id}')">
-                    <i data-lucide="${chat.pinned ? 'pin' : 'message-square'}" class="w-3.5 h-3.5 ${chat.pinned ? 'text-gold' : 'text-white/40'} flex-shrink-0"></i>
-                    <span class="text-xs truncate">${chat.title}</span>
-                </div>
-                
-                <!-- Context Menu Trigger Button -->
-                <button onclick="openContextMenu(event, '${chat.id}')" class="p-1 rounded-lg hover:bg-white/15 text-white/40 hover:text-white transition-all opacity-0 group-hover:opacity-100" title="Options">
-                    <i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>
-                </button>
-            `;
-
+            div.className = `group relative flex items-center justify-between p-2.5 rounded-xl transition-all ${isActive ? 'bg-white/15 text-white font-bold' : 'text-white/70 hover:bg-white/5 hover:text-white'}`;
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'flex items-center gap-2.5 truncate cursor-pointer flex-1 text-left min-w-0';
+            open.addEventListener('click', () => loadChat(chat.id));
+            const icon = document.createElement('i');
+            icon.setAttribute('data-lucide', chat.pinned ? 'pin' : 'message-square');
+            icon.className = `w-3.5 h-3.5 ${chat.pinned ? 'text-gold' : 'text-white/40'} flex-shrink-0`;
+            const title = document.createElement('span');
+            title.className = 'text-xs truncate';
+            title.textContent = chat.title;
+            open.append(icon, title);
+            const options = document.createElement('button');
+            options.type = 'button';
+            options.className = 'p-1 rounded-lg hover:bg-white/15 text-white/40 hover:text-white transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100';
+            options.title = 'Options';
+            options.setAttribute('aria-label', 'Chat options');
+            options.innerHTML = '<i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>';
+            options.addEventListener('click', e => openContextMenu(e, chat.id));
+            div.append(open, options);
             return div;
         }
 
@@ -802,9 +876,12 @@
                 chatsDatabase = chatsDatabase.filter(c => c.id !== contextTargetChatId);
                 if (activeChatId === contextTargetChatId) startNewChat();
             } else if (action === 'archive') {
-                alert(`Chat "${chat.title}" archived successfully.`);
+                chat.archived = true;
+                if (activeChatId === contextTargetChatId) startNewChat();
             }
 
+            touchChat(chat);
+            saveChats();
             hideContextMenu();
             renderSidebarChats();
         }
