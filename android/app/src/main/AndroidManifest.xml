@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:label="ARIA"
@@ -8,8 +9,17 @@
         android:roundIcon="@drawable/aria_launcher"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
+
+        <!-- Existing native activity is retained so its code is not deleted. -->
         <activity
             android:name=".MainActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <!-- New WebView host for the glass UI preview. -->
+        <activity
+            android:name=".AriaGlassActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize|stateAlwaysHidden"
             android:configChanges="keyboardHidden|orientation|screenSize">
