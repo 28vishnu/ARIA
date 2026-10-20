@@ -2,10 +2,12 @@ import gzip
 import json
 import os
 import tempfile
+import contextlib
+import io
 import unittest
 from pathlib import Path
 
-from brain.knowledge.dataset_importer import records_for
+from brain.knowledge.dataset_importer import main as importer_main, records_for
 from brain.knowledge.open_knowledge import connect, import_records, search
 
 
@@ -66,6 +68,32 @@ class DatasetImporterTests(unittest.TestCase):
         columns = {r[1] for r in conn.execute("PRAGMA table_info(documents)")}
         conn.close()
         self.assertIn("license", columns)
+
+    def test_dry_run_previews_without_creating_database(self):
+        path = self.write("preview.txt", "Photosynthesis converts light energy into chemical energy. " * 20)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = importer_main([
+                "import", "--source", "gutenberg", "--file", str(path),
+                "--db", self.db, "--dry-run", "--preview-count", "2",
+            ])
+        self.assertEqual(code, 0)
+        result = json.loads(output.getvalue())
+        self.assertTrue(result["dry_run"])
+        self.assertFalse(result["database_written"])
+        self.assertEqual(result["records_previewed"], 1)
+        self.assertFalse(Path(self.db).exists())
+
+    def test_dry_run_rejects_unreasonable_preview_count(self):
+        path = self.write("preview.txt", "A small text record with enough useful content. " * 5)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = importer_main([
+                "import", "--source", "gutenberg", "--file", str(path),
+                "--db", self.db, "--dry-run", "--preview-count", "1000",
+            ])
+        self.assertEqual(code, 1)
+        self.assertFalse(Path(self.db).exists())
 
 
 if __name__ == "__main__":
