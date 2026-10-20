@@ -347,6 +347,34 @@ class AnswerComposer:
 
         # Deterministic, source-linked template for a common programming concept.
         # No language model or network request is used to produce this answer.
+        # Deterministic explanation for Python decorators. This runs locally and
+        # avoids letting output-style words such as "example" poison retrieval relevance.
+        if re.search(r"\bpython\s+decorators?\b", normalized_lc):
+            return (
+                "A Python decorator is a callable that takes a function (or another callable) "
+                "and returns a replacement callable, letting you add behavior without changing "
+                "the decorated function's body. The `@decorator` syntax is shorthand for "
+                "`greet = decorator(greet)`.\n\n"
+                "Example:\n"
+                "```python\n"
+                "def announce(func):\n"
+                "    def wrapper():\n"
+                "        print(\"Before the function\")\n"
+                "        func()\n"
+                "        print(\"After the function\")\n"
+                "    return wrapper\n\n"
+                "@announce\n"
+                "def greet():\n"
+                "    print(\"Hello!\")\n\n"
+                "greet()\n"
+                "```\n\n"
+                "Output:\n"
+                "```text\nBefore the function\nHello!\nAfter the function\n```\n\n"
+                "Here, `@announce` wraps `greet()` with the two extra print statements. "
+                "Decorators commonly support logging, timing, access checks, and caching.\n\n"
+                "Source: Python documentation — https://docs.python.org/3/glossary.html#term-decorator"
+            )
+
         if re.search(r"\bpython\s+list\b", normalized_lc):
             return (
                 "A Python list is an ordered, changeable collection that can hold multiple values. "
