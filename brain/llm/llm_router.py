@@ -87,9 +87,25 @@ class LLMRouter:
         # Shorter cooldown for temporary server/network failures.
         self._temporary_failure_cooldown = 10.0
 
-        # Response cache for optimization (30-second TTL)
+        # Bounded provider usage: one primary provider plus a small number of
+        # fallbacks, rather than exhausting every configured provider for one
+        # user request. 429 responses are never retried immediately.
+        try:
+            self._max_providers_per_request = max(
+                1, min(4, int(os.getenv("ARIA_LLM_MAX_PROVIDERS_PER_REQUEST", "2")))
+            )
+        except (TypeError, ValueError):
+            self._max_providers_per_request = 2
+
+        # Cache identical requests longer to conserve free provider quotas.
+        # Keep the cache process-local and bounded; do not persist user prompts.
+        try:
+            self._cache_ttl = max(
+                0.0, min(3600.0, float(os.getenv("ARIA_LLM_CACHE_TTL_SECONDS", "300")))
+            )
+        except (TypeError, ValueError):
+            self._cache_ttl = 300.0
         self._cache: Dict[str, tuple[str, float]] = {}
-        self._cache_ttl = 30.0
 
     @staticmethod
     def _normalize_model(
@@ -285,6 +301,7 @@ class LLMRouter:
         )
 
         errors = []
+        providers_attempted = 0
 
         available_providers = {
             "Groq": (
@@ -394,6 +411,17 @@ class LLMRouter:
 
             configured_providers += 1
 
+            # Do not fan a single request out across every configured service.
+            # A provider counts when we actually attempt it; configured but
+            # cooling-down providers do not consume this request's attempt cap.
+            if providers_attempted >= self._max_providers_per_request:
+                logger.info(
+                    "[LLMRouter] Provider attempt budget reached (%d); "
+                    "remaining providers skipped for this request.",
+                    self._max_providers_per_request,
+                )
+                break
+
             # -------------------------------------------------
             # PROVIDER CIRCUIT BREAKER
             # -------------------------------------------------
@@ -428,8 +456,9 @@ class LLMRouter:
 
             # Normally one attempt.
             # A temporary network/server failure may receive
-            # one additional attempt.
-
+            # one additional attempt. Count the provider once, regardless
+            # of the temporary retry or a stale-model correction.
+            providers_attempted += 1
             attempt = 0
 
             while attempt < 2:
