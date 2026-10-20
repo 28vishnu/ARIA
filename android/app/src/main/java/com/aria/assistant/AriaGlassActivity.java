@@ -42,16 +42,12 @@ public class AriaGlassActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         getWindow().setStatusBarColor(Color.rgb(6, 7, 11));
         getWindow().setNavigationBarColor(Color.rgb(6, 7, 11));
         if (Build.VERSION.SDK_INT >= 29) {
             getWindow().setNavigationBarContrastEnforced(false);
             getWindow().setStatusBarContrastEnforced(false);
-        }
-        if (Build.VERSION.SDK_INT >= 28) {
-            WindowManager.LayoutParams attrs = getWindow().getAttributes();
-            attrs.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-            getWindow().setAttributes(attrs);
         }
 
         webView = new WebView(this);
