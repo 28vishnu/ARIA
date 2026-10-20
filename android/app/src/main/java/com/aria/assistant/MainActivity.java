@@ -68,8 +68,8 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().setStatusBarColor(Color.rgb(12, 16, 28));
-        getWindow().setNavigationBarColor(Color.rgb(12, 16, 28));
+        getWindow().setStatusBarColor(Color.rgb(9, 12, 20));
+        getWindow().setNavigationBarColor(Color.rgb(9, 12, 20));
         getWindow().getDecorView().setSystemUiVisibility(0);
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         createNotificationChannel();
@@ -83,7 +83,28 @@ public class MainActivity extends Activity {
     @Override protected void onStop() { appVisible = false; super.onStop(); }
 
     private AlertDialog.Builder dialogBuilder() {
+        // Dark native dialog theme keeps secondary screens consistent with ARIA.
         return new AlertDialog.Builder(new android.view.ContextThemeWrapper(this, android.R.style.Theme_Material_Dialog_Alert));
+    }
+
+    private void applyDialogColors(AlertDialog dialog) {
+        if (dialog == null) return;
+        dialog.setOnShowListener(ignored -> {
+            int buttonColor = ACCENT;
+            int[] ids = {android.R.id.button1, android.R.id.button2, android.R.id.button3};
+            for (int id : ids) {
+                Button b = dialog.findViewById(id);
+                if (b != null) b.setTextColor(buttonColor);
+            }
+            TextView message = dialog.findViewById(android.R.id.message);
+            if (message != null) message.setTextColor(TEXT);
+        });
+    }
+
+    private AlertDialog showDialog(AlertDialog dialog) {
+        applyDialogColors(dialog);
+        dialog.show();
+        return dialog;
     }
 
     private void createNotificationChannel() {
@@ -147,15 +168,34 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(0);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{Color.rgb(11, 15, 28), Color.rgb(7, 9, 17)}));
-        root.setPadding(dp(14), dp(8), dp(14), dp(8));
+        root.setBackgroundColor(BG);
+        final int baseLeft = dp(12), baseTop = dp(4), baseRight = dp(12), baseBottom = dp(6);
+        root.setPadding(baseLeft, baseTop, baseRight, baseBottom);
+        // Respect status bar, camera cut-outs/notches, gesture navigation and keyboard insets.
+        // This prevents the hamburger/header from sitting underneath the notification/status area.
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int top = 0, left = 0, right = 0, bottom = 0;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.statusBars()
+                    | android.view.WindowInsets.Type.navigationBars() | android.view.WindowInsets.Type.displayCutout());
+                top = bars.top; left = bars.left; right = bars.right; bottom = bars.bottom;
+            } else {
+                top = insets.getSystemWindowInsetTop();
+                left = insets.getSystemWindowInsetLeft();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(baseLeft + left, baseTop + top, baseRight + right, baseBottom + bottom);
+            return insets;
+        });
 
         // Compact ChatGPT-inspired header: navigation, brand, and new-chat action.
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setPadding(0, dp(2), 0, dp(8));
-        TextView menu = label("☰", 23, TEXT, false);
+        header.setPadding(0, 0, 0, dp(3));
+        TextView menu = label("☰", 21, TEXT, false);
+        menu.setContentDescription("Open navigation menu");
         menu.setGravity(Gravity.CENTER);
         header.addView(menu, new LinearLayout.LayoutParams(dp(42), dp(44)));
         menu.setOnClickListener(v -> showAppMenu());
@@ -174,10 +214,10 @@ public class MainActivity extends Activity {
         newChat.setGravity(Gravity.CENTER);
         header.addView(newChat, new LinearLayout.LayoutParams(dp(42), dp(44)));
         newChat.setOnClickListener(v -> newConversation());
-        root.addView(header, new LinearLayout.LayoutParams(-1, dp(48)));
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(44)));
 
         tabRow = new LinearLayout(this); tabRow.setOrientation(LinearLayout.HORIZONTAL); tabRow.setGravity(Gravity.CENTER_VERTICAL);
-        tabRow.setPadding(0, dp(2), 0, dp(8));
+        tabRow.setPadding(0, 0, 0, dp(5));
         answerTab = new Button(this); sourcesTab = new Button(this);
         styleTab(answerTab, "Answer", true); styleTab(sourcesTab, "Sources", false);
         tabRow.addView(answerTab, new LinearLayout.LayoutParams(dp(86), dp(36)));
@@ -188,7 +228,8 @@ public class MainActivity extends Activity {
         // Keep configuration out of the conversation view; accessible through the menu.
         serverInput = new EditText(this);
         serverInput.setSingleLine(true);
-        serverInput.setText(DEFAULT_SERVER);
+        serverInput.setText(getSharedPreferences("aria_settings", MODE_PRIVATE)
+            .getString("backend_url", DEFAULT_SERVER));
 
         transcriptScroll = new ScrollView(this);
         transcriptScroll.setFillViewport(true);
@@ -243,25 +284,30 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams disclaimerParams = new LinearLayout.LayoutParams(-1, dp(20));
         root.addView(disclaimer, disclaimerParams);
 
-        // Profile and settings live in the navigation drawer, not in a permanent bottom dock.
+        // Profile and settings are in the navigation drawer, never pinned over the chat.
 
         sendButton.setOnClickListener(v -> sendMessage());
         input.setOnEditorActionListener((v, action, event) -> {
-            if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER && !event.isShiftPressed()) { sendMessage(); return true; }
+            if ((event == null && action == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) || (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER && !event.isShiftPressed())) { sendMessage(); return true; }
             return false;
         });
         setContentView(root);
     }
 
     private void showAppMenu() {
-        String[] options = {"New chat", "Chat history", "Explore ARIA features", "Settings", "About ARIA"};
-        dialogBuilder().setTitle("ARIA").setItems(options, (dialog, which) -> {
-            if (which == 0) newConversation();
-            else if (which == 1) showHistory();
-            else if (which == 2) showFeatureDirectory();
-            else if (which == 3) showSettings();
-            else dialogBuilder().setTitle("About ARIA").setMessage("ARIA is your personal AI assistant, currently connected to your configured backend. Some advanced features are planned and are not active yet.").setPositiveButton("OK", null).show();
-        }).show();
+        final String[] options = {"＋   New chat", "◷   Chat history", "✦   Explore ARIA features", "◉   Profile", "⚙   Settings", "ⓘ   About ARIA"};
+        AlertDialog dialog = dialogBuilder().setTitle("ARIA  ·  Assistant")
+            .setItems(options, (d, which) -> {
+                if (which == 0) newConversation();
+                else if (which == 1) showHistory();
+                else if (which == 2) showFeatureDirectory();
+                else if (which == 3) showProfile();
+                else if (which == 4) showSettings();
+                else dialogBuilder().setTitle("About ARIA")
+                    .setMessage("ARIA is your personal assistant connected to your configured backend. Available tools depend on the backend and permissions enabled for this build.")
+                    .setPositiveButton("Done", null).show();
+            }).create();
+        showDialog(dialog);
     }
 
     private void newConversation() {
@@ -270,14 +316,14 @@ public class MainActivity extends Activity {
     }
 
     private void addWelcome() {
-        LinearLayout welcome = new LinearLayout(this); welcome.setOrientation(LinearLayout.VERTICAL); welcome.setGravity(Gravity.CENTER); welcome.setPadding(dp(10), dp(20), dp(10), dp(24));
+        LinearLayout welcome = new LinearLayout(this); welcome.setOrientation(LinearLayout.VERTICAL); welcome.setGravity(Gravity.CENTER); welcome.setPadding(dp(10), dp(10), dp(10), dp(16));
         TextView icon = label("✦", 32, Color.WHITE, true); icon.setGravity(Gravity.CENTER); icon.setBackground(glassAccent());
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(58), dp(58)); ip.bottomMargin = dp(18); welcome.addView(icon, ip);
-        TextView heading = label("What can I help with?", 26, TEXT, true); heading.setGravity(Gravity.CENTER); welcome.addView(heading);
-        TextView sub = label("Ask anything, explore an idea, or work through a problem.", 15, MUTED, false); sub.setGravity(Gravity.CENTER); sub.setPadding(dp(16), dp(9), dp(16), dp(18)); welcome.addView(sub);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(54), dp(54)); ip.bottomMargin = dp(14); welcome.addView(icon, ip);
+        TextView heading = label("What can I help with?", 23, TEXT, true); heading.setGravity(Gravity.CENTER); welcome.addView(heading);
+        TextView sub = label("Ask a question, explore an idea, or work through a problem.", 14, MUTED, false); sub.setGravity(Gravity.CENTER); sub.setPadding(dp(16), dp(9), dp(16), dp(18)); welcome.addView(sub);
         LinearLayout suggestions = new LinearLayout(this); suggestions.setOrientation(LinearLayout.VERTICAL);
         String[] prompts = {"Explain something clearly", "Help me write or improve code", "Explore an idea with me"};
-        for (String prompt : prompts) { TextView item = label("✧    " + prompt, 14, TEXT, false); item.setPadding(dp(16), dp(15), dp(16), dp(15)); item.setBackground(glassBackground()); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8); suggestions.addView(item,p); item.setOnClickListener(v -> { input.setText(prompt); input.setSelection(input.length()); input.requestFocus(); }); }
+        for (String prompt : prompts) { TextView item = label("✧   " + prompt, 13, TEXT, false); item.setPadding(dp(14), dp(12), dp(14), dp(12)); item.setBackground(glassBackground()); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8); suggestions.addView(item,p); item.setOnClickListener(v -> { input.setText(prompt); input.setSelection(input.length()); input.requestFocus(); }); }
         welcome.addView(suggestions, new LinearLayout.LayoutParams(-1, -2)); transcript.addView(welcome, new LinearLayout.LayoutParams(-1, -1));
     }
 
@@ -300,7 +346,7 @@ public class MainActivity extends Activity {
         TextView backendLabel = label("Backend URL", 13, MUTED, true); content.addView(backendLabel);
         EditText backend = new EditText(this); backend.setSingleLine(true); backend.setText(serverInput.getText().toString()); backend.setTextColor(TEXT); backend.setHintTextColor(MUTED); backend.setTextSize(14); backend.setSelectAllOnFocus(true); content.addView(backend);
         TextView note = label("Render hosting is fine. A free service may take time to wake up after inactivity.", 12, MUTED, false); note.setPadding(0,dp(8),0,0); content.addView(note);
-        dialogBuilder().setTitle("Settings").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> { String url=backend.getText().toString().trim().replaceAll("/+$", ""); if (url.startsWith("https://")) serverInput.setText(url); else toast("Use a valid HTTPS URL."); }).show();
+        dialogBuilder().setTitle("Settings").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> { String url=backend.getText().toString().trim().replaceAll("/+$", ""); if (url.startsWith("https://")) { serverInput.setText(url); getSharedPreferences("aria_settings", MODE_PRIVATE).edit().putString("backend_url", url).apply(); toast("Backend URL saved"); } else toast("Use a valid HTTPS URL."); }).show();
     }
 
     private void showHistory() {
@@ -504,9 +550,9 @@ public class MainActivity extends Activity {
     private GradientDrawable round(int color,int radius) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
     private GradientDrawable glassBackground() {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.rgb(31, 37, 54), Color.rgb(18, 23, 37)});
+            new int[]{Color.rgb(27, 30, 36), Color.rgb(21, 23, 28)});
         d.setCornerRadius(dp(18));
-        d.setStroke(dp(1), Color.argb(65, 190, 205, 245));
+        d.setStroke(dp(1), Color.argb(45, 210, 220, 240));
         return d;
     }
     private GradientDrawable glassAccent() {
