@@ -79,6 +79,45 @@ public class MainActivity extends Activity {
             root.requestApplyInsets();
         }
         addWelcome();
+        checkForUpdates();
+    }
+
+    private void checkForUpdates() {
+        executor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL("https://github.com/28vishnu/ARIA/releases/latest/download/version.json");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(7000);
+                connection.setReadTimeout(7000);
+                connection.setInstanceFollowRedirects(true);
+                int status = connection.getResponseCode();
+                if (status != HttpURLConnection.HTTP_OK) return;
+                StringBuilder body = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line; while ((line = reader.readLine()) != null) body.append(line);
+                }
+                JSONObject release = new JSONObject(body.toString());
+                int latestCode = release.optInt("versionCode", 0);
+                String latestName = release.optString("versionName", "New version");
+                String apkUrl = release.optString("apkUrl", "https://github.com/28vishnu/ARIA/releases/latest");
+                int installedCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+                if (latestCode > installedCode) {
+                    runOnUiThread(() -> new AlertDialog.Builder(this)
+                        .setTitle("ARIA update available")
+                        .setMessage("Version " + latestName + " is ready to install. Update now for the latest improvements.")
+                        .setPositiveButton("Download update", (dialog, which) -> {
+                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl))); }
+                            catch (Exception e) { toast("Could not open the download link."); }
+                        })
+                        .setNegativeButton("Later", null)
+                        .show());
+                }
+            } catch (Exception ignored) {
+                // Updates are optional; network errors must never block opening ARIA.
+            } finally { if (connection != null) connection.disconnect(); }
+        });
     }
 
     private void buildUi() {
