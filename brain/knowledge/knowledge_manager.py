@@ -9,6 +9,7 @@ from pathlib import Path
 
 from brain.knowledge.answer_composer import AnswerComposer
 from brain.knowledge.evidence_cleaner import clean_evidence_text, is_useful_evidence
+from brain.knowledge.evidence_policy import apply_evidence_metadata_policy
 
 logger = logging.getLogger("aria")
 
@@ -569,32 +570,19 @@ class KnowledgeManager:
             min(relevance, 1.0),
         )
 
-        return {
+        normalized = {
             **item,
-
             "content": content,
             "source": source,
-
             "confidence": confidence,
             "importance": importance,
-
-            "evidence_type": item.get(
-                "evidence_type",
-                "retrieved",
-            ),
-
-            "provenance": item.get(
-                "provenance",
-                source,
-            ),
-
+            "evidence_type": item.get("evidence_type", "retrieved"),
+            "provenance": item.get("provenance", source),
             "freshness": freshness,
             "relevance": relevance,
-
-            "verified": bool(
-                item.get("verified", False)
-            ),
+            "verified": bool(item.get("verified", False)),
         }
+        return apply_evidence_metadata_policy(normalized)
 
     # =========================================================
     # Unified Search
