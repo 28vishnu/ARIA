@@ -11,6 +11,7 @@ import html
 import re
 from typing import Any
 from pathlib import Path
+from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
@@ -351,6 +352,34 @@ async def lifespan(
     app.state.registry = registry
 
     app.state.bg_manager = background_manager
+
+    # When MongoDB is configured, Telegram updates are queued durably before the
+    # webhook acknowledges them. A named handler reconstructs only the minimal
+    # request shape used by process_telegram_update; no Request object is stored.
+    if registry.has("durable_job_queue"):
+        durable_queue = registry.get("durable_job_queue")
+        if getattr(durable_queue, "available", False):
+            async def _process_durable_telegram_update(payload):
+                fake_request = SimpleNamespace(app=SimpleNamespace(state=app.state))
+                return await process_telegram_update(
+                    fake_request,
+                    payload["data"],
+                    payload["request_id"],
+                )
+
+            durable_queue.register_handler(
+                "telegram_update",
+                _process_durable_telegram_update,
+            )
+            scheduler = registry.get("scheduler")
+            app.state.durable_queue_worker_job = scheduler.schedule_recurring(
+                1.0,
+                durable_queue.run_one,
+                goal_id="aria_durable_job_worker",
+                timeout_seconds=60.0,
+                run_immediately=True,
+            )
+            logger.info("[Lifespan] Mongo-backed durable job worker enabled.")
 
     logger.info(
         "[Lifespan] ARIA Platform successfully started."
@@ -1595,13 +1624,45 @@ async def telegram_webhook(
         request_id,
     )
 
-    background_manager.schedule(
-        process_telegram_update(
-            req,
-            data,
-            request_id,
+    registry = getattr(req.app.state, "registry", None)
+    durable_queue = None
+    if registry is not None and registry.has("durable_job_queue"):
+        candidate = registry.get("durable_job_queue")
+        if getattr(candidate, "available", False):
+            durable_queue = candidate
+
+    if durable_queue is not None:
+        # Stable IDs make Telegram retries idempotent across process restarts.
+        durable_id = f"telegram-update-{update_id}" if update_id is not None else None
+        try:
+            await durable_queue.enqueue(
+                "telegram_update",
+                {"data": data, "request_id": request_id},
+                job_id=durable_id,
+            )
+        except Exception as exc:
+            # A duplicate durable ID means the update was already accepted.
+            try:
+                existing = await durable_queue.collection.find_one({"_id": durable_id}) if durable_id else None
+            except Exception:
+                existing = None
+            if existing is not None:
+                return {"status": "duplicate_ignored", "update_id": update_id}
+            logger.exception("[Telegram] Could not persist accepted update %s", update_id)
+            return JSONResponse(
+                status_code=503,
+                content={"status": "temporarily_unavailable", "update_id": update_id},
+            )
+    else:
+        # Explicit fallback for local/test deployments without MongoDB. This is
+        # best-effort only and is reported as non-durable by /ready.
+        background_manager.schedule(
+            process_telegram_update(
+                req,
+                data,
+                request_id,
+            )
         )
-    )
 
     # ---------------------------------------------------------
     # IMMEDIATE TELEGRAM ACKNOWLEDGEMENT
