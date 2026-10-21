@@ -40,16 +40,18 @@ class FileAction(BaseAction):
         # Treat user paths as relative to the workspace.
         requested_path = requested_path.lstrip("/\\")
 
-        resolved = os.path.abspath(
-            os.path.join(FILE_WORKSPACE, requested_path)
+        # Resolve symlinks as well as '..' segments. A lexical abspath
+        # check alone permits a symlink inside the workspace to point
+        # outside it.
+        workspace = os.path.realpath(FILE_WORKSPACE)
+        resolved = os.path.realpath(
+            os.path.join(workspace, requested_path)
         )
 
         try:
-            if os.path.commonpath(
-                [FILE_WORKSPACE, resolved]
-            ) != FILE_WORKSPACE:
+            if os.path.commonpath([workspace, resolved]) != workspace:
                 return None
-        except ValueError:
+        except (ValueError, OSError):
             return None
 
         return resolved
