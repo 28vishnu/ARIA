@@ -829,9 +829,59 @@ class ConversationManager:
         cleaned = query.strip()
         lower = cleaned.lower()
 
-        # Resolve explicit "explain that/it/this" follow-ups from the latest
-        # completed turn before generic entity extraction can mistake "Explain"
-        # for the topic. This path is used by Telegram's process_task pipeline.
+        # Resolve explicit references to the immediately preceding answer before
+        # entity extraction can mistake words like "simpler" or "example" for
+        # a new topic. Keep this deterministic and bounded to the latest turn.
+        followup_match = re.match(
+            r"^(?:"
+            r"explain\s+(?:that|it|this)|"
+            r"summari[sz]e\s+(?:that|it|this)|"
+            r"simplif(?:y|ied)\s+(?:that|it|this)|"
+            r"make\s+(?:that|it|this)\s+(?:simpler|shorter|clearer)|"
+            r"give\s+(?:me\s+)?an\s+example(?:\s+of\s+(?:that|it|this))?|"
+            r"continue\s+(?:that|it|this)"
+            r")(?:\s+(.*))?$",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if followup_match:
+            followup_verb = cleaned.split()[0].lower()
+            detail = str(followup_match.group(1) or "").strip(" .!?\t")
+            history = session.get("conversation_history", [])
+            previous = history[-1] if isinstance(history, list) and history else {}
+            if not isinstance(previous, dict):
+                previous = {}
+            previous_user = str(previous.get("user", "")).strip()
+            previous_assistant = str(previous.get("assistant", "")).strip()
+            if not previous_user:
+                previous_user = str(session.get("last_user_message") or "").strip()
+            if not previous_assistant:
+                previous_assistant = str(session.get("last_assistant_message") or "").strip()
+            if previous_user and previous_assistant:
+                if (
+                    followup_match
+                    and cleaned.lower().startswith("explain ")
+                    and re.search(
+                        r"\b(?:calculate|compute|solve|evaluate|work\s+out)\b|\d\s*[+*/%×÷^]",
+                        previous_user,
+                        flags=re.IGNORECASE,
+                    )
+                ):
+                    suffix = f" {detail}" if detail else ""
+                    return (
+                        f"Explain the result of the previous calculation "
+                        f"({previous_user}; result: {previous_assistant}){suffix}."
+                    )
+                source_answer = previous_assistant[:1200]
+                instruction = cleaned.rstrip(" .!? ")
+                return (
+                    f"{instruction.capitalize()} about the previous answer "
+                    f"(user asked: {previous_user[:400]}; answer: {source_answer})"
+                    + (f". Additional instruction: {detail}" if detail else ".")
+                )
+
+        # Legacy calculation-specific expansion remains for cases where the
+        # previous assistant answer is absent but the user message is available.
         explain_match = re.match(
             r"^explain\s+(?:that|it|this)(?:\s+(.*))?$",
             cleaned,
