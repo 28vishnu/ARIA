@@ -328,9 +328,6 @@ class AnswerComposer:
             seen_content.add(key)
             valid.append((raw, content))
 
-        if not valid:
-            return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. Try a more specific question or import the relevant dataset."
-
         normalized_lc = self._normalized_question(question).casefold()
         asks_example = bool(re.search(
             r"\b(?:example|examples|for instance|everyday example|real[- ]life example)\b",
@@ -399,6 +396,31 @@ class AnswerComposer:
                 "Source: Python documentation — https://docs.python.org/3/glossary.html#term-decorator"
             )
 
+        # Deterministic comparison for a common Python beginner question.
+        # This is intentionally independent of retrieved articles: the response
+        # is a stable language fact and includes the official tutorial citation.
+        comparison_query = str(question or "").casefold()
+        if (
+            re.search(r"\bpython\b", comparison_query)
+            and re.search(r"\blists?\b", comparison_query)
+            and re.search(r"\btuples?\b", comparison_query)
+            and re.search(r"\b(?:difference|differences|compare|comparison|vs|versus)\b", comparison_query)
+        ):
+            return (
+                "In Python, both lists and tuples are ordered sequences that can hold multiple values. "
+                "The main difference is mutability: **lists are mutable** (you can add, remove, or replace items), "
+                "while **tuples are immutable** (their items cannot be reassigned after creation).\n\n"
+                "```python\n"
+                "numbers = [1, 2, 3]  # list\n"
+                "numbers[0] = 10     # allowed\n\n"
+                "point = (1, 2, 3)   # tuple\n"
+                "# point[0] = 10     # raises TypeError\n"
+                "```\n\n"
+                "Use a list for a collection you expect to change, and a tuple for a fixed group of values. "
+                "A tuple can contain a mutable object, so immutability does not automatically make every nested value immutable.\n\n"
+                "Source: Python documentation — https://docs.python.org/3/tutorial/datastructures.html#tuples-and-sequences"
+            )
+
         if re.search(r"\bpython\s+list\b", normalized_lc):
             return (
                 "A Python list is an ordered, changeable collection that can hold multiple values. "
@@ -409,6 +431,11 @@ class AnswerComposer:
                 "Lists use zero-based indexing, so `fruits[0]` accesses the first item.\n\n"
                 "Source: Python documentation — https://docs.python.org/3/tutorial/datastructures.html"
             )
+
+        # If retrieval supplied no usable evidence and none of the deterministic
+        # beginner templates above matched, fail closed before generic ranking.
+        if not valid:
+            return "I couldn't find sufficiently relevant information in ARIA's connected knowledge sources. Try a more specific question or import the relevant dataset."
 
         # News records have a structured title/content/url schema. Render them
         # as a compact headline digest rather than exposing the importer fields
