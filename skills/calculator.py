@@ -11,6 +11,8 @@ ALLOWED_OPERATORS = {
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
     ast.Pow: operator.pow,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
 }
@@ -50,14 +52,19 @@ def _normalize_expression(query: str) -> str:
 
     # Remove common natural-language prefixes.
     expression = re.sub(
-        r"^\s*(calculate|compute|solve|evaluate|what\s+is|find)\s+",
+        r"^\s*(?:please\s+)?(?:calculate|compute|solve|evaluate|work\s+out|what\s+is|find)\s+",
         "",
         expression,
         flags=re.IGNORECASE,
     )
 
-    # Remove trailing question mark.
-    expression = expression.rstrip(" ?.")
+    # Strip punctuation before removing a natural-language output suffix.
+    expression = expression.rstrip(" ?.!\t")
+    expression = re.sub(
+        r"\s+(?:and\s+)?(?:show|give|tell\s+me)\s+(?:me\s+)?(?:the\s+)?"
+        r"(?:result|answer|solution)(?:\s+please)?\s*$",
+        "", expression, flags=re.IGNORECASE,
+    ).strip()
 
     return expression.strip()
 
