@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.dependency_injection import ServiceRegistry
+from core.runtime_diagnostics import runtime_diagnostics
 
 
 class HealthChecker:
@@ -43,8 +44,6 @@ class HealthChecker:
         }
         limitations = []
 
-        # A configured Mongo client must answer a ping; registration alone is not
-        # enough to claim the primary persistence dependency is available.
         if self.registry.has("mongo_client"):
             try:
                 client = self.registry.get("mongo_client")
@@ -67,8 +66,6 @@ class HealthChecker:
                     scheduler_status = status_method()
                     checks["scheduler_running"] = not bool(scheduler_status.get("shutdown", True))
                 else:
-                    # Lightweight test doubles and compatible schedulers may not
-                    # expose status(); registration remains the only available signal.
                     checks["scheduler_running"] = True
             except Exception:
                 checks["scheduler_running"] = False
@@ -87,6 +84,14 @@ class HealthChecker:
         ready = not missing and checks.get("scheduler_running", False)
         if self.registry.has("mongo_client") and not checks.get("mongodb_reachable", False):
             ready = False
+
+        queue_available = False
+        if self.registry.has("durable_job_queue"):
+            try:
+                queue_available = bool(getattr(self.registry.get("durable_job_queue"), "available", False))
+            except Exception:
+                queue_available = False
+
         return {
             "status": "healthy" if ready else "not_ready",
             "ready": ready,
@@ -94,8 +99,9 @@ class HealthChecker:
             "optional_services": optional,
             "missing_required_services": missing,
             "checks": checks,
+            "runtime_diagnostics": runtime_diagnostics(),
             "durable_jobs": {
-                "available": bool(self.registry.has("durable_job_queue") and getattr(self.registry.get("durable_job_queue"), "available", False)),
+                "available": queue_available,
                 "note": "Only jobs submitted through the named durable queue are restart-recoverable; existing in-process scheduler callbacks are not persisted.",
             },
             "limitations": limitations + [
