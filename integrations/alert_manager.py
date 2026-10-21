@@ -141,6 +141,17 @@ class AlertManager:
                 conn.execute(f"UPDATE alerts SET status='delivered', delivered_at=?, last_error=NULL WHERE id IN ({placeholders}) AND status='pending_digest'", [time.time(), *ids])
         return {"sent": delivered, "reason": "sent" if delivered else "delivery_failed", "count": len(ids)}
 
+    def pending_urgent_ids(self, limit: int = 50) -> list[int]:
+        """Return queued urgent alerts eligible for retry."""
+        limit = max(1, min(int(limit), 200))
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM alerts WHERE status='pending_immediate' "
+                "ORDER BY created_at ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [int(row["id"]) for row in rows]
+
     def pending_count(self) -> int:
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM alerts WHERE status IN ('pending_immediate','pending_digest')").fetchone()
