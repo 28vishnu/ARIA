@@ -15,7 +15,24 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from multimodal.secure_ingress import (
+    MultimodalInputError,
+    SecureMultimodalIngress,
+)
+
 logger = logging.getLogger("aria")
+
+
+class _SecureGatewayDispatch:
+    """Internal adapter so the secure ingress can validate before dispatch."""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def route(self, modality, payload, *, metadata=None):
+        return await self.owner._route_unchecked(
+            modality, payload, metadata=metadata
+        )
 
 
 class MultimodalCapabilityGateway:
@@ -33,6 +50,13 @@ class MultimodalCapabilityGateway:
         self.vision_engine = vision_engine
         self.voice_manager = voice_manager
         self.computer_tool = computer_tool
+        self.secure_ingress = SecureMultimodalIngress(
+            _SecureGatewayDispatch(self),
+            allow_computer_control=(
+                str(__import__("os").getenv("ARIA_ALLOW_COMPUTER_CONTROL", "false"))
+                .strip().lower() in {"1", "true", "yes", "on"}
+            ),
+        )
 
     @staticmethod
     def _availability(component: Any) -> bool:
@@ -82,6 +106,17 @@ class MultimodalCapabilityGateway:
         file_name: str = "image.jpg",
         prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
+        try:
+            image_bytes = self.secure_ingress._bytes(
+                image_bytes, "image", self.secure_ingress.max_image_bytes
+            )
+            if not isinstance(file_name, str) or len(file_name) > 255 or Path(file_name).name != file_name or file_name in {".", ".."}:
+                raise MultimodalInputError("image file_name must be a simple filename")
+            if prompt is not None and (not isinstance(prompt, str) or len(prompt) > self.secure_ingress.max_prompt_chars):
+                raise MultimodalInputError("image prompt is invalid or too long")
+        except MultimodalInputError as exc:
+            return {"success": False, "capability": "vision", "error": str(exc)}
+
         if self.vision_engine is None:
             return {
                 "success": False,
@@ -150,6 +185,11 @@ class MultimodalCapabilityGateway:
         self,
         file_path: str,
     ) -> Dict[str, Any]:
+        try:
+            file_path = self.secure_ingress._document_path(file_path)
+        except (MultimodalInputError, OSError, RuntimeError) as exc:
+            return {"success": False, "capability": "document", "error": str(exc)}
+
         if self.document_pipeline is None:
             return {
                 "success": False,
@@ -225,6 +265,13 @@ class MultimodalCapabilityGateway:
         self,
         audio_payload: bytes,
     ) -> Dict[str, Any]:
+        try:
+            audio_payload = self.secure_ingress._bytes(
+                audio_payload, "audio", self.secure_ingress.max_audio_bytes
+            )
+        except MultimodalInputError as exc:
+            return {"success": False, "capability": "voice", "error": str(exc)}
+
         if self.voice_manager is None:
             return {
                 "success": False,
@@ -343,7 +390,10 @@ class MultimodalCapabilityGateway:
     ) -> Dict[str, Any]:
         context = dict(context or {})
 
-        if not context.get(
+        # A caller-supplied context flag is not sufficient authorization.
+        # The operator must explicitly enable this capability in deployment
+        # configuration as well as pass the per-request enablement flag.
+        if not self.secure_ingress.allow_computer_control or not context.get(
             "computer_control_enabled",
             False,
         ):
@@ -410,6 +460,27 @@ class MultimodalCapabilityGateway:
             }
 
     async def route(
+        self,
+        modality: str,
+        payload: Any,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            return await self.secure_ingress.route(
+                modality, payload, metadata=metadata
+            )
+        except MultimodalInputError as exc:
+            normalized = str(modality or "unknown").strip().lower()
+            logger.warning("[Multimodal] Rejected invalid %s input: %s", normalized, exc)
+            return {
+                "success": False,
+                "capability": normalized,
+                "blocked": True,
+                "error": str(exc),
+            }
+
+    async def _route_unchecked(
         self,
         modality: str,
         payload: Any,
