@@ -32,14 +32,13 @@ async def upload_document(
     document_ai = registry.get("document_intelligence")
 
     allowed_extensions = {
-        ".pdf",
-        ".txt",
-        ".docx",
-        ".pptx",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".zip",
+        ".pdf", ".txt", ".md", ".rst", ".log",
+        ".docx", ".pptx", ".xlsx", ".xlsm", ".csv",
+        ".json", ".xml", ".html", ".htm",
+        ".py", ".js", ".ts", ".tsx", ".jsx", ".java",
+        ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".sql",
+        ".yaml", ".yml", ".toml", ".ini", ".sh", ".css",
+        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif",
     }
 
     suffix = Path(file.filename).suffix.lower()
@@ -51,15 +50,26 @@ async def upload_document(
         )
 
     temp_path = None
+    max_bytes = int(os.getenv("ARIA_MAX_UPLOAD_BYTES", str(40 * 1024 * 1024)))
 
     try:
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=suffix,
         ) as temp_file:
-
-            shutil.copyfileobj(file.file, temp_file)
             temp_path = temp_file.name
+            total_bytes = 0
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds the {max_bytes // (1024 * 1024)} MB upload limit.",
+                    )
+                temp_file.write(chunk)
 
         result = await document_ai.process_document(
             file_path=temp_path,
