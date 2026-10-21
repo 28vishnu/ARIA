@@ -719,7 +719,22 @@ async def process_task(
     # BASE CONTEXT
     # -----------------------------------------------------
 
+    # Preserve both the literal user request and available dialogue history.
+    # Deterministic follow-up handling must not depend on a rewritten query alone.
+    conversation_history = []
+    if conversation_manager:
+        try:
+            conversation_state = conversation_manager.get_session(session_id)
+            if isinstance(conversation_state, dict):
+                raw_history = conversation_state.get("conversation_history", [])
+                if isinstance(raw_history, list):
+                    conversation_history = raw_history[-12:]
+        except Exception:
+            logger.exception("[Conversation] Failed to expose history to cognitive core.")
+
     base_context = {
+        "original_user_query": user_text,
+        "conversation_history": conversation_history,
         "app_state": app_state,
         "session": session,
         "memory_engine": (
