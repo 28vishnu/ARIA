@@ -353,6 +353,11 @@ async def lifespan(
 
     app.state.bg_manager = background_manager
 
+    # Phase 7 integration: register the safe engineering staging gate and run
+    # the durable proactive task poller as part of the application lifecycle.
+    from core.phase7_runtime import initialize_phase7_runtime
+    phase7_runtime = await initialize_phase7_runtime(registry, app)
+
     # When MongoDB is configured, Telegram updates are queued durably before the
     # webhook acknowledges them. A named handler reconstructs only the minimal
     # request shape used by process_telegram_update; no Request object is stored.
@@ -392,6 +397,11 @@ async def lifespan(
     )
 
     await background_manager.shutdown()
+
+    try:
+        await phase7_runtime.shutdown()
+    except Exception:
+        logger.exception("[Lifespan] Phase 7 runtime shutdown failed.")
 
     if registry.has(
         "scheduler"
