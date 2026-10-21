@@ -18,10 +18,11 @@ def escape_html_text(value: object) -> str:
 
 
 def split_telegram_text(text: object, limit: int = TELEGRAM_SAFE_TEXT_LIMIT) -> list[str]:
-    """Split text into ordered chunks, preferring paragraph/line/word boundaries.
+    """Split text into ordered chunks without dropping or reordering characters.
 
-    A single unbroken token longer than the limit is split hard. Empty input
-    returns one empty string so callers can handle it consistently.
+    Paragraph, line, and word boundaries are preferred. Whitespace separators
+    remain in the preceding chunk so ``"".join(chunks)`` equals the input.
+    A single unbroken token longer than the limit is split hard.
     """
     value = str(text or "")
     if limit < 1 or limit > 4096:
@@ -34,26 +35,21 @@ def split_telegram_text(text: object, limit: int = TELEGRAM_SAFE_TEXT_LIMIT) -> 
     chunks: list[str] = []
     remaining = value
     while len(remaining) > limit:
-        boundary = max(
-            remaining.rfind("\n\n", 0, limit + 1),
-            remaining.rfind("\n", 0, limit + 1),
-            remaining.rfind(" ", 0, limit + 1),
-        )
-        # Avoid tiny chunks when the only boundary is very early.
+        # Prefer the latest boundary in the allowed window. Include the full
+        # separator in the emitted chunk to preserve every original character.
+        paragraph = remaining.rfind("\n\n", 0, limit + 1)
+        newline = remaining.rfind("\n", 0, limit + 1)
+        space = remaining.rfind(" ", 0, limit + 1)
+        candidates = [(paragraph, 2), (newline, 1), (space, 1)]
+        boundary, separator_length = max(candidates, key=lambda item: item[0] + item[1] if item[0] >= 0 else -1)
         if boundary < int(limit * 0.5):
-            boundary = limit
+            cut = limit
         else:
-            # Keep separators with the preceding chunk when possible.
-            if remaining[boundary:boundary + 2] == "\n\n":
-                boundary += 2
-            else:
-                boundary += 1
-        chunk = remaining[:boundary].rstrip()
-        if not chunk:
-            chunk = remaining[:limit]
-            boundary = limit
-        chunks.append(chunk)
-        remaining = remaining[boundary:].lstrip()
+            cut = boundary + separator_length
+        if cut <= 0 or cut > limit:
+            cut = limit
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:]
     if remaining:
         chunks.append(remaining)
     return chunks
