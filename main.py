@@ -1689,8 +1689,10 @@ async def _transcribe_telegram_voice(
 
         engine = AudioEngine()
 
-        result = await asyncio.to_thread(
-            engine.transcribe_audio,
+        # transcribe_audio is async; awaiting it directly avoids returning an
+        # un-awaited coroutine from asyncio.to_thread. The engine itself moves
+        # blocking provider work off the event loop.
+        result = await engine.transcribe_audio(
             audio_bytes,
             mime_type,
         )
