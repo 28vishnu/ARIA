@@ -5469,6 +5469,70 @@ usable evidence is present. Do not invent details absent from the evidence.
         # mutates `query`; this is required for source-URL directives and logs.
         incoming_user_query = str(query or "").strip()
 
+        # A request for an unspecified "obscure fact" is a prompt for a topic,
+        # not a factual query. Stop it before routing/retrieval can search for
+        # the instruction text itself or store it as knowledge.
+        try:
+            if (
+                self.knowledge_manager
+                and hasattr(self.knowledge_manager, "_is_unspecified_fact_request")
+                and self.knowledge_manager._is_unspecified_fact_request(incoming_user_query)
+            ):
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="clarification",
+                    data={
+                        "response": (
+                            "What topic would you like a verifiable fact about? For example, "
+                            "space, history, biology, technology, or an unusual animal. "
+                            "I'll look for relevant sources once you choose a subject."
+                        ),
+                        "message": (
+                            "What topic would you like a verifiable fact about? For example, "
+                            "space, history, biology, technology, or an unusual animal. "
+                            "I'll look for relevant sources once you choose a subject."
+                        ),
+                    },
+                )
+        except Exception:
+            logger.exception("[CognitiveCore] Unspecified-fact clarification guard failed.")
+
+        # Resolve calculation follow-ups deterministically. Reference resolution
+        # expands "Explain that" using the prior turn; don't send that expanded
+        # request back through tool routing, where it may be mistaken for a new
+        # operation and fail.
+        calculation_followup = re.match(
+            r"^Explain the result of the previous calculation \((.*?);\s*result:\s*(.*?)\)(?:\s+(.*))?\.?$",
+            incoming_user_query,
+            flags=re.IGNORECASE,
+        )
+        if calculation_followup:
+            prior_question = calculation_followup.group(1).strip()
+            prior_result_text = calculation_followup.group(2).strip().rstrip(".")
+            numeric_result = re.search(r"-?\d[\d,]*(?:\.\d+)?", prior_result_text)
+            prior_result = numeric_result.group(0) if numeric_result else prior_result_text
+            if numeric_result and "." not in prior_result:
+                try:
+                    prior_result = f"{int(prior_result.replace(',', '')):,}"
+                except ValueError:
+                    pass
+            expression = re.search(
+                r"(\d[\d,]*)\s*(?:×|\*|x|X)\s*(\d[\d,]*)",
+                prior_question,
+            )
+            if expression:
+                left = int(expression.group(1).replace(",", ""))
+                right = int(expression.group(2).replace(",", ""))
+                answer = (
+                    f"{left:,} × {right:,} means multiplying {left:,} by {right:,}; "
+                    f"the result is {prior_result}."
+                )
+                return SystemResponse(
+                    success=True, confidence=1.0, source="deterministic_followup",
+                    data={"response": answer, "message": answer},
+                )
+
         execution_id = self._create_execution_id()
 
         # Always initialize the unified decision before any early
