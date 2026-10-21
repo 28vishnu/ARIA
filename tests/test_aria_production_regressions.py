@@ -95,3 +95,28 @@ def test_unspecified_fact_request_returns_clarification_without_retrieving():
         "Give me a verifiable answer about a very obscure fact, with sources.",
     ))
     assert "what topic" in response.lower()
+
+
+def test_answer_composer_strips_source_request_from_topic():
+    from brain.knowledge.answer_composer import AnswerComposer
+    assert AnswerComposer._normalized_question("What is photosynthesis? Give me sources.") == "photosynthesis"
+
+
+def test_conversation_manager_resolves_explain_that_from_last_calculation():
+    from brain.conversation.conversation_manager import ConversationManager
+    manager = object.__new__(ConversationManager)
+    sessions = {
+        "session-test": {
+            "conversation_history": [{
+                "user": "Calculate 1847 × 29 and show the result.",
+                "assistant": "The answer is 53563, Sir.",
+            }],
+            "last_user_message": "Calculate 1847 × 29 and show the result.",
+            "last_assistant_message": "The answer is 53563, Sir.",
+        }
+    }
+    manager.sessions = sessions
+    manager.get_session = lambda session_id: sessions.setdefault(session_id, {"conversation_history": []})
+    result = manager.resolve_reference("session-test", "Explain that in one simple sentence")
+    assert "previous calculation" in result.lower()
+    assert "53563" in result
