@@ -4320,6 +4320,29 @@ usable evidence is present. Do not invent details absent from the evidence.
         if decision is None:
             return decision
 
+        # Arithmetic requests must route to the deterministic calculator even
+        # when a general chat classifier prefers the chat route.
+        math_text = str(query or "").strip()
+        has_math_expression = bool(re.search(
+            r"\d\s*(?:[+*/%×÷^]|-\s*\d)\s*\d", math_text
+        ))
+        has_math_intent = bool(re.search(
+            r"\b(?:calculate|compute|solve|evaluate|work\s+out)\b",
+            math_text, re.IGNORECASE,
+        )) and bool(re.search(r"\d", math_text))
+        if has_math_expression or has_math_intent:
+            self._set_decision_value(decision, "intent", "calculation")
+            self._set_decision_value(decision, "route", "tool")
+            self._set_decision_value(decision, "action", "tool")
+            self._set_decision_value(decision, "use_tools", True)
+            self._set_decision_value(decision, "requires_tool", True)
+            self._set_decision_value(decision, "requires_tools", True)
+            required = list(self._decision_value(decision, "required_tools", []) or [])
+            if not any(str(item).strip().lower() in {"calculator", "calc", "math"} for item in required):
+                required.append("calculator")
+            self._set_decision_value(decision, "required_tools", required)
+            logger.info("[DeterministicRouting] Arithmetic request forced to calculator.")
+
         # Current/latest/news requests -> live web search.
         if self._looks_like_web_search_request(query):
             self._set_decision_value(decision, "intent", "web_search")
@@ -6795,6 +6818,13 @@ usable evidence is present. Do not invent details absent from the evidence.
                     exc,
                 )
                 decision = controller_decision
+
+            # Re-apply deterministic capability overrides after merging the
+            # controller and engine decisions so a weaker classifier cannot
+            # undo a clear arithmetic or explicit web-search request.
+            decision = self._apply_deterministic_capability_overrides(
+                query=query, decision=decision
+            )
 
             context["decision_engine_result"] = engine_decision
 
