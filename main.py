@@ -515,7 +515,7 @@ app = FastAPI(
 async def enforce_private_app_access(request: Request, call_next):
     # Health/root, sign-in, and Telegram webhook are public; all other HTTP API routes
     # require a signed owner session whose version still matches persistent Mongo state.
-    public_paths = {"/", "/health", "/app/login", "/telegram-webhook"}
+    public_paths = {"/", "/health", "/ready", "/app/login", "/telegram-webhook"}
     if request.method == "OPTIONS" or request.url.path in public_paths:
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
@@ -3564,69 +3564,81 @@ async def process_telegram_update(
 # =========================================================
 
 @app.get("/health")
-async def health(
-    req: Request,
-):
+async def health():
+    """Liveness probe: confirms the HTTP process can answer requests.
 
-    # Startup can be incomplete during import-time smoke tests or an early
-    # boot failure. Keep the public liveness endpoint useful in that state.
-    registry = getattr(req.app.state, "registry", None)
-
-    if registry is None or not registry.has(
-        "health_checker"
-    ):
-
-        return {
-            "status": "healthy",
-            "version": "12.0.0",
-            "message": (
-                "Health checker not registered."
-            ),
-        }
-
-    checker = registry.get(
-        "health_checker"
-    )
-
-    base_health = await checker.check_readiness()
-
-    extended_status = {
-        **base_health,
-        "subsystems": {
-            "memory_engine": registry.has(
-                "memory_engine"
-            ),
-            "skill_manager": registry.has(
-                "skill_manager"
-            ),
-            "action_manager": registry.has(
-                "action_manager"
-            ),
-            "plugin_manager": registry.has(
-                "plugin_manager"
-            ),
-            "scheduler": registry.has(
-                "scheduler"
-            ),
-            "http_client": registry.has(
-                "http_client"
-            ),
-        },
-        "plugins_loaded": (
-            list(
-                registry.get(
-                    "plugin_manager"
-                ).plugins.keys()
-            )
-            if registry.has(
-                "plugin_manager"
-            )
-            else []
-        ),
+    Use /ready for dependency registration/readiness. Keeping liveness separate
+    prevents a dependency outage from causing an orchestrator restart loop.
+    """
+    return {
+        "status": "healthy",
+        "live": True,
         "version": "12.0.0",
     }
 
-    return extended_status
+
+@app.get("/ready")
+async def readiness(req: Request):
+    """Readiness probe: reports whether ARIA's core request services are present."""
+    from fastapi.responses import JSONResponse
+
+    registry = getattr(req.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "ready": False,
+                "reason": "Application service registry has not been initialized.",
+                "version": "12.0.0",
+            },
+        )
+
+    if not registry.has("health_checker"):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "ready": False,
+                "reason": "Health checker is not registered.",
+                "version": "12.0.0",
+            },
+        )
+
+    try:
+        checker = registry.get("health_checker")
+        result = await checker.check_readiness()
+        result["version"] = "12.0.0"
+        result["subsystems"] = {
+            name: registry.has(name)
+            for name in (
+                "memory_engine",
+                "skill_manager",
+                "action_manager",
+                "plugin_manager",
+                "scheduler",
+                "http_client",
+            )
+        }
+        result["plugins_loaded"] = (
+            list(registry.get("plugin_manager").plugins.keys())
+            if registry.has("plugin_manager")
+            else []
+        )
+        if not result.get("ready", False):
+            return JSONResponse(status_code=503, content=result)
+        return result
+    except Exception:
+        logger.exception("ARIA readiness check failed")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "ready": False,
+                "reason": "Readiness check raised an internal error.",
+                "version": "12.0.0",
+            },
+        )
 
 
 # =========================================================
