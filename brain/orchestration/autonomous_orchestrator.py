@@ -644,9 +644,11 @@ class AutonomousOrchestrator:
         if self.verification_engine is None:
 
             return {
-                "verified": True,
+                "verified": False,
                 "status": "not_configured",
-                "issues": [],
+                "issues": [
+                    "No verification engine is configured; goal completion cannot be confirmed."
+                ],
                 "corrections": [],
             }
 
@@ -704,9 +706,11 @@ class AutonomousOrchestrator:
 
                     if not result:
                         result = {
-                            "verified": True,
-                            "status": "passed",
-                            "issues": [],
+                            "verified": False,
+                            "status": "empty_verification",
+                            "issues": [
+                                "Verification engine returned no evidence."
+                            ],
                             "corrections": [],
                         }
 
@@ -725,12 +729,29 @@ class AutonomousOrchestrator:
 
                         result[
                             "verified"
-                        ] = status not in {
-                            "failed",
-                            "invalid",
-                            "rejected",
+                        ] = status in {
+                            "passed",
+                            "verified",
+                            "completed",
+                            "success",
                         }
 
+                    # An explicit execution failure must never be upgraded to
+                    # success by a verifier that only checked the plan shape.
+                    execution_dict = _as_dict(execution)
+                    if execution_dict.get("success") is False:
+                        result["verified"] = False
+                        result["status"] = "execution_failed"
+                        issues = result.get("issues", [])
+                        if not isinstance(issues, list):
+                            issues = [str(issues)] if issues else []
+                        issues.append(
+                            "Execution reported failure; verification cannot mark the goal complete."
+                        )
+                        result["issues"] = issues
+
+                    result.setdefault("issues", [])
+                    result.setdefault("corrections", [])
                     return result
 
                 except TypeError:
@@ -753,9 +774,11 @@ class AutonomousOrchestrator:
                     }
 
         return {
-            "verified": True,
+            "verified": False,
             "status": "not_supported",
-            "issues": [],
+            "issues": [
+                "The configured verification engine exposes no supported verification method."
+            ],
             "corrections": [],
         }
 
