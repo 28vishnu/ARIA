@@ -15,29 +15,11 @@ LOG = logging.getLogger("aria.online_knowledge")
 
 
 def topic_from_question(question: str) -> str:
-    """Remove question framing and answer directives without corrupting the topic."""
-    topic = re.sub(r"\s+", " ", str(question or "").strip()).replace("’", "'")
-    if not topic:
-        return ""
+    """Derive a concise search topic, including from long pasted-context prompts."""
+    from brain.knowledge.query_planner import plan_knowledge_query
 
-    # Remove instruction phrases first so they do not become search keywords.
-    directive_patterns = (
-        r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:provide|give|show|include)\s+(?:me\s+)?(?:the\s+)?source\s+urls?)\b.*$",
-        r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|show|include)\s+(?:me\s+)?(?:an?\s+)?(?:everyday|real[- ]life|simple)?\s*examples?)\b.*$",
-        r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|show|include)\s+(?:me\s+)?(?:an?\s+)?(?:code\s+)?examples?)\b.*$",
-        r"\s+(?:in simple words|in simple terms|in easy words|in plain english|for beginners|briefly|in brief|in detail|with an example|with examples|with an everyday example|with a real[- ]life example)\s*[?.!]*$",
-    )
-    for pattern in directive_patterns:
-        topic = re.sub(pattern, "", topic, flags=re.IGNORECASE).strip()
-
-    # Strip a leading request verb or question phrase, but do not strip a leading
-    # article from a proper topic such as "The Solar System".
-    topic = re.sub(
-        r"^(?:please\s+)?(?:can you\s+)?(?:explain|define|describe|tell me about|compare|difference between|what is|what are|what was|who is|who are|where is|where are|when is|when was|why is|why are|how does|how do|how is|how are)\s+",
-        "", topic, flags=re.IGNORECASE,
-    )
-    topic = re.sub(r"[?.!]+$", "", topic).strip(" \t,;:")
-    # Leading articles are request framing, not part of this canonical topic.
+    topic = plan_knowledge_query(str(question or ""), max_chars=180)
+    # Leading articles are request framing for search purposes.
     topic = re.sub(r"^(?:the|a|an)\s+", "", topic, flags=re.IGNORECASE).strip()
     return topic[:180]
 
