@@ -55,7 +55,7 @@ def test_database_rejects_generic_fact_prompt_as_knowledge():
 
 
 def test_followup_resolves_to_previous_calculation():
-    engine = object.__new__(ReasoningEngine)
+    engine = ReasoningEngine()
     result = asyncio.run(engine.resolve_references(
         "Explain that in one simple sentence.",
         {"conversation": {"conversation_history": [{
