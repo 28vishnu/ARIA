@@ -86,6 +86,60 @@ class JarvisMemorySystem:
     def status(self) -> Dict[str, Any]:
         return self.health()
 
+    async def get_profile(self) -> Dict[str, Any]:
+        """Return the safe, durable user profile from the authoritative owner.
+
+        Profile data is never fabricated from working memory. If the durable
+        backend is unavailable, an empty profile is returned and health() makes
+        the missing backend visible.
+        """
+        owners = (self.memory_router, self.memory_engine)
+        getter = None
+        for owner in owners:
+            candidate = getattr(owner, "get_profile", None) if owner else None
+            if candidate is not None:
+                getter = candidate
+                break
+        if getter is None:
+            return {}
+        try:
+            value = await self._maybe_await(getter())
+            return dict(value) if isinstance(value, Mapping) else {}
+        except Exception:
+            self._statistics["errors"] += 1
+            logger.exception("[JarvisMemory] profile read failed")
+            return {}
+
+    async def forget(self, query_or_key: str) -> Dict[str, Any]:
+        """Forget one matching durable memory through the authoritative owner.
+
+        The MemoryEngine applies its sensitive-data protections and matching
+        policy. This method deliberately does not clear all memories implicitly.
+        """
+        query = str(query_or_key or "").strip()
+        if not query:
+            return {"success": False, "reason": "empty_query"}
+
+        owner = self.memory_router or self.memory_engine
+        deleter = getattr(owner, "delete_memory", None) if owner else None
+        if deleter is None and owner is not None:
+            nested = getattr(owner, "memory_engine", None)
+            deleter = getattr(nested, "delete_memory", None) if nested else None
+        if deleter is None:
+            return {"success": False, "reason": "durable_memory_unavailable"}
+
+        try:
+            deleted = await self._maybe_await(deleter(query))
+            return {
+                "success": bool(deleted),
+                "query": query,
+                "reason": None if deleted else "not_found_or_blocked",
+            }
+        except Exception as exc:
+            self._statistics["errors"] += 1
+            logger.exception("[JarvisMemory] forget operation failed")
+            return {"success": False, "query": query, "error": str(exc)}
+
     # ------------------------------------------------------------------
     # Working memory
     # ------------------------------------------------------------------
