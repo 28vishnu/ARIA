@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -48,6 +49,10 @@ class SearchTool(BaseTool):
         self.timeout = max(3.0, float(timeout))
         self._client = None
         self._cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+        try:
+            self.current_cache_ttl = max(0, min(int(os.getenv("ARIA_CURRENT_SEARCH_CACHE_TTL", "10")), 300))
+        except (TypeError, ValueError):
+            self.current_cache_ttl = 10
         try:
             self.cache_ttl = max(0, min(int(os.getenv("ARIA_SEARCH_CACHE_TTL", "60")), 3600))
         except (TypeError, ValueError):
@@ -85,9 +90,11 @@ class SearchTool(BaseTool):
             return self._error("Search query is empty.", started)
 
         cache_key = " ".join(query.casefold().split())
+        current_query = self._looks_time_sensitive(query) or bool(context.get("requires_freshness"))
+        effective_cache_ttl = self.current_cache_ttl if current_query else self.cache_ttl
         cached = self._cache.get(cache_key)
         now = time.monotonic()
-        if cached and self.cache_ttl > 0 and now - cached[0] <= self.cache_ttl:
+        if cached and effective_cache_ttl > 0 and now - cached[0] <= effective_cache_ttl:
             result = copy.deepcopy(cached[1])
             result["cached"] = True
             result["cache_age_seconds"] = round(now - cached[0], 2)
@@ -115,10 +122,15 @@ class SearchTool(BaseTool):
                 errors.append("Tavily returned no usable results")
             except asyncio.TimeoutError:
                 errors.append("Tavily search timed out")
-                logger.warning("[SearchTool] Tavily search timed out: %s", query)
+                logger.warning("[SearchTool] Tavily search timed out; trying fallback: %s", query)
             except Exception as exc:
-                errors.append(f"Tavily failed: {type(exc).__name__}")
-                logger.exception("[SearchTool] Tavily search failed")
+                message = str(exc).lower()
+                if "429" in message or "rate limit" in message or "too many requests" in message:
+                    errors.append("Tavily rate limit reached")
+                    logger.warning("[SearchTool] Tavily rate limit reached; trying fallback")
+                else:
+                    errors.append(f"Tavily failed: {type(exc).__name__}")
+                    logger.warning("[SearchTool] Tavily failed (%s); trying fallback", type(exc).__name__)
 
         fallback_disabled = os.getenv("ARIA_DISABLE_WIKIPEDIA_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "on"}
         if not fallback_disabled:
@@ -140,7 +152,10 @@ class SearchTool(BaseTool):
                 errors.append(f"Wikipedia fallback failed: {type(exc).__name__}")
                 logger.exception("[SearchTool] Wikipedia fallback failed")
 
-        return self._error("; ".join(errors) or "No search provider is available.", started)
+        message = "; ".join(errors) or "No search provider is available."
+        if current_query and "Wikipedia" in message:
+            message += ". Current information could not be verified because the fallback is not a dedicated live-news provider."
+        return self._error(message, started)
 
     def _wikipedia_search(self, query: str) -> Dict[str, Any]:
         params = urlencode({
@@ -194,10 +209,20 @@ class SearchTool(BaseTool):
                 if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                     continue
                 seen_urls.add(url)
-            normalized.append({"title": title, "url": url, "snippet": snippet, "score": item.get("score")})
+            published_date = item.get("published_date") or item.get("publishedDate") or item.get("date")
+            normalized_item = {"title": title, "url": url, "snippet": snippet, "score": item.get("score")}
+            if published_date:
+                normalized_item["published_date"] = str(published_date)[:100]
+            normalized.append(normalized_item)
             if len(normalized) >= self.max_results:
                 break
         return normalized
+
+    @staticmethod
+    def _looks_time_sensitive(query: str) -> bool:
+        text = str(query or "").casefold()
+        markers = ("today", "latest", "current", "right now", "this week", "breaking", "recent", "news", "stock price", "exchange rate", "weather", "election", "outage")
+        return any(marker in text for marker in markers)
 
     def _remember(self, key: str, result: Dict[str, Any]) -> None:
         if self.cache_ttl <= 0 or not result.get("success"):
@@ -212,7 +237,7 @@ class SearchTool(BaseTool):
         self._cache[key] = (time.monotonic(), stored)
 
     def _success(self, query: str, results: List[Dict[str, Any]], provider: str, started: float, warning: str | None = None) -> Dict[str, Any]:
-        output = {"success": True, "tool": self.name, "query": query, "results": results[:self.max_results], "count": min(len(results), self.max_results), "provider": provider, "duration_ms": round((time.monotonic() - started) * 1000, 2)}
+        output = {"success": True, "tool": self.name, "query": query, "results": results[:self.max_results], "count": min(len(results), self.max_results), "provider": provider, "searched_at": datetime.now(timezone.utc).isoformat(), "duration_ms": round((time.monotonic() - started) * 1000, 2)}
         if warning:
             output["warning"] = warning
         return output
