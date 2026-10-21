@@ -1,4 +1,5 @@
 import hashlib
+import os
 import logging
 import re
 import time
@@ -182,75 +183,167 @@ class DocumentIntelligence:
         self,
         file_path: str
     ) -> List[Dict[str, Union[int, str]]]:
-        """
-        Extract text with page numbers from TXT and PDF files.
-        Falls back to OCR for scanned PDFs if pypdf returns empty pages.
-        """
-        suffix = Path(file_path).suffix.lower()
+        """Extract searchable text from common office, text, PDF, and image files.
 
-        if suffix == ".txt":
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                return [{
-                    "page": 1,
-                    "text": content
-                }]
+        Optional parsers are imported only when their format is requested, so a
+        missing optional dependency does not prevent ARIA from starting. Page
+        numbers are one-based; for formats without pages, each logical sheet,
+        slide, or file is represented as a page-like unit with useful metadata
+        added to the text.
+        """
+        path = Path(file_path)
+        suffix = path.suffix.lower()
+
+        if not path.exists() or not path.is_file():
+            raise ValueError("The supplied document does not exist or is not a file.")
+
+        # Avoid loading unexpectedly large files into RAM.
+        max_bytes = int(os.getenv("ARIA_MAX_DOCUMENT_BYTES", str(40 * 1024 * 1024)))
+        if path.stat().st_size > max_bytes:
+            raise ValueError(f"File exceeds the configured {max_bytes // (1024 * 1024)} MB limit.")
+
+        if suffix in {".txt", ".md", ".rst", ".log", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".sql", ".yaml", ".yml", ".toml", ".ini", ".env", ".sh", ".bat", ".css"}:
+            content = path.read_text(encoding="utf-8", errors="replace")
+            return [{"page": 1, "text": content, "source": path.name}]
+
+        if suffix in {".json", ".xml", ".html", ".htm"}:
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if suffix == ".json":
+                try:
+                    import json
+                    content = json.dumps(json.loads(content), ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+            elif suffix in {".html", ".htm", ".xml"}:
+                try:
+                    from bs4 import BeautifulSoup
+                    content = BeautifulSoup(content, "html.parser").get_text("\n", strip=True)
+                except ImportError:
+                    content = re.sub(r"<[^>]+>", " ", content)
+            return [{"page": 1, "text": content, "source": path.name}]
+
+        if suffix == ".csv":
+            try:
+                import csv
+                with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+                    rows = list(csv.reader(handle))
+                content = "\n".join(" | ".join(cell for cell in row) for row in rows)
+                return [{"page": 1, "text": content, "source": path.name, "rows": len(rows)}]
+            except Exception as exc:
+                raise ValueError(f"Could not read CSV file: {exc}") from exc
 
         if suffix == ".pdf":
             reader = PdfReader(file_path)
             pages = []
-
             for page_number, page in enumerate(reader.pages, start=1):
                 try:
-                    # Preserve the visual layout of tables, schedules,
-                    # columns, forms, etc. whenever pypdf supports it.
-                    text = page.extract_text(
-                        extraction_mode="layout"
-                    ) or ""
+                    text = page.extract_text(extraction_mode="layout") or ""
                 except TypeError:
-                    # Fallback for older pypdf versions.
                     text = page.extract_text() or ""
-
-                # OCR Fallback if page text is empty
                 if not text.strip():
-                    try:
-                        import pytesseract
-                        from pdf2image import convert_from_path
-
-                        images = convert_from_path(
-                            file_path,
-                            first_page=page_number,
-                            last_page=page_number
-                        )
-
-                        if images:
-                            ocr_text = pytesseract.image_to_string(
-                                images[0]
-                            )
-
-                            if ocr_text.strip():
-                                text = ocr_text.strip()
-                                logger.info(
-                                    "[DocumentAI OCR] Successfully extracted page %d via OCR",
-                                    page_number
-                                )
-
-                    except Exception as ocr_err:
-                        logger.warning(
-                            "[DocumentAI OCR] OCR failed on page %d: %s",
-                            page_number,
-                            ocr_err
-                        )
-
+                    text = await self._ocr_pdf_page(file_path, page_number)
                 if text.strip():
-                    pages.append({
-                        "page": page_number,
-                        "text": text.strip()
-                    })
-
+                    pages.append({"page": page_number, "text": text.strip(), "source": path.name})
+            if not pages:
+                raise ValueError("No readable text was found in the PDF. It may be image-only or encrypted; OCR support may be unavailable.")
             return pages
 
-        raise ValueError(f"Unsupported file type: {suffix}")
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}:
+            text = await self._ocr_image_file(file_path)
+            return [{"page": 1, "text": text, "source": path.name, "kind": "image_ocr"}]
+
+        if suffix == ".docx":
+            try:
+                from docx import Document as WordDocument
+                doc = WordDocument(file_path)
+                lines = [p.text for p in doc.paragraphs if p.text.strip()]
+                for table_index, table in enumerate(doc.tables, start=1):
+                    lines.append(f"[Table {table_index}]")
+                    for row in table.rows:
+                        lines.append(" | ".join(cell.text.replace("\n", " / ").strip() for cell in row.cells))
+                return [{"page": 1, "text": "\n".join(lines), "source": path.name}]
+            except ImportError as exc:
+                raise ValueError("DOCX support requires python-docx.") from exc
+
+        if suffix == ".pptx":
+            try:
+                from pptx import Presentation
+                presentation = Presentation(file_path)
+                pages = []
+                for slide_number, slide in enumerate(presentation.slides, start=1):
+                    lines = []
+                    for shape in slide.shapes:
+                        if getattr(shape, "has_text_frame", False) and shape.text.strip():
+                            lines.append(shape.text.strip())
+                        if getattr(shape, "has_table", False):
+                            for row in shape.table.rows:
+                                lines.append(" | ".join(cell.text.strip() for cell in row.cells))
+                    pages.append({"page": slide_number, "text": "\n".join(lines), "source": path.name, "slide": slide_number})
+                return pages or [{"page": 1, "text": "No extractable slide text found.", "source": path.name}]
+            except ImportError as exc:
+                raise ValueError("PPTX support requires python-pptx.") from exc
+
+        if suffix in {".xlsx", ".xlsm"}:
+            try:
+                from openpyxl import load_workbook
+                workbook = load_workbook(file_path, read_only=True, data_only=True)
+                pages = []
+                try:
+                    for sheet_number, sheet in enumerate(workbook.worksheets, start=1):
+                        lines = [f"Sheet: {sheet.title}"]
+                        for row in sheet.iter_rows(values_only=True):
+                            cells = ["" if value is None else str(value) for value in row]
+                            if any(cell.strip() for cell in cells):
+                                lines.append(" | ".join(cells))
+                        pages.append({"page": sheet_number, "text": "\n".join(lines), "source": path.name, "sheet": sheet.title})
+                finally:
+                    workbook.close()
+                return pages
+            except ImportError as exc:
+                raise ValueError("Excel support requires openpyxl.") from exc
+
+        raise ValueError(f"Unsupported file type: {suffix or '[no extension]'}")
+
+    async def _ocr_pdf_page(self, file_path: str, page_number: int) -> str:
+        """OCR a single scanned PDF page using PyMuPDF + RapidOCR when installed."""
+        try:
+            import fitz
+            from PIL import Image
+            import numpy as np
+            from rapidocr_onnxruntime import RapidOCR
+            with fitz.open(file_path) as pdf:
+                page = pdf.load_page(page_number - 1)
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                result, _ = RapidOCR()(np.array(image))
+            if not result:
+                return ""
+            return "\n".join(str(item[1]) for item in result if len(item) > 1 and item[1])
+        except Exception as exc:
+            logger.info("[DocumentAI OCR] PDF page %d OCR unavailable/failed: %s", page_number, exc)
+            return ""
+
+    async def _ocr_image_file(self, file_path: str) -> str:
+        """OCR an image with RapidOCR; fall back to Tesseract if installed."""
+        try:
+            from PIL import Image
+            import numpy as np
+            from rapidocr_onnxruntime import RapidOCR
+            with Image.open(file_path) as image:
+                result, _ = RapidOCR()(np.array(image.convert("RGB")))
+            if result:
+                return "\n".join(str(item[1]) for item in result if len(item) > 1 and item[1])
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.warning("[DocumentAI OCR] RapidOCR failed: %s", exc)
+        try:
+            import pytesseract
+            from PIL import Image
+            with Image.open(file_path) as image:
+                return pytesseract.image_to_string(image).strip()
+        except Exception as exc:
+            raise ValueError("Image OCR is unavailable. Install rapidocr-onnxruntime (recommended) or configure Tesseract OCR.") from exc
 
     def chunk_text_with_pages(
         self,
