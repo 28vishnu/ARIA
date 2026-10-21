@@ -34,6 +34,7 @@ from brain.development.telegram_approval_interface import (
 )
 from audio_engine import AudioEngine
 from brain.knowledge.evidence_cleaner import hide_source_references
+from brain.core.long_text_intelligence import analyze_long_text, split_telegram_text
 from brain.knowledge.knowledge_hub import (
     mark_user_activity as _mark_knowledge_activity,
     begin_user_activity as _begin_knowledge_activity,
@@ -771,8 +772,19 @@ async def process_task(
         except Exception:
             logger.exception("[Conversation] Failed to expose history to cognitive core.")
 
+    # Structural metadata is additive; the exact original query remains intact.
+    try:
+        long_text_packet = analyze_long_text(user_text)
+    except Exception:
+        logger.exception("[LongText] Structural analysis failed; preserving raw query.")
+        long_text_packet = {
+            "character_count": len(user_text), "complete": True,
+            "truncated": False, "analysis_error": True,
+        }
+
     base_context = {
         "original_user_query": user_text,
+        "long_text_analysis": long_text_packet,
         "conversation_history": conversation_history,
         "app_state": app_state,
         "session": session,
@@ -3511,14 +3523,20 @@ async def process_telegram_update(
             status
         )
 
-        telegram_response = await http_client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": telegram_text,
-                "parse_mode": "HTML",
-            },
-        )
+        # Telegram caps each text message at 4096 characters. Deliver long
+        # answers as ordered parts rather than failing the entire response.
+        telegram_response = None
+        for response_part in split_telegram_text(telegram_text, limit=3800):
+            telegram_response = await http_client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": response_part,
+                    "parse_mode": "HTML",
+                },
+            )
+            if not telegram_response.is_success:
+                break
 
         # -----------------------------------------------------
         # SAVE COMPLETED CONVERSATION TURN
