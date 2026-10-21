@@ -25,6 +25,10 @@ from core.dependency_injection import RequestContext
 from core.telegram_status import TelegramStatus
 from personality.response import SystemResponse
 from api.upload import router as upload_router
+from integrations.gmail_readonly import router as gmail_readonly_router
+from integrations.google_calendar_readonly import router as calendar_readonly_router
+from integrations.google_drive_readonly import router as drive_readonly_router
+from integrations.github_webhook import router as github_webhook_router
 from brain.development.telegram_development import TelegramDevelopmentInterface
 from brain.development.telegram_autonomous_engineering import (
     TelegramAutonomousEngineeringInterface,
@@ -556,7 +560,15 @@ app = FastAPI(
 async def enforce_private_app_access(request: Request, call_next):
     # Health/root, sign-in, and Telegram webhook are public; all other HTTP API routes
     # require a signed owner session whose version still matches persistent Mongo state.
-    public_paths = {"/", "/health", "/ready", "/app/login", "/telegram-webhook"}
+    public_paths = {
+        "/", "/health", "/ready", "/app/login", "/telegram-webhook",
+        # OAuth callbacks validate one-time state internally; the connect/status
+        # endpoints remain protected by the owner-session middleware.
+        "/gmail/oauth/callback", "/calendar/oauth/callback",
+        "/drive/oauth/callback",
+        # GitHub webhook authenticates every request with its HMAC signature.
+        "/github-webhook",
+    }
     if request.method == "OPTIONS" or request.url.path in public_paths:
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
@@ -592,9 +604,11 @@ app.add_middleware(
 )
 
 
-app.include_router(
-    upload_router
-)
+app.include_router(upload_router)
+app.include_router(gmail_readonly_router)
+app.include_router(calendar_readonly_router)
+app.include_router(drive_readonly_router)
+app.include_router(github_webhook_router)
 
 
 # =========================================================
