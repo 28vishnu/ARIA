@@ -205,22 +205,29 @@ class ActionManager:
             elif file_mode == "write":
                 effective_permission = "confirm"
 
-        if effective_permission == "confirm" and not confirmed:
-            return ActionResult(
-                success=False,
-                action_name=action_name,
-                error="Action requires explicit user confirmation."
-            )
-
-        if effective_permission != "confirm":
-            if not self.permissions.evaluate(
-                action.name,
-                effective_permission
-            ):
+        # Fail closed: permission decisions are explicit strings, not
+        # booleans. In particular, "deny" is truthy in Python and must
+        # never be treated as permission to execute.
+        if effective_permission == "confirm":
+            if not confirmed:
                 return ActionResult(
                     success=False,
                     action_name=action_name,
-                    error="Action blocked by permission policy."
+                    error="Action requires explicit user confirmation.",
+                )
+        else:
+            permission_decision = self.permissions.evaluate(
+                action.name,
+                effective_permission,
+            )
+            if permission_decision != "allow":
+                return ActionResult(
+                    success=False,
+                    action_name=action_name,
+                    error=(
+                        "Action blocked by permission policy. "
+                        f"Decision: {permission_decision}"
+                    ),
                 )
 
         # 2. Validate parameters
