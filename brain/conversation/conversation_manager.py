@@ -829,6 +829,42 @@ class ConversationManager:
         cleaned = query.strip()
         lower = cleaned.lower()
 
+        # Resolve explicit "explain that/it/this" follow-ups from the latest
+        # completed turn before generic entity extraction can mistake "Explain"
+        # for the topic. This path is used by Telegram's process_task pipeline.
+        explain_match = re.match(
+            r"^explain\s+(?:that|it|this)(?:\s+(.*))?$",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if explain_match:
+            history = session.get("conversation_history", [])
+            previous = history[-1] if isinstance(history, list) and history else {}
+            if not isinstance(previous, dict):
+                previous = {}
+            previous_user = str(previous.get("user", "")).strip()
+            previous_assistant = str(previous.get("assistant", "")).strip()
+            if not previous_user:
+                previous_user = str(session.get("last_user_message") or "").strip()
+            if not previous_assistant:
+                previous_assistant = str(session.get("last_assistant_message") or "").strip()
+            if previous_user and re.search(
+                r"\b(?:calculate|compute|solve|evaluate|work\s+out)\b|\d\s*[+*/%×÷^]",
+                previous_user,
+                flags=re.IGNORECASE,
+            ):
+                detail = str(explain_match.group(1) or "").strip(" .!?\t")
+                suffix = f" {detail}" if detail else ""
+                result = previous_assistant or "the previous calculation result"
+                return (
+                    f"Explain the result of the previous calculation ({previous_user}; "
+                    f"result: {result}){suffix}."
+                )
+            if previous_user and previous_assistant:
+                detail = str(explain_match.group(1) or "").strip(" .!?\t")
+                suffix = f" {detail}" if detail else ""
+                return f"Explain the previous answer ({previous_assistant[:300]}){suffix}."
+
         compared = self._clean_entities(
             session.get("last_compared_entities", [])
         )
