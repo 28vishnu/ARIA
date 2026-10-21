@@ -120,3 +120,42 @@ def test_conversation_manager_resolves_explain_that_from_last_calculation():
     result = manager.resolve_reference("session-test", "Explain that in one simple sentence")
     assert "previous calculation" in result.lower()
     assert "53563" in result
+
+
+def test_core_clarifies_unspecified_obscure_fact_before_routing():
+    core = object.__new__(CognitiveCore)
+    core.knowledge_manager = KnowledgeManager(None, None, None)
+    core._create_execution_id = lambda: "test-execution"
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("vague prompt must return before retrieval/routing")
+
+    core._is_compound_memory_request = lambda *args, **kwargs: False
+    response = asyncio.run(core.process(
+        "Give me a verifiable answer about a very obscure fact, with sources.",
+        session_id="test-session",
+        user_id="test-user",
+        base_context={},
+    ))
+    assert "what topic" in str(response.data.get("response", "")).lower()
+    assert response.source == "clarification"
+
+
+def test_core_explains_resolved_calculation_followup_without_tool_routing():
+    core = object.__new__(CognitiveCore)
+    core.knowledge_manager = None
+    core._create_execution_id = lambda: "test-execution"
+    query = (
+        "Explain the result of the previous calculation "
+        "(Calculate 1847 × 29 and show the result.; result: The answer is 53563, Sir.) "
+        "one simple sentence."
+    )
+    response = asyncio.run(core.process(
+        query,
+        session_id="test-session",
+        user_id="test-user",
+        base_context={},
+    ))
+    assert response.source == "deterministic_followup"
+    assert "53,563" in response.data["response"]
+    assert "1,847" in response.data["response"]
