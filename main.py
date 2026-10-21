@@ -34,7 +34,8 @@ from brain.development.telegram_approval_interface import (
 )
 from audio_engine import AudioEngine
 from brain.knowledge.evidence_cleaner import hide_source_references
-from brain.core.long_text_intelligence import analyze_long_text, split_telegram_text
+from brain.core.long_text_intelligence import analyze_long_text
+from brain.telegram.safe_formatting import split_telegram_text, format_plain_text
 from brain.knowledge.knowledge_hub import (
     mark_user_activity as _mark_knowledge_activity,
     begin_user_activity as _begin_knowledge_activity,
@@ -3500,42 +3501,45 @@ async def process_telegram_update(
             "Finishing the response..."
         )
 
-        reply_text = str(
-            result
-        )
+        reply_text = str(result)
 
         asks_for_source = bool(re.search(
             r"\b(?:source\s+urls?|urls?\s+of\s+(?:the\s+)?sources?|provide\s+(?:the\s+)?sources?|give\s+(?:me\s+)?(?:the\s+)?sources?)\b",
             text or "",
             flags=re.IGNORECASE,
         ))
-        telegram_text = format_telegram_response(
-            reply_text,
-            include_sources=asks_for_source,
-        )
-
+        # Split the raw response BEFORE Markdown-to-HTML conversion. Splitting
+        # already-generated HTML can cut a tag in half and make Telegram reject
+        # the entire chunk with a parse-entity error.
+        visible_reply = reply_text if asks_for_source else hide_source_references(reply_text)
+        visible_reply = format_plain_text(visible_reply)
         logger.info(
-            "[Telegram] Final reply text: %r",
-            telegram_text,
+            "[Telegram] Final reply prepared (chars=%d, source_links_requested=%s)",
+            len(visible_reply),
+            asks_for_source,
         )
 
-        await safe_delete_status(
-            status
-        )
+        await safe_delete_status(status)
 
-        # Telegram caps each text message at 4096 characters. Deliver long
-        # answers as ordered parts rather than failing the entire response.
         telegram_response = None
-        for response_part in split_telegram_text(telegram_text, limit=3800):
+        response_parts = split_telegram_text(visible_reply, limit=3600)
+        for part_index, response_part in enumerate(response_parts, start=1):
+            formatted_part = markdown_to_telegram_html(response_part)
             telegram_response = await http_client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={
                     "chat_id": chat_id,
-                    "text": response_part,
+                    "text": formatted_part,
                     "parse_mode": "HTML",
                 },
             )
             if not telegram_response.is_success:
+                logger.error(
+                    "[Telegram] Failed to send response part %d/%d (HTTP %s).",
+                    part_index,
+                    len(response_parts),
+                    getattr(telegram_response, "status_code", "unknown"),
+                )
                 break
 
         # -----------------------------------------------------
