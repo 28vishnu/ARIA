@@ -144,6 +144,7 @@ from brain.tools.search_tool import SearchTool
 from brain.tools.tool_manager import ToolManager
 from brain.tools.calculator_tool import CalculatorTool
 from autonomy.scheduler import BackgroundScheduler
+from autonomy.durable_job_queue import DurableJobQueue
 from automation_watchers import AutomationWatchers
 
 from brain.planner import Planner
@@ -1978,6 +1979,17 @@ async def bootstrap_application() -> ServiceRegistry:
         "scheduler",
         scheduler,
     )
+
+    # Durable named-job queue uses MongoDB, which survives Render deploys when
+    # configured as the application's persistent database. It deliberately does
+    # not pretend arbitrary Python closures can be restored after a restart.
+    durable_job_collection = db_inst["aria_durable_jobs"] if db_inst is not None else None
+    durable_job_queue = DurableJobQueue(
+        durable_job_collection,
+        max_attempts=int(os.getenv("ARIA_DURABLE_JOB_MAX_ATTEMPTS", "5")),
+        lease_seconds=int(os.getenv("ARIA_DURABLE_JOB_LEASE_SECONDS", "300")),
+    )
+    registry.register("durable_job_queue", durable_job_queue)
 
     # ---------------------------------------------------------
     # Unified local knowledge acquisition (idle-only RSS updates)
