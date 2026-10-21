@@ -63,8 +63,16 @@ class LearningEngine:
             "service unavailable",
             "internal server error",
         )
-        return value.startswith(failure_starts) or (
-            value.startswith("query:") and "answer:" in value
+        generic_fact_wrappers = (
+            "give me a verifiable answer about a very obscure fact",
+            "give me a verifiable answer about an obscure fact",
+            "give me an obscure fact",
+            "give me a verifiable fact with sources",
+        )
+        return (
+            value.startswith(failure_starts)
+            or (value.startswith("query:") and "answer:" in value)
+            or any(marker in value for marker in generic_fact_wrappers)
         )
 
     async def learn(
