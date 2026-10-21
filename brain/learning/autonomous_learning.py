@@ -2,6 +2,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict
 
+from brain.learning.safe_learning import evaluate_learning_candidate
+
 logger = logging.getLogger("aria")
 
 
@@ -937,18 +939,29 @@ class AutonomousLearning:
         self,
         user,
         assistant,
+        *,
+        explicit_opt_in: bool = False,
     ):
-
-        user_text = self._normalize_text(
-            user
-        )
-
-        assistant_text = self._normalize_text(
-            assistant
-        )
+        """Persist chat-derived learning only after explicit opt-in and screening."""
+        user_text = self._normalize_text(user)
+        assistant_text = self._normalize_text(assistant)
 
         if not user_text:
-            return
+            return False
+
+        candidate = (
+            f"User:\n{user_text}\n\nAssistant:\n{assistant_text}"
+        )
+        decision = evaluate_learning_candidate(
+            candidate,
+            explicit_opt_in=explicit_opt_in,
+        )
+        if not decision.allowed:
+            logger.info(
+                "[AutonomousLearning] Chat learning skipped by safety gate: %s",
+                decision.reason,
+            )
+            return False
 
         # Conversation storage is owned by the main conversation pipeline.
         # Do not call MemoryEngine.store_chat() here: it expects a text string,
@@ -969,15 +982,8 @@ class AutonomousLearning:
                     "continuing with bounded learning."
                 )
 
-        content = (
-            f"User:\n"
-            f"{user_text}\n\n"
-            f"Assistant:\n"
-            f"{assistant_text}"
-        )
-
         content = self._safe_learning_content(
-            content,
+            decision.text,
             "conversation learning content",
         )
 
@@ -1017,6 +1023,7 @@ class AutonomousLearning:
         self.statistics[
             "chats"
         ] += 1
+        return True
 
     async def process_document(
         self,
@@ -1231,13 +1238,24 @@ class AutonomousLearning:
     async def process_profile(
         self,
         profile,
+        *,
+        explicit_opt_in: bool = False,
     ):
-
-        profile_str = (
-            self._safe_learning_content(
-                profile,
-                "profile learning content",
+        """Persist a user profile only when opted in and approved by the gate."""
+        decision = evaluate_learning_candidate(
+            profile,
+            explicit_opt_in=explicit_opt_in,
+        )
+        if not decision.allowed:
+            logger.info(
+                "[AutonomousLearning] Profile learning skipped by safety gate: %s",
+                decision.reason,
             )
+            return False
+
+        profile_str = self._safe_learning_content(
+            decision.text,
+            "profile learning content",
         )
 
         if hasattr(
@@ -1246,7 +1264,7 @@ class AutonomousLearning:
         ):
 
             await self.memory.store_profile(
-                profile
+                profile_str
             )
 
         await self._store_learning(
@@ -1273,8 +1291,10 @@ class AutonomousLearning:
         ):
 
             await self.learning.learn_profile(
-                profile
+                profile_str
             )
+
+        return True
 
     async def process_failure(
         self,
@@ -1526,6 +1546,7 @@ class AutonomousLearning:
                 await self.process_chat(
                     kwargs.get("user"),
                     kwargs.get("assistant"),
+                    explicit_opt_in=bool(kwargs.get("explicit_opt_in", False)),
                 )
 
             elif source == "document":
@@ -1553,6 +1574,7 @@ class AutonomousLearning:
 
                 await self.process_profile(
                     kwargs.get("profile"),
+                    explicit_opt_in=bool(kwargs.get("explicit_opt_in", False)),
                 )
 
             elif source == "plan":
