@@ -93,7 +93,18 @@ class AnswerComposer:
         if not text:
             return []
         parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])", text)
-        return [part.strip() for part in parts if part.strip()]
+        cleaned = []
+        for part in parts:
+            sentence = part.strip()
+            # Video/transcript timestamp fragments are not factual claims and
+            # should not leak into the final answer as standalone evidence.
+            sentence = re.sub(r"(?:^|\s)\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*", " ", sentence).strip()
+            if not sentence or re.fullmatch(r"[\W_]*", sentence):
+                continue
+            if re.match(r"^(?:key details|related videos|watch now)\s*:?$", sentence, re.IGNORECASE):
+                continue
+            cleaned.append(sentence)
+        return cleaned
 
     @staticmethod
     def _normalized_question(question: str) -> str:
@@ -104,6 +115,19 @@ class AnswerComposer:
             r"what is|what are|who is|who are|where is|where are|when is|when was|"
             r"why is|why are|why does|why do|how is|how are|how does|how do)\s+",
             "", text,
+        )
+        # Remove source/citation instructions from the subject before retrieval
+        # relevance checks. They describe answer format, not the factual topic.
+        text = re.sub(
+            r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|include|show)\s+"
+            r"(?:(?:me|us)\s+)?(?:(?:the|some)\s+)?(?:verifiable\s+)?"
+            r"(?:sources?|citations?|source\s+links?|references?))\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\s*(?:,?\s*with\s+(?:reliable\s+|verifiable\s+)?"
+            r"(?:sources?|citations?|references?))\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
         )
         # Strip requested everyday examples/analogies before relevance checks.
         # They describe the output style, not additional subject terms.
