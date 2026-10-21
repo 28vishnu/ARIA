@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import logging
+import asyncio
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -69,13 +70,15 @@ class AudioEngine:
             }
 
         try:
-            response = self.client.models.generate_content(
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model="gemini-2.0-flash",
                 contents=[
                     {"mime_type": mime_type, "data": audio_bytes},
                     (
-                        "Transcribe this audio verbatim, provide a concise summary, "
-                        "and detect the primary language spoken."
+                        "Transcribe this audio verbatim. Return the transcript first, "
+                        "then a concise summary and the primary language if identifiable. "
+                        "Do not invent speech that is not audible."
                     ),
                 ],
             )
