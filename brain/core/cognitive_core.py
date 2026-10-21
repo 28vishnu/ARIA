@@ -5468,6 +5468,37 @@ usable evidence is present. Do not invent details absent from the evidence.
         # Preserve the exact incoming user request before topic resolution
         # mutates `query`; this is required for source-URL directives and logs.
         incoming_user_query = str(query or "").strip()
+        context_for_followup = base_context if isinstance(base_context, dict) else {}
+        original_user_query = str(
+            context_for_followup.get("original_user_query") or incoming_user_query
+        ).strip()
+
+        # Handle a literal "Explain that/it/this" against the actual preceding
+        # calculation before routing can reinterpret words like "one sentence"
+        # as a new arithmetic expression. Prefer operands from the prior user
+        # turn and compute the answer ourselves instead of parsing assistant prose.
+        if re.match(r"^explain\s+(?:that|it|this)(?:\s+.*)?$", original_user_query, re.IGNORECASE):
+            history = context_for_followup.get("conversation_history", [])
+            previous = history[-1] if isinstance(history, list) and history else {}
+            if isinstance(previous, dict):
+                previous_user = str(previous.get("user", "")).strip()
+                calculation = re.search(
+                    r"(?:calculate|compute|solve|evaluate|work\s+out)?\s*(\d[\d,]*)\s*(?:×|\*|\bx\b)\s*(\d[\d,]*)",
+                    previous_user,
+                    re.IGNORECASE,
+                )
+                if calculation:
+                    left = int(calculation.group(1).replace(",", ""))
+                    right = int(calculation.group(2).replace(",", ""))
+                    product = left * right
+                    answer = (
+                        f"{left:,} × {right:,} means multiplying {left:,} by {right:,}; "
+                        f"the result is {product:,}."
+                    )
+                    return SystemResponse(
+                        success=True, confidence=1.0, source="deterministic_followup",
+                        data={"response": answer, "message": answer},
+                    )
 
         # A request for an unspecified "obscure fact" is a prompt for a topic,
         # not a factual query. Stop it before routing/retrieval can search for
