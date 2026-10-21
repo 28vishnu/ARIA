@@ -130,6 +130,14 @@ class KnowledgeDatabase:
         )
         if text.startswith(failure_starts):
             return True
+        generic_fact_wrappers = (
+            "give me a verifiable answer about a very obscure fact",
+            "give me a verifiable answer about an obscure fact",
+            "give me an obscure fact",
+            "give me a verifiable fact with sources",
+        )
+        if any(marker in text for marker in generic_fact_wrappers):
+            return True
         if text.startswith("query:") and "answer:" in text:
             return True
         if title_text.startswith("query ") and "answer" in title_text and text.startswith("query:"):
