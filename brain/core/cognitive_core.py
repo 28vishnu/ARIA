@@ -5473,6 +5473,45 @@ usable evidence is present. Do not invent details absent from the evidence.
             context_for_followup.get("original_user_query") or incoming_user_query
         ).strip()
 
+        # Runtime status is a request about this running process, not a factual
+        # knowledge query. Answer only from the live request context and clearly
+        # label what this process cannot verify.
+        status_query = original_user_query.casefold()
+        asks_runtime_status = (
+            ("runtime" in status_query or "system" in status_query or "aria" in status_query)
+            and any(term in status_query for term in (
+                "status", "health", "running", "started", "current state",
+                "what can you verify", "verify", "diagnostic",
+            ))
+        )
+        if asks_runtime_status:
+            app_state = context_for_followup.get("app_state")
+            registry = getattr(app_state, "registry", None)
+            services = getattr(registry, "_services", None)
+            if isinstance(services, dict):
+                service_names = sorted(str(name) for name in services.keys())
+                service_summary = ", ".join(service_names[:20]) or "none reported"
+                extra_count = max(0, len(service_names) - 20)
+                if extra_count:
+                    service_summary += f", and {extra_count} more"
+            else:
+                service_summary = "not exposed to the current request context"
+            answer = (
+                "Runtime status (verified from this request):\n"
+                "• The application is running enough to receive and process this Telegram request.\n"
+                f"• Registered services visible to this process: {service_summary}.\n"
+                "Not verified by this response: external database reachability, background-job success, "
+                "Render deployment health beyond this request, current resource usage, or whether every "
+                "integration is functioning. Those require dedicated health checks and logs."
+            )
+            return SystemResponse(
+                success=True,
+                confidence=1.0,
+                source="runtime_status",
+                data={"response": answer, "message": answer},
+                metadata={"verified_from_live_request": True},
+            )
+
         # Handle a literal "Explain that/it/this" against the actual preceding
         # calculation before routing can reinterpret words like "one sentence"
         # as a new arithmetic expression. Prefer operands from the prior user
