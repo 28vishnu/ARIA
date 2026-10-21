@@ -33,6 +33,16 @@ class PermissionManager:
             "deny"    -> reject execution
         """
 
+        # Reject unknown levels before applying mode-specific rules. An
+        # unknown level must never be upgraded to confirmation/allow.
+        if permission_level not in {"safe", "confirm", "deny"}:
+            logger.warning(
+                "[PermissionManager] Unknown permission level '%s' for action '%s'.",
+                permission_level,
+                action_name,
+            )
+            return "deny"
+
         # Explicitly denied actions always remain denied.
         if permission_level == "deny":
             logger.warning(
@@ -70,10 +80,4 @@ class PermissionManager:
             )
             return "confirm"
 
-        # Unknown permission levels should fail closed.
-        logger.warning(
-            "[PermissionManager] Unknown permission level '%s' for action '%s'.",
-            permission_level,
-            action_name,
-        )
         return "deny"
