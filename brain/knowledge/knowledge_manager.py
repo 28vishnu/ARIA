@@ -2643,6 +2643,25 @@ class KnowledgeManager:
                 "I'll look for relevant sources once you choose a subject."
             )
 
+        # Answer stable, explicitly supported beginner FAQs before retrieval.
+        # Otherwise a temporary empty corpus prevents AnswerComposer's
+        # deterministic, official-documentation-backed templates from running.
+        try:
+            deterministic = self.answer_composer.compose(question, [])
+            generic_misses = (
+                "couldn't find sufficiently relevant information",
+                "couldn't find reliable information",
+            )
+            if deterministic and not any(
+                marker in deterministic.casefold() for marker in generic_misses
+            ):
+                logger.info(
+                    "[KnowledgeBrain] Answered recognized deterministic FAQ without retrieval."
+                )
+                return deterministic
+        except Exception:
+            logger.exception("[KnowledgeBrain] Deterministic FAQ preflight failed; continuing retrieval.")
+
         results = await self.retrieve(session_id, question)
         fresh_query = self._requires_fresh_online_evidence(question)
         sufficient = self._evidence_is_sufficient(question, results)
