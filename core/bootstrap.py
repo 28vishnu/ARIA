@@ -1980,6 +1980,74 @@ async def bootstrap_application() -> ServiceRegistry:
         scheduler,
     )
 
+    # ---------------------------------------------------------
+    # Approval-gated JARVIS briefing runtime
+    # ---------------------------------------------------------
+    # Briefings summarize recent alerts already ingested by the read-only
+    # provider integrations. Preparing a preview never sends it.
+    try:
+        from integrations.alert_manager import AlertManager
+        from integrations.briefing_collectors import create_alert_collector
+        from integrations.briefing_service import BriefingService
+        from integrations.briefing_scheduler import BriefingClockScheduler
+        from integrations.briefing_workflow import BriefingWorkflow
+        from integrations.gmail_readonly import GmailReadOnlyIntegration
+        from integrations.google_calendar_readonly import GoogleCalendarReadOnlyIntegration
+
+        alert_db_path = os.getenv(
+            "ARIA_ALERT_DB_PATH",
+            "./aria_data/alerts.sqlite3",
+        )
+        briefing_workflow = BriefingWorkflow(db_path=alert_db_path)
+        briefing_collectors = {
+            source: create_alert_collector(source, alert_db_path)
+            for source in ("gmail", "calendar", "github", "drive", "system")
+        }
+        briefing_service = BriefingService(
+            briefing_workflow,
+            briefing_collectors,
+            timeout_seconds=float(os.getenv("ARIA_BRIEFING_COLLECTOR_TIMEOUT", "20")),
+            max_items_per_source=30,
+        )
+        briefing_clock = BriefingClockScheduler(
+            scheduler,
+            briefing_service,
+            db_path=alert_db_path,
+        )
+
+        # These read-only pollers are no-ops until their OAuth token is connected.
+        gmail_integration = GmailReadOnlyIntegration(manager=AlertManager(db_path=alert_db_path))
+        calendar_integration = GoogleCalendarReadOnlyIntegration(manager=AlertManager(db_path=alert_db_path))
+        gmail_poll_job = scheduler.schedule_recurring(
+            max(300, int(os.getenv("ARIA_GMAIL_POLL_INTERVAL_SECONDS", "300"))),
+            gmail_integration.poll,
+            goal_id="aria_gmail_readonly_poll",
+            timeout_seconds=45,
+        )
+        calendar_poll_job = scheduler.schedule_recurring(
+            max(300, int(os.getenv("ARIA_CALENDAR_POLL_INTERVAL_SECONDS", "300"))),
+            calendar_integration.poll,
+            goal_id="aria_calendar_readonly_poll",
+            timeout_seconds=45,
+        )
+        briefing_clock_job = briefing_clock.start()
+
+        registry.register("briefing_workflow", briefing_workflow)
+        registry.register("briefing_service", briefing_service)
+        registry.register("briefing_clock", briefing_clock)
+        registry.register("gmail_readonly_integration", gmail_integration)
+        registry.register("calendar_readonly_integration", calendar_integration)
+        registry.register("gmail_readonly_poll_job", gmail_poll_job)
+        registry.register("calendar_readonly_poll_job", calendar_poll_job)
+        registry.register("briefing_clock_job", briefing_clock_job)
+        logger.info(
+            "[BriefingRuntime] Approval-gated morning/evening previews enabled; "
+            "Gmail and Calendar poll every 5+ minutes; no automatic briefing delivery."
+        )
+    except Exception:
+        logger.exception("[BriefingRuntime] Could not initialize briefing integrations.")
+
+
     # Durable named-job queue uses MongoDB, which survives Render deploys when
     # configured as the application's persistent database. It deliberately does
     # not pretend arbitrary Python closures can be restored after a restart.
