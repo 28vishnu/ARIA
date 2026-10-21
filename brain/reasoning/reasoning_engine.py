@@ -1249,6 +1249,40 @@ class ReasoningEngine:
         if not clean_query:
             return clean_query
 
+        # Resolve explicit demonstrative follow-ups from supplied history before
+        # topic detection can interpret "that in one simple sentence" as a topic.
+        explain_match = re.match(
+            r"^explain\s+(?:that|it|this)(?:\s+(.*))?$",
+            str(query or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        if explain_match:
+            conversation = context.get("conversation", {})
+            if not isinstance(conversation, dict):
+                conversation = {}
+            history = conversation.get("conversation_history", [])
+            if not history:
+                history = context.get("conversation_history", [])
+            previous = history[-1] if isinstance(history, list) and history else {}
+            if isinstance(previous, dict):
+                previous_user = str(previous.get("user", "")).strip()
+                previous_assistant = str(previous.get("assistant", "")).strip()
+                if previous_user and re.search(
+                    r"\b(?:calculate|compute|solve|evaluate|work\s+out)\b|\d\s*[+*/%×÷^]",
+                    previous_user,
+                    flags=re.IGNORECASE,
+                ):
+                    detail = str(explain_match.group(1) or "").strip(" .!?\t")
+                    suffix = f" {detail}" if detail else ""
+                    return (
+                        f"Explain the result of the previous calculation ({previous_user}; "
+                        f"result: {previous_assistant or 'the previous calculation result'}){suffix}."
+                    )
+                if previous_user and previous_assistant:
+                    detail = str(explain_match.group(1) or "").strip(" .!?\t")
+                    suffix = f" {detail}" if detail else ""
+                    return f"Explain the previous answer ({previous_assistant[:300]}){suffix}."
+
         conversation_state = context.get(
             "conversation_state"
         )
