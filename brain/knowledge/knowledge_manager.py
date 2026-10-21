@@ -56,6 +56,31 @@ class KnowledgeManager:
     # =========================================================
 
     @staticmethod
+    def _is_unspecified_fact_request(question: str) -> bool:
+        """Return True when a fact request lacks the subject needed to search."""
+        q = re.sub(r"\s+", " ", str(question or "").strip().casefold())
+        q = q.replace("’", "'").rstrip(" .!?\t")
+        generic_requests = {
+            "give me a verifiable answer about a very obscure fact, with sources",
+            "give me a verifiable answer about an obscure fact, with sources",
+            "give me a verifiable answer about a very obscure fact",
+            "give me an obscure fact, with sources",
+            "give me a very obscure fact, with sources",
+            "tell me a very obscure fact, with sources",
+            "give me a fact with sources",
+            "give me a verifiable fact with sources",
+            "give me an interesting fact with sources",
+        }
+        if q in generic_requests:
+            return True
+        # Catch generic formulations without blocking a prompt that names a topic.
+        generic = bool(re.search(r"\b(?:obscure|interesting|verifiable)\s+fact\b", q))
+        has_subject = bool(re.search(
+            r"\b(?:about|on|involving|related to|from)\s+[a-z0-9]", q
+        ))
+        return generic and not has_subject
+
+    @staticmethod
     def _is_non_factual_source(source: Any, evidence_type: Any = "") -> bool:
         """Internal traces and failed queries are not evidence about the world."""
         blocked = {
@@ -2622,6 +2647,13 @@ class KnowledgeManager:
 
         if not question:
             return None
+
+        if self._is_unspecified_fact_request(question):
+            return (
+                "What topic would you like a verifiable fact about? For example, "
+                "space, history, biology, technology, or an unusual animal. "
+                "I'll look for relevant sources once you choose a subject."
+            )
 
         results = await self.retrieve(session_id, question)
         fresh_query = self._requires_fresh_online_evidence(question)
