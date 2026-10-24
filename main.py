@@ -31,6 +31,7 @@ from integrations.google_drive_readonly import router as drive_readonly_router
 from integrations.github_account_actions import router as github_account_actions_router
 from integrations.phase4_actions import router as phase4_actions_router
 from integrations.jarvis_status import router as jarvis_status_router
+from integrations.personal_workspace import router as personal_workspace_router
 from integrations.github_webhook import router as github_webhook_router
 from brain.development.telegram_development import TelegramDevelopmentInterface
 from brain.development.telegram_autonomous_engineering import (
@@ -615,6 +616,7 @@ app.include_router(github_webhook_router)
 app.include_router(github_account_actions_router)
 app.include_router(phase4_actions_router)
 app.include_router(jarvis_status_router)
+app.include_router(personal_workspace_router)
 
 
 # =========================================================
