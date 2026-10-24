@@ -35,6 +35,12 @@ class Phase7Runtime:
             pass
         except Exception:
             logger.exception("Proactive agent failed during shutdown")
+        close = getattr(self.store, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.exception("Proactive task store failed to close cleanly")
 
 
 def _registry_has(registry: Any, name: str) -> bool:
@@ -67,13 +73,21 @@ async def initialize_phase7_runtime(registry: Any, app: Any) -> Phase7Runtime:
             raise RuntimeError("ARIA_PROACTIVE_STORAGE=mongodb requires MONGODB_URI")
         mongo_db = os.getenv("ARIA_PROACTIVE_MONGO_DATABASE", "aria_db").strip() or "aria_db"
         mongo_collection = os.getenv("ARIA_PROACTIVE_MONGO_COLLECTION", "proactive_tasks").strip() or "proactive_tasks"
-        store = MongoProactiveTaskStore(mongo_uri, mongo_db, mongo_collection)
+        store = MongoProactiveTaskStore(
+            mongo_uri,
+            mongo_db,
+            mongo_collection,
+            task_lease_seconds=float(os.getenv("ARIA_PROACTIVE_TASK_LEASE_SECONDS", "3600")),
+        )
         logger.info("Proactive task storage connected: MongoDB database=%s collection=%s", mongo_db, mongo_collection)
     elif storage_mode == "sqlite":
         persistent_dir = os.getenv("RENDER_PERSISTENT_DIR")
         default_db = str(Path(persistent_dir) / "aria_proactive.sqlite3") if persistent_dir else "data/aria_proactive.sqlite3"
         db_path = os.getenv("ARIA_PROACTIVE_DB_PATH", default_db)
-        store = ProactiveTaskStore(db_path)
+        store = ProactiveTaskStore(
+            db_path,
+            task_lease_seconds=float(os.getenv("ARIA_PROACTIVE_TASK_LEASE_SECONDS", "3600")),
+        )
         if not persistent_dir and db_path != ":memory:":
             logger.warning(
                 "Proactive task database is on the instance filesystem; tasks may be lost on Render restart. "
