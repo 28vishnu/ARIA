@@ -95,3 +95,64 @@ def test_agent_stops_cleanly(tmp_path):
         await asyncio.wait_for(task, timeout=1)
 
     asyncio.run(scenario())
+
+
+def test_stale_running_task_is_recovered_after_worker_crash(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    store = ProactiveTaskStore(db, task_lease_seconds=60)
+    task_id = store.schedule_once("recover me", 100, {"value": "ok"})
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE proactive_tasks SET status='running', updated_at=? WHERE id=?",
+            (100, task_id),
+        )
+
+    seen = []
+
+    async def handler(task):
+        seen.append(task["payload"]["value"])
+        return "recovered"
+
+    result = asyncio.run(store.run_due(handler, now=200))
+    item = next(t for t in store.list_tasks(include_disabled=True) if t["id"] == task_id)
+    assert result == {"claimed": 1, "succeeded": 1, "failed": 0}
+    assert seen == ["ok"]
+    assert item["status"] == "completed"
+
+
+def test_cancellation_during_execution_is_not_overwritten_by_completion(tmp_path):
+    store = ProactiveTaskStore(tmp_path / "tasks.sqlite3")
+    task_id = store.schedule_once("cancel during run", time.time() - 1)
+
+    async def handler(task):
+        assert store.cancel(task["id"]) is True
+        return "handler completed"
+
+    result = asyncio.run(store.run_due(handler))
+    item = next(t for t in store.list_tasks(include_disabled=True) if t["id"] == task_id)
+    assert result == {"claimed": 1, "succeeded": 1, "failed": 0}
+    assert item["status"] == "cancelled"
+    assert item["enabled"] is False
+
+
+def test_task_lease_must_be_positive(tmp_path):
+    with pytest.raises(ValueError, match="task_lease_seconds"):
+        ProactiveTaskStore(tmp_path / "tasks.sqlite3", task_lease_seconds=0)
+
+
+
+def test_error_messages_redact_common_credentials():
+    from autonomy.proactive_agent import _safe_error_message
+
+    message = _safe_error_message(RuntimeError(
+        "token=abc123 password:secret123 "
+        "mongodb://admin:supersecret@host/db "
+        "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef "
+        "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+    ))
+    assert "abc123" not in message
+    assert "secret123" not in message
+    assert "supersecret" not in message
+    assert "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef" not in message
+    assert "ghp_abcdefghijklmnopqrstuvwxyz1234567890" not in message
+    assert "[REDACTED]" in message
