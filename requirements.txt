@@ -22,3 +22,4 @@ python-multipart
 sentence-transformers
 torch
 edge-tts
+pymongo>=4.6,<5
