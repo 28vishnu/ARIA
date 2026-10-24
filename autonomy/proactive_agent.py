@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 import uuid
@@ -16,6 +17,26 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger("aria.proactive")
+DEFAULT_TASK_LEASE_SECONDS = 3600.0
+
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(token|secret|password|api[_-]?key|authorization)\b(\s*[:=]\s*)([^\s,;]+)"
+)
+_TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
+_GITHUB_TOKEN_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b")
+_MONGO_CREDENTIAL_RE = re.compile(r"(?i)(mongodb(?:\+srv)?://[^:/@\s]+:)[^@/\s]+(@)")
+
+
+def _safe_error_message(error: BaseException) -> str:
+    """Return a bounded error string without common credential formats."""
+    message = str(error)
+    message = _MONGO_CREDENTIAL_RE.sub(r"\1[REDACTED]\2", message)
+    message = _SECRET_ASSIGNMENT_RE.sub(r"\1\2[REDACTED]", message)
+    message = _TELEGRAM_TOKEN_RE.sub("[REDACTED_TELEGRAM_TOKEN]", message)
+    message = _GITHUB_TOKEN_RE.sub("[REDACTED_GITHUB_TOKEN]", message)
+    return message[:1000]
+
+
 AsyncHandler = Callable[[dict[str, Any]], Awaitable[Any]]
 AsyncNotifier = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
@@ -23,7 +44,11 @@ AsyncNotifier = Callable[[str, dict[str, Any]], Awaitable[Any]]
 class ProactiveTaskStore:
     """SQLite-backed one-shot and interval task store with safe claim semantics."""
 
-    def __init__(self, database_path: str | Path = "data/aria_proactive.sqlite3"):
+    def __init__(self, database_path: str | Path = "data/aria_proactive.sqlite3", *,
+                 task_lease_seconds: float = DEFAULT_TASK_LEASE_SECONDS):
+        if task_lease_seconds <= 0:
+            raise ValueError("task_lease_seconds must be greater than zero")
+        self.task_lease_seconds = float(task_lease_seconds)
         self.database_path = str(database_path)
         if self.database_path != ":memory:":
             Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +130,14 @@ class ProactiveTaskStore:
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
+            # Recover tasks left in `running` by a crashed process. The lease must
+            # exceed the maximum expected execution time to avoid duplicate work.
+            stale_before = now - self.task_lease_seconds
+            conn.execute(
+                "UPDATE proactive_tasks SET status='scheduled',updated_at=? "
+                "WHERE enabled=1 AND status='running' AND updated_at<=?",
+                (now, stale_before),
+            )
             rows = conn.execute("SELECT * FROM proactive_tasks WHERE enabled=1 AND status='scheduled' AND due_at<=? ORDER BY due_at LIMIT ?", (now, limit)).fetchall()
             ids = [row["id"] for row in rows]
             for task_id in ids:
@@ -126,7 +159,7 @@ class ProactiveTaskStore:
                 conn.execute("UPDATE proactive_tasks SET status='scheduled',due_at=?,run_count=run_count+?,failure_count=failure_count+?,last_error=?,updated_at=? WHERE id=? AND enabled=1",
                              (next_due, int(success), int(not success), error, now, task["id"]))
             else:
-                conn.execute("UPDATE proactive_tasks SET status=?,enabled=0,run_count=run_count+?,failure_count=failure_count+?,last_error=?,updated_at=? WHERE id=?",
+                conn.execute("UPDATE proactive_tasks SET status=?,enabled=0,run_count=run_count+?,failure_count=failure_count+?,last_error=?,updated_at=? WHERE id=? AND status='running'",
                              ("completed" if success else "failed", int(success), int(not success), error, now, task["id"]))
 
     async def run_due(self, handler: AsyncHandler, notifier: Optional[AsyncNotifier] = None,
@@ -150,8 +183,8 @@ class ProactiveTaskStore:
                     conn.execute("UPDATE proactive_tasks SET status='scheduled',updated_at=? WHERE id=? AND status='running'", (time.time(), task["id"]))
                 raise
             except Exception as exc:
-                logger.exception("Proactive task failed: %s", task["id"])
-                self._finish(task, False, str(exc)[:1000], time.time())
+                logger.error("Proactive task failed id=%s error=%s", task["id"], _safe_error_message(exc))
+                self._finish(task, False, _safe_error_message(exc), time.time())
                 failed += 1
         return {"claimed": len(claimed), "succeeded": succeeded, "failed": failed}
 
@@ -190,9 +223,13 @@ class MongoProactiveTaskStore:
     """
 
     def __init__(self, mongo_uri: str, database_name: str = "aria_db",
-                 collection_name: str = "proactive_tasks", *, server_selection_timeout_ms: int = 5000):
+                 collection_name: str = "proactive_tasks", *, server_selection_timeout_ms: int = 5000,
+                 task_lease_seconds: float = DEFAULT_TASK_LEASE_SECONDS):
         if not isinstance(mongo_uri, str) or not mongo_uri.strip():
             raise ValueError("mongo_uri must be a non-empty MongoDB URI")
+        if task_lease_seconds <= 0:
+            raise ValueError("task_lease_seconds must be greater than zero")
+        self.task_lease_seconds = float(task_lease_seconds)
         try:
             from pymongo import MongoClient, ASCENDING, ReturnDocument
         except ImportError as exc:  # pragma: no cover - depends on deployment environment
@@ -250,6 +287,12 @@ class MongoProactiveTaskStore:
         return result.modified_count == 1
 
     def _claim_due(self, now: float, limit: int) -> list[dict[str, Any]]:
+        # Requeue work abandoned by a process that crashed after claiming it.
+        # Configure the lease longer than the maximum expected task duration.
+        self._collection.update_many(
+            {"enabled": True, "status": "running", "updated_at": {"$lte": now - self.task_lease_seconds}},
+            {"$set": {"status": "scheduled", "updated_at": now}},
+        )
         claimed: list[dict[str, Any]] = []
         for _ in range(limit):
             row = self._collection.find_one_and_update(
@@ -276,7 +319,7 @@ class MongoProactiveTaskStore:
             )
         else:
             self._collection.update_one(
-                {"id": task["id"]},
+                {"id": task["id"], "status": "running"},
                 {"$set": {**common, "status": "completed" if success else "failed", "enabled": False},
                  "$inc": increments},
             )
@@ -302,7 +345,7 @@ class MongoProactiveTaskStore:
                 )
                 raise
             except Exception as exc:
-                logger.exception("Proactive task failed: %s", task["id"])
-                self._finish(task, False, str(exc)[:1000], time.time())
+                logger.error("Proactive task failed id=%s error=%s", task["id"], _safe_error_message(exc))
+                self._finish(task, False, _safe_error_message(exc), time.time())
                 failed += 1
         return {"claimed": len(claimed), "succeeded": succeeded, "failed": failed}
