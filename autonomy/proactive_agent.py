@@ -179,3 +179,130 @@ class ProactiveAgent:
 
     def stop(self) -> None:
         self._stop.set()
+
+
+class MongoProactiveTaskStore:
+    """MongoDB-backed implementation of the ProactiveTaskStore interface.
+
+    Uses PyMongo's atomic find_one_and_update for cross-process task claiming.
+    This stores task state in MongoDB, so it survives Render instance replacement
+    when the MongoDB deployment itself is durable and reachable.
+    """
+
+    def __init__(self, mongo_uri: str, database_name: str = "aria_db",
+                 collection_name: str = "proactive_tasks", *, server_selection_timeout_ms: int = 5000):
+        if not isinstance(mongo_uri, str) or not mongo_uri.strip():
+            raise ValueError("mongo_uri must be a non-empty MongoDB URI")
+        try:
+            from pymongo import MongoClient, ASCENDING, ReturnDocument
+        except ImportError as exc:  # pragma: no cover - depends on deployment environment
+            raise RuntimeError("MongoDB proactive storage requires pymongo; add pymongo to requirements.txt") from exc
+        self._return_document = ReturnDocument
+        self._client = MongoClient(mongo_uri, serverSelectionTimeoutMS=server_selection_timeout_ms,
+                                   connectTimeoutMS=server_selection_timeout_ms)
+        self._client.admin.command("ping")
+        self._collection = self._client[database_name][collection_name]
+        self._collection.create_index([("enabled", ASCENDING), ("status", ASCENDING), ("due_at", ASCENDING)])
+        self._collection.create_index([("id", ASCENDING)], unique=True)
+
+    def close(self) -> None:
+        self._client.close()
+
+    def schedule_once(self, title: str, due_at: float, payload: Optional[dict[str, Any]] = None) -> str:
+        return self._schedule(title, "once", float(due_at), None, payload or {})
+
+    def schedule_interval(self, title: str, first_due_at: float, interval_seconds: float,
+                          payload: Optional[dict[str, Any]] = None) -> str:
+        interval = float(interval_seconds)
+        if interval < 60:
+            raise ValueError("interval_seconds must be at least 60 seconds")
+        return self._schedule(title, "interval", float(first_due_at), interval, payload or {})
+
+    def _schedule(self, title: str, kind: str, due_at: float, interval: Optional[float], payload: dict[str, Any]) -> str:
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("title must be a non-empty string")
+        if due_at < 0:
+            raise ValueError("due_at must be a Unix timestamp >= 0")
+        try:
+            json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("payload must be JSON-serializable") from exc
+        now = time.time()
+        task_id = str(uuid.uuid4())
+        self._collection.insert_one({
+            "id": task_id, "title": title.strip(), "kind": kind, "payload": payload,
+            "due_at": due_at, "interval_seconds": interval, "enabled": True,
+            "status": "scheduled", "run_count": 0, "failure_count": 0,
+            "last_error": None, "created_at": now, "updated_at": now,
+        })
+        return task_id
+
+    def list_tasks(self, include_disabled: bool = False) -> list[dict[str, Any]]:
+        query = {} if include_disabled else {"enabled": True}
+        rows = self._collection.find(query, {"_id": 0}).sort([("due_at", 1), ("id", 1)])
+        return [dict(row) for row in rows]
+
+    def cancel(self, task_id: str) -> bool:
+        result = self._collection.update_one(
+            {"id": task_id, "enabled": True},
+            {"$set": {"enabled": False, "status": "cancelled", "updated_at": time.time()}},
+        )
+        return result.modified_count == 1
+
+    def _claim_due(self, now: float, limit: int) -> list[dict[str, Any]]:
+        claimed: list[dict[str, Any]] = []
+        for _ in range(limit):
+            row = self._collection.find_one_and_update(
+                {"enabled": True, "status": "scheduled", "due_at": {"$lte": now}},
+                {"$set": {"status": "running", "updated_at": now}},
+                sort=[("due_at", 1), ("id", 1)],
+                return_document=self._return_document.BEFORE,
+                projection={"_id": 0},
+            )
+            if row is None:
+                break
+            claimed.append(dict(row))
+        return claimed
+
+    def _finish(self, task: dict[str, Any], success: bool, error: Optional[str], now: float) -> None:
+        common = {"last_error": error, "updated_at": now}
+        increments = {"run_count": int(success), "failure_count": int(not success)}
+        if task["kind"] == "interval" and task["enabled"]:
+            next_due = max(float(task["due_at"]) + float(task["interval_seconds"]),
+                           now + float(task["interval_seconds"]))
+            self._collection.update_one(
+                {"id": task["id"], "enabled": True},
+                {"$set": {**common, "status": "scheduled", "due_at": next_due}, "$inc": increments},
+            )
+        else:
+            self._collection.update_one(
+                {"id": task["id"]},
+                {"$set": {**common, "status": "completed" if success else "failed", "enabled": False},
+                 "$inc": increments},
+            )
+
+    async def run_due(self, handler: AsyncHandler, notifier: Optional[AsyncNotifier] = None,
+                      *, now: Optional[float] = None, limit: int = 20) -> dict[str, int]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        claimed = self._claim_due(time.time() if now is None else float(now), limit)
+        succeeded = failed = 0
+        for task in claimed:
+            try:
+                result = await handler(task)
+                if notifier is not None:
+                    message = result if isinstance(result, str) else task["title"]
+                    await notifier(message, task)
+                self._finish(task, True, None, time.time())
+                succeeded += 1
+            except asyncio.CancelledError:
+                self._collection.update_one(
+                    {"id": task["id"], "status": "running"},
+                    {"$set": {"status": "scheduled", "updated_at": time.time()}},
+                )
+                raise
+            except Exception as exc:
+                logger.exception("Proactive task failed: %s", task["id"])
+                self._finish(task, False, str(exc)[:1000], time.time())
+                failed += 1
+        return {"claimed": len(claimed), "succeeded": succeeded, "failed": failed}
