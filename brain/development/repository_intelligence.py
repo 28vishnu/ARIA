@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
+from brain.development.repository_static_analyzer import RepositoryStaticAnalyzer
+
 logger = logging.getLogger("aria.repository_intelligence")
 
 
@@ -31,6 +33,7 @@ class RepositorySnapshot:
     inventory: Dict[str, Any] = field(default_factory=dict)
     architecture: Dict[str, Any] = field(default_factory=dict)
     dependencies: Dict[str, Any] = field(default_factory=dict)
+    static_analysis: Dict[str, Any] = field(default_factory=dict)
     relevant_files: List[str] = field(default_factory=list)
     source_evidence: List[Dict[str, Any]] = field(default_factory=list)
     git: Dict[str, Any] = field(default_factory=dict)
@@ -52,6 +55,7 @@ class RepositorySnapshot:
             "inventory": self.inventory,
             "architecture": self.architecture,
             "dependencies": self.dependencies,
+            "static_analysis": self.static_analysis,
             "relevant_files": list(self.relevant_files),
             "source_evidence": list(self.source_evidence),
             "git": self.git,
@@ -65,7 +69,7 @@ class RepositorySnapshot:
 class RepositoryIntelligence:
     """Canonical read-only gateway over ARIA's existing repository services."""
 
-    VERSION = "ARIA-REPOSITORY-INTELLIGENCE-20261006"
+    VERSION = "ARIA-REPOSITORY-INTELLIGENCE-20261024"
 
     def __init__(
         self,
@@ -83,6 +87,7 @@ class RepositoryIntelligence:
         repository_root: Optional[str] = None,
         max_files: int = 4000,
         max_evidence: int = 80,
+        static_analyzer: Any = None,
     ) -> None:
         self.repository_manager = repository_manager
         self.architecture_intelligence = architecture_intelligence
@@ -98,6 +103,10 @@ class RepositoryIntelligence:
         self.repository_root = Path(repository_root or os.getcwd()).resolve()
         self.max_files = max(100, int(max_files))
         self.max_evidence = max(10, int(max_evidence))
+        self.static_analyzer = static_analyzer or RepositoryStaticAnalyzer(
+            self.repository_root,
+            max_files=self.max_files,
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -190,6 +199,7 @@ class RepositoryIntelligence:
             "code_parser": self.code_parser is not None,
             "dependency_graph": self.dependency_graph is not None,
             "repository_memory": self.repository_memory is not None,
+            "static_analyzer": self.static_analyzer is not None,
         }
         root_exists = self.repository_root.exists() and self.repository_root.is_dir()
         return {
@@ -212,6 +222,10 @@ class RepositoryIntelligence:
             "dependencies": True,
             "relevant_files": True,
             "source_evidence": True,
+            "symbol_index": self.static_analyzer is not None,
+            "local_import_graph": self.static_analyzer is not None,
+            "call_graph_candidates": self.static_analyzer is not None,
+            "dependency_manifest_analysis": self.static_analyzer is not None,
             "git_state": self.git_manager is not None,
             "github_metadata": self.github_manager is not None,
             "read_only": True,
@@ -262,7 +276,25 @@ class RepositoryIntelligence:
 
         architecture = await self._collect_architecture(request, warnings)
         dependencies = await self._collect_dependencies(request, warnings)
+        static_analysis: Dict[str, Any] = {}
+        if self.static_analyzer is not None:
+            static_result = await self._safe_service_call(
+                self.static_analyzer,
+                ("analyze", "inspect", "scan"),
+                request,
+            )
+            if static_result is not None:
+                static_analysis = self._normalize_mapping(static_result)
+                services["static_analyzer"] = bool(static_analysis.get("success", True))
+                if static_analysis.get("warnings"):
+                    warnings.extend(str(item) for item in static_analysis.get("warnings", [])[:30])
+                if static_analysis.get("errors"):
+                    warnings.extend(f"Static analysis: {item}" for item in static_analysis.get("errors", [])[:10])
+            else:
+                services["static_analyzer"] = False
+                warnings.append("Deterministic static source analysis was unavailable.")
         relevant = self._select_relevant_files(request, inventory)
+        relevant.extend(str(item) for item in static_analysis.get("relevant_files", []) if isinstance(item, str))
 
         # Let the architecture/reasoning services contribute candidate paths,
         # but never trust nonexistent paths. This is the main anti-hallucination
@@ -316,6 +348,7 @@ class RepositoryIntelligence:
             inventory=inventory,
             architecture=architecture,
             dependencies=dependencies,
+            static_analysis=static_analysis,
             relevant_files=relevant,
             source_evidence=evidence,
             git=git_state,
