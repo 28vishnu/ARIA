@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from autonomy.proactive_agent import ProactiveAgent, ProactiveTaskStore
+from autonomy.proactive_agent import MongoProactiveTaskStore, ProactiveAgent, ProactiveTaskStore
 from brain.development.phase4_engineering_gate import EngineeringChangeGate
 
 logger = logging.getLogger("aria.phase7")
@@ -58,17 +58,29 @@ async def initialize_phase7_runtime(registry: Any, app: Any) -> Phase7Runtime:
     registry.register("engineering_change_gate", gate)
     app.state.engineering_change_gate = gate
 
-    # Prefer a Render persistent disk when configured; otherwise warn that
-    # scheduled tasks will not survive container replacement/redeploy.
-    persistent_dir = os.getenv("RENDER_PERSISTENT_DIR")
-    default_db = str(Path(persistent_dir) / "aria_proactive.sqlite3") if persistent_dir else "data/aria_proactive.sqlite3"
-    db_path = os.getenv("ARIA_PROACTIVE_DB_PATH", default_db)
-    store = ProactiveTaskStore(db_path)
-    if not persistent_dir and db_path != ":memory:":
-        logger.warning(
-            "Proactive task database is on the instance filesystem; tasks may be lost on Render restart. "
-            "Set ARIA_PROACTIVE_DB_PATH under your persistent disk mount."
-        )
+    # Prefer MongoDB for durable task state on hosts without persistent disks.
+    # Set ARIA_PROACTIVE_STORAGE=sqlite to force local SQLite intentionally.
+    storage_mode = os.getenv("ARIA_PROACTIVE_STORAGE", "mongodb" if os.getenv("MONGODB_URI") else "sqlite").strip().lower()
+    if storage_mode == "mongodb":
+        mongo_uri = os.getenv("MONGODB_URI", "").strip()
+        if not mongo_uri:
+            raise RuntimeError("ARIA_PROACTIVE_STORAGE=mongodb requires MONGODB_URI")
+        mongo_db = os.getenv("ARIA_PROACTIVE_MONGO_DATABASE", "aria_db").strip() or "aria_db"
+        mongo_collection = os.getenv("ARIA_PROACTIVE_MONGO_COLLECTION", "proactive_tasks").strip() or "proactive_tasks"
+        store = MongoProactiveTaskStore(mongo_uri, mongo_db, mongo_collection)
+        logger.info("Proactive task storage connected: MongoDB database=%s collection=%s", mongo_db, mongo_collection)
+    elif storage_mode == "sqlite":
+        persistent_dir = os.getenv("RENDER_PERSISTENT_DIR")
+        default_db = str(Path(persistent_dir) / "aria_proactive.sqlite3") if persistent_dir else "data/aria_proactive.sqlite3"
+        db_path = os.getenv("ARIA_PROACTIVE_DB_PATH", default_db)
+        store = ProactiveTaskStore(db_path)
+        if not persistent_dir and db_path != ":memory:":
+            logger.warning(
+                "Proactive task database is on the instance filesystem; tasks may be lost on Render restart. "
+                "Use ARIA_PROACTIVE_STORAGE=mongodb and configure MONGODB_URI, or attach a persistent disk."
+            )
+    else:
+        raise RuntimeError("ARIA_PROACTIVE_STORAGE must be 'mongodb' or 'sqlite'")
 
     config = registry.get("config") if _registry_has(registry, "config") else None
     http_client = registry.get("http_client") if _registry_has(registry, "http_client") else None
