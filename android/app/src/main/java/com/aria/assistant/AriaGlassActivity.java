@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.Manifest;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -46,7 +47,7 @@ import java.util.concurrent.Executors;
  */
 public class AriaGlassActivity extends Activity {
     private static final String BACKEND = "https://aria-ai-s5go.onrender.com";
-    private static final String AUTH_PREFS = "aria_glass_auth";
+    private static final String AUTH_PREFS = "aria_auth";
     private static final String TOKEN_KEY = "access_token";
     private static final String DEVICE_KEY = "device_id";
 
@@ -78,12 +79,16 @@ public class AriaGlassActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 // Keep the JavaScript bridge confined to the bundled local app page.
-                return !(url.startsWith("file:///android_asset/") || url.equals("about:blank"));
+                if (url.startsWith("file:///android_asset/") || url.equals("about:blank")) return false;
+                try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception ignored) { }
+                return true;
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return !(url.startsWith("file:///android_asset/") || url.equals("about:blank"));
+                if (url.startsWith("file:///android_asset/") || url.equals("about:blank")) return false;
+                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception ignored) { }
+                return true;
             }
         });
         webView.setWebChromeClient(new WebChromeClient());
