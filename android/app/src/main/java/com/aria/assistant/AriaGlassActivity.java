@@ -61,54 +61,103 @@ public class AriaGlassActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Override
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-        getWindow().setStatusBarColor(Color.rgb(6, 7, 11));
-        getWindow().setNavigationBarColor(Color.rgb(6, 7, 11));
-        if (Build.VERSION.SDK_INT >= 29) {
-            getWindow().setNavigationBarContrastEnforced(false);
-            getWindow().setStatusBarContrastEnforced(false);
+        try {
+            getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            getWindow().setStatusBarColor(Color.rgb(6, 7, 11));
+            getWindow().setNavigationBarColor(Color.rgb(6, 7, 11));
+            if (Build.VERSION.SDK_INT >= 29) {
+                getWindow().setNavigationBarContrastEnforced(false);
+                getWindow().setStatusBarContrastEnforced(false);
+            }
+
+            webView = new WebView(this);
+            webView.setBackgroundColor(Color.rgb(6, 7, 11));
+            webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            webView.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    Uri uri = request.getUrl();
+                    String url = uri.toString();
+                    if (url.startsWith("file:///android_asset/") || "about:blank".equals(url)) {
+                        return false;
+                    }
+                    if ("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme())) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                        } catch (Exception ex) {
+                            android.util.Log.w("ARIA_STARTUP", "No browser can open external URL", ex);
+                        }
+                    }
+                    return true;
+                }
+
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                    Uri uri = Uri.parse(url);
+                    if (url.startsWith("file:///android_asset/") || "about:blank".equals(url)) {
+                        return false;
+                    }
+                    if ("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme())) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                        } catch (Exception ex) {
+                            android.util.Log.w("ARIA_STARTUP", "No browser can open external URL", ex);
+                        }
+                    }
+                    return true;
+                }
+            });
+            webView.setWebChromeClient(new WebChromeClient());
+
+            WebSettings settings = webView.getSettings();
+            settings.setJavaScriptEnabled(true);
+            settings.setDomStorageEnabled(true);
+            settings.setAllowFileAccess(true);
+            settings.setAllowContentAccess(false);
+            settings.setSupportZoom(false);
+            settings.setBuiltInZoomControls(false);
+            settings.setDisplayZoomControls(false);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+            webView.addJavascriptInterface(new AriaBridge(), "AriaNative");
+            setContentView(webView);
+
+            // Voice and notifications are optional capabilities: neither should prevent
+            // the main chat screen from appearing on devices without those services.
+            try {
+                initializeVoice();
+            } catch (Exception ex) {
+                android.util.Log.e("ARIA_STARTUP", "Voice initialization failed", ex);
+            }
+            try {
+                requestNotificationPermissionIfNeeded();
+            } catch (Exception ex) {
+                android.util.Log.e("ARIA_STARTUP", "Notification permission setup failed", ex);
+            }
+            try {
+                if (!getToken().trim().isEmpty()) {
+                    AriaNotificationJobService.schedule(this);
+                }
+            } catch (Exception ex) {
+                android.util.Log.e("ARIA_STARTUP", "Notification scheduling failed", ex);
+            }
+
+            webView.loadUrl("file:///android_asset/index.html");
+        } catch (Exception ex) {
+            android.util.Log.e("ARIA_STARTUP", "Activity initialization failed", ex);
+            android.widget.TextView error = new android.widget.TextView(this);
+            error.setText("ARIA could not start. " + ex.getClass().getSimpleName()
+                    + (ex.getMessage() == null ? "" : ": " + ex.getMessage())
+                    + "\n\nPlease check the Android runtime log.");
+            error.setTextColor(Color.WHITE);
+            error.setTextSize(16);
+            error.setPadding(40, 40, 40, 40);
+            error.setGravity(android.view.Gravity.CENTER);
+            error.setBackgroundColor(Color.rgb(6, 7, 11));
+            setContentView(error);
         }
-
-        webView = new WebView(this);
-        webView.setBackgroundColor(Color.rgb(6, 7, 11));
-        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                // Keep the JavaScript bridge confined to the bundled local app page.
-                if (url.startsWith("file:///android_asset/") || url.equals("about:blank")) return false;
-                try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception ignored) { }
-                return true;
-            }
-
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url.startsWith("file:///android_asset/") || url.equals("about:blank")) return false;
-                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception ignored) { }
-                return true;
-            }
-        });
-        webView.setWebChromeClient(new WebChromeClient());
-
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(true); // Only the bundled, trusted asset is loaded here.
-        settings.setAllowContentAccess(false);
-        settings.setSupportZoom(false);
-        settings.setBuiltInZoomControls(false);
-        settings.setDisplayZoomControls(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        webView.addJavascriptInterface(new AriaBridge(), "AriaNative");
-
-        setContentView(webView);
-        initializeVoice();
-        requestNotificationPermissionIfNeeded();
-        if (!getToken().trim().isEmpty()) AriaNotificationJobService.schedule(this);
-        webView.loadUrl("file:///android_asset/index.html");
     }
 
     private void requestNotificationPermissionIfNeeded() {
@@ -118,47 +167,75 @@ public class AriaGlassActivity extends Activity {
     }
 
     private void initializeVoice() {
-        if (SpeechRecognizer.isRecognitionAvailable(this)) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            speechRecognizer.setRecognitionListener(new RecognitionListener() {
-                @Override public void onReadyForSpeech(Bundle params) { voiceStatus("Listening…"); }
-                @Override public void onBeginningOfSpeech() { voiceStatus("Hearing you…"); }
-                @Override public void onRmsChanged(float rmsdB) { }
-                @Override public void onBufferReceived(byte[] buffer) { }
-                @Override public void onEndOfSpeech() { voiceListening = false; }
-                @Override public void onError(int error) {
-                    voiceListening = false;
-                    voiceStatus("Voice recognition stopped. Tap the microphone and try again.");
-                    deliver("onAriaVoiceResult", voiceError("Speech recognition error (" + error + ")."));
-                }
-                @Override public void onResults(Bundle results) {
-                    voiceListening = false;
-                    ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    String transcript = matches == null || matches.isEmpty() ? "" : matches.get(0).trim();
-                    JSONObject payload = new JSONObject();
-                    try { payload.put("success", !transcript.isEmpty()); payload.put("text", transcript); payload.put("message", transcript.isEmpty() ? "I didn't catch that. Please try again." : "Speech recognized."); }
-                    catch (Exception ignored) { }
-                    deliver("onAriaVoiceResult", payload);
-                }
-                @Override public void onPartialResults(Bundle partialResults) { }
-                @Override public void onEvent(int eventType, Bundle params) { }
-            });
-        }
-        textToSpeech = new TextToSpeech(this, status -> {
-            ttsReady = status == TextToSpeech.SUCCESS;
-            if (ttsReady) {
-                textToSpeech.setLanguage(Locale.getDefault());
-                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                    @Override public void onStart(String utteranceId) { }
-                    @Override public void onDone(String utteranceId) {
-                        mainHandler.post(() -> deliver("onAriaSpeechFinished", new JSONObject()));
+        // Speech recognition and TTS are optional. Handle each independently so
+        // a missing speech service cannot stop ARIA's chat UI from opening.
+        try {
+            if (SpeechRecognizer.isRecognitionAvailable(this)) {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+                speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle params) { voiceStatus("Listening…"); }
+                    @Override public void onBeginningOfSpeech() { voiceStatus("Hearing you…"); }
+                    @Override public void onRmsChanged(float rmsdB) { }
+                    @Override public void onBufferReceived(byte[] buffer) { }
+                    @Override public void onEndOfSpeech() { voiceListening = false; }
+                    @Override public void onError(int error) {
+                        voiceListening = false;
+                        voiceStatus("Voice recognition stopped. Tap the microphone and try again.");
+                        deliver("onAriaVoiceResult", voiceError("Speech recognition error (" + error + ")."));
                     }
-                    @Override public void onError(String utteranceId) {
-                        mainHandler.post(() -> deliver("onAriaSpeechFinished", new JSONObject()));
+                    @Override public void onResults(Bundle results) {
+                        voiceListening = false;
+                        ArrayList<String> matches = results == null ? null
+                                : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        String transcript = matches == null || matches.isEmpty() ? "" : matches.get(0).trim();
+                        JSONObject payload = new JSONObject();
+                        try {
+                            payload.put("success", !transcript.isEmpty());
+                            payload.put("text", transcript);
+                            payload.put("message", transcript.isEmpty()
+                                    ? "I didn't catch that. Please try again." : "Speech recognized.");
+                        } catch (Exception ignored) { }
+                        deliver("onAriaVoiceResult", payload);
                     }
+                    @Override public void onPartialResults(Bundle partialResults) { }
+                    @Override public void onEvent(int eventType, Bundle params) { }
                 });
             }
-        });
+        } catch (Exception ex) {
+            speechRecognizer = null;
+            android.util.Log.e("ARIA_VOICE", "Speech recognition unavailable", ex);
+        }
+
+        try {
+            textToSpeech = new TextToSpeech(this, status -> {
+                if (status != TextToSpeech.SUCCESS || textToSpeech == null) {
+                    ttsReady = false;
+                    android.util.Log.w("ARIA_VOICE", "Text-to-speech initialization failed");
+                    return;
+                }
+                try {
+                    int languageStatus = textToSpeech.setLanguage(Locale.getDefault());
+                    ttsReady = languageStatus != TextToSpeech.LANG_MISSING_DATA
+                            && languageStatus != TextToSpeech.LANG_NOT_SUPPORTED;
+                    textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                        @Override public void onStart(String utteranceId) { }
+                        @Override public void onDone(String utteranceId) {
+                            mainHandler.post(() -> deliver("onAriaSpeechFinished", new JSONObject()));
+                        }
+                        @Override public void onError(String utteranceId) {
+                            mainHandler.post(() -> deliver("onAriaSpeechFinished", new JSONObject()));
+                        }
+                    });
+                } catch (Exception ex) {
+                    ttsReady = false;
+                    android.util.Log.e("ARIA_VOICE", "Text-to-speech setup failed", ex);
+                }
+            });
+        } catch (Exception ex) {
+            textToSpeech = null;
+            ttsReady = false;
+            android.util.Log.e("ARIA_VOICE", "Text-to-speech unavailable", ex);
+        }
     }
 
     private void voiceStatus(String message) {
