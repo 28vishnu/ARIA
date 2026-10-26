@@ -13,9 +13,9 @@ import android.app.job.JobService;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
-import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -55,7 +55,7 @@ public final class AriaNotificationJobService extends JobService {
 
         if (scheduler == null) return;
 
-        JobInfo.Builder builder = new JobInfo.Builder(
+        JobInfo job = new JobInfo.Builder(
                 JOB_ID,
                 new ComponentName(
                         context,
@@ -63,9 +63,10 @@ public final class AriaNotificationJobService extends JobService {
                 .setRequiredNetworkType(
                         JobInfo.NETWORK_TYPE_ANY)
                 .setPeriodic(15 * 60 * 1000L)
-                .setPersisted(true);
+                .setPersisted(true)
+                .build();
 
-        scheduler.schedule(builder.build());
+        scheduler.schedule(job);
     }
 
     public static void cancel(Context context) {
@@ -142,7 +143,7 @@ public final class AriaNotificationJobService extends JobService {
                 }
             }
 
-            // Establish a baseline on the first successful check.
+            // Record the initial baseline without notifying old alerts.
             if (previous < 0) {
                 state.edit()
                         .putLong(LAST_ID_KEY, newest)
@@ -180,9 +181,6 @@ public final class AriaNotificationJobService extends JobService {
                 String body = item.optString(
                         "body", "A new ARIA alert is available.");
 
-                String severity = item.optString(
-                        "severity", "info");
-
                 Intent launch =
                         new Intent(this, MainActivity.class);
 
@@ -190,11 +188,10 @@ public final class AriaNotificationJobService extends JobService {
                         Intent.FLAG_ACTIVITY_CLEAR_TOP
                                 | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
-                int pendingFlags =
-                        PendingIntent.FLAG_UPDATE_CURRENT;
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
 
                 if (Build.VERSION.SDK_INT >= 23) {
-                    pendingFlags |= PendingIntent.FLAG_IMMUTABLE;
+                    flags |= PendingIntent.FLAG_IMMUTABLE;
                 }
 
                 PendingIntent contentIntent =
@@ -202,7 +199,7 @@ public final class AriaNotificationJobService extends JobService {
                                 this,
                                 (int) (id % Integer.MAX_VALUE),
                                 launch,
-                                pendingFlags);
+                                flags);
 
                 Notification.Builder builder =
                         Build.VERSION.SDK_INT >= 26
@@ -214,17 +211,10 @@ public final class AriaNotificationJobService extends JobService {
                         .setSmallIcon(
                                 android.R.drawable.ic_dialog_info)
                         .setContentTitle("ARIA · " + title)
-                        .setContentText(
-                                body.length() > 140
-                                        ? body.substring(0, 137) + "…"
-                                        : body)
+                        .setContentText(body)
                         .setStyle(
                                 new Notification.BigTextStyle()
                                         .bigText(body))
-                        .setCategory(
-                                "urgent".equalsIgnoreCase(severity)
-                                        ? Notification.CATEGORY_ALARM
-                                        : Notification.CATEGORY_STATUS)
                         .setContentIntent(contentIntent)
                         .setAutoCancel(true)
                         .setShowWhen(true)
@@ -240,7 +230,7 @@ public final class AriaNotificationJobService extends JobService {
                     .apply();
 
         } catch (Exception ignored) {
-            // A later scheduled run retries transient failures.
+            // Transient network or parsing errors are retried next run.
         }
     }
 
