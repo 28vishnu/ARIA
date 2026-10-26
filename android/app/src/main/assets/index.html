@@ -1078,6 +1078,11 @@
         window.onAriaVoiceResult = function(result) {
             if (!result || !result.success) {
                 showStatus((result && result.message) || 'Voice input failed. Please try again.');
+                // Keep hands-free mode usable after silence/no-match/network errors,
+                // without retrying when the user explicitly switched voice mode off.
+                if (isVoiceActive && window.AriaNative && typeof window.AriaNative.startVoice === 'function') {
+                    window.setTimeout(() => { if (isVoiceActive) window.AriaNative.startVoice(); }, 1600);
+                }
                 return;
             }
             const transcript = String(result.text || '').trim();
