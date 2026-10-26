@@ -1987,6 +1987,8 @@ async def bootstrap_application() -> ServiceRegistry:
     # provider integrations. Preparing a preview never sends it.
     try:
         from integrations.alert_manager import AlertManager
+        from integrations.alert_runtime import AlertRuntime, telegram_notifier
+        from integrations.news_alert_poller import NewsAlertPoller
         from integrations.briefing_collectors import create_alert_collector
         from integrations.briefing_service import BriefingService
         from integrations.briefing_scheduler import BriefingClockScheduler
@@ -1996,7 +1998,26 @@ async def bootstrap_application() -> ServiceRegistry:
 
         alert_db_path = os.getenv(
             "ARIA_ALERT_DB_PATH",
-            "./aria_data/alerts.sqlite3",
+            "/var/data/aria_alerts.sqlite3" if os.path.isdir("/var/data") else "./aria_data/alerts.sqlite3",
+        )
+        # One shared persistent alert queue backs provider polling, immediate
+        # urgent delivery, and scheduled morning/evening digests.
+        alert_manager = AlertManager(db_path=alert_db_path, notifier=telegram_notifier)
+        alert_runtime = AlertRuntime(manager=alert_manager)
+        alert_runtime_job = scheduler.schedule_recurring(
+            60.0,
+            alert_runtime.tick,
+            goal_id="aria_urgent_alert_and_digest_delivery",
+            timeout_seconds=45.0,
+            run_immediately=True,
+        )
+        news_alert_poller = NewsAlertPoller(alert_manager)
+        news_alert_poll_job = scheduler.schedule_recurring(
+            max(300, int(os.getenv("ARIA_NEWS_ALERT_POLL_INTERVAL_SECONDS", "900"))),
+            news_alert_poller.tick,
+            goal_id="aria_new_rss_headline_alerts",
+            timeout_seconds=60.0,
+            run_immediately=True,
         )
         briefing_workflow = BriefingWorkflow(db_path=alert_db_path)
         briefing_collectors = {
@@ -2016,8 +2037,8 @@ async def bootstrap_application() -> ServiceRegistry:
         )
 
         # These read-only pollers are no-ops until their OAuth token is connected.
-        gmail_integration = GmailReadOnlyIntegration(manager=AlertManager(db_path=alert_db_path))
-        calendar_integration = GoogleCalendarReadOnlyIntegration(manager=AlertManager(db_path=alert_db_path))
+        gmail_integration = GmailReadOnlyIntegration(manager=alert_manager)
+        calendar_integration = GoogleCalendarReadOnlyIntegration(manager=alert_manager)
         gmail_poll_job = scheduler.schedule_recurring(
             max(300, int(os.getenv("ARIA_GMAIL_POLL_INTERVAL_SECONDS", "300"))),
             gmail_integration.poll,
@@ -2032,6 +2053,11 @@ async def bootstrap_application() -> ServiceRegistry:
         )
         briefing_clock_job = briefing_clock.start()
 
+        registry.register("alert_manager", alert_manager)
+        registry.register("alert_runtime", alert_runtime)
+        registry.register("alert_runtime_job", alert_runtime_job)
+        registry.register("news_alert_poller", news_alert_poller)
+        registry.register("news_alert_poll_job", news_alert_poll_job)
         registry.register("briefing_workflow", briefing_workflow)
         registry.register("briefing_service", briefing_service)
         registry.register("briefing_clock", briefing_clock)
@@ -2041,8 +2067,9 @@ async def bootstrap_application() -> ServiceRegistry:
         registry.register("calendar_readonly_poll_job", calendar_poll_job)
         registry.register("briefing_clock_job", briefing_clock_job)
         logger.info(
-            "[BriefingRuntime] Approval-gated morning/evening previews enabled; "
-            "Gmail and Calendar poll every 5+ minutes; no automatic briefing delivery."
+            "[BriefingRuntime] Automatic Telegram alert delivery enabled; "
+            "morning/evening alert digests and newly acquired RSS headline alerts are scheduled; "
+            "Gmail and Calendar poll every 5+ minutes. Briefing previews remain approval-gated."
         )
     except Exception:
         logger.exception("[BriefingRuntime] Could not initialize briefing integrations.")
