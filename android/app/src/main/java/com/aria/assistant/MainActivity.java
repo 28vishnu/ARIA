@@ -126,6 +126,9 @@ public class MainActivity extends Activity {
         buildUi();
         newConversation();
         requestNotificationPermissionIfNeeded();
+        if (!getSharedPreferences("aria_auth", MODE_PRIVATE).getString("access_token", "").isEmpty()) {
+            AriaNotificationJobService.schedule(this);
+        }
         checkForUpdates();
     }
 
