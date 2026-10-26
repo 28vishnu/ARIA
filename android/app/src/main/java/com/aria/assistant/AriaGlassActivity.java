@@ -1,6 +1,16 @@
 package com.aria.assistant;
 
 import android.app.Activity;
+import android.Manifest;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Handler;
+import android.os.Looper;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,6 +33,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -36,7 +48,13 @@ public class AriaGlassActivity extends Activity {
     private static final String TOKEN_KEY = "access_token";
     private static final String DEVICE_KEY = "device_id";
 
+    private static final int REQUEST_RECORD_AUDIO = 7301;
     private WebView webView;
+    private SpeechRecognizer speechRecognizer;
+    private TextToSpeech textToSpeech;
+    private boolean ttsReady = false;
+    private boolean voiceListening = false;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Override
@@ -80,7 +98,115 @@ public class AriaGlassActivity extends Activity {
         webView.addJavascriptInterface(new AriaBridge(), "AriaNative");
 
         setContentView(webView);
+        initializeVoice();
         webView.loadUrl("file:///android_asset/index.html");
+    }
+
+    private void initializeVoice() {
+        if (SpeechRecognizer.isRecognitionAvailable(this)) {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override public void onReadyForSpeech(Bundle params) { voiceStatus("Listening…"); }
+                @Override public void onBeginningOfSpeech() { voiceStatus("Hearing you…"); }
+                @Override public void onRmsChanged(float rmsdB) { }
+                @Override public void onBufferReceived(byte[] buffer) { }
+                @Override public void onEndOfSpeech() { voiceListening = false; }
+                @Override public void onError(int error) {
+                    voiceListening = false;
+                    voiceStatus("Voice recognition stopped. Tap the microphone and try again.");
+                    deliver("onAriaVoiceResult", voiceError("Speech recognition error (" + error + ")."));
+                }
+                @Override public void onResults(Bundle results) {
+                    voiceListening = false;
+                    ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    String transcript = matches == null || matches.isEmpty() ? "" : matches.get(0).trim();
+                    JSONObject payload = new JSONObject();
+                    try { payload.put("success", !transcript.isEmpty()); payload.put("text", transcript); payload.put("message", transcript.isEmpty() ? "I didn't catch that. Please try again." : "Speech recognized."); }
+                    catch (Exception ignored) { }
+                    deliver("onAriaVoiceResult", payload);
+                }
+                @Override public void onPartialResults(Bundle partialResults) { }
+                @Override public void onEvent(int eventType, Bundle params) { }
+            });
+        }
+        textToSpeech = new TextToSpeech(this, status -> {
+            ttsReady = status == TextToSpeech.SUCCESS;
+            if (ttsReady) {
+                textToSpeech.setLanguage(Locale.getDefault());
+                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    @Override public void onStart(String utteranceId) { }
+                    @Override public void onDone(String utteranceId) {
+                        mainHandler.post(() -> deliver("onAriaSpeechFinished", new JSONObject()));
+                    }
+                    @Override public void onError(String utteranceId) {
+                        mainHandler.post(() -> deliver("onAriaSpeechFinished", new JSONObject()));
+                    }
+                });
+            }
+        });
+    }
+
+    private void voiceStatus(String message) {
+        JSONObject payload = new JSONObject();
+        try { payload.put("success", true); payload.put("status", message); }
+        catch (Exception ignored) { }
+        deliver("onAriaVoiceStatus", payload);
+    }
+
+    private void startVoiceRecognition() {
+        runOnUiThread(() -> {
+            if (speechRecognizer == null) {
+                deliver("onAriaVoiceResult", voiceError("Speech recognition is not available on this device."));
+                return;
+            }
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO);
+                voiceStatus("Microphone permission is required. Allow it, then tap the microphone again.");
+                return;
+            }
+            try {
+                if (voiceListening) speechRecognizer.cancel();
+                Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+                intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+                intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+                voiceListening = true;
+                speechRecognizer.startListening(intent);
+            } catch (Exception ex) {
+                voiceListening = false;
+                deliver("onAriaVoiceResult", voiceError("Could not start speech recognition: " + safeMessage(ex)));
+            }
+        });
+    }
+
+    private JSONObject voiceError(String message) {
+        JSONObject payload = new JSONObject();
+        try { payload.put("success", false); payload.put("message", message); }
+        catch (Exception ignored) { }
+        return payload;
+    }
+
+    private void speakReply(String text) {
+        if (text == null || text.trim().isEmpty()) return;
+        runOnUiThread(() -> {
+            if (textToSpeech == null || !ttsReady) {
+                voiceStatus("Speech output is not ready on this device.");
+                return;
+            }
+            String safeText = text.length() > 3500 ? text.substring(0, 3500) : text;
+            textToSpeech.speak(safeText, TextToSpeech.QUEUE_FLUSH, null, "aria-reply-" + System.currentTimeMillis());
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_RECORD_AUDIO && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            voiceStatus("Microphone enabled. Tap the microphone to speak.");
+        } else if (requestCode == REQUEST_RECORD_AUDIO) {
+            voiceStatus("Microphone permission was denied.");
+        }
     }
 
     private String getAriaDeviceId() {
@@ -95,6 +221,34 @@ public class AriaGlassActivity extends Activity {
 
     private String getToken() {
         return getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).getString(TOKEN_KEY, "");
+    }
+
+    private JSONObject getJson(String path, String token) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(BACKEND + path).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
+            conn.setRequestProperty("Accept", "application/json");
+            if (token != null && !token.isEmpty()) conn.setRequestProperty("Authorization", "Bearer " + token);
+            int status = conn.getResponseCode();
+            InputStream stream = status >= 200 && status < 400 ? conn.getInputStream() : conn.getErrorStream();
+            StringBuilder body = new StringBuilder();
+            if (stream != null) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) body.append(line);
+                }
+            }
+            JSONObject result;
+            try { result = body.length() == 0 ? new JSONObject() : new JSONObject(body.toString()); }
+            catch (Exception ignored) { result = new JSONObject().put("detail", body.toString()); }
+            result.put("_http_status", status);
+            return result;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     private JSONObject postJson(String path, JSONObject payload, String token) throws Exception {
@@ -226,6 +380,55 @@ public class AriaGlassActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void notifications(String requestId) {
+            final String id = requestId == null ? "" : requestId;
+            executor.execute(() -> {
+                JSONObject result = new JSONObject();
+                try {
+                    String token = getToken();
+                    if (token.isEmpty()) {
+                        result.put("requestId", id).put("success", false).put("authRequired", true).put("items", new org.json.JSONArray());
+                    } else {
+                        JSONObject response = getJson("/app/notifications?limit=30", token);
+                        int status = response.optInt("_http_status", 0);
+                        if (status == 401) {
+                            getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).edit().remove(TOKEN_KEY).apply();
+                            result.put("requestId", id).put("success", false).put("authRequired", true).put("items", new org.json.JSONArray());
+                        } else if (status >= 200 && status < 300) {
+                            result.put("requestId", id).put("success", true).put("items", response.optJSONArray("items") == null ? new org.json.JSONArray() : response.optJSONArray("items"));
+                        } else {
+                            result.put("requestId", id).put("success", false).put("items", new org.json.JSONArray()).put("message", response.optString("detail", "Notifications are temporarily unavailable."));
+                        }
+                    }
+                } catch (Exception ex) {
+                    try { result.put("requestId", id).put("success", false).put("items", new org.json.JSONArray()).put("message", "Could not load notifications: " + safeMessage(ex)); }
+                    catch (Exception ignored) { }
+                }
+                deliver("onAriaNotificationsResult", result);
+            });
+        }
+
+        @JavascriptInterface
+        public void startVoice() { startVoiceRecognition(); }
+
+        @JavascriptInterface
+        public void stopVoice() {
+            runOnUiThread(() -> {
+                voiceListening = false;
+                if (speechRecognizer != null) speechRecognizer.cancel();
+                voiceStatus("Voice input stopped.");
+            });
+        }
+
+        @JavascriptInterface
+        public void speak(String text) { speakReply(text); }
+
+        @JavascriptInterface
+        public void stopSpeaking() {
+            runOnUiThread(() -> { if (textToSpeech != null) textToSpeech.stop(); });
+        }
+
+        @JavascriptInterface
         public void signOut() {
             getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).edit().remove(TOKEN_KEY).apply();
         }
@@ -253,6 +456,17 @@ public class AriaGlassActivity extends Activity {
             webView = null;
         }
         executor.shutdownNow();
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+            speechRecognizer.destroy();
+            speechRecognizer = null;
+        }
+        if (textToSpeech != null) {
+            textToSpeech.stop();
+            textToSpeech.shutdown();
+            textToSpeech = null;
+        }
+        mainHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
 }
