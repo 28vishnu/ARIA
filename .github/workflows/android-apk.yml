@@ -1,4 +1,3 @@
-
 name: Build and publish ARIA Android APK
 
 on:
@@ -15,7 +14,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,19 +31,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager -print -quit)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: Android sdkmanager was not found."
-            exit 1
-          fi
-
-          "$SDKMANAGER" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$SDKMANAGER" || { echo "ERROR: Android sdkmanager was not found."; exit 1; }
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -56,23 +44,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          test -f android/settings.gradle -o \
-               -f android/settings.gradle.kts || {
-            echo "ERROR: Android settings.gradle is missing."
-            exit 1
-          }
-
-          test -f android/app/build.gradle -o \
-               -f android/app/build.gradle.kts || {
-            echo "ERROR: Android app build.gradle is missing."
-            exit 1
-          }
-
-          test -f android/app/src/main/AndroidManifest.xml || {
-            echo "ERROR: AndroidManifest.xml is missing."
-            exit 1
-          }
+          test -f android/settings.gradle
+          test -f android/app/build.gradle
+          test -f android/app/src/main/AndroidManifest.xml
+          grep -q 'android:name=".AriaGlassActivity"' android/app/src/main/AndroidManifest.xml
+          grep -q 'android.intent.category.LAUNCHER' android/app/src/main/AndroidManifest.xml
 
       - name: Validate signing secrets
         shell: bash
@@ -83,17 +59,8 @@ jobs:
           ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
-          for name in \
-            ARIA_KEYSTORE_BASE64 \
-            ARIA_KEYSTORE_PASSWORD \
-            ARIA_KEY_ALIAS \
-            ARIA_KEY_PASSWORD
-          do
-            if [ -z "${!name}" ]; then
-              echo "ERROR: Required secret is missing or empty: $name"
-              exit 1
-            fi
+          for name in ARIA_KEYSTORE_BASE64 ARIA_KEYSTORE_PASSWORD ARIA_KEY_ALIAS ARIA_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "ERROR: Required secret is missing: $name"; exit 1; fi
             echo "$name is present"
           done
 
@@ -103,40 +70,8 @@ jobs:
           ARIA_KEYSTORE_BASE64: ${{ secrets.ARIA_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
-
-          printf '%s' "$ARIA_KEYSTORE_BASE64" \
-            | base64 --decode > "$RUNNER_TEMP/aria-upload-key.jks"
-
+          printf '%s' "$ARIA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aria-upload-key.jks"
           test -s "$RUNNER_TEMP/aria-upload-key.jks"
-          echo "Keystore restored."
-
-      - name: Diagnose signing configuration
-        shell: bash
-        env:
-          ARIA_KEYSTORE_PATH: ${{ runner.temp }}/aria-upload-key.jks
-          ARIA_KEYSTORE_PASSWORD: ${{ secrets.ARIA_KEYSTORE_PASSWORD }}
-          ARIA_KEY_ALIAS: ${{ secrets.ARIA_KEY_ALIAS }}
-          ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          test -s "$ARIA_KEYSTORE_PATH" || {
-            echo "ERROR: Keystore file is missing."
-            exit 1
-          }
-
-          for name in \
-            ARIA_KEYSTORE_PATH \
-            ARIA_KEYSTORE_PASSWORD \
-            ARIA_KEY_ALIAS \
-            ARIA_KEY_PASSWORD
-          do
-            if [ -z "${!name}" ]; then
-              echo "ERROR: $name is missing or empty."
-              exit 1
-            fi
-            echo "$name is present"
-          done
 
       - name: Build signed release APK
         shell: bash
@@ -150,17 +85,9 @@ jobs:
           ARIA_KEY_PASSWORD: ${{ secrets.ARIA_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
           gradle --no-daemon clean assembleRelease
-
-          APK_PATH="$(find app/build/outputs/apk/release \
-            -type f -name '*.apk' -print -quit)"
-
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: Release APK was not generated."
-            exit 1
-          fi
-
+          APK_PATH="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          test -n "$APK_PATH" || { echo "ERROR: Release APK was not generated."; exit 1; }
           mkdir -p "$GITHUB_WORKSPACE/release-output"
           cp "$APK_PATH" "$GITHUB_WORKSPACE/release-output/aria.apk"
 
@@ -168,28 +95,64 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           test -s release-output/aria.apk
           unzip -t release-output/aria.apk >/dev/null
           sha256sum release-output/aria.apk
+
+      # Preserve a downloadable APK even when GitHub's Releases API has a 5xx outage.
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aria-android-apk-${{ github.run_number }}
+          path: |
+            release-output/aria.apk
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Create version metadata
         shell: bash
         run: |
           set -euo pipefail
+          printf '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/aria.apk"}\n' \
+            "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" > release-output/version.json
 
-          printf \
-            '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/aria.apk"}\n' \
-            "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" \
-            > release-output/version.json
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload version metadata artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: android-build-${{ github.run_number }}
-          name: ARIA Android 1.0.${{ github.run_number }}
-          body: 'Automated ARIA Android release. APK archive validation passed.'
-          make_latest: true
-          files: |
-            release-output/aria.apk
-            release-output/version.json
+          name: aria-version-metadata-${{ github.run_number }}
+          path: release-output/version.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release with retries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          TAG="android-build-${GITHUB_RUN_NUMBER}"
+          TITLE="ARIA Android 1.0.${GITHUB_RUN_NUMBER}"
+          NOTES="Automated ARIA Android release. APK archive validation passed. If the release is unavailable, download the APK from this workflow's Artifacts section."
+          for attempt in 1 2 3 4 5; do
+            echo "Publishing release attempt ${attempt}/5 for ${TAG}..."
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              if gh release upload "$TAG" release-output/aria.apk release-output/version.json --clobber && \
+                 gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --latest; then
+                echo "Release updated successfully."
+                exit 0
+              fi
+            else
+              if gh release create "$TAG" release-output/aria.apk release-output/version.json \
+                --title "$TITLE" --notes "$NOTES" --latest; then
+                echo "Release created successfully."
+                exit 0
+              fi
+            fi
+            sleep_seconds=$((attempt * 4))
+            echo "Release API failed; retrying in ${sleep_seconds}s. The APK workflow artifact is already uploaded."
+            sleep "$sleep_seconds"
+          done
+          echo "WARNING: GitHub Release API failed after retries. The APK is still available in Actions > this run > Artifacts."
+          # Do not mark a successfully compiled and uploaded APK as a build failure
+          # solely because GitHub Releases returned a transient 5xx.
+          exit 0
