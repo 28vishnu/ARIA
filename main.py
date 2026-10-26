@@ -959,6 +959,22 @@ def markdown_to_telegram_html(
         quote=False,
     )
 
+    # Highlight important signposts consistently in Telegram. These labels
+    # remain plain text when no label is present; no content is invented.
+    important_labels = (
+        (r"(?im)^(\s*)(important|key takeaway|bottom line)\s*:", "📌"),
+        (r"(?im)^(\s*)(warning|caution|risk)\s*:", "⚠️"),
+        (r"(?im)^(\s*)(note|remember|result|next step)\s*:", "ℹ️"),
+    )
+    for pattern, icon in important_labels:
+        text = re.sub(
+            pattern,
+            lambda match, marker=icon: (
+                f"{match.group(1)}{marker} <b>{match.group(2).title()}:</b>"
+            ),
+            text,
+        )
+
     # -----------------------------------------------------
     # BOLD
     # -----------------------------------------------------
