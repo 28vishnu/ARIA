@@ -152,6 +152,42 @@ class AlertManager:
             ).fetchall()
         return [int(row["id"]) for row in rows]
 
+    def recent_alerts(self, limit: int = 30, after_id: int | None = None) -> list[dict[str, Any]]:
+        """Return recent alerts for the authenticated app inbox.
+
+        Bodies are clipped to keep the mobile payload bounded. The method is
+        read-only and never changes delivery or digest state.
+        """
+        bounded = max(1, min(int(limit), 100))
+        with self._connect() as conn:
+            select = (
+                "SELECT id,source,title,body,severity,created_at,status,delivered_at "
+                "FROM alerts "
+            )
+            if after_id is not None:
+                rows = conn.execute(
+                    select + "WHERE id > ? ORDER BY id ASC LIMIT ?",
+                    (max(0, int(after_id)), bounded),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    select + "ORDER BY id DESC LIMIT ?",
+                    (bounded,),
+                ).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "source": str(row["source"] or "ARIA"),
+                "title": str(row["title"] or "ARIA update")[:400],
+                "body": str(row["body"] or "")[:1600],
+                "severity": str(row["severity"] or "info"),
+                "created_at": float(row["created_at"] or 0),
+                "status": str(row["status"] or "unknown"),
+                "delivered_at": float(row["delivered_at"]) if row["delivered_at"] is not None else None,
+            }
+            for row in rows
+        ]
+
     def pending_count(self) -> int:
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM alerts WHERE status IN ('pending_immediate','pending_digest')").fetchone()
