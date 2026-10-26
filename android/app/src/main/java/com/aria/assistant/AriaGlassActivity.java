@@ -1,6 +1,8 @@
 package com.aria.assistant;
 
 import android.app.Activity;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -99,7 +101,15 @@ public class AriaGlassActivity extends Activity {
 
         setContentView(webView);
         initializeVoice();
+        requestNotificationPermissionIfNeeded();
+        if (!getToken().trim().isEmpty()) AriaNotificationJobService.schedule(this);
         webView.loadUrl("file:///android_asset/index.html");
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7302);
+        }
     }
 
     private void initializeVoice() {
@@ -312,6 +322,7 @@ public class AriaGlassActivity extends Activity {
                     String token = response.optString("access_token", "");
                     if (status >= 200 && status < 300 && !token.isEmpty()) {
                         getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).edit().putString(TOKEN_KEY, token).apply();
+                        AriaNotificationJobService.schedule(AriaGlassActivity.this);
                         result.put("success", true);
                     } else {
                         result.put("success", false);
@@ -431,6 +442,7 @@ public class AriaGlassActivity extends Activity {
         @JavascriptInterface
         public void signOut() {
             getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).edit().remove(TOKEN_KEY).apply();
+            AriaNotificationJobService.cancel(AriaGlassActivity.this);
         }
     }
 
