@@ -3870,7 +3870,7 @@ class ChatResponse(BaseModel):
 
 
 @app.get("/app/notifications")
-async def app_notifications(request: Request, limit: int = 30):
+async def app_notifications(request: Request, limit: int = 30, after_id: int | None = None):
     """Return recent owner-scoped ARIA alerts to the signed-in app inbox."""
     registry = getattr(request.app.state, "registry", None)
     if registry is None or not registry.has("alert_manager"):
@@ -3878,7 +3878,7 @@ async def app_notifications(request: Request, limit: int = 30):
     try:
         manager = registry.get("alert_manager")
         bounded_limit = max(1, min(int(limit), 100))
-        items = await asyncio.to_thread(manager.recent_alerts, bounded_limit)
+        items = await asyncio.to_thread(manager.recent_alerts, bounded_limit, after_id)
         return {"success": True, "items": items, "configured": True}
     except Exception:
         logger.exception("Could not load ARIA app notifications")
