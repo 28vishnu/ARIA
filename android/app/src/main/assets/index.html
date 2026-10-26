@@ -203,6 +203,14 @@
     <!-- MAIN ROOT CONTAINER -->
     <div id="app-root" class="relative w-full h-full flex flex-col z-10 overflow-hidden">
 
+        <section id="notification-panel" class="hidden fixed z-[90] top-20 right-3 left-3 sm:left-auto sm:w-[390px] max-h-[70vh] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 backdrop-blur-2xl shadow-2xl text-white" aria-label="ARIA notifications">
+            <div class="flex items-center justify-between p-4 border-b border-white/10">
+                <div><div class="font-bold text-sm">ARIA Notifications</div><div class="text-[11px] text-white/50">Alerts and newly acquired headlines</div></div>
+                <button onclick="closeNotifications()" class="p-2 rounded-lg hover:bg-white/10" aria-label="Close notifications"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+            <div id="notification-items" class="overflow-y-auto max-h-[55vh] p-3 space-y-2"><div class="text-xs text-white/50 p-3">Loading notifications…</div></div>
+        </section>
+
         <!-- FIXED TOP HEADER (Non-Scrolling with Notch Inset) -->
         <header id="main-header" class="safe-notch-top fixed top-0 left-0 right-0 z-30 ios-glass border-b border-white/5 px-4 pb-3 flex items-center justify-between">
             
@@ -258,7 +266,11 @@
                 </div>
             </div>
 
-            <!-- Right: New Chat Fast Action Button -->
+            <!-- Right: in-app notification inbox + new chat -->
+            <button id="btn-notifications" onclick="openNotifications()" class="relative p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" title="Notifications" aria-label="Notifications">
+                <i data-lucide="bell" class="w-5 h-5"></i>
+                <span id="notification-dot" class="hidden absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-400 ring-2 ring-slate-950"></span>
+            </button>
             <button onclick="startNewChat()" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" title="New Chat">
                 <i data-lucide="square-pen" class="w-5 h-5"></i>
             </button>
@@ -678,6 +690,9 @@
                 reply = String(result.reply || result.message || 'The ARIA request failed.');
             }
             chat.messages.push({role:'assistant', text:String(reply), sources});
+            if (isVoiceActive && window.AriaNative && typeof window.AriaNative.speak === 'function') {
+                window.AriaNative.speak(String(reply));
+            }
             touchChat(chat);
             // Only render into the visible pane if the user is still viewing this conversation.
             if (activeChatId === chat.id) appendMessageToUI('assistant', reply, sources);
@@ -946,6 +961,66 @@
             }, { passive: true });
         }
 
+        // Authenticated in-app inbox. This polls the same persistent alert queue
+        // used by Telegram; it does not pretend to be Android push notifications.
+        let notificationRequestCounter = 0;
+        let notificationPollHandle = null;
+        let lastSeenNotificationId = Number(localStorage.getItem('aria_last_seen_notification_id') || 0);
+
+        function refreshNotifications() {
+            if (!window.AriaNative || typeof window.AriaNative.notifications !== 'function' || !window.AriaNative.isSignedIn()) return;
+            window.AriaNative.notifications('notifications_' + (++notificationRequestCounter));
+        }
+
+        function openNotifications() {
+            document.getElementById('notification-panel').classList.remove('hidden');
+            refreshNotifications();
+        }
+
+        function closeNotifications() {
+            document.getElementById('notification-panel').classList.add('hidden');
+        }
+
+        window.onAriaNotificationsResult = function(result) {
+            if (!result || result.authRequired) return;
+            const container = document.getElementById('notification-items');
+            const items = result.success && Array.isArray(result.items) ? result.items : [];
+            if (!items.length) {
+                container.innerHTML = '<div class="text-xs text-white/50 p-3">No notifications yet. New alerts will appear here.</div>';
+                document.getElementById('notification-dot').classList.add('hidden');
+                return;
+            }
+            const newest = Math.max(...items.map(item => Number(item.id || 0)));
+            const panelOpen = !document.getElementById('notification-panel').classList.contains('hidden');
+            document.getElementById('notification-dot').classList.toggle('hidden', panelOpen || newest <= lastSeenNotificationId);
+            container.replaceChildren();
+            items.forEach(item => {
+                const card = document.createElement('article');
+                card.className = 'rounded-xl border border-white/10 bg-white/5 p-3';
+                const heading = document.createElement('div');
+                heading.className = 'text-xs font-bold';
+                heading.textContent = String(item.title || 'ARIA update');
+                const meta = document.createElement('div');
+                meta.className = 'mt-1 text-[10px] uppercase tracking-wide text-cyan-300';
+                meta.textContent = String(item.severity || 'info') + ' · ' + String(item.source || 'ARIA');
+                const body = document.createElement('div');
+                body.className = 'mt-2 text-xs text-white/70 whitespace-pre-wrap break-words';
+                body.textContent = String(item.body || '');
+                card.append(heading, meta, body);
+                container.appendChild(card);
+            });
+            if (panelOpen) {
+                lastSeenNotificationId = Math.max(lastSeenNotificationId, newest);
+                localStorage.setItem('aria_last_seen_notification_id', String(lastSeenNotificationId));
+                document.getElementById('notification-dot').classList.add('hidden');
+            }
+        };
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) refreshNotifications();
+        });
+        if (notificationPollHandle === null) notificationPollHandle = window.setInterval(refreshNotifications, 60000);
+
         // ENGINE & TOGGLE FEATURES
         function switchEngine(id, name, icon, colorHex) {
             showStatus('Model selection is visual only until the ARIA backend exposes provider routing. Requests still go to your configured ARIA backend.');
@@ -978,17 +1053,48 @@
         }
 
         function toggleVoiceMode() {
-            isVoiceActive = !isVoiceActive;
             const btn = document.getElementById('btn-voice-mode');
-
+            if (!window.AriaNative || typeof window.AriaNative.startVoice !== 'function') {
+                showStatus('Native voice support is unavailable. Update the ARIA Android app.');
+                return;
+            }
+            isVoiceActive = !isVoiceActive;
             if (isVoiceActive) {
-                isVoiceActive = false;
-                showStatus('Live voice conversations are not implemented by this backend yet. Use your phone keyboard microphone for speech-to-text.');
-                btn.classList.remove('voice-active');
+                btn.classList.add('voice-active');
+                showStatus('Voice mode enabled. Tap the microphone and speak; ARIA will read its reply aloud.');
+                window.AriaNative.startVoice();
             } else {
                 btn.classList.remove('voice-active');
+                if (typeof window.AriaNative.stopVoice === 'function') window.AriaNative.stopVoice();
+                if (typeof window.AriaNative.stopSpeaking === 'function') window.AriaNative.stopSpeaking();
+                showStatus('Voice mode disabled.');
             }
         }
+
+        window.onAriaVoiceStatus = function(result) {
+            if (result && result.status) showStatus(result.status);
+        };
+
+        window.onAriaVoiceResult = function(result) {
+            if (!result || !result.success) {
+                showStatus((result && result.message) || 'Voice input failed. Please try again.');
+                return;
+            }
+            const transcript = String(result.text || '').trim();
+            if (!transcript) return;
+            const input = document.getElementById('user-input');
+            input.value = transcript;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            sendMessage();
+        };
+
+        window.onAriaSpeechFinished = function() {
+            if (!isVoiceActive || !window.AriaNative || typeof window.AriaNative.startVoice !== 'function') return;
+            // Continue the hands-free turn only while the user has left voice mode on.
+            window.setTimeout(() => {
+                if (isVoiceActive) window.AriaNative.startVoice();
+            }, 350);
+        };
 
         function triggerFileUpload() {
             document.getElementById('file-input').click();
