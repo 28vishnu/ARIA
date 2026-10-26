@@ -20,7 +20,12 @@ logger = logging.getLogger("aria")
 
 async def telegram_notifier(message: str) -> bool:
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or "").strip()
-    chat_id = (os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    chat_id = (
+        os.getenv("ADMIN_CHAT_ID")
+        or os.getenv("TELEGRAM_CHAT_ID")
+        or os.getenv("ALLOWED_TELEGRAM_USER_ID")
+        or ""
+    ).strip()
     if not token or not chat_id or not message.strip():
         logger.warning("[JARVIS alerts] Telegram notifier is not configured.")
         return False
@@ -51,8 +56,8 @@ class AlertRuntime:
         self.manager = manager or AlertManager(notifier=telegram_notifier)
         self._now = now or (lambda: datetime.now(self._timezone()))
         self.timezone_name = os.getenv("ARIA_TIMEZONE", "Asia/Kolkata")
-        self.morning_time = os.getenv("ARIA_MORNING_BRIEFING", "08:00")
-        self.evening_time = os.getenv("ARIA_EVENING_BRIEFING", "20:00")
+        self.morning_time = os.getenv("ARIA_BRIEFING_MORNING_TIME", os.getenv("ARIA_MORNING_BRIEFING", "08:00"))
+        self.evening_time = os.getenv("ARIA_BRIEFING_EVENING_TIME", os.getenv("ARIA_EVENING_BRIEFING", "19:00"))
         self._validate_clock(self.morning_time, "ARIA_MORNING_BRIEFING")
         self._validate_clock(self.evening_time, "ARIA_EVENING_BRIEFING")
         self._ensure_state_table()
@@ -110,13 +115,18 @@ class AlertRuntime:
 
         due = []
         clock = now.strftime("%H:%M")
-        for key, scheduled in (
-            ("morning", self.morning_time),
-            ("evening", self.evening_time),
-        ):
-            # Exact minute avoids repeatedly attempting a digest throughout a
-            # whole hour; persisted state prevents duplicate sends on restarts.
-            if clock == scheduled and not self._already_ran(key, date_key):
+        # Send only the most recent due digest if the process was offline across
+        # both scheduled times. This avoids sending an overdue morning digest at
+        # night and then immediately sending a second, empty evening digest.
+        scheduled_periods = (
+            [("evening", self.evening_time)]
+            if clock >= self.evening_time
+            else ([ ("morning", self.morning_time) ] if clock >= self.morning_time else [])
+        )
+        for key, scheduled in scheduled_periods:
+            # A >= comparison tolerates scheduler jitter, process wake-up and
+            # brief restarts. Persistent per-day state still prevents duplicates.
+            if not self._already_ran(key, date_key):
                 result = await self.manager.send_digest()
                 if result.get("sent") or result.get("reason") == "empty":
                     self._mark_ran(key, date_key)
