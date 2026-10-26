@@ -61,7 +61,6 @@ public class AriaGlassActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Override
-    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         try {
