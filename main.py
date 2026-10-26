@@ -3869,6 +3869,22 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+@app.get("/app/notifications")
+async def app_notifications(request: Request, limit: int = 30):
+    """Return recent owner-scoped ARIA alerts to the signed-in app inbox."""
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None or not registry.has("alert_manager"):
+        return {"success": True, "items": [], "configured": False}
+    try:
+        manager = registry.get("alert_manager")
+        bounded_limit = max(1, min(int(limit), 100))
+        items = await asyncio.to_thread(manager.recent_alerts, bounded_limit)
+        return {"success": True, "items": items, "configured": True}
+    except Exception:
+        logger.exception("Could not load ARIA app notifications")
+        return JSONResponse(status_code=503, content={"success": False, "detail": "Notifications are temporarily unavailable."})
+
+
 @app.post(
     "/chat",
     response_model=ChatResponse,
