@@ -17,11 +17,25 @@ from typing import Any
 from integrations.alert_manager import AlertManager
 
 _LOG = logging.getLogger("aria.news_alerts")
-_URGENT_TITLE = re.compile(
-    r"\b(?:actively exploited|zero[- ]day|critical vulnerability|security breach|"
-    r"ransomware|massive data breach|emergency security update)\b",
-    re.IGNORECASE,
+_DEFAULT_IMMEDIATE_TOPICS = (
+    "actively exploited", "zero-day", "zero day", "critical vulnerability",
+    "security breach", "ransomware", "massive data breach", "emergency security update",
+    "major ai model", "ai model release", "frontier model", "openai launches",
+    "anthropic launches", "deepmind announces", "nasa announces", "spacex launches",
+    "space telescope discovers", "exoplanet discovery", "asteroid threat",
 )
+
+
+def _immediate_title_pattern() -> re.Pattern[str]:
+    """Build a configurable, escaped headline matcher from environment settings."""
+    configured = os.getenv("ARIA_NEWS_IMMEDIATE_KEYWORDS", "").strip()
+    terms = [term.strip() for term in configured.split(",") if term.strip()] if configured else list(_DEFAULT_IMMEDIATE_TOPICS)
+    if not terms:
+        terms = list(_DEFAULT_IMMEDIATE_TOPICS)
+    return re.compile("|".join(re.escape(term) for term in terms), re.IGNORECASE)
+
+
+_URGENT_TITLE = _immediate_title_pattern()
 
 
 class NewsAlertPoller:
