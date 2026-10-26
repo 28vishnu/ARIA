@@ -110,6 +110,30 @@ class AnswerComposer:
     def _normalized_question(question: str) -> str:
         """Remove question framing and answer-style modifiers before relevance checks."""
         text = re.sub(r"\s+", " ", str(question or "").strip().lower())
+        # Remove explicit answer instructions before topic matching. These clauses
+        # affect response style/source policy, not the factual subject. In
+        # particular, keep phrases such as "answer using your local knowledge"
+        # and "include a verifiable source" out of the retrieval topic tokens.
+        text = re.sub(
+            r"\s*(?:[,.!?;:]\s*)?(?:and\s+)?(?:please\s+)?"
+            r"(?:answer|respond|reply)\s+(?:using|from|with)\s+"
+            r"(?:(?:your|my|the)\s+)?(?:(?:local|connected|stored)\s+)?"
+            r"(?:knowledge(?:\s+(?:base|sources?|database))?|sources?)"
+            r"(?:\s+(?:only|available))?"
+            r"(?:\s+and\s+(?:please\s+)?(?:include|provide|give|show)\s+"
+            r"(?:(?:a|an|the|some)\s+)?(?:(?:verifiable|reliable|relevant)\s+)?"
+            r"(?:sources?|citations?|references?))?\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
+        )
+        # Also strip a standalone trailing source request, including the article
+        # "a" which older patterns did not accept (e.g. "include a verifiable source").
+        text = re.sub(
+            r"\s*(?:,?\s*(?:and\s+)?(?:please\s+)?(?:give|provide|include|show)\s+"
+            r"(?:(?:me|us)\s+)?(?:(?:a|an|the|some)\s+)?"
+            r"(?:(?:verifiable|reliable|relevant)\s+)?"
+            r"(?:sources?|citations?|source\s+links?|references?))\s*[.!?]*$",
+            "", text, flags=re.IGNORECASE,
+        )
         text = re.sub(
             r"^(?:please\s+)?(?:can you\s+)?(?:compare|explain|describe|define|tell me about|"
             r"what is|what are|who is|who are|where is|where are|when is|when was|"
