@@ -12,11 +12,11 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 
-        <!-- Existing native activity is retained so its code is not deleted. -->
+        <!-- Launch the glass UI, which contains the current chat, voice and inbox features. -->
         <activity
-            android:name=".MainActivity"
+            android:name=".AriaGlassActivity"
             android:exported="true"
-            android:windowSoftInputMode="adjustResize|stateAlwaysHidden"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="keyboardHidden|orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -24,17 +24,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Retain the legacy native screen for compatibility and diagnostics. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
         <service
             android:name=".AriaNotificationJobService"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
 
-        <!-- Keep the established native app as the launcher. The experimental
-             WebView shell must not replace the working main app until verified. -->
-        <activity
-            android:name=".AriaGlassActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize|stateAlwaysHidden"
-            android:configChanges="keyboardHidden|orientation|screenSize" />
     </application>
 </manifest>
