@@ -8,5 +8,4 @@ validate:
 runs-on: ubuntu-latest
 steps:
 - name: Confirm workflow runs
-run: |
-echo "ARIA Knowledge Audit workflow started successfully"
+run: echo "ARIA Knowledge Audit workflow started successfully"
