@@ -3,20 +3,10 @@ name: ARIA Knowledge Audit
 'on':
 workflow_dispatch:
 
-permissions:
-contents: read
-
 jobs:
-knowledge-audit:
+validate:
 runs-on: ubuntu-latest
 steps:
-- name: Checkout repository
-uses: actions/checkout@v4
-
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.12'
-
-  - name: Confirm workflow runs
-    run: echo "ARIA Knowledge Audit workflow started successfully"
+- name: Confirm workflow runs
+run: |
+echo "ARIA Knowledge Audit workflow started successfully"
