@@ -24,6 +24,13 @@ from pathlib import Path
 from typing import Any
 
 from brain.knowledge.open_knowledge import DEFAULT_DB, fetch_and_store_topic
+from brain.knowledge.knowledge_taxonomy import (
+    TAXONOMY_PATH,
+    coverage_report as taxonomy_coverage_report,
+    list_catalog as list_taxonomy_catalog,
+    load_taxonomy,
+)
+from brain.knowledge.source_registry import load_registry
 
 DOMAINS: dict[str, dict[str, Any]] = {
     "computer_science": {
@@ -102,25 +109,29 @@ def audit_coverage(db_path: str = DEFAULT_DB) -> dict[str, Any]:
         if "documents" not in tables:
             return {"database": str(path.resolve()), "exists": True, "total_records": 0, "domains": {key: {"label": value["label"], "matched_records": 0, "status": "documents_table_missing"} for key, value in DOMAINS.items()}}
         total = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
-        # Scan titles first and a bounded content prefix; this is a health estimate, not semantic evaluation.
-        rows = conn.execute("SELECT title, substr(content,1,3000), source FROM documents").fetchall()
+        # Stream rows once so large corpora do not consume RAM proportional to size.
         reports = {}
+        needles_by_domain = {}
         for key, domain in DOMAINS.items():
             needles = {re.sub(r"[^a-z0-9]+", " ", t.lower()).strip() for t in domain["topics"]}
             needles |= {word for phrase in list(needles) for word in phrase.split() if len(word) >= 5}
-            matches = 0
-            sources: dict[str, int] = {}
-            for title, content, source in rows:
-                haystack = re.sub(r"[^a-z0-9]+", " ", f"{title or ''} {content or ''}".lower())
-                if any(term and term in haystack for term in needles):
-                    matches += 1
-                    sources[str(source or "unknown")] = sources.get(str(source or "unknown"), 0) + 1
+            needles_by_domain[key] = needles
             reports[key] = {
-                "label": domain["label"], "matched_records": matches,
-                "status": "has_matches" if matches else "needs_ingestion",
-                "top_sources": sorted(sources.items(), key=lambda pair: pair[1], reverse=True)[:5],
+                "label": domain["label"], "matched_records": 0,
+                "status": "needs_ingestion", "top_sources": [],
                 "coverage_method": "approximate title/content keyword overlap; not a correctness score",
             }
+        source_counts: dict[str, dict[str, int]] = {key: {} for key in DOMAINS}
+        for title, content, source in conn.execute("SELECT title, substr(content,1,3000), source FROM documents"):
+            haystack = re.sub(r"[^a-z0-9]+", " ", f"{title or ''} {content or ''}".lower())
+            for key, needles in needles_by_domain.items():
+                if any(term and term in haystack for term in needles):
+                    reports[key]["matched_records"] += 1
+                    source_name = str(source or "unknown")
+                    source_counts[key][source_name] = source_counts[key].get(source_name, 0) + 1
+        for key, report in reports.items():
+            report["status"] = "has_matches" if report["matched_records"] else "needs_ingestion"
+            report["top_sources"] = sorted(source_counts[key].items(), key=lambda pair: pair[1], reverse=True)[:5]
         return {"database": str(path.resolve()), "exists": True, "total_records": total, "domains": reports}
     finally:
         conn.close()
@@ -132,14 +143,33 @@ def sync_topics(db_path: str = DEFAULT_DB, domain: str = "all", limit_per_domain
         raise ValueError("limit_per_domain must be zero or greater")
     if delay < 0:
         raise ValueError("delay must be zero or greater")
-    selected = list(DOMAINS) if domain == "all" else [domain]
-    unknown = [item for item in selected if item not in DOMAINS]
+    taxonomy = load_taxonomy()
+    taxonomy_domains = {item["id"]: item for item in taxonomy["domains"]}
+    if domain == "all":
+        selected = list(DOMAINS)  # retain the historical bounded default
+    elif domain == "all-taxonomy":
+        selected = list(taxonomy_domains)
+    else:
+        selected = [domain]
+    unknown = [item for item in selected if item not in DOMAINS and item not in taxonomy_domains]
     if unknown:
         raise ValueError("Unknown domain(s): " + ", ".join(unknown))
     result: dict[str, Any] = {"database": str(Path(db_path).expanduser()), "domains": {}, "include_news": include_news}
     for domain_key in selected:
         outcomes = []
-        for topic in DOMAINS[domain_key]["topics"][:limit_per_domain]:
+        if domain_key in DOMAINS:
+            domain_topics = DOMAINS[domain_key]["topics"]
+            domain_label = DOMAINS[domain_key]["label"]
+        else:
+            domain_node = taxonomy_domains[domain_key]
+            domain_label = domain_node["name"]
+            domain_topics = [
+                topic["name"]
+                for subject in domain_node["subjects"]
+                for subdomain in subject["subdomains"]
+                for topic in subdomain["topics"]
+            ]
+        for topic in domain_topics[:limit_per_domain]:
             try:
                 item = fetch_and_store_topic(db_path, topic, language="en", timeout=12)
                 outcomes.append({"topic": topic, "stored": int(item.get("processed", item.get("stored", 0)) or 0), "reason": item.get("reason")})
@@ -148,7 +178,7 @@ def sync_topics(db_path: str = DEFAULT_DB, domain: str = "all", limit_per_domain
             if delay:
                 time.sleep(delay)
         result["domains"][domain_key] = {
-            "label": DOMAINS[domain_key]["label"], "requested_topics": len(outcomes),
+            "label": domain_label, "requested_topics": len(outcomes),
             "stored_records": sum(item["stored"] for item in outcomes), "topics": outcomes,
         }
     if include_news:
@@ -162,14 +192,23 @@ def sync_topics(db_path: str = DEFAULT_DB, domain: str = "all", limit_per_domain
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Unified ARIA knowledge domain catalog, audit, and incremental sync")
+    taxonomy = load_taxonomy()
+    taxonomy_ids = [item["id"] for item in taxonomy["domains"]]
+    parser = argparse.ArgumentParser(description="Unified JARVIS knowledge catalog, coverage audit, and incremental sync")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("catalog", help="Show subject domains and suggested sources")
+    sub.add_parser("sources", help="Show the central source and rights registry")
+    listing = sub.add_parser("list", help="List versioned domains, subjects, or topics")
+    listing.add_argument("--kind", choices=["domains", "subjects", "topics"], default="domains")
+    listing.add_argument("--domain", help="Stable top-level domain ID")
+    listing.add_argument("--subject", help="Stable subject ID")
+    catalog_coverage = sub.add_parser("coverage", help="Read-only exact-title coverage for the versioned taxonomy")
+    catalog_coverage.add_argument("--db", default=DEFAULT_DB)
     audit = sub.add_parser("audit", help="Read-only approximate subject coverage report")
     audit.add_argument("--db", default=DEFAULT_DB)
     sync = sub.add_parser("sync", help="Fetch small Wikimedia topic batches into the unified corpus")
     sync.add_argument("--db", default=DEFAULT_DB)
-    sync.add_argument("--domain", choices=["all", *DOMAINS], default="all")
+    sync.add_argument("--domain", choices=["all", "all-taxonomy", *DOMAINS, *taxonomy_ids], default="all")
     sync.add_argument("--limit-per-domain", type=int, default=5)
     sync.add_argument("--include-news", action="store_true", help="Also force one dated RSS news collection run")
     sync.add_argument("--delay", type=float, default=0.25, help="Seconds between topic requests")
@@ -180,7 +219,13 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "catalog":
-            print(json.dumps({"domains": DOMAINS, "sources": SOURCE_CATALOG}, ensure_ascii=False, indent=2))
+            print(json.dumps({"legacy_domains": DOMAINS, "taxonomy": load_taxonomy(), "sources": load_registry()}, ensure_ascii=False, indent=2))
+        elif args.command == "sources":
+            print(json.dumps(load_registry(), ensure_ascii=False, indent=2))
+        elif args.command == "list":
+            print(json.dumps(list_taxonomy_catalog(args.kind, args.domain, args.subject), ensure_ascii=False, indent=2))
+        elif args.command == "coverage":
+            print(json.dumps(taxonomy_coverage_report(args.db), ensure_ascii=False, indent=2))
         elif args.command == "audit":
             print(json.dumps(audit_coverage(args.db), ensure_ascii=False, indent=2))
         elif args.command == "sync":

@@ -6,7 +6,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="ARIA"
+        android:label="JARVIS"
         android:icon="@drawable/aria_launcher"
         android:roundIcon="@drawable/aria_launcher"
         android:theme="@style/AppTheme"

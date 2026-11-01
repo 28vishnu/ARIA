@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from core.configuration import APP_NAME, APP_FULL_NAME
 from core.logging_config import setup_logging
 from core.route_handlers import GreetingHandler
 from core.dependency_injection import RequestContext
@@ -145,7 +146,7 @@ logger = logging.getLogger("aria")
 # TELEGRAM REQUEST SAFETY
 # =========================================================
 
-# Maximum amount of time ARIA is allowed to process one Telegram
+# Maximum amount of time JARVIS is allowed to process one Telegram
 # request before the operation is stopped.
 #
 # This prevents:
@@ -223,7 +224,7 @@ background_manager = BackgroundTaskManager()
 # Telegram can retry an update if the webhook endpoint does not
 # acknowledge quickly enough.
 #
-# Previously, ARIA could receive:
+# Previously, JARVIS could receive:
 #
 #     update 100
 #     update 100
@@ -233,8 +234,8 @@ background_manager = BackgroundTaskManager()
 #
 # This cache prevents that.
 #
-# This is currently in-memory because ARIA is running as a single
-# Render instance. If ARIA later becomes multi-instance, move this
+# This is currently in-memory because JARVIS is running as a single
+# Render instance. If JARVIS later becomes multi-instance, move this
 # mechanism to MongoDB/Redis.
 
 TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS = max(
@@ -399,7 +400,7 @@ async def lifespan(
             logger.info("[Lifespan] Mongo-backed durable job worker enabled.")
 
     logger.info(
-        "[Lifespan] ARIA Platform successfully started."
+        "[Lifespan] JARVIS Platform successfully started."
     )
 
     yield
@@ -557,7 +558,7 @@ class ChangePasswordRequest(BaseModel):
 # =========================================================
 
 app = FastAPI(
-    title="ARIA AI Operating Platform",
+    title=f"{APP_NAME} — {APP_FULL_NAME}",
     version="12.0.0",
     lifespan=lifespan,
 )
@@ -581,17 +582,17 @@ async def enforce_private_app_access(request: Request, call_next):
     scheme, _, token = auth_header.partition(" ")
     claims = _decode_owner_token(token.strip()) if scheme.lower() == "bearer" else None
     if claims is None:
-        return JSONResponse(status_code=401, content={"detail": "Authentication required. Sign in to ARIA."}, headers={"WWW-Authenticate": "Bearer"})
+        return JSONResponse(status_code=401, content={"detail": "Authentication required. Sign in to JARVIS."}, headers={"WWW-Authenticate": "Bearer"})
     collection = _security_collection(request)
     if collection is None:
         return JSONResponse(status_code=503, content={"detail": "Persistent private-app security storage is unavailable."})
     try:
         record = await collection.find_one({"_id": claims["owner_id"]})
     except Exception:
-        logger.exception("Could not verify ARIA app session against persistent storage")
+        logger.exception("Could not verify JARVIS app session against persistent storage")
         return JSONResponse(status_code=503, content={"detail": "Private-app security storage is temporarily unavailable."})
     if not record or int(record.get("token_version", 0)) != claims["version"]:
-        return JSONResponse(status_code=401, content={"detail": "This ARIA session was revoked. Please sign in again."}, headers={"WWW-Authenticate": "Bearer"})
+        return JSONResponse(status_code=401, content={"detail": "This JARVIS session was revoked. Please sign in again."}, headers={"WWW-Authenticate": "Bearer"})
     request.state.aria_owner = claims["owner_id"]
     request.state.aria_device_id = claims["device_id"]
     return await call_next(request)
@@ -1510,7 +1511,7 @@ async def safe_delete_status(
     Delete the temporary Telegram status.
 
     Failure to delete the status must never break the actual
-    ARIA request.
+    JARVIS request.
     """
 
     if status is None:
@@ -1546,10 +1547,10 @@ async def telegram_webhook(
 
     The webhook MUST acknowledge Telegram quickly.
 
-    Actual ARIA processing is scheduled in the background.
+    Actual JARVIS processing is scheduled in the background.
 
     This prevents Telegram from retrying the same update while
-    ARIA is still processing the request.
+    JARVIS is still processing the request.
     """
 
     request_id = req.headers.get(
@@ -1943,7 +1944,7 @@ async def _handle_master_architecture_command(
         )[:5]
 
         lines = [
-            "🏗️ ARIA Architecture Report",
+            "🏗️ JARVIS Architecture Report",
             "",
             f"Project type: {repository.get('project_type', 'unknown')}",
             f"Files: {repository.get('total_files', 0)}",
@@ -2119,7 +2120,7 @@ async def _handle_master_requirement_command(
             "text": (
                 "Usage: /master requirement <development requirement>\n\n"
                 "Example: /master requirement Create a new file "
-                "aria_test.txt containing exactly ARIA self-development test successful. "
+                "aria_test.txt containing exactly JARVIS self-development test successful. "
                 "Do not modify existing files."
             ),
         }
@@ -2133,7 +2134,7 @@ async def _handle_master_requirement_command(
         requirement = data.get("requirement") or {}
 
         lines = [
-            "🧠 <b>ARIA Requirement Intelligence</b>",
+            "🧠 <b>JARVIS Requirement Intelligence</b>",
             "",
             f"<b>Intent:</b> {html.escape(str(data.get('intent', 'unknown')))}",
             f"<b>Primary action:</b> {html.escape(str(data.get('primary_action', 'unknown')))}",
@@ -3714,7 +3715,7 @@ async def health():
 
 @app.get("/ready")
 async def readiness(req: Request):
-    """Readiness probe: reports whether ARIA's core request services are present."""
+    """Readiness probe: reports whether JARVIS's core request services are present."""
     from fastapi.responses import JSONResponse
 
     registry = getattr(req.app.state, "registry", None)
@@ -3764,7 +3765,7 @@ async def readiness(req: Request):
             return JSONResponse(status_code=503, content=result)
         return result
     except Exception:
-        logger.exception("ARIA readiness check failed")
+        logger.exception("JARVIS readiness check failed")
         return JSONResponse(
             status_code=503,
             content={
@@ -3784,7 +3785,7 @@ async def readiness(req: Request):
 async def root():
 
     return {
-        "system": "ARIA AI Operating Platform",
+        "system": f"{APP_NAME} — {APP_FULL_NAME}",
         "status": "operational",
         "version": "12.0.0",
     }
@@ -3801,7 +3802,7 @@ async def app_owner_login(credentials: OwnerLoginRequest, request: Request):
     token_secret = os.getenv(TOKEN_SECRET_ENV, "")
     device_id = str(credentials.device_id).strip()
     if not expected_id or not initial_password or len(token_secret) < 32:
-        return JSONResponse(status_code=503, content={"detail": "Private ARIA sign-in is not configured. Set the owner ID, initial app password, and a 32+ character token-signing secret."})
+        return JSONResponse(status_code=503, content={"detail": "Private JARVIS sign-in is not configured. Set the owner ID, initial app password, and a 32+ character token-signing secret."})
     if not device_id or len(device_id) > 128:
         return JSONResponse(status_code=400, content={"detail": "A valid device identifier is required."})
     if not hmac.compare_digest(str(credentials.telegram_id).strip(), expected_id):
@@ -3835,7 +3836,7 @@ async def app_owner_login(credentials: OwnerLoginRequest, request: Request):
         }}}, upsert=True)
         return OwnerLoginResponse(access_token=token)
     except Exception:
-        logger.exception("ARIA owner sign-in failed due to persistent security storage error")
+        logger.exception("JARVIS owner sign-in failed due to persistent security storage error")
         return JSONResponse(status_code=503, content={"detail": "Could not complete secure sign-in. Check database connectivity."})
 
 
@@ -3864,7 +3865,7 @@ async def app_change_password(payload: ChangePasswordRequest, request: Request):
         }})
         return {"success": True, "message": "Password changed. Sign in again on your devices."}
     except Exception:
-        logger.exception("ARIA owner password change failed")
+        logger.exception("JARVIS owner password change failed")
         return JSONResponse(status_code=503, content={"detail": "Could not save the new password. Try again later."})
 
 # =========================================================
@@ -3887,7 +3888,7 @@ class ChatResponse(BaseModel):
 
 @app.get("/app/notifications")
 async def app_notifications(request: Request, limit: int = 30, after_id: int | None = None):
-    """Return recent owner-scoped ARIA alerts to the signed-in app inbox."""
+    """Return recent owner-scoped JARVIS alerts to the signed-in app inbox."""
     registry = getattr(request.app.state, "registry", None)
     if registry is None or not registry.has("alert_manager"):
         return {"success": True, "items": [], "configured": False}
@@ -3897,7 +3898,7 @@ async def app_notifications(request: Request, limit: int = 30, after_id: int | N
         items = await asyncio.to_thread(manager.recent_alerts, bounded_limit, after_id)
         return {"success": True, "items": items, "configured": True}
     except Exception:
-        logger.exception("Could not load ARIA app notifications")
+        logger.exception("Could not load JARVIS app notifications")
         return JSONResponse(status_code=503, content={"success": False, "detail": "Notifications are temporarily unavailable."})
 
 

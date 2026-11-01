@@ -1,11 +1,48 @@
-name: ARIA Knowledge Audit
+name: JARVIS backend checks
 
-'on':
+on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'brain/knowledge/**'
+      - '**/*.py'
+      - 'requirements.txt'
+      - '.github/workflows/jarvis-backend-checks.yml'
+  pull_request:
+    paths:
+      - 'brain/knowledge/**'
+      - '**/*.py'
+      - 'requirements.txt'
+      - '.github/workflows/jarvis-backend-checks.yml'
+
+permissions:
+  contents: read
 
 jobs:
-  validate:
+  backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Confirm workflow runs
-        run: echo "ARIA Knowledge Audit workflow started successfully"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install backend and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Validate Python imports and syntax
+        run: python -m compileall -q .
+      - name: Run complete test suite
+        run: python -m pytest -q --junitxml=test-report.xml
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-backend-test-report
+          path: test-report.xml
+          if-no-files-found: ignore
+          retention-days: 14

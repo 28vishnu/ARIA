@@ -2548,16 +2548,43 @@ class KnowledgeManager:
             topic_from_question,
         )
 
+        academic: List[Dict[str, Any]] = []
+        academic_query = bool(re.search(
+            r"\b(research|papers?|preprints?|arxiv|scientific studies|recent findings)\b",
+            str(question or ""), re.IGNORECASE,
+        ))
+        academic_search = None
+        if academic_query:
+            try:
+                from brain.knowledge.academic_sources import search_academic_sources
+                academic_search = search_academic_sources(question, limit=5, timeout=10.0)
+            except Exception:
+                logger.exception("[KnowledgeBrain] Academic retrieval setup failed; continuing with configured sources.")
+
         db_path = os.environ.get(
             "ARIA_OPEN_KNOWLEDGE_DB",
             "data/aria_open_knowledge.sqlite3",
         )
         topic = topic_from_question(question)
         online: List[Dict[str, Any]] = []
-        try:
-            online = await self.search_web(question)
-        except Exception:
-            logger.exception("[KnowledgeBrain] Online fallback search failed.")
+        searches = [self.search_web(question)]
+        if academic_search is not None:
+            searches.append(academic_search)
+        search_results = await asyncio.gather(*searches, return_exceptions=True)
+        if isinstance(search_results[0], BaseException):
+            logger.error("[KnowledgeBrain] Online fallback search failed: %s", type(search_results[0]).__name__)
+        elif isinstance(search_results[0], list):
+            online = search_results[0]
+        if academic_search is not None:
+            research = search_results[1]
+            if isinstance(research, BaseException):
+                logger.error("[KnowledgeBrain] Academic retrieval failed: %s", type(research).__name__)
+            else:
+                academic = research.get("results", [])
+                logger.info(
+                    "[KnowledgeBrain] Academic retrieval completed providers=%s results=%d",
+                    research.get("providers", {}), len(academic),
+                )
 
         if online:
             try:
@@ -2584,6 +2611,7 @@ class KnowledgeManager:
             and bool(topic)
             and not self._requires_fresh_online_evidence(question)
             and (not online or len(online) < 2)
+            and not academic
         )
         if should_wikimedia:
             try:
@@ -2607,7 +2635,7 @@ class KnowledgeManager:
 
         combined = []
         seen = set()
-        for item in list(online or []) + list(stored_results or []):
+        for item in list(online or []) + list(academic or []) + list(stored_results or []):
             if not isinstance(item, dict):
                 continue
             content = str(item.get("content") or "").strip()

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import bz2
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -27,6 +28,8 @@ import re
 import sqlite3
 import sys
 import time
+from contextlib import closing
+from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
 from pathlib import Path
@@ -50,6 +53,20 @@ CREATE TABLE IF NOT EXISTS documents (
     url TEXT NOT NULL,
     language TEXT NOT NULL DEFAULT 'en',
     license TEXT NOT NULL DEFAULT 'unknown',
+    canonical_url TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    domain_id TEXT NOT NULL DEFAULT '',
+    subject_id TEXT NOT NULL DEFAULT '',
+    topic_ids TEXT NOT NULL DEFAULT '[]',
+    publication_date TEXT NOT NULL DEFAULT '',
+    retrieval_date TEXT NOT NULL DEFAULT '',
+    last_verified_at TEXT,
+    content_hash TEXT NOT NULL DEFAULT '',
+    document_version INTEGER NOT NULL DEFAULT 1,
+    quality_score REAL,
+    freshness_score REAL,
+    verification_status TEXT NOT NULL DEFAULT 'unreviewed',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source, source_id)
 );
@@ -77,7 +94,47 @@ def connect(db_path: str) -> sqlite3.Connection:
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(documents)")}
     if "license" not in columns:
         conn.execute("ALTER TABLE documents ADD COLUMN license TEXT NOT NULL DEFAULT 'unknown'")
-        conn.commit()
+        columns.add("license")
+
+    # Additive, idempotent migration. Existing document rows and identifiers are
+    # preserved; no content is rewritten during connection/startup.
+    additive_columns = {
+        "canonical_url": "TEXT NOT NULL DEFAULT ''",
+        "summary": "TEXT NOT NULL DEFAULT ''",
+        "domain_id": "TEXT NOT NULL DEFAULT ''",
+        "subject_id": "TEXT NOT NULL DEFAULT ''",
+        "topic_ids": "TEXT NOT NULL DEFAULT '[]'",
+        "publication_date": "TEXT NOT NULL DEFAULT ''",
+        "retrieval_date": "TEXT NOT NULL DEFAULT ''",
+        "last_verified_at": "TEXT",
+        "content_hash": "TEXT NOT NULL DEFAULT ''",
+        "document_version": "INTEGER NOT NULL DEFAULT 1",
+        "quality_score": "REAL",
+        "freshness_score": "REAL",
+        "verification_status": "TEXT NOT NULL DEFAULT 'unreviewed'",
+        "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    for name, declaration in additive_columns.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {name} {declaration}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_domain_subject ON documents(domain_id, subject_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_publication_date ON documents(publication_date)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS knowledge_schema_migrations (
+        version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
+    )""")
+    conn.execute("""INSERT OR IGNORE INTO knowledge_schema_migrations(version,name,applied_at)
+        VALUES (2,'document_provenance_and_taxonomy_metadata',?)""",
+        (datetime.now(timezone.utc).isoformat(),))
+    conn.execute("""CREATE TABLE IF NOT EXISTS document_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT NOT NULL, source_id TEXT NOT NULL, document_version INTEGER NOT NULL,
+        title TEXT NOT NULL, content TEXT NOT NULL, canonical_url TEXT NOT NULL DEFAULT '',
+        content_hash TEXT NOT NULL, license TEXT NOT NULL DEFAULT 'unknown',
+        metadata_json TEXT NOT NULL DEFAULT '{}', archived_at TEXT NOT NULL,
+        UNIQUE(source, source_id, document_version)
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_document_history_source_id ON document_history(source, source_id, document_version)")
 
     try:
         conn.execute("""
@@ -514,15 +571,33 @@ def import_records(
 
     sql = """
         INSERT INTO documents(
-            source, source_id, title, content, url, language, license
+            source, source_id, title, content, url, language, license,
+            canonical_url, summary, domain_id, subject_id, topic_ids,
+            publication_date, retrieval_date, last_verified_at, content_hash,
+            document_version, quality_score, freshness_score, verification_status,
+            metadata_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, source_id) DO UPDATE SET
             title=excluded.title,
             content=excluded.content,
             url=excluded.url,
             language=excluded.language,
-            license=excluded.license
+            license=excluded.license,
+            canonical_url=CASE WHEN excluded.canonical_url='' THEN documents.canonical_url ELSE excluded.canonical_url END,
+            summary=CASE WHEN excluded.summary='' THEN documents.summary ELSE excluded.summary END,
+            domain_id=CASE WHEN excluded.domain_id='' THEN documents.domain_id ELSE excluded.domain_id END,
+            subject_id=CASE WHEN excluded.subject_id='' THEN documents.subject_id ELSE excluded.subject_id END,
+            topic_ids=CASE WHEN excluded.topic_ids='[]' THEN documents.topic_ids ELSE excluded.topic_ids END,
+            publication_date=CASE WHEN excluded.publication_date='' THEN documents.publication_date ELSE excluded.publication_date END,
+            retrieval_date=excluded.retrieval_date,
+            last_verified_at=COALESCE(excluded.last_verified_at, documents.last_verified_at),
+            content_hash=excluded.content_hash,
+            document_version=CASE WHEN documents.content_hash != excluded.content_hash THEN documents.document_version + 1 ELSE documents.document_version END,
+            quality_score=COALESCE(excluded.quality_score, documents.quality_score),
+            freshness_score=COALESCE(excluded.freshness_score, documents.freshness_score),
+            verification_status=CASE WHEN excluded.verification_status='unreviewed' THEN documents.verification_status ELSE excluded.verification_status END,
+            metadata_json=CASE WHEN excluded.metadata_json='{}' THEN documents.metadata_json ELSE excluded.metadata_json END
     """
 
     try:
@@ -549,12 +624,70 @@ def import_records(
                 record.get("license") or default_licenses.get(source, "unknown")
             )[:200]
 
+            metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+            try:
+                metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                metadata_json = "{}"
+            if len(metadata_json) > 64_000:
+                metadata_json = json.dumps({"truncated": True, "preview": metadata_json[:60_000]}, ensure_ascii=False)
+            topic_ids = record.get("topic_ids") if isinstance(record.get("topic_ids"), list) else []
+            domain_id = clean_text(record.get("domain_id"))[:120]
+            subject_id = clean_text(record.get("subject_id"))[:160]
+            if not topic_ids and not domain_id:
+                try:
+                    from brain.knowledge.knowledge_taxonomy import topic_assignment
+                    assignment = topic_assignment(title)
+                    if assignment:
+                        domain_id = assignment["domain_id"]
+                        subject_id = assignment["subject_id"]
+                        topic_ids = assignment["topic_ids"]
+                except Exception:
+                    LOG.debug("No taxonomy assignment for imported title %r", title)
+            topic_ids_json = json.dumps([clean_text(item)[:200] for item in topic_ids[:100]], ensure_ascii=False)
+            canonical_url = clean_text(record.get("canonical_url") or url)[:2000]
+            summary = clean_text(record.get("summary") or "")[:4000]
+            publication_date = clean_text(record.get("publication_date") or "")[:80]
+            retrieval_date = clean_text(record.get("retrieval_date") or record.get("retrieved_at") or datetime.now(timezone.utc).isoformat())[:80]
+            last_verified_at = clean_text(record.get("last_verified_at") or "")[:80] or None
+            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            try:
+                document_version = max(1, int(record.get("document_version", 1)))
+            except (TypeError, ValueError):
+                document_version = 1
+            def bounded_score(name):
+                try:
+                    score = float(record.get(name))
+                except (TypeError, ValueError):
+                    return None
+                return score if 0 <= score <= 1 else None
+            verification_status = clean_text(record.get("verification_status") or "unreviewed")[:80]
+
             if not title or not source_id or not content:
                 continue
 
-            batch.append(
-                (source, source_id, title, content, url, language, license_name)
-            )
+            existing = conn.execute(
+                "SELECT document_version, content_hash, title, content, canonical_url, license, metadata_json FROM documents WHERE source=? AND source_id=?",
+                (source, source_id),
+            ).fetchone()
+            if existing and not existing[1]:
+                legacy_hash = hashlib.sha256(str(existing[3] or "").encode("utf-8")).hexdigest()
+                conn.execute("UPDATE documents SET content_hash=? WHERE source=? AND source_id=? AND content_hash=''",
+                             (legacy_hash, source, source_id))
+                existing = (existing[0], legacy_hash, *existing[2:])
+            if existing and existing[1] != content_hash:
+                conn.execute("""INSERT OR IGNORE INTO document_history
+                    (source,source_id,document_version,title,content,canonical_url,content_hash,license,metadata_json,archived_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (source, source_id, int(existing[0] or 1), existing[2], existing[3],
+                     existing[4] or "", existing[1], existing[5] or "unknown", existing[6] or "{}",
+                     datetime.now(timezone.utc).isoformat()))
+
+            batch.append((source, source_id, title, content, url, language, license_name,
+                          canonical_url, summary, domain_id, subject_id, topic_ids_json,
+                          publication_date, retrieval_date, last_verified_at, content_hash,
+                          document_version, bounded_score("quality_score"), bounded_score("freshness_score"),
+                          verification_status, metadata_json))
             processed += 1
 
             if len(batch) >= batch_size:
@@ -583,6 +716,7 @@ def import_records(
         "processed": processed,
         "database_changes_including_index_triggers": changed,
         "database": str(Path(db_path).resolve()),
+        "schema_version": 2,
     }
 
 
@@ -613,6 +747,10 @@ def search(db_path: str, query: str, limit: int = 5) -> list[dict]:
                 SELECT
                     d.source, d.source_id, d.title,
                     d.content, d.url, d.language,
+                    d.license, d.canonical_url, d.summary, d.domain_id, d.subject_id,
+                    d.topic_ids, d.publication_date, d.retrieval_date, d.last_verified_at,
+                    d.content_hash, d.document_version, d.quality_score, d.freshness_score,
+                    d.verification_status, d.metadata_json,
                     bm25(documents_fts) AS score
                 FROM documents_fts
                 JOIN documents d
@@ -649,8 +787,11 @@ def search(db_path: str, query: str, limit: int = 5) -> list[dict]:
 
             rows = conn.execute(
                 f"""
-                SELECT source, source_id, title,
-                       content, url, language
+                SELECT source, source_id, title, content, url, language,
+                       license, canonical_url, summary, domain_id, subject_id, topic_ids,
+                       publication_date, retrieval_date, last_verified_at, content_hash,
+                       document_version, quality_score, freshness_score, verification_status,
+                       metadata_json
                 FROM documents
                 WHERE {conditions}
                 LIMIT ?
@@ -660,6 +801,106 @@ def search(db_path: str, query: str, limit: int = 5) -> list[dict]:
 
         return [dict(row) for row in rows]
 
+    finally:
+        conn.close()
+
+
+def verify_database(db_path: str) -> dict:
+    """Read-only SQLite integrity and schema verification."""
+    path = Path(db_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"Knowledge database does not exist: {path}; no database was created")
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=20)
+    try:
+        integrity = [row[0] for row in conn.execute("PRAGMA integrity_check")]
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "documents" not in tables:
+            raise ValueError("Knowledge database is missing the documents table")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
+        required = {"source", "source_id", "title", "content", "url", "content_hash", "topic_ids", "metadata_json"}
+        missing = sorted(required - columns)
+        missing_tables = sorted({"document_history", "knowledge_schema_migrations"} - tables)
+        count = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+        return {"database": str(path.resolve()), "read_only": True,
+                "integrity_check": "ok" if integrity == ["ok"] else integrity,
+                "documents": count, "missing_columns": missing, "missing_tables": missing_tables,
+                "status": "ok" if integrity == ["ok"] and not missing and not missing_tables else "needs_attention"}
+    finally:
+        conn.close()
+
+
+def backup_database(db_path: str, destination: str) -> dict:
+    """Create a consistent SQLite backup; never overwrite an existing target."""
+    source = Path(db_path).expanduser().resolve()
+    target = Path(destination).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"Knowledge database does not exist: {source}")
+    if source == target:
+        raise ValueError("Backup destination must differ from the source database")
+    if target.exists():
+        raise FileExistsError(f"Backup destination already exists: {target}")
+    if not target.parent.is_dir():
+        raise FileNotFoundError(f"Backup destination directory does not exist: {target.parent}")
+    with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=30)) as src:
+        with closing(sqlite3.connect(str(target), timeout=30)) as dst:
+            src.backup(dst, pages=256, sleep=0.05)
+            dst.commit()
+    check = verify_database(str(target))
+    if check["integrity_check"] != "ok":
+        raise sqlite3.DatabaseError(f"Backup verification failed: {check}")
+    return {"status": "backup_created", "source": str(source), "destination": str(target),
+            "documents": check["documents"], "integrity_check": check["integrity_check"]}
+
+
+def restore_database(source_path: str, destination: str, *, overwrite: bool = False) -> dict:
+    """Restore to a new path by default; existing files require explicit overwrite."""
+    source = Path(source_path).expanduser().resolve()
+    target = Path(destination).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"Backup source does not exist: {source}")
+    if source == target:
+        raise ValueError("Restore destination must differ from the backup source")
+    if not target.parent.is_dir():
+        raise FileNotFoundError(f"Restore destination directory does not exist: {target.parent}")
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"Restore destination exists; pass overwrite=True only after backing it up: {target}")
+    source_check = verify_database(str(source))
+    if source_check["integrity_check"] != "ok":
+        raise sqlite3.DatabaseError(f"Restore source failed integrity checks: {source_check}")
+    temporary = target.with_name(target.name + ".restore-tmp")
+    if temporary.exists():
+        raise FileExistsError(f"Restore temporary path already exists: {temporary}")
+    try:
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=30)) as src:
+            with closing(sqlite3.connect(str(temporary), timeout=30)) as dst:
+                src.backup(dst, pages=256, sleep=0.05)
+                dst.commit()
+        restored = verify_database(str(temporary))
+        if restored["integrity_check"] != "ok":
+            raise sqlite3.DatabaseError(f"Restored database failed integrity checks: {restored}")
+        if overwrite:
+            import os
+            os.replace(temporary, target)
+        else:
+            temporary.replace(target)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    return {"status": "restored", "source": str(source), "destination": str(target),
+            "documents": source_check["documents"], "overwrite": overwrite}
+
+
+def reindex_database(db_path: str) -> dict:
+    """Rebuild the optional FTS5 index; SQLite LIKE remains the fallback."""
+    conn = connect(db_path)
+    try:
+        try:
+            conn.execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')")
+            conn.commit()
+            return {"status": "reindexed", "backend": "fts5", "documents": int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])}
+        except sqlite3.OperationalError as exc:
+            return {"status": "fallback_available", "backend": "like", "detail": str(exc)[:240]}
     finally:
         conn.close()
 
@@ -848,6 +1089,18 @@ def build_parser():
     stats = sub.add_parser("stats", help="Show database statistics")
     stats.add_argument("--db", default=DEFAULT_DB)
 
+    verify = sub.add_parser("verify", help="Read-only integrity and schema checks")
+    verify.add_argument("--db", default=DEFAULT_DB)
+    reindex = sub.add_parser("reindex", help="Rebuild the optional FTS5 index")
+    reindex.add_argument("--db", default=DEFAULT_DB)
+    backup = sub.add_parser("backup", help="Create a consistent backup without overwriting a target")
+    backup.add_argument("--db", default=DEFAULT_DB)
+    backup.add_argument("--destination", required=True)
+    restore = sub.add_parser("restore", help="Restore a backup to a new database path")
+    restore.add_argument("--source", required=True)
+    restore.add_argument("--destination", required=True)
+    restore.add_argument("--overwrite", action="store_true", help="Replace an existing destination after an atomic temporary restore")
+
     return parser
 
 
@@ -964,6 +1217,14 @@ def main(argv=None) -> int:
                         """
                     )
                 }
+                domain_counts = {
+                    row[0]: row[1] for row in conn.execute(
+                        "SELECT COALESCE(NULLIF(domain_id,''),'unclassified'), COUNT(*) FROM documents GROUP BY domain_id"
+                    )
+                }
+                history_count = int(conn.execute("SELECT COUNT(*) FROM document_history").fetchone()[0])
+                migration_version = int(conn.execute("SELECT COALESCE(MAX(version),0) FROM knowledge_schema_migrations").fetchone()[0])
+                fts_active = bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents_fts'").fetchone())
 
             finally:
                 conn.close()
@@ -971,7 +1232,23 @@ def main(argv=None) -> int:
             result = {
                 "total_documents": total,
                 "by_source": counts,
+                "by_domain": domain_counts,
+                "document_history_versions": history_count,
+                "schema_version": migration_version,
+                "fts5_active": fts_active,
             }
+
+        elif args.command == "verify":
+            result = verify_database(args.db)
+
+        elif args.command == "reindex":
+            result = reindex_database(args.db)
+
+        elif args.command == "backup":
+            result = backup_database(args.db, args.destination)
+
+        elif args.command == "restore":
+            result = restore_database(args.source, args.destination, overwrite=args.overwrite)
 
         else:
             return 2

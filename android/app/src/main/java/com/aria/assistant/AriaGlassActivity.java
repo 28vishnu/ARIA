@@ -42,7 +42,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Local glass UI for ARIA. Authentication and chat requests are performed natively
+ * Local glass UI for JARVIS. Authentication and chat requests are performed natively
  * so the bundled file:// page does not depend on browser CORS behavior.
  */
 public class AriaGlassActivity extends Activity {
@@ -147,7 +147,7 @@ public class AriaGlassActivity extends Activity {
         } catch (Exception ex) {
             android.util.Log.e("ARIA_STARTUP", "Activity initialization failed", ex);
             android.widget.TextView error = new android.widget.TextView(this);
-            error.setText("ARIA could not start. " + ex.getClass().getSimpleName()
+            error.setText("JARVIS could not start. " + ex.getClass().getSimpleName()
                     + (ex.getMessage() == null ? "" : ": " + ex.getMessage())
                     + "\n\nPlease check the Android runtime log.");
             error.setTextColor(Color.WHITE);
@@ -167,7 +167,7 @@ public class AriaGlassActivity extends Activity {
 
     private void initializeVoice() {
         // Speech recognition and TTS are optional. Handle each independently so
-        // a missing speech service cannot stop ARIA's chat UI from opening.
+        // a missing speech service cannot stop JARVIS's chat UI from opening.
         try {
             if (SpeechRecognizer.isRecognitionAvailable(this)) {
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
@@ -414,7 +414,7 @@ public class AriaGlassActivity extends Activity {
                         result.put("success", false);
                         result.put("message", ex instanceof java.net.SocketTimeoutException
                                 ? "Sign-in timed out. The backend may be waking up; try again."
-                                : "Cannot sign in to ARIA: " + safeMessage(ex));
+                                : "Cannot sign in to JARVIS: " + safeMessage(ex));
                     } catch (Exception ignored) { }
                 }
                 deliver("onAriaLoginResult", result);
@@ -432,7 +432,7 @@ public class AriaGlassActivity extends Activity {
                     String token = getToken();
                     if (token.isEmpty()) {
                         result.put("requestId", id).put("success", false).put("authRequired", true)
-                                .put("message", "Please sign in to private ARIA.").put("reply", "Sign-in required.");
+                                .put("message", "Please sign in to private JARVIS.").put("reply", "Sign-in required.");
                     } else {
                         JSONObject payload = new JSONObject();
                         payload.put("message", text);
@@ -442,29 +442,29 @@ public class AriaGlassActivity extends Activity {
                         if (status == 401) {
                             getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).edit().remove(TOKEN_KEY).apply();
                             result.put("requestId", id).put("success", false).put("authRequired", true)
-                                    .put("message", "Your ARIA session expired. Please sign in again.")
-                                    .put("reply", "Your ARIA session expired. Please sign in again.");
+                                    .put("message", "Your JARVIS session expired. Please sign in again.")
+                                    .put("reply", "Your JARVIS session expired. Please sign in again.");
                         } else if (status >= 200 && status < 300) {
                             String reply = response.optString("reply", response.optString("answer", "")).trim();
                             boolean success = response.optBoolean("success", true);
-                            if (reply.isEmpty()) reply = "ARIA returned an empty response. Check the backend logs and try again.";
+                            if (reply.isEmpty()) reply = "JARVIS returned an empty response. Check the backend logs and try again.";
                             result.put("requestId", id).put("success", success).put("reply", reply);
                             if (!success) result.put("message", reply);
                         } else {
                             String detail = response.optString("detail", "");
                             if (detail.length() > 600) detail = detail.substring(0, 600);
                             result.put("requestId", id).put("success", false)
-                                    .put("message", "ARIA backend returned HTTP " + status + (detail.isEmpty() ? ". Try again shortly." : ": " + detail))
+                                    .put("message", "JARVIS backend returned HTTP " + status + (detail.isEmpty() ? ". Try again shortly." : ": " + detail))
                                     .put("reply", "Request failed. " + (detail.isEmpty() ? "Please try again shortly." : detail));
                         }
                     }
                 } catch (Exception ex) {
                     try {
                         result.put("requestId", id).put("success", false)
-                                .put("message", "Could not reach ARIA backend: " + safeMessage(ex))
+                                .put("message", "Could not reach JARVIS backend: " + safeMessage(ex))
                                 .put("reply", ex instanceof java.net.SocketTimeoutException
-                                        ? "ARIA is taking longer than expected. The request timed out; try again in a moment."
-                                        : "I couldn't reach the ARIA backend. Check your internet connection and try again.");
+                                        ? "JARVIS is taking longer than expected. The request timed out; try again in a moment."
+                                        : "I couldn't reach the JARVIS backend. Check your internet connection and try again.");
                     } catch (Exception ignored) { }
                 }
                 deliver("onAriaChatResult", result);

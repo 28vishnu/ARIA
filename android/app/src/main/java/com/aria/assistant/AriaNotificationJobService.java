@@ -176,10 +176,10 @@ public final class AriaNotificationJobService extends JobService {
                 if (id <= previous) continue;
 
                 String title = item.optString(
-                        "title", "ARIA update");
+                        "title", "JARVIS update");
 
                 String body = item.optString(
-                        "body", "A new ARIA alert is available.");
+                        "body", "A new JARVIS alert is available.");
 
                 Intent launch =
                         new Intent(this, MainActivity.class);
@@ -210,7 +210,7 @@ public final class AriaNotificationJobService extends JobService {
                 Notification notification = builder
                         .setSmallIcon(
                                 android.R.drawable.ic_dialog_info)
-                        .setContentTitle("ARIA · " + title)
+                        .setContentTitle("JARVIS · " + title)
                         .setContentText(body)
                         .setStyle(
                                 new Notification.BigTextStyle()
@@ -312,7 +312,7 @@ public final class AriaNotificationJobService extends JobService {
             NotificationChannel channel =
                     new NotificationChannel(
                             CHANNEL_ID,
-                            "ARIA alerts",
+                            "JARVIS alerts",
                             NotificationManager.IMPORTANCE_DEFAULT);
 
             manager.createNotificationChannel(channel);

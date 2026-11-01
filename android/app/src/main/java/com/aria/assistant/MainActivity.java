@@ -121,7 +121,7 @@ public class MainActivity extends Activity {
         }
         loadChatHistory();
         // Always start on a fresh draft. History is retained and can be opened
-        // explicitly from the sidebar; launching ARIA never resumes an old thread.
+        // explicitly from the sidebar; launching JARVIS never resumes an old thread.
         activeChatId = "";
         buildUi();
         newConversation();
@@ -142,7 +142,7 @@ public class MainActivity extends Activity {
     @Override protected void onStop() { appVisible = false; super.onStop(); }
 
     /** All native alert dialogs are restyled after showing so menus, settings,
-     * source lists, profile, update prompts and confirmations share ARIA's theme. */
+     * source lists, profile, update prompts and confirmations share JARVIS's theme. */
     private final class GlassDialogBuilder extends AlertDialog.Builder {
         GlassDialogBuilder() {
             super(new android.view.ContextThemeWrapper(MainActivity.this,
@@ -195,8 +195,8 @@ public class MainActivity extends Activity {
 
     private void createNotificationChannel() {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel channel = new NotificationChannel(NOTIFICATION_CHANNEL_ID, "ARIA replies", NotificationManager.IMPORTANCE_DEFAULT);
-            channel.setDescription("Notifies you when an ARIA response is ready while the app is in the background.");
+            NotificationChannel channel = new NotificationChannel(NOTIFICATION_CHANNEL_ID, "JARVIS replies", NotificationManager.IMPORTANCE_DEFAULT);
+            channel.setDescription("Notifies you when an JARVIS response is ready while the app is in the background.");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
         }
@@ -217,8 +217,8 @@ public class MainActivity extends Activity {
         Notification.Builder builder = android.os.Build.VERSION.SDK_INT >= 26
             ? new Notification.Builder(this, NOTIFICATION_CHANNEL_ID) : new Notification.Builder(this);
         builder.setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("ARIA response ready")
-            .setContentText("Your answer is ready. Tap to return to ARIA.")
+            .setContentTitle("JARVIS response ready")
+            .setContentText("Your answer is ready. Tap to return to JARVIS.")
             .setContentIntent(pending).setAutoCancel(true);
         NotificationManager manager = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) manager.notify((int)(System.currentTimeMillis() & 0x7fffffff), builder.build());
@@ -240,8 +240,8 @@ public class MainActivity extends Activity {
                 String latestName = release.optString("versionName", "New version");
                 String apkUrl = release.optString("apkUrl", "https://github.com/28vishnu/ARIA/releases/latest");
                 int installedCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
-                if (latestCode > installedCode) runOnUiThread(() -> dialogBuilder().setTitle("ARIA update available")
-                    .setMessage("Version " + latestName + " is ready. Download the latest ARIA build?")
+                if (latestCode > installedCode) runOnUiThread(() -> dialogBuilder().setTitle("JARVIS update available")
+                    .setMessage("Version " + latestName + " is ready. Download the latest JARVIS build?")
                     .setPositiveButton("Download update", (d, w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl))); } catch (Exception e) { toast("Could not open the download link."); } })
                     .setNegativeButton("Later", null).show());
             } catch (Exception ignored) { } finally { if (connection != null) connection.disconnect(); }
@@ -274,7 +274,7 @@ public class MainActivity extends Activity {
         mark.setGravity(Gravity.CENTER);
         mark.setBackground(glassAccent());
         brand.addView(mark, new LinearLayout.LayoutParams(dp(34), dp(34)));
-        TextView title = label("  ARIA", 18, TEXT, true);
+        TextView title = label("  JARVIS", 18, TEXT, true);
         brand.addView(title);
         header.addView(brand, new LinearLayout.LayoutParams(0, -1, 1));
         TextView newChat = label("＋", 27, TEXT, false);
@@ -330,7 +330,7 @@ public class MainActivity extends Activity {
         input.setTextColor(TEXT);
         input.setHintTextColor(Color.rgb(158, 160, 166));
         input.setTextSize(16);
-        input.setHint("Message ARIA");
+        input.setHint("Message JARVIS");
         input.setGravity(Gravity.CENTER_VERTICAL);
         input.setMinHeight(dp(42));
         input.setMaxLines(5);
@@ -349,7 +349,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.topMargin = dp(8);
         root.addView(composer, cp);
-        TextView disclaimer = label("ARIA can make mistakes. Check important information.", 10, Color.rgb(125, 132, 148), false);
+        TextView disclaimer = label("JARVIS can make mistakes. Check important information.", 10, Color.rgb(125, 132, 148), false);
         disclaimer.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams disclaimerParams = new LinearLayout.LayoutParams(-1, dp(20));
         root.addView(disclaimer, disclaimerParams);
@@ -396,7 +396,7 @@ public class MainActivity extends Activity {
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand = label("ARIA", 21, TEXT, true);
+        TextView brand = label("JARVIS", 21, TEXT, true);
         top.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1));
         TextView close = label("×", 30, MUTED, false);
         close.setGravity(Gravity.CENTER);
@@ -484,7 +484,7 @@ public class MainActivity extends Activity {
         LinearLayout accountText = new LinearLayout(this);
         accountText.setOrientation(LinearLayout.VERTICAL);
         accountText.setPadding(dp(10), 0, 0, 0);
-        accountText.addView(label("ARIA Personal", 14, TEXT, true));
+        accountText.addView(label("JARVIS Personal", 14, TEXT, true));
         accountText.addView(label("Profile and settings", 11, MUTED, false));
         account.addView(accountText, new LinearLayout.LayoutParams(0, -2, 1));
         TextView more = label("•••", 18, MUTED, true);
@@ -565,7 +565,7 @@ public class MainActivity extends Activity {
         panel.addView(row, new LinearLayout.LayoutParams(-1, -2));
         row.setOnClickListener(v -> {
             drawer.dismiss();
-            if ("ARIA backend".equals(title)) showSettings();
+            if ("JARVIS backend".equals(title)) showSettings();
             else if ("Projects".equals(title)) showProjects();
             else if ("Scheduled".equals(title)) showFeaturePanel(title, "Scheduled reminders will appear here when task scheduling is connected.");
             else if ("Images".equals(title)) showFeaturePanel(title, "Your image workspace. Image generation and image history require an image-capable backend.");
@@ -573,8 +573,8 @@ public class MainActivity extends Activity {
             else if ("Remote".equals(title)) showFeaturePanel(title, "Remote computer control is not connected in this Android build.");
             else if ("Plugins".equals(title)) showFeaturePanel(title, "Tool integrations and plugins will appear here when configured.");
             else if ("Prompts".equals(title)) showFeaturePanel(title, "Save reusable prompts here. Prompt storage is not yet connected.");
-            else if ("Education".equals(title)) showFeaturePanel(title, "Study mode, quizzes, and learning projects are planned for ARIA.");
-            else if ("Create Android App".equals(title)) showFeaturePanel(title, "Use ARIA to plan Android app screens, architecture, and implementation steps.");
+            else if ("Education".equals(title)) showFeaturePanel(title, "Study mode, quizzes, and learning projects are planned for JARVIS.");
+            else if ("Create Android App".equals(title)) showFeaturePanel(title, "Use JARVIS to plan Android app screens, architecture, and implementation steps.");
             else showFeaturePanel(title, description);
         });
     }
@@ -591,7 +591,7 @@ public class MainActivity extends Activity {
         content.addView(body);
         dialogBuilder().setTitle(title).setView(content)
                 .setPositiveButton("Done", null)
-                .setNeutralButton("Explore ARIA features", (d, w) -> showFeatureDirectory())
+                .setNeutralButton("Explore JARVIS features", (d, w) -> showFeatureDirectory())
                 .show();
     }
 
@@ -649,7 +649,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams logoP = new LinearLayout.LayoutParams(dp(72), dp(72));
         logoP.bottomMargin = dp(22);
         root.addView(logo, logoP);
-        TextView title = label("Private ARIA", 27, TEXT, true);
+        TextView title = label("Private JARVIS", 27, TEXT, true);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
         TextView subtitle = label("Sign in with the owner credentials to access your private assistant.", 14, MUTED, false);
@@ -999,9 +999,9 @@ public class MainActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(20), dp(8), dp(20), dp(4));
-        TextView name = label("ARIA Personal Assistant", 16, TEXT, true);
+        TextView name = label("JARVIS Personal Assistant", 16, TEXT, true);
         content.addView(name);
-        TextView info = label("Connected to your ARIA backend\n\nProfile and chat history are stored locally only where implemented. This build does not sync a personal profile to a cloud account.", 13, MUTED, false);
+        TextView info = label("Connected to your JARVIS backend\n\nProfile and chat history are stored locally only where implemented. This build does not sync a personal profile to a cloud account.", 13, MUTED, false);
         info.setPadding(0, dp(10), 0, dp(4));
         content.addView(info);
         dialogBuilder().setTitle("Profile").setView(content)
@@ -1016,7 +1016,7 @@ public class MainActivity extends Activity {
         content.setPadding(dp(20), dp(8), dp(20), dp(4));
         TextView title = label("Privacy & security", 15, TEXT, true);
         content.addView(title);
-        TextView description = label("Your ARIA connection is managed securely in the app. The server address is not displayed here.", 12, MUTED, false);
+        TextView description = label("Your JARVIS connection is managed securely in the app. The server address is not displayed here.", 12, MUTED, false);
         description.setPadding(0, dp(6), 0, dp(14));
         content.addView(description);
         Button changePassword = new Button(this);
@@ -1090,7 +1090,7 @@ public class MainActivity extends Activity {
                 if (!success) {
                     try { error = new JSONObject(response.toString()).optString("detail", error); } catch (Exception ignored) { }
                 }
-            } catch (Exception ignored) { error = "Could not reach ARIA securely. Check your connection and try again."; }
+            } catch (Exception ignored) { error = "Could not reach JARVIS securely. Check your connection and try again."; }
             finally { if (conn != null) conn.disconnect(); }
             final boolean changed = success; final String message = error;
             runOnUiThread(() -> {
@@ -1110,7 +1110,7 @@ public class MainActivity extends Activity {
 
     private void showAttachmentMenu(View anchor) {
         String[] items = {"＋  Add photos & files", "▧  Take a photo", "♬  Voice input"};
-        showAnchoredMenu(anchor, "Add to ARIA", items, index -> {
+        showAnchoredMenu(anchor, "Add to JARVIS", items, index -> {
             if (index == 0) launchFilePicker();
             else if (index == 1) toast("Camera input needs a camera permission and image-analysis endpoint; it is not connected yet.");
             else if (index == 2) startVoiceInput();
@@ -1179,7 +1179,7 @@ public class MainActivity extends Activity {
         try {
             Intent intent = new Intent("android.speech.action.RECOGNIZE_SPEECH");
             intent.putExtra("android.speech.extra.LANGUAGE_MODEL", "free_form");
-            intent.putExtra("android.speech.extra.PROMPT", "Speak to ARIA");
+            intent.putExtra("android.speech.extra.PROMPT", "Speak to JARVIS");
             startActivityForResult(intent, 7403);
         } catch (Exception e) { toast("Voice input is unavailable on this device."); }
     }
@@ -1196,7 +1196,7 @@ public class MainActivity extends Activity {
                 StringBuilder names = new StringBuilder("Selected file(s): ");
                 for (int i = 0; i < selected.size(); i++) { if (i > 0) names.append(", "); names.append(selected.get(i).getLastPathSegment()); }
                 if (input != null) { String old = input.getText().toString().trim(); input.setText(old.isEmpty() ? names.toString() : old + "\n" + names); input.setSelection(input.length()); }
-                toast("Files selected. ARIA's current backend does not yet upload/analyze their contents.");
+                toast("Files selected. JARVIS's current backend does not yet upload/analyze their contents.");
             }
         } else if (requestCode == 7403) {
             ArrayList<String> results = data.getStringArrayListExtra("android.speech.extra.RESULTS");
@@ -1217,9 +1217,9 @@ public class MainActivity extends Activity {
         for (String name : names) {
             list.append("• ").append(name).append("\n");
         }
-        list.append("\nStatus: This is the feature roadmap in the app. Only chat with the current ARIA backend and source-link display are connected today. Other features need implementation and backend/API support before they work.");
+        list.append("\nStatus: This is the feature roadmap in the app. Only chat with the current JARVIS backend and source-link display are connected today. Other features need implementation and backend/API support before they work.");
         dialogBuilder()
-            .setTitle("ARIA capabilities")
+            .setTitle("JARVIS capabilities")
             .setMessage(list.toString())
             .setPositiveButton("Got it", (dialog, which) -> {})
             .setNeutralButton("Backend settings", (dialog, which) -> showBackendHelp())
@@ -1229,7 +1229,7 @@ public class MainActivity extends Activity {
     private void showBackendHelp() {
         dialogBuilder()
             .setTitle("Backend connection")
-            .setMessage("ARIA currently sends chat requests to the configured HTTPS /chat endpoint. Render is okay for hosting, but a free service may sleep when idle. Advanced tools need explicit API endpoints and response formats before they can be connected.")
+            .setMessage("JARVIS currently sends chat requests to the configured HTTPS /chat endpoint. Render is okay for hosting, but a free service may sleep when idle. Advanced tools need explicit API endpoints and response formats before they can be connected.")
             .setPositiveButton("OK", (dialog, which) -> {})
             .show();
     }
@@ -1253,14 +1253,14 @@ public class MainActivity extends Activity {
                 int code = conn.getResponseCode(); InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream(); StringBuilder body = new StringBuilder();
                 if (stream != null) try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = reader.readLine()) != null) body.append(line).append('\n'); }
                 if (code >= 200 && code < 300) {
-                    JSONObject response = new JSONObject(body.toString()); reply = response.optString("reply", response.optString("answer", "")).trim(); if (reply.isEmpty()) reply = "The ARIA backend returned an empty response. Check the backend logs and try again.";
+                    JSONObject response = new JSONObject(body.toString()); reply = response.optString("reply", response.optString("answer", "")).trim(); if (reply.isEmpty()) reply = "The JARVIS backend returned an empty response. Check the backend logs and try again.";
                     collectSources(response, sources); if (!response.optBoolean("success", true)) reply = "Request did not complete: " + reply;
                 } else if (code == 401) {
-                    reply = "Your ARIA sign-in has expired or is invalid. Please sign in again.";
+                    reply = "Your JARVIS sign-in has expired or is invalid. Please sign in again.";
                     runOnUiThread(() -> { getSharedPreferences("aria_auth", MODE_PRIVATE).edit().remove("access_token").apply(); showSignInUi(); });
-                } else { String detail = body.toString().trim(); if (detail.length() > 700) detail = detail.substring(0, 700); reply = "The ARIA server returned HTTP " + code + (detail.isEmpty() ? ". Please try again shortly." : ".\\n\\nServer detail: " + detail); }
+                } else { String detail = body.toString().trim(); if (detail.length() > 700) detail = detail.substring(0, 700); reply = "The JARVIS server returned HTTP " + code + (detail.isEmpty() ? ". Please try again shortly." : ".\\n\\nServer detail: " + detail); }
                 conn.disconnect();
-            } catch (java.net.SocketTimeoutException ex) { reply = "ARIA is taking longer than expected. The request timed out. Please try again; a sleeping free Render service may need time to wake up."; } catch (Exception ex) { reply = "I couldn't reach the ARIA backend (" + ex.getClass().getSimpleName() + "). Check your internet connection and confirm the backend is online."; }
+            } catch (java.net.SocketTimeoutException ex) { reply = "JARVIS is taking longer than expected. The request timed out. Please try again; a sleeping free Render service may need time to wake up."; } catch (Exception ex) { reply = "I couldn't reach the JARVIS backend (" + ex.getClass().getSimpleName() + "). Check your internet connection and confirm the backend is online."; }
             final String finalReply = reply; final ArrayList<SourceItem> finalSources = sources;
             runOnUiThread(() -> { setThinking(false); addAssistantMessage(cleanAnswer(finalReply), finalSources); sendButton.setEnabled(true); sendButton.setAlpha(1f); if (!appVisible) notifyResponseReady(); });
         });
@@ -1322,13 +1322,13 @@ public class MainActivity extends Activity {
         LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setPadding(dp(2), dp(5), dp(2), dp(18));
         LinearLayout whoRow = new LinearLayout(this); whoRow.setOrientation(LinearLayout.HORIZONTAL); whoRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView badge=label("✦", 13, Color.WHITE, true); badge.setGravity(Gravity.CENTER); badge.setBackground(glassAccent()); whoRow.addView(badge, new LinearLayout.LayoutParams(dp(27), dp(27)));
-        TextView who=label("  ARIA", 13, TEXT, true); whoRow.addView(who); wrap.addView(whoRow);
+        TextView who=label("  JARVIS", 13, TEXT, true); whoRow.addView(who); wrap.addView(whoRow);
         TextView body = new TextView(this); body.setText(markdownLite(text)); body.setTextColor(TEXT); body.setTextSize(16); body.setLineSpacing(dp(4), 1.02f); body.setTextIsSelectable(true); body.setPadding(dp(1), dp(10), dp(1), dp(4)); wrap.addView(body);
         if (sources != null && !sources.isEmpty()) {
             TextView sourcesLink = label("↗  Sources · " + sources.size(), 12, ACCENT, true); sourcesLink.setPadding(dp(2),dp(8),dp(2),dp(3)); sourcesLink.setOnClickListener(v -> showSourcesDialog(sources)); wrap.addView(sourcesLink);
         }
         LinearLayout actions = new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL); actions.setGravity(Gravity.CENTER_VERTICAL);
-        TextView copy = label("▢  Copy", 11, MUTED, false); copy.setPadding(dp(3),dp(8),dp(15),dp(4)); copy.setOnClickListener(v -> { android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE); cm.setPrimaryClip(android.content.ClipData.newPlainText("ARIA answer", text)); toast("Answer copied"); }); actions.addView(copy);
+        TextView copy = label("▢  Copy", 11, MUTED, false); copy.setPadding(dp(3),dp(8),dp(15),dp(4)); copy.setOnClickListener(v -> { android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE); cm.setPrimaryClip(android.content.ClipData.newPlainText("JARVIS answer", text)); toast("Answer copied"); }); actions.addView(copy);
         wrap.addView(actions); transcript.addView(wrap); scrollDown(transcriptScroll);
         if (sources != null) { lastSources.clear(); lastSources.addAll(sources); renderSources(); }
     }

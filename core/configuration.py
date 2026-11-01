@@ -1,6 +1,17 @@
 import os
 from dataclasses import dataclass
 
+APP_NAME = "JARVIS"
+APP_FULL_NAME = "JUST A RATHER VERY INTELLIGENT SYSTEM"
+
+
+def _setting(name: str, legacy_name: str | None = None, default: str = "") -> str:
+    """Read the JARVIS setting first, retaining the previous name as fallback."""
+    value = os.getenv(name)
+    if value is None and legacy_name:
+        value = os.getenv(legacy_name)
+    return default if value is None else value
+
 
 @dataclass
 class AppConfig:
@@ -32,10 +43,7 @@ class AppConfig:
 
 def load_config() -> AppConfig:
     return AppConfig(
-        environment=os.getenv(
-            "AR_ENVIRONMENT",
-            "production"
-        ),
+        environment=_setting("JARVIS_ENVIRONMENT", "AR_ENVIRONMENT", "production"),
 
         mongodb_uri=os.getenv(
             "MONGODB_URI",
@@ -96,9 +104,8 @@ def load_config() -> AppConfig:
         ),
 
         # Runtime configuration
-        vector_persist_path=os.getenv(
-            "RENDER_PERSISTENT_DIR",
-            "./aria_vectors"
+        vector_persist_path=_setting(
+            "JARVIS_VECTOR_PERSIST_PATH", "RENDER_PERSISTENT_DIR", "./aria_vectors"
         ),
 
         log_level=os.getenv(
@@ -106,15 +113,7 @@ def load_config() -> AppConfig:
             "INFO"
         ),
 
-        timeout_seconds=float(
-            os.getenv(
-                "AR_TIMEOUT",
-                "15.0"
-            )
-        ),
+        timeout_seconds=float(_setting("JARVIS_TIMEOUT", "AR_TIMEOUT", "15.0")),
 
-        permission_mode=os.getenv(
-            "AR_PERMISSION_MODE",
-            "autonomous"
-        )
+        permission_mode=_setting("JARVIS_PERMISSION_MODE", "AR_PERMISSION_MODE", "autonomous")
     )

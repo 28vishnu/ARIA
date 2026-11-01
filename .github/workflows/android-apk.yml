@@ -1,4 +1,4 @@
-name: Build and publish ARIA Android APK
+name: Build and publish JARVIS Android APK
 
 on:
   workflow_dispatch:
@@ -89,23 +89,23 @@ jobs:
           APK_PATH="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
           test -n "$APK_PATH" || { echo "ERROR: Release APK was not generated."; exit 1; }
           mkdir -p "$GITHUB_WORKSPACE/release-output"
-          cp "$APK_PATH" "$GITHUB_WORKSPACE/release-output/aria.apk"
+          cp "$APK_PATH" "$GITHUB_WORKSPACE/release-output/jarvis.apk"
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          test -s release-output/aria.apk
-          unzip -t release-output/aria.apk >/dev/null
-          sha256sum release-output/aria.apk
+          test -s release-output/jarvis.apk
+          unzip -t release-output/jarvis.apk >/dev/null
+          sha256sum release-output/jarvis.apk
 
       # Preserve a downloadable APK even when GitHub's Releases API has a 5xx outage.
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aria-android-apk-${{ github.run_number }}
+          name: jarvis-android-apk-${{ github.run_number }}
           path: |
-            release-output/aria.apk
+            release-output/jarvis.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -113,13 +113,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/aria.apk"}\n' \
+          printf '{"versionCode":%s,"versionName":"1.0.%s","apkUrl":"https://github.com/28vishnu/ARIA/releases/latest/download/jarvis.apk"}\n' \
             "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" > release-output/version.json
 
       - name: Upload version metadata artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aria-version-metadata-${{ github.run_number }}
+          name: jarvis-version-metadata-${{ github.run_number }}
           path: release-output/version.json
           if-no-files-found: error
           retention-days: 30
@@ -131,18 +131,18 @@ jobs:
         run: |
           set -u
           TAG="android-build-${GITHUB_RUN_NUMBER}"
-          TITLE="ARIA Android 1.0.${GITHUB_RUN_NUMBER}"
-          NOTES="Automated ARIA Android release. APK archive validation passed. If the release is unavailable, download the APK from this workflow's Artifacts section."
+          TITLE="JARVIS Android 1.0.${GITHUB_RUN_NUMBER}"
+          NOTES="Automated JARVIS Android release. APK archive validation passed. If the release is unavailable, download the APK from this workflow's Artifacts section."
           for attempt in 1 2 3 4 5; do
             echo "Publishing release attempt ${attempt}/5 for ${TAG}..."
             if gh release view "$TAG" >/dev/null 2>&1; then
-              if gh release upload "$TAG" release-output/aria.apk release-output/version.json --clobber && \
+              if gh release upload "$TAG" release-output/jarvis.apk release-output/version.json --clobber && \
                  gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --latest; then
                 echo "Release updated successfully."
                 exit 0
               fi
             else
-              if gh release create "$TAG" release-output/aria.apk release-output/version.json \
+              if gh release create "$TAG" release-output/jarvis.apk release-output/version.json \
                 --title "$TITLE" --notes "$NOTES" --latest; then
                 echo "Release created successfully."
                 exit 0

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ARIA — Personal AI</title>
+    <title>JARVIS — Personal Intelligence</title>
     <!-- Configure first, then load optional presentation libraries asynchronously so offline/slow CDNs cannot block app startup. -->
     <script>
         window.__ariaTailwindLoaded = false;
@@ -226,9 +226,9 @@
     <!-- MAIN ROOT CONTAINER -->
     <div id="app-root" class="relative w-full h-full flex flex-col z-10 overflow-hidden">
 
-        <section id="notification-panel" class="hidden fixed z-[90] top-20 right-3 left-3 sm:left-auto sm:w-[390px] max-h-[70vh] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 backdrop-blur-2xl shadow-2xl text-white" aria-label="ARIA notifications">
+        <section id="notification-panel" class="hidden fixed z-[90] top-20 right-3 left-3 sm:left-auto sm:w-[390px] max-h-[70vh] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 backdrop-blur-2xl shadow-2xl text-white" aria-label="JARVIS notifications">
             <div class="flex items-center justify-between p-4 border-b border-white/10">
-                <div><div class="font-bold text-sm">ARIA Notifications</div><div class="text-[11px] text-white/50">Alerts and newly acquired headlines</div></div>
+                <div><div class="font-bold text-sm">JARVIS Notifications</div><div class="text-[11px] text-white/50">Alerts and newly acquired headlines</div></div>
                 <button onclick="closeNotifications()" class="p-2 rounded-lg hover:bg-white/10" aria-label="Close notifications"><i data-lucide="x" class="w-4 h-4"></i></button>
             </div>
             <div id="notification-items" class="overflow-y-auto max-h-[55vh] p-3 space-y-2"><div class="text-xs text-white/50 p-3">Loading notifications…</div></div>
@@ -246,7 +246,7 @@
             <div class="relative">
                 <button id="btn-model-selector" class="ios-glass-pill px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs font-semibold tracking-wide text-white/90 hover:border-gold/40 transition-all">
                     <span id="active-model-icon" class="text-gold"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i></span>
-                    <span id="active-model-name" class="font-bold text-white">ARIA Backend</span>
+                    <span id="active-model-name" class="font-bold text-white">JARVIS Backend</span>
                     <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-white/50"></i>
                 </button>
 
@@ -307,7 +307,7 @@
                 <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-6 border border-gold/30">
                     <i data-lucide="bot" class="w-8 h-8"></i>
                 </div>
-                <h1 class="text-2xl font-black tracking-tight text-white mb-2">ARIA Intelligence</h1>
+                <h1 class="text-2xl font-black tracking-tight text-white mb-2">JARVIS Intelligence</h1>
                 <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed">
                     Your private assistant for knowledge, coding, planning, and daily updates.
                 </p>
@@ -376,7 +376,7 @@
                     </button>
 
                     <!-- Text Input -->
-                    <input type="text" id="user-input" placeholder="Ask ARIA anything..." class="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/40 px-2 font-medium" onkeydown="handleKeyPress(event)">
+                    <input type="text" id="user-input" placeholder="Ask JARVIS anything..." class="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/40 px-2 font-medium" onkeydown="handleKeyPress(event)">
 
                     <!-- Voice Mode Button -->
                     <button id="btn-voice-mode" onclick="toggleVoiceMode()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-gold transition-all active:scale-95" title="Voice Conversation">
@@ -390,7 +390,7 @@
                 </div>
 
                 <div class="composer-caption text-center text-[10px] text-white/30 mt-2 font-medium">
-                    ARIA Backend • Real requests • Responses and sources from backend
+                    JARVIS Backend • Real requests • Responses and sources from backend
                 </div>
             </div>
         </div>
@@ -462,7 +462,7 @@
                             S
                         </div>
                         <div>
-                            <div class="text-xs font-bold text-white">ARIA Personal</div>
+                            <div class="text-xs font-bold text-white">JARVIS Personal</div>
                             <div class="text-[10px] text-white/50">Pro Subscriber • Unlimited</div>
                         </div>
                     </div>
@@ -539,7 +539,7 @@
                             .map(m => ({ role: m.role, text: String(m.text ?? ''), sources: normalizeSources(m.sources || []) }))
                     }));
             } catch (error) {
-                console.error('Could not load saved ARIA chats', error);
+                console.error('Could not load saved JARVIS chats', error);
                 return [];
             }
         }
@@ -550,7 +550,7 @@
                 localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId || '');
                 return true;
             } catch (error) {
-                console.error('Could not persist ARIA chats', error);
+                console.error('Could not persist JARVIS chats', error);
                 showStatus('Chat storage is full or unavailable. Export your important chats before clearing app data.');
                 return false;
             }
@@ -651,13 +651,13 @@
             const input = document.getElementById('user-input');
             const text = input.value.trim();
             if (!text || !window.AriaNative) {
-                if (!window.AriaNative) showStatus('ARIA native bridge is unavailable. Reopen the app.');
+                if (!window.AriaNative) showStatus('JARVIS native bridge is unavailable. Reopen the app.');
                 return;
             }
             if (!window.AriaNative.isSignedIn()) {
-                const secret = window.prompt('Sign in to your private ARIA backend. Enter your ARIA app password:');
+                const secret = window.prompt('Sign in to your private JARVIS backend. Enter your JARVIS app password:');
                 if (!secret) { showStatus('Sign-in is required before sending messages.'); return; }
-                showStatus('Signing in to ARIA…');
+                showStatus('Signing in to JARVIS…');
                 window.__pendingFirstMessage = text;
                 window.AriaNative.signIn(secret);
                 input.value = '';
@@ -685,8 +685,8 @@
         }
 
         window.onAriaLoginResult = function(result) {
-            if (!result || !result.success) { showStatus((result && result.message) || 'ARIA sign-in failed.'); return; }
-            showStatus('Connected to ARIA.');
+            if (!result || !result.success) { showStatus((result && result.message) || 'JARVIS sign-in failed.'); return; }
+            showStatus('Connected to JARVIS.');
             const queued = window.__pendingFirstMessage;
             window.__pendingFirstMessage = null;
             if (queued) { document.getElementById('user-input').value = queued; sendMessage(); }
@@ -703,7 +703,7 @@
             if (result.authRequired) { showStatus(result.message || 'Please sign in again.'); return; }
             const chat = chatsDatabase.find(c => c.id === (pending && pending.chatId));
             if (!chat) { showStatus('The reply arrived, but its conversation no longer exists.'); return; }
-            let reply = result.reply || result.answer || result.message || 'ARIA returned an empty response.';
+            let reply = result.reply || result.answer || result.message || 'JARVIS returned an empty response.';
             let sources = [];
             if (result.success) {
                 const extracted = extractSourcesFromReply(reply);
@@ -711,7 +711,7 @@
                 sources = normalizeSources([...(Array.isArray(result.sources) ? result.sources : []), ...(Array.isArray(result.citations) ? result.citations : []), ...(Array.isArray(result.references) ? result.references : []), ...extracted.sources]);
                 sources = [...new Map(sources.map(source => [source.url, source])).values()];
             } else {
-                reply = String(result.reply || result.message || 'The ARIA request failed.');
+                reply = String(result.reply || result.message || 'The JARVIS request failed.');
             }
             chat.messages.push({role:'assistant', text:String(reply), sources});
             if (isVoiceActive && window.AriaNative && typeof window.AriaNative.speak === 'function') {
@@ -721,7 +721,7 @@
             // Only render into the visible pane if the user is still viewing this conversation.
             if (activeChatId === chat.id) appendMessageToUI('assistant', reply, sources);
             renderSidebarChats();
-            if (!result.success) showStatus(result.message || 'ARIA request failed.');
+            if (!result.success) showStatus(result.message || 'JARVIS request failed.');
         };
 
         function extractSourcesFromReply(text) {
@@ -758,7 +758,7 @@
         function appendTypingIndicator() {
             const container = document.getElementById('messages-container');
             const row = document.createElement('div'); row.className = 'flex justify-start';
-            row.innerHTML = '<div class="ios-glass-card rounded-2xl px-4 py-3"><div class="typing-indicator"><span>ARIA is thinking</span><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div></div>';
+            row.innerHTML = '<div class="ios-glass-card rounded-2xl px-4 py-3"><div class="typing-indicator"><span>JARVIS is thinking</span><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div></div>';
             container.appendChild(row); scrollToBottom(); return row;
         }
         function setComposerBusy(busy) {
@@ -793,7 +793,7 @@
             bubble.className = `max-w-[92%] sm:max-w-[82%] min-w-0 p-4 rounded-3xl ${isUser ? 'bg-gradient-to-r from-gold to-amber-300 text-obsidian font-semibold rounded-br-md shadow-gold-sm' : 'ios-glass-card text-white rounded-bl-md border border-white/10'}`;
             if (!isUser) {
                 const heading=document.createElement('div'); heading.className='flex items-center gap-2 mb-2 text-gold font-bold text-xs';
-                heading.innerHTML='<i data-lucide="bot" class="w-4 h-4"></i><span>ARIA</span>'; bubble.appendChild(heading);
+                heading.innerHTML='<i data-lucide="bot" class="w-4 h-4"></i><span>JARVIS</span>'; bubble.appendChild(heading);
             }
             const body=document.createElement('div'); body.className='message-content text-sm'; body.textContent=String(text ?? ''); bubble.appendChild(body);
             const safeSources=normalizeSources(sources);
@@ -1023,10 +1023,10 @@
                 card.className = 'rounded-xl border border-white/10 bg-white/5 p-3';
                 const heading = document.createElement('div');
                 heading.className = 'text-xs font-bold';
-                heading.textContent = String(item.title || 'ARIA update');
+                heading.textContent = String(item.title || 'JARVIS update');
                 const meta = document.createElement('div');
                 meta.className = 'mt-1 text-[10px] uppercase tracking-wide text-cyan-300';
-                meta.textContent = String(item.severity || 'info') + ' · ' + String(item.source || 'ARIA');
+                meta.textContent = String(item.severity || 'info') + ' · ' + String(item.source || 'JARVIS');
                 const body = document.createElement('div');
                 body.className = 'mt-2 text-xs text-white/70 whitespace-pre-wrap break-words';
                 body.textContent = String(item.body || '');
@@ -1047,7 +1047,7 @@
 
         // ENGINE & TOGGLE FEATURES
         function switchEngine(id, name, icon, colorHex) {
-            showStatus('Model selection is visual only until the ARIA backend exposes provider routing. Requests still go to your configured ARIA backend.');
+            showStatus('Model selection is visual only until the JARVIS backend exposes provider routing. Requests still go to your configured JARVIS backend.');
             currentEngine = id;
             document.getElementById('active-model-name').innerText = name;
             
@@ -1079,13 +1079,13 @@
         function toggleVoiceMode() {
             const btn = document.getElementById('btn-voice-mode');
             if (!window.AriaNative || typeof window.AriaNative.startVoice !== 'function') {
-                showStatus('Native voice support is unavailable. Update the ARIA Android app.');
+                showStatus('Native voice support is unavailable. Update the JARVIS Android app.');
                 return;
             }
             isVoiceActive = !isVoiceActive;
             if (isVoiceActive) {
                 btn.classList.add('voice-active');
-                showStatus('Voice mode enabled. Tap the microphone and speak; ARIA will read its reply aloud.');
+                showStatus('Voice mode enabled. Tap the microphone and speak; JARVIS will read its reply aloud.');
                 window.AriaNative.startVoice();
             } else {
                 btn.classList.remove('voice-active');

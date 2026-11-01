@@ -10,6 +10,7 @@ import json
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -59,7 +60,8 @@ def retrieve(query: str, documents: Iterable[dict[str, Any]], top_k: int = 5) ->
         score = score_document(query_tokens, doc)
         if score > 0:
             ranked.append({"id": doc["id"], "source": doc["source"], "title": doc["title"],
-                           "url": doc["url"], "score": score})
+                           "url": doc["url"], "score": score,
+                           "evidence_preview": str(doc.get("content") or "")[:500]})
     ranked.sort(key=lambda item: (-item["score"], str(item["title"]).casefold(), int(item["id"])))
     return ranked[:top_k]
 
@@ -73,28 +75,59 @@ def evaluate_cases(db_path: str | Path, cases: list[dict[str, Any]], top_k: int 
     results = []
     passed = 0
     for index, case in enumerate(cases, start=1):
+        started = time.perf_counter()
         query = str(case.get("query", "")).strip()
         if not query:
             raise ValueError(f"Case {index} has an empty query")
         ranked = retrieve(query, documents, top_k)
         expected_terms = tokens(" ".join(map(str, case.get("expected_terms", []))))
         expected_ids = {str(value) for value in case.get("expected_source_ids", [])}
+        expected_titles = {re.sub(r"[^\w ]", "", str(value).casefold()).strip()
+                           for value in case.get("relevant_titles", [])}
+        expected_titles.discard("")
         top_results = [r for r in ranked if r["score"] >= minimum_score]
         found_terms = tokens(" ".join(r["title"] for r in top_results))
         term_coverage = (len(expected_terms & found_terms) / len(expected_terms)) if expected_terms else None
         expected_id_hit = any(str(r["id"]) in expected_ids for r in top_results) if expected_ids else None
+        judged = bool(expected_ids or expected_titles)
+        relevant = [r for r in ranked if (str(r["id"]) in expected_ids if expected_ids else
+                    re.sub(r"[^\w ]", "", str(r["title"]).casefold()).strip() in expected_titles)] if judged else []
+        precision_at_k = (len(relevant) / top_k) if judged else None
+        recall_at_k = (min(len(relevant), len(expected_ids or expected_titles)) / len(expected_ids or expected_titles)) if judged else None
+        reciprocal_rank = (1 / (ranked.index(relevant[0]) + 1)) if relevant else (0.0 if judged else None)
+        valid_citations = sum(bool(re.match(r"^https://[^\s]+$", str(r.get("url") or ""))) for r in relevant)
+        citation_correctness = (valid_citations / len(relevant)) if relevant else (0.0 if judged else None)
         has_result = bool(top_results)
-        case_pass = has_result and (term_coverage is None or term_coverage > 0) and (expected_id_hit is not False)
+        case_pass = has_result and (term_coverage is None or term_coverage > 0) and (expected_id_hit is not False) and (bool(relevant) if judged else True)
         passed += int(case_pass)
         results.append({"case_id": case.get("id", index), "query": query, "pass": case_pass,
                         "result_count": len(top_results), "expected_term_coverage": round(term_coverage, 3) if term_coverage is not None else None,
-                        "expected_source_id_hit": expected_id_hit, "results": ranked})
+                        "expected_source_id_hit": expected_id_hit,
+                        "expected_domain": case.get("domain"), "retrieval_route": case.get("retrieval_route"),
+                        "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+                        "final_answer": None,
+                        "answer_evaluation": "not_performed_by_retrieval_evaluator",
+                        "precision_at_k": round(precision_at_k, 4) if precision_at_k is not None else None,
+                        "recall_at_k": round(recall_at_k, 4) if recall_at_k is not None else None,
+                        "reciprocal_rank": round(reciprocal_rank, 4) if reciprocal_rank is not None else None,
+                        "citation_correctness": round(citation_correctness, 4) if citation_correctness is not None else None,
+                        "results": ranked})
     count = len(results)
-    return {"status": "ok", "read_only": True, "evaluation_method": "transparent lexical token overlap; title matches weighted 2x; not semantic verification",
+    judged_cases = [item for item in results if item["precision_at_k"] is not None]
+    def average(field: str):
+        values = [item[field] for item in judged_cases if item[field] is not None]
+        return round(sum(values) / len(values), 4) if values else None
+    return {"status": "ok", "read_only": True, "evaluation_method": "transparent lexical token overlap; title matches weighted 2x; relevance metrics use fixed relevant_titles or relevant source IDs; not semantic verification",
             "database": str(Path(db_path).expanduser().resolve()), "document_count": len(documents),
             "case_count": count, "passed_cases": passed, "failed_cases": count - passed,
             "pass_rate_percent": round(passed / count * 100, 2) if count else None,
-            "minimum_score": minimum_score, "top_k": top_k, "cases": results}
+            "minimum_score": minimum_score, "top_k": top_k,
+            "metrics": {"judged_cases": len(judged_cases), "precision_at_k": average("precision_at_k"),
+                        "recall_at_k": average("recall_at_k"), "mean_reciprocal_rank": average("reciprocal_rank"),
+                        "citation_correctness": average("citation_correctness"),
+                        "answer_completeness": None, "unsupported_claim_rate": None,
+                        "note": "Answer completeness and unsupported claims require a separate reviewed answer-level evaluator."},
+            "cases": results}
 
 
 def build_gap_report(evaluation: dict[str, Any]) -> dict[str, Any]:
@@ -110,24 +143,33 @@ def build_gap_report(evaluation: dict[str, Any]) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Evaluate ARIA lexical retrieval and report knowledge gaps")
+    parser = argparse.ArgumentParser(description="Evaluate JARVIS lexical retrieval and report knowledge gaps")
     parser.add_argument("--db", required=True, help="Path to an existing ARIA knowledge SQLite database")
     parser.add_argument("--cases", required=True, help="JSON file containing a list of query test cases")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--minimum-score", type=float, default=0.15)
     parser.add_argument("--gaps-out", help="Optional path to write gap report JSON")
+    parser.add_argument("--report-out", help="Optional path for a machine-readable evaluation report")
     args = parser.parse_args(argv)
     try:
         cases_path = Path(args.cases).expanduser()
-        cases = json.loads(cases_path.read_text(encoding="utf-8"))
+        case_data = json.loads(cases_path.read_text(encoding="utf-8"))
+        cases = case_data.get("cases") if isinstance(case_data, dict) else case_data
         if not isinstance(cases, list):
-            raise ValueError("Cases JSON must contain a list")
+            raise ValueError("Cases JSON must be a list or an object containing a cases list")
         report = evaluate_cases(args.db, cases, args.top_k, args.minimum_score)
+        if isinstance(case_data, dict):
+            report["dataset_id"] = case_data.get("dataset_id")
+            report["dataset_version"] = case_data.get("version")
         report["gap_report"] = build_gap_report(report)
         if args.gaps_out:
             out = Path(args.gaps_out).expanduser()
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(report["gap_report"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if args.report_out:
+            out = Path(args.report_out).expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
     except (OSError, ValueError, sqlite3.Error, json.JSONDecodeError) as exc:

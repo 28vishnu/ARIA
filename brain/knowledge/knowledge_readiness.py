@@ -23,7 +23,14 @@ DEFAULT_TOPICS = KNOWLEDGE_DIR / "core_topics.txt"
 DEFAULT_REGISTRY = KNOWLEDGE_DIR / "source_registry.json"
 DEFAULT_MANIFEST = KNOWLEDGE_DIR / "specialized_docs_manifest.json"
 REQUIRED_DOCUMENT_COLUMNS = {"source", "title", "content"}
+PROVENANCE_DOCUMENT_COLUMNS = {
+    "canonical_url", "summary", "domain_id", "subject_id", "topic_ids",
+    "publication_date", "retrieval_date", "last_verified_at", "content_hash",
+    "document_version", "quality_score", "freshness_score", "verification_status",
+    "metadata_json",
+}
 OPTIONAL_INTEGRATION_MODULES = (
+    "knowledge_taxonomy.py",
     "knowledge_coverage.py",
     "source_registry.py",
     "knowledge_batch_ingest.py",
@@ -54,6 +61,15 @@ def inspect_database(db_path: str | Path) -> list[dict[str, Any]]:
             missing = sorted(REQUIRED_DOCUMENT_COLUMNS - columns)
             checks.append(_check("documents_schema", not missing,
                                  "Required columns present" if not missing else f"Missing columns: {missing}"))
+            missing_provenance = sorted(PROVENANCE_DOCUMENT_COLUMNS - columns)
+            checks.append(_check("document_provenance_schema", not missing_provenance,
+                                 "Versioned provenance fields present" if not missing_provenance
+                                 else f"Additive schema migration pending; missing columns: {missing_provenance}",
+                                 severity="warning"))
+            history_present = "document_history" in tables and "knowledge_schema_migrations" in tables
+            checks.append(_check("document_history_schema", history_present,
+                                 "Revision history and migration ledger present" if history_present
+                                 else "Revision history/migration ledger not initialized", severity="warning"))
             count = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
             checks.append(_check("document_count", count > 0,
                                  f"{count} document(s) stored", severity="warning"))
@@ -96,6 +112,18 @@ def build_readiness_report(
                              f"Schema v{registry['schema_version']}; {len(registry['sources'])} registered source(s)"))
     except Exception as exc:
         checks.append(_check("source_registry", False, f"Registry invalid/unavailable: {exc}"))
+
+    try:
+        from brain.knowledge.knowledge_taxonomy import audit_source_references, load_taxonomy
+        taxonomy = load_taxonomy()
+        source_audit = audit_source_references(taxonomy)
+        valid = source_audit["status"] == "ok"
+        detail = f"Taxonomy v{taxonomy['taxonomy_version']}; {len(taxonomy['domains'])} domains; {taxonomy['topic_count']} topics; {len(source_audit['registered'])} source IDs registered"
+        if not valid:
+            detail += "; unregistered source IDs: " + ", ".join(source_audit["unregistered"])
+        checks.append(_check("hierarchical_taxonomy", valid, detail))
+    except Exception as exc:
+        checks.append(_check("hierarchical_taxonomy", False, f"Taxonomy invalid/unavailable: {exc}"))
 
     try:
         data = json.loads(Path(manifest_path).expanduser().read_text(encoding="utf-8"))
