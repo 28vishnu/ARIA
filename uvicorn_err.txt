@@ -1,0 +1,6 @@
+INFO:     Started server process [24588]
+INFO:     Waiting for application startup.
+C:\Users\REFL\Documents\Jarvis-openCode\ARIA-main\.venv\Lib\site-packages\fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)

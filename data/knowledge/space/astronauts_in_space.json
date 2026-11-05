@@ -1,0 +1,22 @@
+{
+  "category": "space",
+  "fetched_at": "2026-11-05T09:56:39.387128+00:00",
+  "data": {
+    "number_in_space": 12,
+    "astronauts": [
+      "Oleg Kononenko",
+      "Nikolai Chub",
+      "Tracy Caldwell Dyson",
+      "Matthew Dominick",
+      "Michael Barratt",
+      "Jeanette Epps",
+      "Alexander Grebenkin",
+      "Butch Wilmore",
+      "Sunita Williams",
+      "Li Guangsu",
+      "Li Cong",
+      "Ye Guangfu"
+    ],
+    "fetched_at": "2026-11-05T09:56:39.387128+00:00"
+  }
+}

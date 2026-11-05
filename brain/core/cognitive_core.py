@@ -1,0 +1,7682 @@
+import asyncio
+import logging
+import re
+import time
+import uuid
+from urllib.parse import quote
+from typing import Dict, Any, Optional, List
+
+from personality.response import SystemResponse
+from brain.response.response_formatter import ResponseFormatter
+from brain.core.response_verifier import ResponseVerifier
+from brain.agents.response_fusion import ResponseFusion
+from brain.events.event import Event
+from brain.events import event_types
+from brain.core.cognitive_controller import CognitiveController
+from brain.core.prompt_builder import PromptBuilder
+from brain.core.fast_router import should_fast_route
+from brain.core.execution_router import decide, Route
+from brain.core.coding_engine import CodingEngine
+from brain.core.engine_manager import EngineManager
+from brain.development.engineering_request_router import EngineeringRequestRouter
+from brain.core.jarvis_request_kernel import JarvisRequestKernel
+from brain.core.jarvis_final_integration import JarvisFinalIntegration
+
+logger = logging.getLogger("aria")
+
+
+# =============================================================
+# CONFIRMATION VOCABULARY
+# =============================================================
+
+CONFIRM_WORDS = {
+    "yes",
+    "yes please",
+    "yeah",
+    "yep",
+    "confirm",
+    "continue",
+    "proceed",
+    "do it",
+    "go ahead",
+    "approved",
+    "approve",
+}
+
+REJECT_WORDS = {
+    "no",
+    "nope",
+    "cancel",
+    "stop",
+    "don't",
+    "do not",
+    "reject",
+    "deny",
+}
+
+
+class CognitiveCore:
+    """
+    Central orchestrator of ARIA.
+
+    Coordinates:
+
+    - intent analysis
+    - memory
+    - context
+    - reasoning
+    - decision making
+    - agents
+    - skills
+    - direct actions
+    - centralized tools
+    - planning
+    - multi-step execution
+    - workflow confirmation
+    - workflow suspension/resumption
+    """
+
+    def __init__(
+        self,
+        planner,
+        executor,
+        skill_manager,
+        action_manager=None,
+        memory_router=None,
+        state_manager=None,
+        intent_analyzer=None,
+        context_builder=None,
+        decision_engine=None,
+        memory_conversation_manager=None,
+        reasoning_engine=None,
+        knowledge_manager=None,
+        knowledge_graph=None,
+        knowledge_database=None,
+        learning_engine=None,
+        personality_engine=None,
+        world_model=None,
+        self_reflection=None,
+        autonomous_learning=None,
+        event_bus=None,
+        llm_router=None,
+        conversation_manager=None,
+        working_memory=None,
+        memory_engine=None,
+        goal_manager=None,
+        project_manager=None,
+        task_manager=None,
+        agent_coordinator=None,
+        lead_agent=None,
+        agent_manager=None,
+        task_planner=None,
+        document_pipeline=None,
+        study_engine=None,
+        repository_memory=None,
+        tool_manager=None,
+        phase1_runtime=None,
+        capability_selector=None,
+        jarvis_final_integration=None,
+        delivery_authorization=None,
+        readiness_gateway=None,
+        execution_mode=None,
+        repository_intelligence=None,
+        autonomous_engineering_lifecycle=None,
+    ):
+        self.planner = planner
+        self.executor = executor
+        self.skill_manager = skill_manager
+        self.action_manager = action_manager
+        self.tool_manager = tool_manager
+        self.memory_router = memory_router
+        self.state_manager = state_manager
+        self.intent_analyzer = intent_analyzer
+        self.context_builder = context_builder
+        self.decision_engine = decision_engine
+        self.memory_conversation_manager = memory_conversation_manager
+        self.reasoning_engine = reasoning_engine
+        self.knowledge_manager = knowledge_manager
+        self.knowledge_graph = knowledge_graph
+        self.knowledge_database = knowledge_database
+        self.learning_engine = learning_engine
+        self.personality_engine = personality_engine
+        self.world_model = world_model
+        self.self_reflection = self_reflection
+        self.autonomous_learning = autonomous_learning
+        self.event_bus = event_bus
+        self.llm_router = llm_router
+        self.conversation_manager = conversation_manager
+        self.working_memory = working_memory
+        self.memory_engine = memory_engine
+        self.goal_manager = goal_manager
+        self.project_manager = project_manager
+        self.task_manager = task_manager
+        self.agent_coordinator = agent_coordinator
+        self.lead_agent = lead_agent
+        self.agent_manager = agent_manager
+        self.task_planner = task_planner
+        self.document_pipeline = document_pipeline
+        self.study_engine = study_engine
+        self.repository_memory = repository_memory
+        self.phase1_runtime = phase1_runtime
+        self.capability_selector = capability_selector
+        self.jarvis_final_integration = jarvis_final_integration
+        self._canonical_delivery_authorization = delivery_authorization
+        self._canonical_readiness_gateway = readiness_gateway
+        self._canonical_execution_mode = execution_mode
+        self._canonical_repository_intelligence = repository_intelligence
+        self._canonical_autonomous_engineering_lifecycle = autonomous_engineering_lifecycle
+
+        # =============================================================
+        # FINAL JARVIS INTEGRATION
+        # =============================================================
+        # Resolve Phase-1 services from the canonical runtime adapter.
+        # CognitiveCore remains the compatibility owner for legacy services,
+        # while the JARVIS layer becomes the deterministic request gate.
+        self.jarvis_request_kernel = JarvisRequestKernel()
+
+        self.execution_mode = (
+            self._canonical_execution_mode
+            or self._phase1_component("engineering_execution_mode")
+            or self._phase1_component("execution_mode")
+        )
+        self.repository_intelligence = (
+            self._canonical_repository_intelligence
+            or self._phase1_component("repository_intelligence")
+        )
+        self.jarvis_memory_system = self._phase1_component(
+            "jarvis_memory_system"
+        ) or self._phase1_component(
+            "jarvis_memory"
+        )
+        if self.capability_selector is None:
+            self.capability_selector = self._phase1_component(
+                "unified_capability_selector"
+            ) or self._phase1_component(
+                "capability_selector"
+            )
+        self.delivery_authorization = (
+            self._canonical_delivery_authorization
+            or self._phase1_component("master_delivery_authorization")
+            or self._phase1_component("delivery_authorization")
+        )
+        self.autonomous_engineering_lifecycle = (
+            self._canonical_autonomous_engineering_lifecycle
+            or self._phase1_component("autonomous_engineering_lifecycle")
+            or self._phase1_component("autonomous_engineering")
+        )
+        self.multimodal_gateway = self._phase1_component(
+            "multimodal_gateway"
+        ) or self._phase1_component(
+            "multimodal_capability_gateway"
+        )
+        self.phase1_readiness_gateway = (
+            self._canonical_readiness_gateway
+            or self._phase1_component("phase1_readiness_gateway")
+            or self._phase1_component("readiness_gateway")
+        )
+
+        if self.jarvis_final_integration is None:
+            self.jarvis_final_integration = JarvisFinalIntegration(
+                memory_system=self.jarvis_memory_system,
+                execution_mode=self.execution_mode,
+                autonomous_engineering_lifecycle=self.autonomous_engineering_lifecycle,
+                master_delivery_authorization=self.delivery_authorization,
+                multimodal_gateway=self.multimodal_gateway,
+                repository_intelligence=self.repository_intelligence,
+                readiness_gateway=self.phase1_readiness_gateway,
+            )
+
+        self.engineering_request_router = EngineeringRequestRouter(
+            runtime=phase1_runtime,
+            lifecycle=self.autonomous_engineering_lifecycle,
+            readiness_gateway=self.phase1_readiness_gateway,
+            delivery_authorization=self.delivery_authorization,
+            execution_mode=self.execution_mode,
+            repository_intelligence=self.repository_intelligence,
+            capability_selector=self.capability_selector,
+        )
+        self.cognitive_controller = CognitiveController()
+        self.prompt_builder = PromptBuilder()
+        self.coding_engine = CodingEngine(self.llm_router)
+        self.engine_manager = EngineManager()
+        self.engine_manager.register(
+            "coding",
+            self.coding_engine,
+        )
+
+        self.brain_state = {
+            "thinking": False,
+            "learning": False,
+            "reasoning": False,
+            "retrieving": False,
+        }
+
+        self.response_formatter = ResponseFormatter()
+        self.response_fusion = ResponseFusion()
+        self.response_verifier = ResponseVerifier()
+
+    def _phase1_component(self, name: str) -> Any:
+        """Resolve a component from the canonical Phase-1 runtime safely."""
+        runtime = getattr(self, "phase1_runtime", None)
+        if runtime is None:
+            return None
+
+        getter = getattr(runtime, "get", None)
+        if callable(getter):
+            try:
+                value = getter(name)
+                if value is not None:
+                    return value
+            except Exception:
+                logger.debug(
+                    "[CognitiveCore] Phase-1 component lookup failed: %s",
+                    name,
+                    exc_info=True,
+                )
+
+        try:
+            return getattr(runtime, name, None)
+        except Exception:
+            return None
+
+    def _create_execution_id(self) -> str:
+        """
+        Create a unique identifier for one cognitive execution.
+
+        This prevents different executions from being confused with
+        one another when state is persisted or recovered.
+        """
+        return f"exec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+
+    @staticmethod
+    def _engineering_route_response(
+        route: Dict[str, Any],
+        default_message: str = (
+            "The canonical Phase 1 engineering lifecycle completed."
+        ),
+    ) -> SystemResponse:
+        """Convert canonical engineering-router output into SystemResponse."""
+        result = route.get("result") if isinstance(route, dict) else route
+
+        if isinstance(result, SystemResponse):
+            return result
+
+        if isinstance(result, dict):
+            message = (
+                result.get("message")
+                or result.get("response")
+                or result.get("summary")
+            )
+            success = bool(
+                result.get(
+                    "success",
+                    result.get(
+                        "accepted",
+                        result.get("ok", True),
+                    ),
+                )
+            )
+        else:
+            message = None
+            success = True
+
+        if not message and isinstance(route, dict):
+            message = (
+                route.get("message")
+                or route.get("response")
+                or route.get("summary")
+            )
+
+        message = str(
+            message
+            or default_message
+        )
+
+        return SystemResponse(
+            success=success,
+            confidence=1.0 if success else 0.0,
+            source="phase1_authoritative_engineering",
+            data={
+                "response": message,
+                "message": message,
+                "engineering_route": route,
+                "engineering_result": result,
+            },
+        )
+
+    def _normalize_execution_result(
+        self,
+        result: Any,
+    ) -> Dict[str, Any]:
+        """
+        Normalize executor output into a predictable structure.
+
+        The cognitive layer must never assume that every executor
+        implementation returns a perfect dictionary.
+        """
+
+        if isinstance(result, dict):
+            return result
+
+        if result is None:
+            return {
+                "success": False,
+                "error": "Executor returned no result.",
+            }
+
+        success = getattr(result, "success", None)
+        error = getattr(result, "error", None)
+        data = getattr(result, "data", None)
+
+        normalized = {
+            "success": (
+                bool(success)
+                if success is not None
+                else True
+            ),
+            "data": data,
+        }
+
+        if error:
+            normalized["error"] = str(error)
+
+        return normalized
+
+    # =============================================================
+    # PHASE 11 — DECISION / CONTEXT / MEMORY SAFETY HELPERS
+    # =============================================================
+
+    @staticmethod
+    def _decision_value(decision: Any, key: str, default: Any = None) -> Any:
+        if decision is None:
+            return default
+        if isinstance(decision, dict):
+            return decision.get(key, default)
+        return getattr(decision, key, default)
+
+    def _merge_decisions(
+        self,
+        controller_decision: Any,
+        engine_decision: Any,
+    ) -> Any:
+        """Merge the rich CognitiveController decision with the
+        specialized DecisionEngine result without allowing two
+        independent decisions to compete.
+
+        CognitiveController remains the canonical decision object.
+        DecisionEngine may override only when it expresses an explicit
+        capability/action decision.
+        """
+        if controller_decision is None:
+            return engine_decision
+        if engine_decision is None:
+            return controller_decision
+
+        engine_action = str(
+            self._decision_value(engine_decision, "action", "") or ""
+        ).strip().lower()
+
+        explicit = bool(
+            engine_action
+            and engine_action not in {"chat", "conversation"}
+        )
+
+        for key in (
+            "use_memory",
+            "use_planner",
+            "use_executor",
+            "use_tools",
+            "use_documents",
+            "use_world_model",
+            "use_multi_agent",
+            "required_tools",
+            "selected_agents",
+        ):
+            value = self._decision_value(engine_decision, key, None)
+            if value:
+                explicit = True
+                break
+
+        if not explicit:
+            return controller_decision
+
+        if engine_action:
+            setattr(controller_decision, "action", engine_action)
+
+        for key in (
+            "reasoning_mode",
+            "use_memory",
+            "use_planner",
+            "use_executor",
+            "use_tools",
+            "use_documents",
+            "use_world_model",
+            "use_multi_agent",
+        ):
+            value = self._decision_value(engine_decision, key, None)
+            if value is not None:
+                try:
+                    setattr(controller_decision, key, value)
+                except Exception:
+                    pass
+
+        required_tools = self._decision_value(
+            engine_decision,
+            "required_tools",
+            None,
+        )
+        if required_tools:
+            existing = list(
+                self._decision_value(
+                    controller_decision,
+                    "required_tools",
+                    [],
+                )
+                or []
+            )
+            for tool in list(required_tools):
+                if tool not in existing:
+                    existing.append(tool)
+            setattr(controller_decision, "required_tools", existing)
+
+        selected_agents = self._decision_value(
+            engine_decision,
+            "selected_agents",
+            None,
+        )
+        if selected_agents:
+            existing_agents = list(
+                self._decision_value(
+                    controller_decision,
+                    "selected_agents",
+                    [],
+                )
+                or []
+            )
+            for agent in list(selected_agents):
+                if agent not in existing_agents:
+                    existing_agents.append(agent)
+            setattr(controller_decision, "selected_agents", existing_agents)
+
+        explanation = self._decision_value(
+            engine_decision,
+            "explanation",
+            None,
+        )
+        if explanation:
+            setattr(
+                controller_decision,
+                "decision_reason",
+                str(explanation),
+            )
+
+        engine_confidence = self._decision_value(
+            engine_decision,
+            "confidence",
+            None,
+        )
+        if engine_confidence is not None:
+            try:
+                setattr(
+                    controller_decision,
+                    "confidence",
+                    max(
+                        0.0,
+                        min(1.0, float(engine_confidence)),
+                    ),
+                )
+            except (TypeError, ValueError):
+                pass
+
+        return controller_decision
+
+    @staticmethod
+    def _safe_memory_items(memories: Any) -> List[Dict[str, Any]]:
+        """Normalize memory records before they reach prompts/logging."""
+        if not isinstance(memories, (list, tuple)):
+            return []
+
+        safe: List[Dict[str, Any]] = []
+        blocked = {
+            "id",
+            "_id",
+            "memory_id",
+            "record_id",
+            "embedding",
+            "metadata",
+        }
+
+        for item in memories:
+            if not isinstance(item, dict):
+                continue
+
+            key = item.get("key")
+            value = item.get("value")
+
+            if key is None or value is None:
+                continue
+
+            normalized_key = str(key).strip().lower()
+            value_text = str(value).strip()
+
+            if normalized_key in {
+                "aadhaar",
+                "aadhar",
+                "pan",
+                "password",
+                "otp",
+                "pin",
+                "cvv",
+                "secret",
+                "token",
+            }:
+                continue
+
+            # Defense-in-depth: do not inject obvious government-ID,
+            # OTP, card-security, or secret-like values into LLM prompts.
+            if (
+                re.fullmatch(r"\d{12}", value_text)
+                or re.fullmatch(
+                    r"[A-Z]{5}\d{4}[A-Z]",
+                    value_text.upper(),
+                )
+                or re.fullmatch(r"\d{6}", value_text)
+            ):
+                continue
+
+            record = {
+                str(k): v
+                for k, v in item.items()
+                if str(k) not in blocked
+            }
+            record["key"] = str(key)
+            record["value"] = value
+            safe.append(record)
+
+        return safe
+
+    @staticmethod
+    def _extract_knowledge_answer(result: Any) -> str:
+        """Extract user-facing answer text without exposing raw database records."""
+        if result is None:
+            return ""
+
+        if isinstance(result, str):
+            return result.strip()
+
+        if isinstance(result, dict):
+            # Explicit response fields are acceptable; raw memory/knowledge
+            # records are not answers just because they are truthy dictionaries.
+            for key in (
+                "answer", "response", "content", "text", "message", "summary"
+            ):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+            record_markers = {
+                "key", "value", "category", "memory_type", "retrieval_score",
+                "updated_at", "verification_status",
+            }
+            if record_markers.intersection(result.keys()):
+                return ""
+            return ""
+
+        if isinstance(result, (list, tuple)):
+            answers = []
+            for item in result:
+                extracted = CognitiveCore._extract_knowledge_answer(item)
+                if extracted:
+                    answers.append(extracted)
+            return "\\n".join(answers).strip()
+
+        # SystemResponse-like objects may carry the answer in data.
+        data = getattr(result, "data", None)
+        if isinstance(data, dict):
+            extracted = CognitiveCore._extract_knowledge_answer(data)
+            if extracted:
+                return extracted
+
+        for key in ("answer", "response", "content", "text", "message", "summary"):
+            value = getattr(result, key, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        return ""
+
+    @staticmethod
+    def _is_local_knowledge_instruction(query: str) -> bool:
+        """Recognize explicit requests to answer from ARIA's local corpus."""
+        text = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        phrases = (
+            "answer using your locally stored knowledge",
+            "answer using locally stored knowledge",
+            "answer from your local knowledge",
+            "answer using local knowledge",
+            "use your locally stored knowledge",
+            "use local knowledge",
+            "from your local knowledge",
+            "provide the source url",
+            "provide source url",
+            "cite the source url",
+        )
+        return any(phrase in text for phrase in phrases)
+
+    @staticmethod
+    def _resolve_local_knowledge_topic(
+        query: str,
+        conversation: Any = None,
+        context: Any = None,
+    ) -> str:
+        """Resolve a local-knowledge follow-up without discarding explicit topics.
+
+        A request may contain both a topic and instructions to use local knowledge
+        or provide a URL. In that case, route the actual topic to KnowledgeManager
+        instead of treating the entire message as a context-only follow-up.
+        """
+        raw_query = re.sub(r"\s+", " ", str(query or "").strip())
+        instruction = raw_query.lower()
+        if not CognitiveCore._is_local_knowledge_instruction(instruction):
+            return raw_query
+
+        # Remove answer-style directives while preserving a real question in the
+        # same message, e.g. "Answer using local knowledge: What is X? Provide URL".
+        explicit_topic = raw_query
+        directive_patterns = (
+            r"\banswer\s+using\s+(?:your\s+)?(?:locally\s+stored|local)\s+knowledge\b[:,; ]*",
+            r"\banswer\s+from\s+(?:your\s+)?local\s+knowledge\b[:,; ]*",
+            r"\buse\s+(?:your\s+)?(?:locally\s+stored|local)\s+knowledge\b[:,; ]*",
+            r"\bfrom\s+your\s+local\s+knowledge\b[:,; ]*",
+            r"\b(?:and\s+)?(?:please\s+)?(?:provide|give|show|include)\s+(?:me\s+)?(?:the\s+)?source\s+urls?\b[.!? ]*",
+            r"\b(?:and\s+)?(?:please\s+)?cite\s+(?:the\s+)?source\s+urls?\b[.!? ]*",
+        )
+        for pattern in directive_patterns:
+            explicit_topic = re.sub(pattern, " ", explicit_topic, flags=re.IGNORECASE)
+        explicit_topic = re.sub(r"\s+", " ", explicit_topic).strip(" \t,;:-")
+        explicit_topic = re.sub(r"^(?:and|then)\s+", "", explicit_topic, flags=re.IGNORECASE).strip()
+        if explicit_topic and explicit_topic.lower() != instruction:
+            # Only bypass conversational resolution when meaningful subject text
+            # remains after removing the directives.
+            meaningful = re.sub(r"[^a-z0-9]+", "", explicit_topic.lower())
+            if len(meaningful) >= 5:
+                return explicit_topic
+
+        containers = [conversation, context]
+        preferred_keys = (
+            "active_thread",
+            "current_topic",
+            "topic",
+            "subject",
+            "last_topic",
+            "last_user_query",
+            "previous_query",
+            "last_query",
+        )
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            for key in preferred_keys:
+                value = container.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and value.lower() != instruction:
+                        # A topic label is enough; a previous full question is
+                        # also acceptable and preserves its subject.
+                        if key in {"active_thread", "current_topic", "topic", "subject", "last_topic"}:
+                            return f"What is {value}?"
+                        return value
+
+            # Conversation implementations differ in how they expose history.
+            for history_key in ("history", "messages", "turns", "conversation_history"):
+                history = container.get(history_key)
+                if not isinstance(history, list):
+                    continue
+                for item in reversed(history):
+                    if not isinstance(item, dict):
+                        continue
+                    role = str(item.get("role") or item.get("speaker") or "").lower()
+                    content = str(
+                        item.get("content")
+                        or item.get("message")
+                        or item.get("text")
+                        or item.get("query")
+                        or ""
+                    ).strip()
+                    if role in {"user", "human", "luffy"} and content:
+                        if content.lower() != instruction and not CognitiveCore._is_local_knowledge_instruction(content):
+                            return content
+
+        return ""
+
+    @staticmethod
+    def _looks_like_ordinary_knowledge_query(query: str) -> bool:
+        """Route ordinary factual questions directly to the local knowledge brain.
+
+        Normalize common contractions first (e.g. "what's TCP and UDP?" ->
+        "what is TCP and UDP?"). Dynamic/current, personal-memory, and specialized
+        requests retain their dedicated routes. This check runs at the start of
+        process(), before memory relevance, intent, or answer-generation LLM calls.
+        """
+        text = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        text = text.replace("’", "'")
+        contractions = (
+            (r"^what's\b", "what is"), (r"^whats\b", "what is"),
+            (r"^who's\b", "who is"), (r"^whos\b", "who is"),
+            (r"^where's\b", "where is"), (r"^wheres\b", "where is"),
+            (r"^when's\b", "when is"), (r"^whens\b", "when is"),
+            (r"^how's\b", "how is"), (r"^hows\b", "how is"),
+        )
+        for pattern, replacement in contractions:
+            text = re.sub(pattern, replacement, text)
+
+        if not text or len(text) < 3:
+            return False
+        if CognitiveCore._is_local_knowledge_instruction(text):
+            return True
+
+        explicit_online = any(marker in text for marker in (
+            "search the web", "search online", "search the internet", "browse online",
+            "look up online", "on the internet", "online sources", "live web search",
+        ))
+        # Current news is answered from ARIA's periodically ingested local news
+        # corpus. Explicit online-search requests keep their dedicated route.
+        if "news" in text and not explicit_online:
+            return True
+        dynamic_markers = (
+            "latest", "current", "currently", "today", "tonight", "tomorrow",
+            "right now", "this week", "this month", "this year",
+            "online", "on the internet", "search the web", "look up", "recent",
+        )
+        if any(marker in text for marker in dynamic_markers):
+            return False
+
+        memory_markers = (
+            "my name", "my favorite", "my favourite", "what do you know about me",
+            "remember", "memorize", "save this", "store this", "don't forget",
+            "do not forget", "forget this", "forget that", "what did i tell you",
+            "what did i say",
+        )
+        if any(marker in text for marker in memory_markers):
+            return False
+
+        specialized_markers = (
+            "write code", "code for", "debug", "fix this code", "python code",
+            "javascript code", "java code", "sql query", "roadmap", "plan for",
+            "make a plan", "remind me", "schedule", "weather", "temperature",
+            "calculate", "convert ", "open ", "send ", "download ", "upload ",
+        )
+        if any(marker in text for marker in specialized_markers):
+            return False
+
+        prefixes = (
+            "what is ", "what are ", "what does ", "what do ", "what was ",
+            "what were ", "who is ", "who are ", "where is ", "where are ",
+            "when is ", "when was ", "why is ", "why are ", "why does ",
+            "why do ", "how does ", "how do ", "how is ", "how are ",
+            "explain ", "define ", "describe ", "tell me about ",
+            "can you explain ", "meaning of ", "difference between ",
+            "compare ",
+        )
+        if text.startswith(prefixes):
+            return True
+
+        # Support concise factual comparisons such as "TCP vs UDP?" without
+        # treating commands or arbitrary statements as factual questions.
+        if (" vs " in f" {text} " or " versus " in f" {text} ") and ("?" in text or text.endswith(("tcp", "udp"))):
+            return True
+        return False
+
+    def _should_store_natural_memory(
+        self,
+        query: str,
+        intent: Any = None,
+        route: Any = None,
+    ) -> bool:
+        """Only write natural memory when the request is clearly memory-like."""
+        intent_name = str(
+            getattr(intent, "name", "")
+            or getattr(intent, "intent", "")
+            or ""
+        ).lower()
+
+        if intent_name in {
+            "memory_store",
+            "memory_update",
+            "memory_save",
+            "remember",
+        }:
+            return True
+
+        route_name = str(
+            getattr(route, "route", route) or ""
+        ).lower()
+
+        if "memory" in route_name:
+            return True
+
+        text = str(query or "").lower()
+        return any(
+            phrase in text
+            for phrase in (
+                "remember that",
+                "remember this",
+                "please remember",
+                "don't forget",
+                "do not forget",
+                "my name is",
+                "i am from",
+                "i live in",
+                "i study",
+                "i prefer",
+                "my favorite",
+                "my favourite",
+            )
+        )
+
+    async def _reflect_execution_outcome(
+        self,
+        *,
+        query: str,
+        execution_result: Any,
+        verification: Optional[Dict[str, Any]] = None,
+        attempt: int = 1,
+        session_id: str = "",
+        execution_id: str = "",
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send an observable execution outcome through SelfReflection.
+
+        Reflection is deliberately best-effort: a reflection failure must
+        never break the actual ARIA task execution path.
+        """
+        if self.self_reflection is None:
+            return {}
+
+        try:
+            result = (
+                dict(execution_result)
+                if isinstance(execution_result, dict)
+                else execution_result
+            )
+
+            if isinstance(result, dict):
+                result.setdefault(
+                    "verified",
+                    bool(
+                        isinstance(verification, dict)
+                        and verification.get("goal_completed") is True
+                    ),
+                )
+
+                if verification:
+                    result["verification"] = verification
+
+                if error:
+                    result["error"] = error
+
+                result["retry_count"] = max(0, int(attempt) - 1)
+
+            reflection_context = {
+                "query": query,
+                "session_id": session_id,
+                "execution_id": execution_id,
+                "execution_attempt": attempt,
+                "verification": verification or {},
+            }
+
+            return await self.self_reflection.reflect(
+                "execution",
+                execution_result=result,
+                context=reflection_context,
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "[CognitiveCore] Execution reflection skipped: %s",
+                exc,
+            )
+            return {}
+
+    def _validate_persisted_execution(
+        self,
+        execution: Any,
+    ) -> Dict[str, Any]:
+        """
+        Validate persisted execution state before it enters
+        the active cognitive context.
+        """
+
+        if not isinstance(execution, dict):
+            return {}
+
+        status = execution.get("status")
+
+        allowed_statuses = {
+            "running",
+            "executed",
+            "awaiting_confirmation",
+            "verified_success",
+            "verified_failure",
+            "completed",
+            "failed",
+        }
+
+        if status not in allowed_statuses:
+            return {}
+
+        attempt = execution.get("attempt", 0)
+
+        try:
+            attempt = int(attempt)
+        except (TypeError, ValueError):
+            attempt = 0
+
+        attempt = max(0, attempt)
+
+        return {
+            "execution_id": execution.get(
+                "execution_id"
+            ),
+            "status": status,
+            "query": str(
+                execution.get("query", "")
+            ),
+            "plan": execution.get("plan"),
+            "result": execution.get("result"),
+            "verification": (
+                execution.get("verification")
+                if isinstance(
+                    execution.get("verification"),
+                    dict,
+                )
+                else {}
+            ),
+            "attempt": attempt,
+            "error": execution.get("error"),
+            "updated_at": execution.get(
+                "updated_at"
+            ),
+        }
+
+    async def _persist_execution_state(
+        self,
+        session_id: str,
+        execution_id: str = "",
+        *,
+        status: str,
+        query: str = "",
+        plan: Any = None,
+        result: Any = None,
+        verification: Dict[str, Any] | None = None,
+        attempt: int = 0,
+        error: str | None = None,
+    ) -> None:
+        """
+        Persist resumable execution state.
+
+        StateManager keeps the complete runtime execution state.
+        WorldModel stores only BSON-safe durable metadata so execution
+        state survives application restarts without serializing planner
+        or executor objects directly.
+        """
+
+        # ---------------------------------------------------------
+        # 1. COMPLETE RUNTIME STATE
+        # ---------------------------------------------------------
+        state_payload = {
+            "execution_id": execution_id,
+            "status": status,
+            "query": query,
+            "plan": plan,
+            "result": result,
+            "verification": verification or {},
+            "attempt": attempt,
+            "error": error,
+            "updated_at": time.time(),
+        }
+
+        if self.state_manager and session_id:
+            try:
+                self.state_manager.update_state(
+                    session_id,
+                    execution={
+                        **state_payload,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Runtime execution state "
+                    "persistence skipped: %s",
+                    exc,
+                )
+
+        # ---------------------------------------------------------
+        # 2. DURABLE WORLD MODEL STATE
+        # ---------------------------------------------------------
+        if self.world_model:
+            try:
+                await self.world_model.update_workflow_state(
+                    goal=query,
+                    progress=(
+                        100
+                        if status in {
+                            "completed",
+                            "verified_success",
+                        }
+                        else 0
+                    ),
+                )
+
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    # IMPORTANT:
+                    # Do NOT persist raw Plan / Executor objects.
+                    # Store only simple BSON-safe recovery metadata.
+                    durable_execution = {
+                        "execution_id": str(
+                            execution_id or ""
+                        ),
+                        "status": str(status or ""),
+                        "query": str(query or ""),
+                        "attempt": int(attempt or 0),
+                        "error": (
+                            str(error)
+                            if error is not None
+                            else None
+                        ),
+                        "updated_at": time.time(),
+                    }
+
+                    if isinstance(verification, dict):
+                        durable_execution[
+                            "verification"
+                        ] = {
+                            "status": str(
+                                verification.get(
+                                    "status",
+                                    "",
+                                )
+                            ),
+                            "goal_completed": bool(
+                                verification.get(
+                                    "goal_completed",
+                                    False,
+                                )
+                            ),
+                            "confidence": float(
+                                verification.get(
+                                    "confidence",
+                                    0.0,
+                                )
+                                or 0.0
+                            ),
+                            "reason": str(
+                                verification.get(
+                                    "reason",
+                                    "",
+                                )
+                                or ""
+                            ),
+                        }
+                    else:
+                        durable_execution[
+                            "verification"
+                        ] = {}
+
+                    # Store the execution metadata needed for
+                    # restart/recovery, but never the raw plan/result.
+                    workflow_state[
+                        "execution"
+                    ] = durable_execution
+
+                    await self.world_model.save()
+
+                logger.debug(
+                    "[CognitiveCore] Durable workflow state "
+                    "persisted: execution_id=%s status=%s",
+                    execution_id,
+                    status,
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Durable workflow persistence "
+                    "skipped: %s",
+                    exc,
+                )
+
+    async def _get_persisted_execution_state(
+        self,
+        session_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve resumable execution state.
+
+        Runtime state is checked first because it is fastest.
+        WorldModel is used as the durable fallback.
+        """
+
+        # ---------------------------------------------------------
+        # 1. FAST RUNTIME STATE
+        # ---------------------------------------------------------
+        if self.state_manager and session_id:
+            try:
+                state = (
+                    self.state_manager.get_state(
+                        session_id
+                    )
+                    or {}
+                )
+
+                execution = state.get(
+                    "execution",
+                    {},
+                )
+
+                if isinstance(execution, dict) and execution:
+                    return execution
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Runtime execution "
+                    "state recovery skipped: %s",
+                    exc,
+                )
+
+        # ---------------------------------------------------------
+        # 2. DURABLE WORLD MODEL FALLBACK
+        # ---------------------------------------------------------
+        if self.world_model:
+            try:
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    execution = workflow_state.get(
+                        "execution",
+                        {},
+                    )
+
+                    if isinstance(execution, dict):
+                        return execution
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Durable workflow recovery "
+                    "skipped: %s",
+                    exc,
+                )
+
+        return {}
+
+    def _store_generic_result(
+        self,
+        session_id: str,
+        result: Any,
+        *,
+        source: str = "execution",
+        operation: Optional[str] = None,
+    ) -> None:
+        """
+        Store a meaningful structured execution result for future
+        conversational reference resolution.
+
+        This is intentionally capability-independent.
+        """
+        if not self.conversation_manager:
+            return
+
+        if result is None:
+            return
+
+        try:
+            self.conversation_manager.set_last_result(
+                session_id=session_id,
+                result=result,
+                source=source,
+                operation=operation,
+            )
+
+            logger.info(
+                "[CognitiveCore] Stored generic result "
+                "for future contextual reasoning."
+            )
+
+        except Exception as e:
+            logger.warning(
+                "[CognitiveCore] Could not store generic result: %s",
+                e,
+            )
+
+    async def _resolve_calculator_query(
+        self,
+        query: str,
+        session_id: str,
+    ) -> str:
+        """
+        Resolve conversational calculator follow-ups before
+        sending the query to the calculator skill.
+        """
+
+        text = str(query or "").strip()
+
+        if not text:
+            return text
+
+        # ---------------------------------------------------------
+        # 1. Get previous conversational context
+        # ---------------------------------------------------------
+        structured_result = None
+
+        if self.conversation_manager:
+            try:
+                structured_result = (
+                    self.conversation_manager.get_last_result(session_id)
+                )
+            except Exception as e:
+                logger.warning(
+                    "[CalculatorContext] Last-result retrieval skipped: %s",
+                    e,
+                )
+
+        previous_result = None
+
+        if isinstance(structured_result, dict):
+            previous_result = structured_result.get("value")
+        else:
+            previous_result = structured_result
+
+        # ---------------------------------------------------------
+        # 3. Resolve common calculator follow-ups
+        # ---------------------------------------------------------
+        if previous_result is not None:
+            result_text = str(previous_result).strip()
+
+            divide_match = re.search(
+                r"\bdivide\s+(?:the\s+)?result\s+by\s+(-?\d+(?:\.\d+)?)\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if divide_match and previous_result is not None:
+                divisor = divide_match.group(1)
+
+                resolved = f"{previous_result} / {divisor}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+            multiply_match = re.search(
+                r"\b(?:multiply|times)\s+(?:the\s+)?result\s+by\s+(-?\d+(?:\.\d+)?)\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if multiply_match:
+                multiplier = multiply_match.group(1)
+
+                resolved = f"{result_text} * {multiplier}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+            add_match = re.search(
+                r"\badd\s+(-?\d+(?:\.\d+)?)\s+to\s+(?:the\s+)?result\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if add_match:
+                value = add_match.group(1)
+
+                resolved = f"{result_text} + {value}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+            subtract_match = re.search(
+                r"\bsubtract\s+(-?\d+(?:\.\d+)?)\s+from\s+(?:the\s+)?result\b",
+                text,
+                re.IGNORECASE,
+            )
+
+            if subtract_match:
+                value = subtract_match.group(1)
+
+                resolved = f"{result_text} - {value}"
+
+                logger.info(
+                    "[CalculatorContext] Resolved %r -> %r",
+                    text,
+                    resolved,
+                )
+
+                return resolved
+
+        # ---------------------------------------------------------
+        # 4. Normalize percentage calculations
+        # ---------------------------------------------------------
+        percentage_match = re.search(
+            r"(?:what\s+is\s+)?(-?\d+(?:\.\d+)?)\s*%\s*(?:of)\s*(-?\d+(?:\.\d+)?)",
+            text,
+            re.IGNORECASE,
+        )
+
+        if percentage_match:
+            percentage = percentage_match.group(1)
+            number = percentage_match.group(2)
+
+            resolved = f"({percentage} / 100) * {number}"
+
+            logger.info(
+                "[CalculatorContext] Normalized percentage %r -> %r",
+                text,
+                resolved,
+            )
+
+            return resolved
+
+        return text
+
+    def _extract_weather_params(self, query: str) -> Dict[str, Any]:
+        """
+        Extract structured weather parameters from a natural-language
+        weather request.
+
+        The cognitive layer is responsible for identifying the actual
+        geographical location and forecast range before calling the
+        weather action.
+
+        Examples:
+
+            Weather in London
+                -> location=London, forecast_days=1
+
+            What's the weather in Vizag?
+                -> location=Vizag, forecast_days=1
+
+            Check the weather in London for the next 3 days
+                -> location=London, forecast_days=3
+
+            What's the weather in Vizag for the next 5 days
+            and tell me which days have rain
+                -> location=Vizag, forecast_days=5
+
+            Will it rain in Mumbai tomorrow?
+                -> location=Mumbai, forecast_days=2,
+                    forecast_target=tomorrow
+        """
+
+        text = str(query or "").strip()
+
+        if not text:
+            return {
+                "location": "",
+                "forecast_days": 1,
+                "forecast_target": "today",
+            }
+
+        working = re.sub(r"\s+", " ", text).strip()
+
+        # ---------------------------------------------------------
+        # 1. FORECAST TARGET
+        # ---------------------------------------------------------
+
+        forecast_target = "today"
+
+        if re.search(r"\btomorrow\b", working, re.IGNORECASE):
+            forecast_target = "tomorrow"
+
+        elif re.search(
+            r"\b(?:today|right now|currently|current|now)\b",
+            working,
+            re.IGNORECASE,
+        ):
+            forecast_target = "today"
+
+        # ---------------------------------------------------------
+        # 2. FORECAST LENGTH
+        # ---------------------------------------------------------
+
+        forecast_days = 1
+
+        days_match = re.search(
+            r"\b(?:for|next)\s+(\d+)\s+days?\b",
+            working,
+            re.IGNORECASE,
+        )
+
+        if days_match:
+            try:
+                forecast_days = int(days_match.group(1))
+            except (TypeError, ValueError):
+                forecast_days = 1
+
+        if forecast_target == "tomorrow":
+            forecast_days = max(forecast_days, 2)
+
+        forecast_days = max(1, min(forecast_days, 7))
+
+        # ---------------------------------------------------------
+        # 3. EXTRACT LOCATION FROM THE WEATHER SENTENCE
+        #
+        # Important:
+        # Do NOT send the complete user sentence to geocoding.
+        # Find the geographical phrase first.
+        # ---------------------------------------------------------
+
+        location = ""
+
+        location_match = re.search(
+            r"\b(?:in|at)\s+"
+            r"(.+?)"
+            r"(?="
+            r"\s*(?:,|\.|\?|;)\s*"
+            r"(?:and|but|tell|show|give|let|whether|if)"
+            r"|\s+\band\b\s+"
+            r"(?:tell|show|give|let|whether|if)"
+            r"|\s+\bfor\s+(?:the\s+)?(?:next\s+)?\d+\s+days?\b"
+            r"|\s+\b(?:today|tomorrow|tonight|right now|currently|now)\b"
+            r"|$"
+            r")",
+            working,
+            re.IGNORECASE,
+        )
+
+        if location_match:
+            location = location_match.group(1).strip()
+
+        # ---------------------------------------------------------
+        # 4. Handle malformed / alternate weather wording
+        # ---------------------------------------------------------
+
+        if not location:
+            location_match = re.search(
+                r"\b(?:weather|temperature|forecast)\s+"
+                r"(?:for|of)\s+"
+                r"(.+?)"
+                r"(?="
+                r"\s*(?:,|\.|\?|;)\s*"
+                r"(?:and|but|tell|show|give|let|whether|if)"
+                r"|\s+\band\b\s+"
+                r"(?:tell|show|give|let|whether|if)"
+                r"|\s+\bfor\s+(?:the\s+)?(?:next\s+)?\d+\s+days?\b"
+                r"|\s+\b(?:today|tomorrow|tonight|right now|currently|now)\b"
+                r"|$"
+                r")",
+                working,
+                re.IGNORECASE,
+            )
+
+            if location_match:
+                location = location_match.group(1).strip()
+
+        # ---------------------------------------------------------
+        # 5. Rain/snow construction
+        # ---------------------------------------------------------
+
+        if not location:
+            location_match = re.search(
+                r"\b(?:rain|raining|snow|snowing)\s+"
+                r"(?:in|at)\s+"
+                r"(.+?)"
+                r"(?="
+                r"\s*(?:,|\.|\?|;)"
+                r"|\s+\band\b\s+"
+                r"(?:tell|show|give|let|whether|if)"
+                r"|\s+\bfor\s+(?:the\s+)?(?:next\s+)?\d+\s+days?\b"
+                r"|\s+\b(?:today|tomorrow|tonight|right now|currently|now)\b"
+                r"|$"
+                r")",
+                working,
+                re.IGNORECASE,
+            )
+
+            if location_match:
+                location = location_match.group(1).strip()
+
+        # ---------------------------------------------------------
+        # 6. Final cleanup
+        # ---------------------------------------------------------
+
+        location = re.sub(r"\s+", " ", location)
+        location = location.strip(" ,.;:!?")
+
+        location = re.sub(
+            r"^(?:the\s+)?(?:weather|temperature|forecast)\s+",
+            "",
+            location,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        return {
+            "location": location,
+            "forecast_days": forecast_days,
+            "forecast_target": forecast_target,
+        }
+
+    def _extract_timezone(self, query: str) -> str:
+        q = query.lower()
+
+        timezone_map = {
+            "tokyo": "Asia/Tokyo",
+            "japan": "Asia/Tokyo",
+            "delhi": "Asia/Kolkata",
+            "india": "Asia/Kolkata",
+            "mumbai": "Asia/Kolkata",
+            "kolkata": "Asia/Kolkata",
+            "london": "Europe/London",
+            "uk": "Europe/London",
+            "new york": "America/New_York",
+            "los angeles": "America/Los_Angeles",
+            "san francisco": "America/Los_Angeles",
+            "chicago": "America/Chicago",
+            "dubai": "Asia/Dubai",
+            "singapore": "Asia/Singapore",
+            "seoul": "Asia/Seoul",
+            "south korea": "Asia/Seoul",
+            "sydney": "Australia/Sydney",
+            "paris": "Europe/Paris",
+            "berlin": "Europe/Berlin",
+            "moscow": "Europe/Moscow",
+            "beijing": "Asia/Shanghai",
+            "china": "Asia/Shanghai",
+        }
+
+        for location, timezone in timezone_map.items():
+            if location in q:
+                return timezone
+
+        return "UTC"
+
+    def _get_active_task_context(self, query: str = ""):
+
+        if not self.task_manager:
+            return ""
+
+        task = self.task_manager.switch_task(query)
+
+        if task is None:
+            task = self.task_manager.highest_priority_task()
+
+        if not task:
+            return ""
+
+        return (
+            f"Current Active Task:\n"
+            f"Title: {task.title}\n"
+            f"Progress: {task.progress:.0f}%\n"
+            f"Status: {task.status}\n"
+        )
+
+    def _task_reminder(self) -> str:
+        if not self.task_manager:
+            return ""
+
+        task = self.task_manager.highest_priority_task()
+
+        if not task:
+            return ""
+
+        if task.progress >= 100:
+            return ""
+
+        return (
+            f"\nCurrent unfinished task:\n"
+            f"- {task.title}\n"
+            f"- Progress: {task.progress:.0f}%\n"
+        )
+
+    def _observe_tasks(self, query: str):
+        if not self.task_manager:
+            return
+
+        query_lower = query.lower()
+
+        project_phrases = [
+            "i'm building",
+            "i am building",
+            "i'm creating",
+            "i am creating",
+            "i'm making",
+            "working on",
+            "developing",
+            "writing",
+            "designing",
+        ]
+
+        for phrase in project_phrases:
+            if phrase in query_lower:
+                subject = query_lower.split(phrase, 1)[1].strip()
+
+                if subject:
+                    existing = self.task_manager.switch_task(query)
+                    if existing is None:
+                        existing = self.task_manager.highest_priority_task()
+
+                    if existing and existing.title.lower() == subject.lower():
+                        return
+
+                    self.task_manager.create_task(
+                        title=subject.title(),
+                        description=f"Long-term task: {subject}"
+                    )
+                return
+
+    def _update_task_progress(self, query: str):
+        if not self.task_manager:
+            return
+
+        task = self.task_manager.switch_task(query)
+        if task is None:
+            task = self.task_manager.highest_priority_task()
+
+        if not task:
+            return
+
+        text = query.lower()
+
+        completed_words = [
+            "finished",
+            "done",
+            "completed",
+            "implemented",
+            "deployed",
+            "released",
+            "working now",
+            "it's working",
+        ]
+
+        for word in completed_words:
+            if word in text:
+                self.task_manager.complete_task(task.id)
+                return
+
+        progress_words = [
+            "started",
+            "implemented",
+            "created",
+            "added",
+            "built",
+            "working on",
+        ]
+
+        for word in progress_words:
+            if word in text:
+                progress = min(task.progress + 20.0, 90.0)
+                self.task_manager.update_progress(
+                    task.id,
+                    progress,
+                )
+                return
+
+    async def process_document(
+        self,
+        file_path: str,
+    ):
+
+        if self.document_pipeline is None:
+            return None
+
+        return await self.document_pipeline.process(
+            file_path
+        )
+
+    async def _retrieve_semantic_memory(
+        self,
+        query,
+    ):
+        """
+        Retrieve semantic context related to the current query.
+        """
+
+        if not self.working_memory:
+            return None
+
+        semantic = self.working_memory.semantic()
+
+        logger.info(
+            "[SemanticMemory] Retrieved semantic context."
+        )
+
+        return {
+            "summary": semantic.summary(),
+            "graph": semantic,
+        }
+
+    async def _execute_required_tools(
+        self,
+        decision,
+        query,
+        context,
+    ):
+        """Execute required capabilities through ToolManager first.
+
+        Legacy capability fallbacks remain for compatibility with existing
+        Phase 1-10 registrations that have not yet been converted into
+        BaseTool implementations.
+        """
+        evidence = {}
+
+        required_tools = self._decision_value(
+            decision,
+            "required_tools",
+            [],
+        ) or []
+
+        if not isinstance(required_tools, (list, tuple, set)):
+            required_tools = [required_tools]
+
+        # Compound memory requests are conversational composition tasks.
+        # They must not be routed into coding/planner/agent execution merely
+        # because the controller lists those capabilities as available.
+        compound_memory_request = bool(
+            context.get("memory_compound_request")
+            or self._is_compound_memory_request(query, context)
+        )
+
+        for tool in required_tools:
+            tool_name = str(tool).strip()
+            if not tool_name:
+                continue
+
+            if compound_memory_request and tool_name.lower() in {
+                "coding",
+                "planner",
+                "agents",
+                "agent",
+                "study",
+            }:
+                logger.info(
+                    "[CognitiveCore] Skipping %s for compound memory response.",
+                    tool_name,
+                )
+                continue
+
+            executed_by_manager = False
+
+            if self.tool_manager and hasattr(self.tool_manager, "execute"):
+                try:
+                    managed_result = await self.tool_manager.execute(
+                        query=query,
+                        context=context,
+                        tool_name=tool_name,
+                    )
+
+                    if managed_result is not None:
+                        evidence[tool_name] = managed_result
+                        executed_by_manager = True
+                        logger.info(
+                            "[ToolManager] Executed required tool: %s",
+                            tool_name,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[ToolManager] Named tool %s failed; "
+                        "falling back to legacy capability: %s",
+                        tool_name,
+                        exc,
+                    )
+
+            if executed_by_manager:
+                continue
+
+            try:
+                # ToolManager is the primary execution owner. For web/search,
+                # keep a compatibility fallback to the shared SearchTool
+                # already registered by bootstrap.
+                if tool_name in {
+                    "web",
+                    "web_search",
+                    "internet",
+                    "online_search",
+                    "search",
+                }:
+                    app_state = context.get("app_state")
+
+                    if app_state is not None:
+                        try:
+                            registry = getattr(app_state, "registry", None)
+                            search_tool = None
+
+                            if registry is not None:
+                                for registry_name in (
+                                    "search_tool",
+                                    "web_search",
+                                    "search",
+                                ):
+                                    try:
+                                        if registry.has(registry_name):
+                                            search_tool = registry.get(
+                                                registry_name
+                                            )
+                                            if search_tool is not None:
+                                                break
+                                    except Exception:
+                                        continue
+
+                            if search_tool is not None:
+                                search_result = None
+
+                                if hasattr(search_tool, "search"):
+                                    search_result = await search_tool.search(
+                                        query
+                                    )
+                                elif hasattr(search_tool, "execute"):
+                                    try:
+                                        search_result = await search_tool.execute(
+                                            query=query,
+                                            context=context,
+                                        )
+                                    except TypeError:
+                                        search_result = await search_tool.execute(
+                                            query
+                                        )
+
+                                if search_result:
+                                    evidence["web"] = search_result
+                                    logger.info(
+                                        "[CognitiveCore] Web search fallback "
+                                        "executed successfully."
+                                    )
+                                    continue
+
+                        except Exception as exc:
+                            logger.warning(
+                                "[CognitiveCore] Web search fallback failed: %s",
+                                exc,
+                            )
+
+                    evidence.setdefault(
+                        "tool_errors",
+                        {},
+                    ).setdefault(
+                        "web",
+                        "Web search tool returned no usable result.",
+                    )
+
+                elif tool_name == "memory" and self.memory_engine:
+                    evidence["memory"] = await self.memory_engine.retrieve(
+                        query=query
+                    )
+
+                elif tool_name == "document" and self.document_pipeline:
+                    evidence["documents"] = await self.document_pipeline.search(
+                        query=query
+                    )
+
+                elif tool_name == "repository" and self.repository_memory:
+                    evidence["repository"] = await self.repository_memory.search(
+                        query=query
+                    )
+
+                elif tool_name == "study" and self.study_engine:
+                    evidence["study"] = await self.study_engine.prepare_context(
+                        query=query
+                    )
+
+                elif tool_name == "planner" and self.planner:
+                    evidence["plan"] = await self.planner.create_plan(
+                        query=query,
+                        context=context,
+                    )
+
+                elif tool_name == "coding" and self.agent_coordinator:
+                    evidence["coding"] = await self.agent_coordinator.prepare(
+                        "coding",
+                        query=query,
+                    )
+
+                elif tool_name == "semantic_memory":
+                    semantic = await self._retrieve_semantic_memory(query)
+                    if semantic is not None:
+                        evidence["semantic_memory"] = semantic
+
+            except Exception as exc:
+                logger.exception(
+                    "[CognitiveCore] Required capability failed: %s",
+                    tool_name,
+                )
+                evidence.setdefault(
+                    "tool_errors",
+                    {},
+                )[tool_name] = str(exc)
+
+        return evidence
+
+    async def _run_phase1_agent_pipeline(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        decision=None,
+    ):
+        """
+        Execute the canonical Phase-1 agent pipeline.
+        """
+
+        if not self.agent_coordinator:
+            return None
+
+        try:
+            selected_agents = []
+
+            if decision is not None:
+                selected_agents = list(
+                    getattr(
+                        decision,
+                        "selected_agents",
+                        [],
+                    )
+                    or []
+                )
+
+                selected_skills = list(
+                    getattr(
+                        decision,
+                        "selected_skills",
+                        [],
+                    )
+                    or []
+                )
+
+                if not selected_agents:
+                    selected_agents = (
+                        selected_skills
+                    )
+
+            execution_plan = None
+
+            if self.lead_agent:
+                execution_plan = (
+                    await self.lead_agent
+                    .create_execution_plan(
+                        query=query,
+                        context=context,
+                        selected_agents=selected_agents,
+                        decision=decision,
+                    )
+                )
+
+                context[
+                    "lead_execution_plan"
+                ] = execution_plan
+
+                selected_agents = list(
+                    execution_plan.get(
+                        "execution_order",
+                        selected_agents,
+                    )
+                    or []
+                )
+
+            if self.task_planner:
+                task_plan = (
+                    self.task_planner.create_plan(
+                        query=query,
+                        decision=decision,
+                        context=context,
+                    )
+                )
+
+                context[
+                    "task_plan"
+                ] = task_plan
+
+            coordination = (
+                await self.agent_coordinator.coordinate(
+                    decision=decision,
+                    query=query,
+                    context=context,
+                )
+            )
+
+            context[
+                "agent_coordination"
+            ] = coordination
+
+            return coordination
+
+        except Exception:
+            logger.exception(
+                "[CognitiveCore] Phase-1 agent pipeline failed."
+            )
+
+            return None
+
+    def _normalize_execution_verification(
+        self,
+        evaluation,
+        result,
+    ) -> Dict[str, Any]:
+        """
+        Normalize executor verification into one reliable structure.
+        """
+
+        if not isinstance(evaluation, dict):
+            evaluation = {}
+
+        goal_completed = evaluation.get("goal_completed")
+
+        if goal_completed is True:
+            return {
+                "status": "verified_success",
+                "goal_completed": True,
+                "confidence": float(
+                    evaluation.get("confidence", 1.0)
+                    or 1.0
+                ),
+                "reason": evaluation.get(
+                    "reason",
+                    "Goal verified successfully.",
+                ),
+            }
+
+        if goal_completed is False:
+            return {
+                "status": "verified_failure",
+                "goal_completed": False,
+                "confidence": float(
+                    evaluation.get("confidence", 0.0)
+                    or 0.0
+                ),
+                "reason": evaluation.get(
+                    "reason",
+                    "Goal was not completed.",
+                ),
+            }
+
+        return {
+            "status": "uncertain",
+            "goal_completed": False,
+            "confidence": 0.0,
+            "reason": (
+                evaluation.get("reason")
+                or "Execution result could not be verified."
+            ),
+        }
+
+    async def _execute_plan_with_recovery(
+        self,
+        *,
+        plan,
+        query: str,
+        context: Dict[str, Any],
+        max_attempts: int = 3,
+    ):
+        """
+        Execute a plan through a centralized recovery loop.
+        """
+
+        current_plan = plan
+        last_result = None
+        last_error = None
+
+        # ---------------------------------------------------------
+        # Recovery-state defaults
+        # ---------------------------------------------------------
+        # These must exist before the execution loop because an
+        # exception can occur before evaluation/verification are
+        # produced.
+        evaluation = {}
+        verification = {}
+
+        max_attempts = max(1, min(int(max_attempts), 3))
+        session_id = context.get("session_id", "")
+        execution_id = context.get("execution_id", "")
+
+        for attempt in range(1, max_attempts + 1):
+
+            logger.info(
+                "[Recovery] Execution attempt %d/%d for query=%r",
+                attempt,
+                max_attempts,
+                query,
+            )
+
+            try:
+                if not current_plan:
+                    raise ValueError("No executable plan was produced.")
+
+                await self._persist_execution_state(
+                    session_id,
+                    execution_id=execution_id,
+                    status="running",
+                    query=query,
+                    plan=current_plan,
+                    attempt=attempt,
+                )
+
+                raw_result = await self.executor.execute_plan(
+                    current_plan,
+                    context,
+                )
+                last_result = self._normalize_execution_result(raw_result)
+
+                if isinstance(last_result, dict):
+
+                    paused = bool(
+                        last_result.get(
+                            "paused",
+                            False,
+                        )
+                    )
+
+                    requires_confirmation = bool(
+                        last_result.get(
+                            "requires_confirmation",
+                            False,
+                        )
+                    )
+
+                    if paused and requires_confirmation:
+
+                        logger.info(
+                            "[Recovery] Workflow paused awaiting user confirmation "
+                            "on attempt %d.",
+                            attempt,
+                        )
+
+                        await self._persist_execution_state(
+                            session_id,
+                            execution_id=execution_id,
+                            status="awaiting_confirmation",
+                            query=query,
+                            plan=current_plan,
+                            result=last_result,
+                            attempt=attempt,
+                        )
+
+                        return {
+                            "result": last_result,
+                            "plan": current_plan,
+                            "evaluation": None,
+                            "verification": {
+                                "status": "awaiting_confirmation",
+                                "goal_completed": False,
+                                "confidence": 1.0,
+                                "reason": (
+                                    "Workflow is waiting for user confirmation."
+                                ),
+                            },
+                            "attempts": attempt,
+                            "recovered": attempt > 1,
+                            "success": True,
+                            "paused": True,
+                            "requires_confirmation": True,
+                        }
+
+                await self._persist_execution_state(
+                    session_id,
+                    execution_id=execution_id,
+                    status="executed",
+                    query=query,
+                    plan=current_plan,
+                    result=last_result,
+                    attempt=attempt,
+                )
+
+            except asyncio.TimeoutError:
+                last_error = "Executor timed out."
+
+                logger.warning(
+                    "[Recovery] Executor timeout on attempt %d/%d.",
+                    attempt,
+                    max_attempts,
+                )
+
+            except Exception as exc:
+                last_error = str(exc) or "Executor raised an unknown error."
+
+                logger.exception(
+                    "[Recovery] Executor failed on attempt %d/%d: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+
+            else:
+                evaluation = None
+
+                if (
+                    self.reasoning_engine
+                    and hasattr(
+                        self.reasoning_engine,
+                        "evaluate_result",
+                    )
+                ):
+                    try:
+                        evaluation = (
+                            await self.reasoning_engine.evaluate_result(
+                                query=query,
+                                result=last_result,
+                            )
+                        )
+
+                    except Exception as exc:
+                        logger.warning(
+                            "[Recovery] Result verification failed: %s",
+                            exc,
+                        )
+
+                verification = (
+                    self._normalize_execution_verification(
+                        evaluation,
+                        last_result,
+                    )
+                )
+
+                execution_reflection = (
+                    await self._reflect_execution_outcome(
+                        query=query,
+                        execution_result=last_result,
+                        verification=verification,
+                        attempt=attempt,
+                        session_id=session_id,
+                        execution_id=execution_id,
+                    )
+                )
+
+                context["execution_reflection"] = execution_reflection
+
+                await self._persist_execution_state(
+                    session_id,
+                    execution_id=execution_id,
+                    status=verification.get(
+                        "status",
+                        "uncertain",
+                    ),
+                    query=query,
+                    plan=current_plan,
+                    result=last_result,
+                    verification=verification,
+                    attempt=attempt,
+                    error=(
+                        verification.get("reason")
+                        if verification.get("status")
+                        == "verified_failure"
+                        else None
+                    ),
+                )
+
+                if verification["goal_completed"]:
+                    logger.info(
+                        "[Recovery] Goal verified successfully "
+                        "on attempt %d.",
+                        attempt,
+                    )
+
+                    return {
+                        "result": last_result,
+                        "plan": current_plan,
+                        "evaluation": evaluation,
+                        "verification": verification,
+                        "execution_reflection": execution_reflection,
+                        "attempts": attempt,
+                        "recovered": attempt > 1,
+                        "success": True,
+                    }
+
+                if isinstance(last_result, dict):
+
+                    explicit_success = last_result.get(
+                        "success"
+                    )
+
+                    failed_tasks = last_result.get(
+                        "failed",
+                        [],
+                    )
+
+                    skipped_tasks = last_result.get(
+                        "skipped",
+                        [],
+                    )
+
+                    paused = bool(
+                        last_result.get(
+                            "paused",
+                            False,
+                        )
+                    )
+
+                    if (
+                        explicit_success is True
+                        and not failed_tasks
+                        and not skipped_tasks
+                        and not paused
+                    ):
+                        logger.info(
+                            "[Recovery] Executor reported "
+                            "successful completion on attempt %d.",
+                            attempt,
+                        )
+
+                        return {
+                            "result": last_result,
+                            "plan": current_plan,
+                            "evaluation": evaluation,
+                            "verification": verification,
+                            "execution_reflection": execution_reflection,
+                            "attempts": attempt,
+                            "recovered": attempt > 1,
+                            "success": True,
+                        }
+
+                last_error = (
+                    "Execution completed but the requested goal "
+                    "was not verified."
+                )
+
+                if isinstance(evaluation, dict):
+                    last_error = (
+                        evaluation.get("reason")
+                        or evaluation.get("error")
+                        or last_error
+                    )
+
+            if attempt >= max_attempts:
+                break
+
+            recovery_context = dict(context)
+
+            recovery_context["recovery"] = {
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "previous_error": last_error,
+                "previous_result": last_result,
+            }
+
+            logger.info(
+                "[Recovery] Attempting replanning after failed "
+                "execution attempt %d.",
+                attempt,
+            )
+
+            try:
+                new_plan = None
+
+                if self.planner and hasattr(
+                    self.planner,
+                    "create_plan",
+                ):
+                    new_plan = await self.planner.create_plan(
+                        query,
+                        recovery_context,
+                    )
+
+                if new_plan is not None:
+                    current_plan = new_plan
+
+                    logger.info(
+                        "[Recovery] New recovery plan generated "
+                        "after attempt %d.",
+                        attempt,
+                    )
+
+                else:
+                    logger.warning(
+                        "[Recovery] Planner could not generate "
+                        "a recovery plan."
+                    )
+
+            except Exception as exc:
+                logger.exception(
+                    "[Recovery] Replanning failed: %s",
+                    exc,
+                )
+
+        logger.error(
+            "[Recovery] Execution failed after %d attempt(s). "
+            "Last error: %s",
+            max_attempts,
+            last_error,
+        )
+
+        return {
+            "result": last_result,
+            "plan": current_plan,
+            "evaluation": evaluation if isinstance(evaluation, dict) else {},
+            "verification": verification,
+            "execution_reflection": context.get(
+                "execution_reflection",
+                {},
+            ),
+            "attempts": max_attempts,
+            "recovered": False,
+            "success": False,
+            "error": last_error,
+        }
+
+    async def knowledge_first_pipeline(
+        self,
+        session_id: str,
+        query: str,
+        context: Dict[str, Any],
+        precomputed_reasoning: Optional[Any] = None,
+        completed_goal: Optional[Any] = None,
+    ) -> SystemResponse:
+        """
+        ARIA's core unified cognitive intelligence pipeline orchestrated via Reasoning, Planner, Executor, Memory, WorldModel, Reflection, and Learning.
+        """
+        if completed_goal:
+            response_text = (
+                f"Excellent. I've marked "
+                f"'{completed_goal.title}' "
+                "as completed.\n\n"
+                "What would you like to build next?"
+            )
+            return await self._format_response(response_text, "goal_manager", context, 1.0)
+
+        self.brain_state["retrieving"] = True
+
+        answer = None
+        source = "cognitive_core"
+        confidence = 0.0
+        decision = context.get("decision")
+        execution_result = None
+        plan = None
+
+        context.setdefault("session_id", session_id)
+        context.setdefault("execution_id", self._create_execution_id())
+        context.setdefault("query", query)
+        compound_memory_request = bool(
+            context.get("memory_compound_request")
+            or self._is_compound_memory_request(query, context)
+        )
+        context["memory_compound_request"] = compound_memory_request
+
+        local_knowledge_query = bool(
+            context.get("local_knowledge_query")
+            or (
+                self._looks_like_ordinary_knowledge_query(query)
+                and not compound_memory_request
+            )
+        )
+        context["local_knowledge_query"] = local_knowledge_query
+
+        if self.conversation_manager:
+            try:
+                conversation_context = self.conversation_manager.get_context(
+                    session_id
+                )
+                context["conversation"] = conversation_context
+            except Exception as e:
+                logger.warning(
+                    "[Conversation] Context retrieval skipped: %s",
+                    e,
+                )
+
+        if context.get("references_resolved"):
+            resolved_query = str(
+                context.get("resolved_query")
+                or context.get("query")
+                or query
+            )
+        elif local_knowledge_query:
+            if self._is_local_knowledge_instruction(query):
+                resolved_query = (
+                    self._resolve_local_knowledge_topic(
+                        query,
+                        conversation_context,
+                        context,
+                    )
+                    or query
+                )
+                context["require_source_url"] = True
+                logger.info(
+                    "[LocalKnowledge] Local-knowledge follow-up resolved to %r.",
+                    resolved_query,
+                )
+            else:
+                resolved_query = query
+            logger.info(
+                "[LocalKnowledge] Reference resolution skipped for ordinary knowledge query."
+            )
+        elif self.reasoning_engine:
+            try:
+                resolved_query = await self.reasoning_engine.resolve_references(
+                    query,
+                    context,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Reference resolution skipped: %s",
+                    exc,
+                )
+                resolved_query = query
+        else:
+            resolved_query = query
+
+        context["original_query"] = query
+        context["resolved_query"] = resolved_query
+        context["references_resolved"] = True
+        if self._is_local_knowledge_instruction(query):
+            context["require_source_url"] = True
+
+        if self.context_builder and not context.get("_context_built"):
+            try:
+                # Preserve multimodal/vision context before rebuilding context.
+                vision_result = context.get("vision_result")
+                image_metadata = context.get("image_metadata")
+                vision_active = context.get("vision_active", False)
+
+                context = await self.context_builder.build(
+                    query=resolved_query,
+                    session_id=session_id,
+                    user_id=context.get("user_id", session_id),
+                    base_context=context,
+                )
+
+                # ContextBuilder may rebuild the dictionary, so explicitly
+                # preserve the routing decision made before the rebuild.
+                context["local_knowledge_query"] = local_knowledge_query
+
+                # ContextBuilder may rebuild the dictionary, so explicitly
+                # restore vision information for the downstream cognitive pipeline.
+                if vision_result:
+                    context["vision_result"] = vision_result
+
+                if image_metadata:
+                    context["image_metadata"] = image_metadata
+
+                if vision_active:
+                    context["vision_active"] = True
+
+            except Exception as e:
+                logger.warning("Context builder skipped: %s", e)
+                context.setdefault("query", resolved_query)
+                context.setdefault("session_id", session_id)
+        else:
+            context.setdefault("query", resolved_query)
+            context.setdefault("session_id", session_id)
+
+        if self.conversation_manager:
+            try:
+                fresh_conversation = (
+                    self.conversation_manager.get_context(session_id)
+                    or {}
+                )
+                existing_conversation = context.get(
+                    "conversation",
+                    {},
+                )
+                if isinstance(existing_conversation, dict):
+                    context["conversation"] = {
+                        **fresh_conversation,
+                        **existing_conversation,
+                    }
+                else:
+                    context["conversation"] = fresh_conversation
+            except Exception as e:
+                logger.warning(
+                    "[Conversation] Context refresh skipped: %s",
+                    e,
+                )
+
+        working_memory_context = {}
+        if self.working_memory:
+            working_memory_context = {
+                "topic": self.working_memory.get_topic(),
+                "goal": self.working_memory.get_goal(),
+                "entities": self.working_memory.get_entities(),
+                "recent_results": getattr(self.working_memory, "get_recent_results", lambda: [])(),
+            }
+
+        conversation_context = context.get("conversation", {})
+        memory_context = self._safe_memory_items(
+            context.get("memory", [])
+        )
+        world_state = context.get("world", {})
+
+        context = dict(context)
+
+        context.update({
+            "query": resolved_query,
+            "session_id": session_id,
+            "user_id": context.get("user_id", session_id),
+            "working_memory": working_memory_context,
+            "conversation": conversation_context,
+            "memory": self._safe_memory_items(memory_context),
+            "world": world_state,
+        })
+
+        # =========================================================
+        # DETERMINISTIC CAPABILITY RESPONSE
+        # =========================================================
+        # Capability questions should never depend on episodic memory,
+        # knowledge search, or an external LLM provider.
+        if self._looks_like_capability_request(resolved_query):
+            logger.info(
+                "[Capability] Deterministic capability response selected."
+            )
+            return SystemResponse(
+                success=True,
+                confidence=1.0,
+                source="capability",
+                data={
+                    "response": (
+                        "Certainly, Sir. I can help you with conversation and questions, "
+                        "remember and recall information you ask me to keep, search and "
+                        "reason over knowledge, work with documents and files, perform "
+                        "supported tools and workflows, help with coding and technical "
+                        "tasks, assist with planning and problem solving, and learn from "
+                        "our interactions when appropriate."
+                    ),
+                    "message": (
+                        "Certainly, Sir. I can help you with conversation and questions, "
+                        "remember and recall information you ask me to keep, search and "
+                        "reason over knowledge, work with documents and files, perform "
+                        "supported tools and workflows, help with coding and technical "
+                        "tasks, assist with planning and problem solving, and learn from "
+                        "our interactions when appropriate."
+                    ),
+                },
+            )
+
+        # =========================================================
+        # PHASE 5 — RETRIEVE RELEVANT EPISODIC MEMORY
+        # =========================================================
+        # Ordinary factual knowledge questions must not inspect personal
+        # episodic history. Doing so adds latency and can invoke the legacy
+        # memory-relevance LLM path. Personal memory is opt-in through the
+        # deterministic memory routes or an explicit cognitive decision.
+        local_knowledge_query = bool(
+            context.get("local_knowledge_query")
+            or (
+                self._looks_like_ordinary_knowledge_query(resolved_query)
+                and not compound_memory_request
+            )
+        )
+        context["local_knowledge_query"] = local_knowledge_query
+
+        if self.memory_conversation_manager and not local_knowledge_query:
+            try:
+                episodic_memories = (
+                    await self.memory_conversation_manager.retrieve_episodes(
+                        query=resolved_query,
+                        limit=5,
+                    )
+                )
+
+                context["episodic_memory"] = episodic_memories
+
+                if episodic_memories:
+                    logger.info(
+                        "[CognitiveCore] Retrieved %d episodic memories.",
+                        len(episodic_memories),
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "[CognitiveCore] Episodic memory retrieval skipped: %s",
+                    e,
+                )
+                context["episodic_memory"] = []
+        elif local_knowledge_query:
+            context["episodic_memory"] = []
+            logger.info(
+                "[LocalKnowledge] Episodic memory retrieval skipped for ordinary knowledge query."
+            )
+
+        if self._looks_like_name_recall_request(query):
+            user_name = conversation_context.get("user_name")
+
+            if user_name:
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="conversation_memory",
+                    data={
+                        "response": f"Your name is {user_name}.",
+                        "message": f"Your name is {user_name}.",
+                    },
+                )
+
+        reasoning = precomputed_reasoning
+        if (
+            not compound_memory_request
+            and not local_knowledge_query
+            and not reasoning
+            and self.reasoning_engine
+        ):
+            try:
+                reasoning = await self.reasoning_engine.reason(context)
+            except Exception as e:
+                logger.warning("ReasoningEngine invocation skipped: %s", e)
+        elif local_knowledge_query:
+            logger.info(
+                "[LocalKnowledge] ReasoningEngine skipped; KnowledgeManager owns this query."
+            )
+
+        if reasoning:
+            context["reasoning"] = reasoning
+
+        # DecisionEngine/controller implementations may expose action as
+        # either a string or a structured value. Never perform set-membership
+        # directly on an arbitrary object because a dict/list is unhashable.
+        decision_action = self._decision_value(
+            decision,
+            "action",
+            "",
+        )
+        if isinstance(decision_action, (dict, list, tuple, set)):
+            decision_action = (
+                decision_action.get("name", "")
+                if isinstance(decision_action, dict)
+                else ""
+            )
+        decision_action = str(decision_action or "").strip().lower()
+
+        if decision_action in {
+            "chat",
+            "memory",
+            "skill",
+        }:
+            logger.debug(
+                "[CognitiveCore] Direct decision already handled."
+            )
+
+        execution_id = context.get("execution_id", "")
+        persisted_execution = context.get("persisted_execution", {})
+        previous_execution_id = persisted_execution.get("execution_id")
+        previous_status = persisted_execution.get("status")
+
+        if (
+            previous_execution_id
+            and previous_status == "completed"
+            and persisted_execution.get("query") == resolved_query
+        ):
+            previous_result = persisted_execution.get("result")
+
+            if previous_result:
+                execution_result = previous_result
+                if isinstance(reasoning, dict):
+                    reasoning["execution_result"] = execution_result
+                elif reasoning is not None:
+                    setattr(reasoning, "execution_result", execution_result)
+        elif (
+            not compound_memory_request
+            and decision_action == "planner"
+        ):
+
+            plan = None
+
+            if self.planner and hasattr(
+                self.planner,
+                "create_plan",
+            ):
+                plan = await self.planner.create_plan(
+                    resolved_query,
+                    context,
+                )
+
+            if not plan or not getattr(
+                plan,
+                "tasks",
+                None,
+            ):
+                return SystemResponse(
+                    success=False,
+                    confidence=0.0,
+                    source="planner_executor",
+                    error="The planner could not produce an executable plan.",
+                )
+
+            if not self.executor or not hasattr(
+                self.executor,
+                "execute_plan",
+            ):
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="planner_executor",
+                    error="The workflow executor is unavailable.",
+                )
+
+            recovery = await self._execute_plan_with_recovery(
+                plan=plan,
+                query=resolved_query,
+                context=context,
+                max_attempts=3,
+            )
+
+            execution_result = recovery.get(
+                "result"
+            )
+
+            if not isinstance(
+                execution_result,
+                dict,
+            ):
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="planner_executor",
+                    error="The executor returned an invalid workflow result.",
+                )
+
+            return await self._process_workflow_result(
+                session_id=session_id,
+                plan=recovery.get(
+                    "plan",
+                    plan,
+                ),
+                exec_result=execution_result,
+            )
+
+        try:
+            if reasoning and getattr(reasoning, "answer", None):
+                answer = reasoning.answer
+                source = "reasoning"
+                confidence = getattr(reasoning, "confidence", 0.90)
+
+            if not answer and reasoning and getattr(reasoning, "plan", None) and self.executor:
+                try:
+                    recovery = await self._execute_plan_with_recovery(
+                        plan=reasoning.plan,
+                        query=resolved_query,
+                        context=context,
+                        max_attempts=3,
+                    )
+
+                    result = recovery.get("result")
+
+                    if (
+                        recovery.get("paused")
+                        or (
+                            isinstance(result, dict)
+                            and result.get("paused")
+                            and result.get("requires_confirmation")
+                        )
+                    ):
+                        return await self._process_workflow_result(
+                            session_id=session_id,
+                            plan=recovery.get(
+                                "plan",
+                                reasoning.plan,
+                            ),
+                            exec_result=result,
+                        )
+
+                    context["execution_verification"] = (
+                        recovery.get("verification", {})
+                    )
+                    context["execution_attempt"] = recovery.get(
+                        "attempts",
+                        1,
+                    )
+
+                    if not recovery.get("success"):
+                        logger.warning(
+                            "[CognitiveCore] Reasoning plan "
+                            "execution was not verified: %s",
+                            recovery.get("error"),
+                        )
+                        await self._persist_execution_state(
+                            session_id,
+                            execution_id=execution_id,
+                            status="failed",
+                            query=resolved_query,
+                            plan=reasoning.plan,
+                            result=result,
+                            verification=context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            attempt=context.get(
+                                "execution_attempt",
+                                0,
+                            ),
+                            error=recovery.get("error"),
+                        )
+                    else:
+                        result_to_store = result
+                        if hasattr(result, "data"):
+                            result_to_store = result.data
+
+                        self._store_generic_result(
+                            session_id,
+                            result_to_store,
+                            source="execution",
+                            operation=resolved_query,
+                        )
+
+                        await self._persist_execution_state(
+                            session_id,
+                            execution_id=execution_id,
+                            status="completed",
+                            query=resolved_query,
+                            plan=reasoning.plan,
+                            result=result,
+                            verification=context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            attempt=context.get(
+                                "execution_attempt",
+                                0,
+                            ),
+                        )
+
+                    if result:
+                        answer = result.get("response") or result.get("message") or (result.get("task_outputs") and str(result.get("task_outputs")))
+                        if answer:
+                            source = "planner_executor"
+                            plan_confidence = self._decision_value(
+                                getattr(reasoning, "plan", None),
+                                "confidence",
+                                None,
+                            )
+                            confidence = (
+                                float(plan_confidence)
+                                if plan_confidence is not None
+                                else 0.92
+                            )
+                except Exception as e:
+                    logger.warning("Executor plan execution skipped: %s", e)
+
+            if not answer:
+                self.brain_state["thinking"] = True
+
+                agent_fusion = context.get("agent_fusion")
+
+                if agent_fusion:
+                    if isinstance(agent_fusion, dict):
+                        fused_answer = (
+                            agent_fusion.get("response")
+                            or agent_fusion.get("answer")
+                            or agent_fusion.get("content")
+                            or agent_fusion.get("message")
+                        )
+                    else:
+                        fused_answer = str(agent_fusion)
+
+                    if fused_answer:
+                        answer = str(fused_answer).strip()
+                        source = "multi_agent"
+                        consensus = context.get("agent_consensus", {})
+                        confidence = float(
+                            consensus.get("confidence", 0.90)
+                            if isinstance(consensus, dict)
+                            else 0.90
+                        )
+
+                mem_res = None
+                if (
+                    not context.get("local_knowledge_query")
+                    and decision
+                    and getattr(decision, "use_memory", False)
+                    and self.memory_router
+                    and hasattr(self.memory_router, "answer")
+                ):
+                    try:
+                        mem_res = await self.memory_router.answer(
+                            resolved_query,
+                            reasoning_result=reasoning,
+                        )
+                    except Exception as e:
+                        logger.warning("Memory router answer search skipped: %s", e)
+                elif (
+                    not context.get("local_knowledge_query")
+                    and reasoning
+                    and getattr(reasoning, "retrieved_memory", None)
+                ):
+                    mem_res = reasoning.retrieved_memory
+                # IMPORTANT:
+                # Never perform a personal-memory relevance LLM call for a
+                # normal knowledge question. Memory retrieval is opt-in via
+                # the decision/reasoning path or deterministic memory routes.
+                elif (
+                    not context.get("local_knowledge_query")
+                    and self.memory_router
+                    and hasattr(self.memory_router, "answer")
+                ):
+                    try:
+                        mem_res = await self.memory_router.answer(
+                            resolved_query,
+                            reasoning_result=reasoning,
+                        )
+                    except Exception as e:
+                        logger.warning("Memory router answer search skipped: %s", e)
+
+                if mem_res:
+                    if isinstance(mem_res, list):
+                        context["memory"] = self._safe_memory_items(mem_res)
+                    elif isinstance(mem_res, dict):
+                        context["memory"] = self._safe_memory_items([mem_res])
+                    else:
+                        context["memory"] = [str(mem_res)]
+
+                    if (
+                        not context.get("local_knowledge_query")
+                        and not answer
+                        and not compound_memory_request
+                        and self._looks_like_memory_recall_request(
+                            resolved_query
+                        )
+                    ):
+                        if isinstance(mem_res, str):
+                            answer = mem_res
+                        elif isinstance(mem_res, list):
+                            answer = "\n".join(
+                                str(item) for item in mem_res
+                            )
+                        else:
+                            answer = str(mem_res)
+
+                        source = "memory"
+                        confidence = 0.94
+
+                if not answer:
+                    doc_res = None
+                    try:
+                        if self.knowledge_manager and hasattr(self.knowledge_manager, "answer"):
+                            doc_res = await self.knowledge_manager.answer(
+                                session_id=session_id,
+                                question=resolved_query,
+                            )
+                    except Exception as e:
+                        logger.warning("KnowledgeManager skipped: %s", e)
+                        doc_res = None
+
+                    if doc_res:
+                        answer = self._extract_knowledge_answer(doc_res)
+
+                        if not answer:
+                            logger.warning(
+                                "[LocalKnowledge] Ignored non-answer retrieval "
+                                "record from KnowledgeManager (type=%s).",
+                                type(doc_res).__name__,
+                            )
+
+                        # KnowledgeManager is the authoritative answer owner for
+                        # ordinary/local knowledge queries. Do not relabel its
+                        # answer as a generic document response: doing so allows
+                        # later personality/LLM fallback paths to rewrite it.
+                        if answer:
+                            if local_knowledge_query:
+                                source = "local_knowledge"
+                                context["local_knowledge"] = True
+                                context["knowledge_source"] = "local_foundational_knowledge"
+                                context["answer_owner"] = "knowledge_manager"
+                                context["external_llm_synthesis"] = False
+                                logger.info(
+                                    "[LocalKnowledge] KnowledgeManager answer accepted "
+                                    "as local answer owner; external LLM synthesis disabled."
+                                )
+                            else:
+                                source = "document"
+                            confidence = 0.89
+                    elif reasoning and getattr(reasoning, "graph_results", None):
+                        answer = self._extract_knowledge_answer(
+                            reasoning.graph_results
+                        )
+                        if answer:
+                            source = "knowledge_graph"
+                            confidence = 0.81
+                    elif self.knowledge_database and hasattr(self.knowledge_database, "search"):
+                        try:
+                            db_res = await self.knowledge_database.search(resolved_query)
+                            answer = self._extract_knowledge_answer(db_res)
+                            if answer:
+                                source = "knowledge_database"
+                                confidence = 0.75
+                            elif db_res:
+                                logger.warning(
+                                    "[LocalKnowledge] Ignored non-answer record "
+                                    "from knowledge database (type=%s).",
+                                    type(db_res).__name__,
+                                )
+                        except Exception as e:
+                            logger.warning("Knowledge database search skipped: %s", e)
+
+                if not answer and not local_knowledge_query:
+                    world_res = None
+                    if decision and getattr(decision, "use_world_model", False) and self.world_model and hasattr(self.world_model, "search"):
+                        try:
+                            world_res = await asyncio.to_thread(self.world_model.search, resolved_query)
+                        except Exception as e:
+                            logger.warning("World model search skipped: %s", e)
+                    elif reasoning and hasattr(reasoning, "world_state"):
+                        world_res = reasoning.world_state
+                    elif self.world_model and hasattr(self.world_model, "search"):
+                        try:
+                            world_res = await asyncio.to_thread(self.world_model.search, resolved_query)
+                        except Exception as e:
+                            logger.warning("World model search skipped: %s", e)
+                    if world_res:
+                        answer = str(world_res)
+                        source = "world_model"
+                        confidence = 0.91
+
+                # Ordinary/local knowledge queries must never fall through to
+                # the general-purpose LLM generation path. KnowledgeManager,
+                # deterministic knowledge, database retrieval, or web fallback
+                # must own the answer. This is an upstream safety gate in
+                # addition to PersonalityEngine's final gate.
+                if (
+                    not answer
+                    and not local_knowledge_query
+                    and self.llm_router
+                    and hasattr(self.llm_router, "chat")
+                ):
+                    try:
+                        system_context = (
+                            "You are ARIA.\n\n"
+                            "Behave like a trusted AI assistant.\n"
+                            "Understand what the user is trying to achieve, not only what they asked.\n"
+                            "Answer naturally.\n"
+                            "Be concise.\n"
+                            "Avoid sounding like an encyclopedia.\n"
+                            "Use conversation history when relevant.\n"
+                            "If a useful next step exists, suggest it naturally.\n"
+                            "Never pad the answer."
+                        )
+
+                        task_context = self._get_active_task_context(resolved_query)
+
+                        if task_context:
+                            system_context += "\n\n" + task_context
+
+                        planning_keywords = [
+                            "continue",
+                            "next",
+                            "roadmap",
+                            "plan",
+                            "what now",
+                            "what next",
+                            "resume",
+                        ]
+
+                        should_remind = any(
+                            word in resolved_query.lower()
+                            for word in planning_keywords
+                        )
+
+                        if should_remind:
+                            reminder = self._task_reminder()
+                            if reminder:
+                                system_context += "\n" + reminder
+
+                        if execution_result:
+                            system_context += f"""
+
+Execution Results:
+
+{execution_result}
+
+"""
+
+                        # Current-information requests must use actual
+                        # web/search evidence when it was retrieved.
+                        web_results = context.get("web_results")
+
+                        if web_results:
+                            system_context += f"""
+
+Live Web/Search Evidence:
+
+{web_results}
+
+Use this web/search evidence as the factual basis for the current-
+information answer. Do not claim that live access is unavailable when
+usable evidence is present. Do not invent details absent from the evidence.
+"""
+
+                        decision_obj = None
+                        if self.working_memory and hasattr(self.working_memory, "metadata"):
+                            decision_obj = self.working_memory.metadata.get("cognitive_decision")
+
+                        system_context = self.prompt_builder.build(
+                            decision_obj,
+                            system_context,
+                        )
+
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": system_context
+                            }
+                        ]
+
+                        memory_items = self._safe_memory_items(
+                            context.get("memory", [])
+                        )
+
+                        if memory_items:
+                            memory_text = "\n".join(
+                                f"{item['key']}: {item['value']}"
+                                for item in memory_items
+                            )
+
+                            messages.append({
+                                "role": "system",
+                                "content":
+                                    "Known user memories:\n"
+                                    + memory_text +
+                                    "\nUse these memories when answering if relevant."
+                            })
+
+                        # ---------------------------------------------------------
+                        # VISION CONTEXT
+                        # ---------------------------------------------------------
+                        vision_result = context.get("vision_result")
+
+                        if vision_result:
+                            if isinstance(vision_result, dict):
+                                vision_text = vision_result.get("text", "")
+                                vision_description = vision_result.get(
+                                    "description",
+                                    "",
+                                )
+                                vision_entities = vision_result.get(
+                                    "entities",
+                                    [],
+                                )
+
+                                vision_context = (
+                                    "Visual information available from the image:\n"
+                                    f"OCR/Text:\n{vision_text}\n\n"
+                                    f"Visual description:\n{vision_description}\n\n"
+                                    f"Detected entities:\n{vision_entities}\n\n"
+                                    "Use this visual information when answering the "
+                                    "user's request. Do not invent visual details."
+                                )
+                            else:
+                                vision_context = (
+                                    "Visual information available from the image:\n"
+                                    f"{vision_result}"
+                                )
+
+                            messages.append({
+                                "role": "system",
+                                "content": vision_context,
+                            })
+
+                        messages.append({
+                            "role": "user",
+                            "content": resolved_query
+                        })
+
+                        # Compound requests need enough output budget to complete
+                        # every requested subtask. The router default is intentionally
+                        # conservative for ordinary turns, but using that default here
+                        # can truncate long multi-part answers mid-code or mid-section.
+                        compound_request = self._looks_like_compound_request(
+                            resolved_query
+                        )
+                        if compound_memory_request:
+                            compound_request = True
+                            messages.insert(
+                                0,
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "This is a compound conversational request. "
+                                        "Complete every requested part in one response. "
+                                        "The memory operation has already been handled; "
+                                        "do not expose internal memory keys, tool errors, "
+                                        "agent failures, routing details, or implementation logs. "
+                                        "Give a concise profile summary, a short Python "
+                                        "learning plan, and a clear first step."
+                                    ),
+                                },
+                            )
+                        llm_max_tokens = 4096 if compound_request else 2048
+
+                        reply = await self.llm_router.chat(
+                            messages,
+                            max_tokens=llm_max_tokens,
+                            task=(
+                                "compound_response"
+                                if compound_request
+                                else "general_response"
+                            ),
+                            context=context,
+                        )
+                        if isinstance(reply, dict) and not reply.get("success", True):
+                            answer = None
+                        else:
+                            answer = str(reply).strip() if reply else None
+
+                        if answer:
+                            source = "llm_generated"
+                            confidence = 0.70
+                    except Exception as e:
+                        logger.warning("LLM fallback generation skipped: %s", e)
+
+                if not answer:
+                    class DummyExecutionResults:
+                        def __init__(self, completed):
+                            self.completed = completed
+                    
+                    verification = context.get(
+                        "execution_verification",
+                        {},
+                    )
+
+                    verification_status = verification.get(
+                        "status"
+                    )
+
+                    if (
+                        execution_result
+                        and verification_status == "verified_success"
+                    ):
+                        execution_results = DummyExecutionResults(
+                            execution_result.get("completed", [])
+                            if isinstance(execution_result, dict)
+                            else []
+                        )
+
+                        if execution_results.completed:
+                            answer = execution_results.completed[-1]
+
+                    elif (
+                        execution_result
+                        and verification_status == "uncertain"
+                    ):
+                        answer = (
+                            "I completed the execution attempt, "
+                            "but I could not reliably verify that the "
+                            "requested result was achieved."
+                        )
+
+                    if not answer:
+                        web_fallback = context.get("web_results")
+                        if web_fallback:
+                            # A live search result is still useful even if the
+                            # synthesis LLM is temporarily unavailable. Keep
+                            # this fallback explicit so ARIA never pretends it
+                            # produced a polished synthesis.
+                            answer = (
+                                "I found live web results, but my language "
+                                "models are temporarily unavailable, so I "
+                                "can't summarize them reliably right now. "
+                                "Here are the retrieved results:\n\n"
+                                + str(web_fallback)
+                            )
+                            source = "web_fallback"
+                            confidence = 0.55
+                        elif context.get("local_knowledge_query"):
+                            # Local knowledge requests must never be replaced by an
+                            # LLM outage message. Be transparent when the configured
+                            # local corpus has no matching evidence.
+                            topic = str(resolved_query or query or "").strip()
+                            topic = re.sub(
+                                r"^(?:what is|what are|define|explain|tell me about|describe)\\s+",
+                                "",
+                                topic,
+                                flags=re.IGNORECASE,
+                            ).strip(" .?!")
+                            slug = quote(topic.replace(" ", "_"), safe="_-")
+                            source_url = (
+                                f"https://en.wikipedia.org/wiki/{slug}"
+                                if slug
+                                else "https://en.wikipedia.org/"
+                            )
+                            answer = (
+                                "I couldn't find a matching entry in my local knowledge "
+                                "store, so I can't honestly present this as a locally "
+                                "retrieved answer. No language model was used. "
+                                f"Reference URL (not verified by local retrieval): {source_url}"
+                            )
+                            context["local_knowledge"] = True
+                            context["knowledge_source"] = "local_knowledge_store_miss"
+                            context["answer_owner"] = "knowledge_manager"
+                            context["external_llm_synthesis"] = False
+                            source = "local_knowledge_miss"
+                            confidence = 0.0
+                        else:
+                            answer = (
+                                "I'm temporarily unable to reach my language models. "
+                                "Please try again in a few seconds."
+                            )
+                            source = "llm_unavailable"
+                            confidence = 0.1
+
+        finally:
+            self.brain_state["retrieving"] = False
+            self.brain_state["thinking"] = False
+            self.brain_state["reasoning"] = False
+
+        if self.self_reflection:
+            try:
+                # -------------------------------------------------
+                # SELF-REFLECTION SAFETY BOUNDARY
+                # -------------------------------------------------
+                # Do not pass the complete cognitive context,
+                # execution state, retrieval results, tool outputs,
+                # embeddings, or conversation history into reflection.
+                #
+                # MongoDB has a 16 MB BSON document limit, and the
+                # reflection layer may persist the supplied context.
+                # Keep this payload intentionally small.
+                safe_reflection_context = {
+                    "query": str(resolved_query or "")[:4000],
+                    "resolved_query": str(resolved_query or "")[:4000],
+                    "confidence": float(confidence or 0.0),
+                    "failed": not bool(answer),
+                    "verified": (
+                        context.get(
+                            "execution_verification",
+                            {},
+                        ).get("goal_completed")
+                        if isinstance(
+                            context.get(
+                                "execution_verification",
+                                {},
+                            ),
+                            dict,
+                        )
+                        else None
+                    ),
+                    "session_id": str(
+                        session_id or ""
+                    )[:256],
+                    "execution_id": str(
+                        context.get(
+                            "execution_id",
+                            "",
+                        )
+                        or ""
+                    )[:256],
+                    "knowledge_source": str(
+                        source or ""
+                    )[:256],
+                    "local_knowledge": bool(
+                        context.get(
+                            "local_knowledge",
+                            False,
+                        )
+                    ),
+                }
+
+                # Never include raw execution_result,
+                # execution_reflection, web results, memory results,
+                # reasoning traces, or the complete context here.
+                response_evaluation = (
+                    await self.self_reflection.reflect(
+                        "evaluate_response",
+                        response=str(
+                            answer or ""
+                        )[:12000],
+                        context=safe_reflection_context,
+                    )
+                )
+
+                context["response_reflection"] = (
+                    response_evaluation
+                )
+
+                # Preserve the existing learning/review contract,
+                # but send only bounded scalar values.
+                await self.self_reflection.reflect(
+                    "review",
+                    query=str(
+                        resolved_query or ""
+                    )[:4000],
+                    answer=str(
+                        answer or ""
+                    )[:12000],
+                    source=str(
+                        source or ""
+                    )[:256],
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "Self reflection skipped: %s",
+                    e,
+                )
+
+        if self.autonomous_learning:
+            try:
+                await self.autonomous_learning.learn(
+                    "chat",
+                    user=resolved_query,
+                    assistant=answer,
+                )
+            except Exception as e:
+                logger.warning("Autonomous learning skipped: %s", e)
+
+        if self.state_manager:
+            try:
+                self.state_manager.update_state(
+                    session_id,
+                    last_reasoning=context.get("reasoning"),
+                    last_source=source,
+                    last_confidence=confidence,
+                    last_assistant_response=answer,
+                )
+            except Exception as e:
+                logger.warning("State manager update skipped: %s", e)
+
+        if self.event_bus:
+            try:
+                await self.event_bus.publish(
+                    Event(
+                        type=event_types.RESPONSE_GENERATED,
+                        source="cognitive_core",
+                        data={
+                            "query": resolved_query,
+                            "answer": answer,
+                            "confidence": confidence,
+                            "knowledge_source": source,
+                            "session_id": session_id,
+                            "reflection": context.get(
+                                "response_reflection",
+                                {},
+                            ),
+                            "execution_reflection": context.get(
+                                "execution_reflection",
+                                {},
+                            ),
+                        }
+                    )
+                )
+            except Exception as e:
+                logger.warning("Event bus publish skipped: %s", e)
+
+        formatted_response = await self._format_response(answer, source, context, confidence)
+        response_text = formatted_response.data.get("response", answer)
+
+        if self.working_memory and context.get("active_context", {}).get("topic"):
+            self.working_memory.set_topic(
+                context["active_context"]["topic"]
+            )
+
+        if self.working_memory:
+            self.working_memory.remember_exchange(
+                resolved_query,
+                response_text
+            )
+
+        if self.conversation_manager:
+            try:
+                self.conversation_manager.update_turn(
+                    session_id=session_id,
+                    user_message=resolved_query,
+                    assistant_message=response_text,
+                )
+            except Exception as e:
+                logger.warning("Conversation manager update_turn skipped: %s", e)
+
+        # =========================================================
+        # PHASE 5 — PERSIST EPISODIC MEMORY
+        # =========================================================
+        if self.memory_conversation_manager:
+            try:
+                episode_context = dict(context or {})
+                episode_context["session_id"] = session_id
+
+                recorded = (
+                    await self.memory_conversation_manager.record_episode(
+                        query=resolved_query,
+                        response=response_text,
+                        context=episode_context,
+                    )
+                )
+
+                # -------------------------------------------------
+                # PHASE 5 — AUTOMATIC MEMORY CONSOLIDATION
+                # -------------------------------------------------
+                # Consolidate periodically rather than on every
+                # conversation. This prevents unnecessary LLM calls
+                # while allowing durable user information to become
+                # long-term memory automatically.
+                if recorded:
+                    try:
+                        episode_count = None
+
+                        episode_col = getattr(
+                            self.memory_conversation_manager,
+                            "episode_col",
+                            None,
+                        )
+
+                        if episode_col is not None:
+                            episode_count = (
+                                await episode_col.count_documents({})
+                            )
+
+                        if (
+                            episode_count is not None
+                            and episode_count > 0
+                            and episode_count % 10 == 0
+                        ):
+                            consolidated = (
+                                await self.memory_conversation_manager
+                                .consolidate_episodes(
+                                    limit=10
+                                )
+                            )
+
+                            if consolidated:
+                                logger.info(
+                                    "[CognitiveCore] Automatically "
+                                    "consolidated %d durable memories "
+                                    "from episodic memory.",
+                                    consolidated,
+                                )
+
+                    except Exception as e:
+                        logger.warning(
+                            "[CognitiveCore] Automatic memory "
+                            "consolidation skipped: %s",
+                            e,
+                        )
+
+            except Exception as e:
+                logger.warning(
+                    "[CognitiveCore] Episodic memory recording skipped: %s",
+                    e,
+                )
+
+        if self.state_manager:
+            try:
+                self.state_manager.add_conversation_turn(
+                    session_id=session_id,
+                    user_message=resolved_query,
+                    assistant_message=response_text,
+                )
+            except Exception as e:
+                logger.warning("State manager add_conversation_turn skipped: %s", e)
+
+        topic = context.get("active_context", {}).get("topic")
+        if topic and self.world_model:
+            try:
+                if hasattr(self.world_model, "set_active_topic"):
+                    res = self.world_model.set_active_topic(topic)
+                    if asyncio.iscoroutine(res):
+                        await res
+            except Exception as e:
+                logger.warning("WorldModel set_active_topic skipped: %s", e)
+
+        entities = context.get("active_context", {}).get("entities", [])
+        if self.working_memory and entities:
+            self.working_memory.set_entities(entities)
+
+        return formatted_response
+
+    async def _format_response(self, answer: str, source: str, context: Dict[str, Any], confidence: float = 1.0) -> SystemResponse:
+        formatted_answer = answer
+
+        # Deterministic memory-profile/forget responses are already safe and
+        # user-facing. Do not send them through the personality LLM, which can
+        # expand them with unrelated memories or conversational history.
+        local_sources = {
+            "local_knowledge",
+            "local_foundational_knowledge",
+            "knowledge_database",
+            "knowledge_manager",
+            "knowledge",
+            "local_knowledge_miss",
+        }
+
+        if source in {
+            "memory_profile",
+            "memory_conversation",
+            "capability",
+            "llm_unavailable",
+            *local_sources,
+        }:
+            is_local = source in local_sources or bool(
+                context.get("local_knowledge")
+            )
+
+            return SystemResponse(
+                success=True,
+                confidence=confidence,
+                source=(
+                    "local_knowledge"
+                    if is_local
+                    else source
+                ),
+                data={
+                    "response": formatted_answer,
+                    "message": formatted_answer,
+                    "local_knowledge": is_local,
+                    "knowledge_source": (
+                        context.get("knowledge_source", source)
+                        if is_local
+                        else source
+                    ),
+                    "answer_owner": (
+                        "knowledge_manager"
+                        if is_local
+                        else None
+                    ),
+                    "external_llm_synthesis": (
+                        False
+                        if is_local
+                        else None
+                    ),
+                    "verification": {
+                        "verified": True,
+                        "uncertainty": 0.0,
+                        "evidence_count": 0,
+                        "citations": [],
+                        "warnings": [],
+                        "source": source,
+                    },
+                },
+            )
+
+        if self.personality_engine and hasattr(self.personality_engine, "format"):
+            try:
+                formatted_answer = await self.personality_engine.format(answer, context)
+            except Exception as e:
+                logger.warning("Personality engine formatting skipped: %s", e)
+
+        verification = None
+        if self.response_verifier is not None:
+            try:
+                verification = self.response_verifier.verify(
+                    formatted_answer,
+                    source,
+                    context,
+                )
+                formatted_answer = verification.get(
+                    "answer",
+                    formatted_answer,
+                )
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] Response verification skipped."
+                )
+
+        data = {
+            "response": formatted_answer,
+            "message": formatted_answer,
+        }
+
+        if verification:
+            data["verification"] = verification
+            data["citations"] = verification.get("citations", [])
+            data["uncertainty"] = verification.get("uncertainty", 0.0)
+            data["verified"] = verification.get("verified", False)
+            data["verification_warnings"] = verification.get(
+                "warnings",
+                [],
+            )
+
+        return SystemResponse(
+            success=True,
+            confidence=confidence,
+            source=source,
+            data=data,
+        )
+
+    def _normalize_confirmation_text(
+        self,
+        query: str,
+    ) -> str:
+        return str(query or "").strip().lower()
+
+    def _is_confirm(
+        self,
+        query: str,
+    ) -> bool:
+        return (
+            self._normalize_confirmation_text(query)
+            in CONFIRM_WORDS
+        )
+
+    def _is_reject(
+        self,
+        query: str,
+    ) -> bool:
+        return (
+            self._normalize_confirmation_text(query)
+            in REJECT_WORDS
+        )
+
+    def _is_compound_memory_request(self, query: str, context: Optional[Dict[str, Any]] = None) -> bool:
+        """Detect memory operations embedded in a larger request."""
+        ctx = context if isinstance(context, dict) else {}
+        manager = self.memory_conversation_manager
+        if manager and hasattr(manager, "_is_compound_memory_request"):
+            try:
+                intent = ctx.get("intent")
+                intent_name = (
+                    getattr(intent, "name", "")
+                    or getattr(intent, "intent", "")
+                    or ""
+                )
+                return bool(manager._is_compound_memory_request(
+                    str(query or ""),
+                    intent_name=str(intent_name),
+                    context=ctx,
+                ))
+            except Exception:
+                logger.debug("[CognitiveCore] Compound memory detection fallback used.", exc_info=True)
+        q = str(query or "").lower()
+        return (
+            any(x in q for x in ("remember", "memorize", "save this", "save that", "store this", "store that", "don't forget", "do not forget"))
+            and any(x in q for x in ("then", "and then", "also", "make a plan", "create a plan", "study plan", "roadmap", "explain", "what should i do", "what do i do first", "search", "write code", "generate"))
+        )
+
+    def _looks_like_memory_forget_request(self, query: str) -> bool:
+        """Detect explicit requests to remove persistent memories."""
+        q = str(query or "").strip().lower()
+
+        return bool(
+            re.search(
+                r"^\s*(?:forget|delete|remove|clear|erase)\b",
+                q,
+            )
+            or any(
+                phrase in q
+                for phrase in (
+                    "forget unnecessary things about me",
+                    "forget unnecessary things",
+                    "forget irrelevant things about me",
+                    "forget irrelevant things",
+                    "remove unnecessary memories",
+                    "delete unnecessary memories",
+                    "clear unnecessary memories",
+                )
+            )
+        )
+
+    @staticmethod
+    def _profile_memory_items(memories: Any) -> List[Dict[str, Any]]:
+        """
+        Keep only durable user-profile facts for broad personal-memory
+        summaries. Retrieval candidates are not automatically profile facts.
+
+        Temporary study/exam items, purchases, generic conversational
+        buckets, and episodic/casual narrative fields are intentionally
+        excluded from the profile surface.
+        """
+        if not isinstance(memories, (list, tuple)):
+            return []
+
+        excluded_exact = {
+            "user_dislikes",
+            "exam_preparation",
+            "exam",
+            "exam_topic",
+            "current_exam",
+            "intended_purchase",
+            "purchase",
+            "recent_purchase",
+            "temporary_goal",
+            "temporary_task",
+            "conversation",
+            "conversation_memory",
+            "episodic_memory",
+            "episode",
+            "story",
+            "casual_context",
+        }
+
+        allowed_prefixes = (
+            "favorite_",
+            "favourite_",
+            "preferred_",
+            "preference_",
+            "education",
+            "current_degree",
+            "degree",
+            "field_of_study",
+            "study_destination",
+            "planned_postgraduate",
+            "postgraduate",
+            "intended_degree",
+            "backup_country",
+            "future_education",
+            "higher_education",
+            "long_term",
+            "career_goal",
+            "career_",
+            "name",
+            "user_name",
+            "full_name",
+            "location",
+            "country",
+            "university",
+            "universities",
+            "college",
+            "affordability",
+            "user_likes",
+            "general_preference",
+        )
+
+        profile = []
+        seen = set()
+
+        for item in memories:
+            if not isinstance(item, dict):
+                continue
+
+            key = str(item.get("key") or "").strip()
+            value = str(item.get("value") or "").strip()
+
+            if not key or not value:
+                continue
+
+            normalized_key = key.lower().replace("-", "_").replace(" ", "_")
+
+            if normalized_key in excluded_exact:
+                continue
+
+            if not any(
+                normalized_key == prefix.rstrip("_")
+                or normalized_key.startswith(prefix)
+                for prefix in allowed_prefixes
+            ):
+                continue
+
+            dedupe_key = normalized_key
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            profile.append({
+                "key": key,
+                "value": value,
+            })
+
+        return profile
+
+    def _build_profile_memory_response(
+        self,
+        query: str,
+        memories: Any,
+    ) -> Optional[str]:
+        """
+        Produce a deterministic, user-facing memory answer.
+
+        This prevents raw MongoDB records or arbitrary retrieved
+        conversations from reaching the personality/final LLM layer.
+        """
+        profile = self._profile_memory_items(memories)
+        q = str(query or "").strip().lower()
+
+        # Specific favorite/preference recall.
+        specific_match = re.search(
+            r"\bwhat(?:'s| is)|whats|do you remember|can you remember|"
+            r"tell me|recall|remember",
+            q,
+        )
+
+        subject_match = re.search(
+            r"(?:what(?:'s| is)|whats)\s+my\s+(.+?)(?:\?|$)",
+            q,
+        )
+
+        if subject_match:
+            subject = subject_match.group(1).strip()
+            subject = re.sub(
+                r"\b(?:favorite|favourite|preferred|preference)\b",
+                "",
+                subject,
+            )
+            subject = re.sub(r"\s+", " ", subject).strip()
+
+            subject_words = {
+                w for w in re.sub(r"[^a-z0-9\s]", " ", subject).split()
+                if w not in {"the", "a", "an", "my"}
+            }
+
+            candidates = []
+            for item in profile:
+                key_words = set(
+                    re.sub(
+                        r"[^a-z0-9\s]",
+                        " ",
+                        item["key"].lower().replace("_", " "),
+                    ).split()
+                )
+                if subject_words and (
+                    subject_words <= key_words
+                    or bool(subject_words & key_words)
+                ):
+                    candidates.append(item)
+
+            if candidates:
+                item = candidates[0]
+                readable = (
+                    item["key"]
+                    .replace("favorite_", "favorite ")
+                    .replace("favourite_", "favorite ")
+                    .replace("preferred_", "preferred ")
+                    .replace("_", " ")
+                    .strip()
+                )
+                return f"Your {readable} is {item['value']}, Sir."
+
+            if subject:
+                return f"I don't remember your {subject} yet, Sir."
+
+        broad = self._looks_like_memory_recall_request(q)
+        if broad:
+            if not profile:
+                return "I don't have any durable personal details about you in memory yet, Sir."
+
+            lines = []
+            for item in profile:
+                readable_key = (
+                    item["key"]
+                    .replace("user_likes", "likes")
+                    .replace("favorite_", "favorite ")
+                    .replace("favourite_", "favorite ")
+                    .replace("preferred_", "preferred ")
+                    .replace("_", " ")
+                    .strip()
+                )
+                lines.append(f"• {readable_key.capitalize()}: {item['value']}")
+
+            return (
+                "Certainly, Sir. Here's what I remember about you:\n\n"
+                + "\n".join(lines)
+            )
+
+        return None
+
+    def _memory_first_candidate(self, query: str) -> bool:
+        """Return True when personal memory should be checked before LLMs."""
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+
+        # Explicit personal-memory questions always get the cheapest
+        # deterministic lookup first, including protected identifiers.
+        if self._looks_like_sensitive_memory_recall_request(q):
+            return True
+        if self._looks_like_memory_recall_request(q):
+            return True
+
+        if self.memory_engine and hasattr(self.memory_engine, "should_use_memory"):
+            try:
+                return bool(self.memory_engine.should_use_memory(q))
+            except Exception:
+                pass
+
+        return bool(re.search(
+            r"\\b(?:my|mine|me|i|remember|recall|about me)\\b",
+            q,
+            re.IGNORECASE,
+        ))
+
+    def _build_memory_first_answer(self, query: str, memories: Any) -> Optional[str]:
+        """Build a deterministic answer from an already retrieved memory."""
+        safe = self._safe_memory_items(memories)
+        if not safe:
+            return None
+
+        # Existing profile formatter handles broad and favorite-style recall.
+        profile_answer = self._build_profile_memory_response(query, safe)
+        if profile_answer and not profile_answer.lower().startswith("i don't remember"):
+            return profile_answer
+
+        q_words = {
+            w for w in re.sub(r"[^a-z0-9_ ]", " ", str(query).lower()).split()
+            if w not in {"what", "whats", "what's", "is", "are", "my", "me", "i", "do", "you", "know", "remember", "tell", "about", "the", "a", "an", "please"}
+        }
+
+        best = None
+        best_score = 0
+        for item in safe:
+            key = str(item.get("key", "")).lower().replace("_", " ")
+            value = str(item.get("value", "")).strip()
+            if not key or not value:
+                continue
+            key_words = set(key.split())
+            score = len(q_words & key_words)
+            if score > best_score:
+                best_score = score
+                best = item
+
+        if best and best_score > 0:
+            readable = str(best.get("key", "")).replace("_", " ").strip()
+            return f"Your {readable} is {best.get('value')}, Sir."
+
+        return None
+
+    def _looks_like_capability_request(self, query: str) -> bool:
+        """Detect common questions asking what ARIA can do."""
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+        phrases = (
+            "what can you do",
+            "what can you do?",
+            "what are you capable of",
+            "what are you capable of?",
+            "what things can you do",
+            "what things can you do?",
+            "what are things you can do",
+            "what are things you can do?",
+            "what do you do",
+            "what do you do?",
+            "what can aria do",
+            "what can aria do?",
+            "what are your capabilities",
+            "what are your capabilities?",
+            "what features do you have",
+            "what features do you have?",
+        )
+        return q in phrases
+
+    def _looks_like_non_durable_preference_statement(self, query: str) -> bool:
+        """Ordinary likes/favorites are conversational unless explicitly saved."""
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+        if re.search(r"\b(?:remember|memorize|save|store|keep|don't forget|do not forget)\b", q):
+            return False
+        return bool(re.match(
+            r"^\s*(?:i|i'm|i am|my)\s+(?:like|love|prefer|favorite|favourite)\b", q
+        ))
+
+    def _looks_like_memory_recall_request(self, query: str) -> bool:
+        q = str(query or "").strip().lower()
+
+        recall_phrases = (
+            "what do you remember about me",
+            "what do you remember about me?",
+            "what do you know about me",
+            "what do you know about me?",
+            "what can you remember about me",
+            "what can you remember about me?",
+            "tell me what you remember about me",
+            "tell me what you know about me",
+            "show me what you remember about me",
+            "show me what you know about me",
+            "list what you remember about me",
+            "list what you know about me",
+            "what have you remembered about me",
+            "what have you learned about me",
+            "what memories do you have about me",
+            "show my memories",
+            "list my memories",
+        )
+
+        if any(
+            phrase in q
+            for phrase in recall_phrases
+        ):
+            return True
+
+        # Specific personal-property questions such as:
+        # "What is my favorite color?"
+        # "What's my preferred language?"
+        # "Do you remember my favorite food?"
+        if re.search(
+            r"^\s*(?:what(?:'s| is)|whats)\s+my\s+"
+            r"(?:favorite|favourite|preferred|preference)\b",
+            q,
+        ):
+            return True
+
+        if re.search(
+            r"^\s*(?:do you|can you)\s+remember\s+my\s+",
+            q,
+        ):
+            return True
+
+        return False
+
+    def _looks_like_sensitive_memory_recall_request(self, query: str) -> bool:
+        """
+        Detect requests for highly sensitive stored identifiers/secrets.
+
+        These requests must be handled by a dedicated secure-memory/vault
+        path rather than being injected into an LLM prompt.
+        """
+        q = str(query or "").strip().lower()
+
+        identifier_terms = (
+            "aadhaar",
+            "aadhar",
+            "pan number",
+            "passport number",
+            "driving licence number",
+            "driving license number",
+            "bank account number",
+        )
+        recall_verbs = (
+            "give me",
+            "tell me",
+            "show me",
+            "what is my",
+            "what's my",
+            "whats my",
+            "do you know my",
+            "find my",
+            "get my",
+        )
+
+        return (
+            any(term in q for term in identifier_terms)
+            and any(verb in q for verb in recall_verbs)
+        )
+
+    def _looks_like_name_recall_request(self, query: str) -> bool:
+        q = str(query or "").strip().lower()
+
+        return q in {
+            "what's my name",
+            "what is my name",
+            "whats my name",
+            "tell me my name",
+            "do you know my name",
+            "remember my name",
+        }
+
+    def _looks_like_compound_request(self, query: str) -> bool:
+        """Detect requests containing multiple explicit subtasks."""
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+
+        # Explicit sequential connectors are the strongest signal.
+        connector_count = len(re.findall(
+            r"\\b(?:then|also|and then|after that|next)\\b",
+            text,
+        ))
+
+        # Multiple imperative/question clauses commonly indicate a
+        # compound request. Keep this conservative to avoid changing
+        # ordinary single-task coding requests.
+        action_phrases = (
+            "remember that",
+            "tell me what",
+            "what do you know",
+            "make a plan",
+            "make a short plan",
+            "explain what",
+            "explain how",
+            "and explain",
+            "and tell",
+        )
+
+        matched_actions = sum(
+            1 for phrase in action_phrases if phrase in text
+        )
+
+        return connector_count >= 1 and matched_actions >= 2
+
+    @staticmethod
+    def _set_decision_value(decision: Any, key: str, value: Any) -> None:
+        """Set a decision field safely for dict- or object-style decisions."""
+        if decision is None:
+            return
+        if isinstance(decision, dict):
+            decision[key] = value
+            return
+        try:
+            setattr(decision, key, value)
+        except Exception:
+            pass
+
+    def _apply_deterministic_capability_overrides(
+        self,
+        query: str,
+        decision: Any,
+    ) -> Any:
+        """
+        Apply high-confidence capability routing after the LLM/controller
+        decision. Dynamic/current-information requests must never depend on
+        the classifier remembering to set use_web=True.
+
+        This is deliberately narrow: it only overrides capabilities when
+        the user's wording is an unambiguous match for an existing local
+        capability.
+        """
+        if decision is None:
+            return decision
+
+        # Arithmetic requests must route to the deterministic calculator even
+        # when a general chat classifier prefers the chat route.
+        math_text = str(query or "").strip()
+        has_math_expression = bool(re.search(
+            r"\d\s*(?:[+*/%×÷^]|-\s*\d)\s*\d", math_text
+        ))
+        has_math_intent = bool(re.search(
+            r"\b(?:calculate|compute|solve|evaluate|work\s+out)\b",
+            math_text, re.IGNORECASE,
+        )) and bool(re.search(r"\d", math_text))
+        if has_math_expression or has_math_intent:
+            self._set_decision_value(decision, "intent", "calculation")
+            self._set_decision_value(decision, "route", "tool")
+            self._set_decision_value(decision, "action", "tool")
+            self._set_decision_value(decision, "use_tools", True)
+            self._set_decision_value(decision, "requires_tool", True)
+            self._set_decision_value(decision, "requires_tools", True)
+            required = list(self._decision_value(decision, "required_tools", []) or [])
+            if not any(str(item).strip().lower() in {"calculator", "calc", "math"} for item in required):
+                required.append("calculator")
+            self._set_decision_value(decision, "required_tools", required)
+            logger.info("[DeterministicRouting] Arithmetic request forced to calculator.")
+
+        # Current/latest/news requests -> live web search.
+        if self._looks_like_web_search_request(query):
+            self._set_decision_value(decision, "intent", "web_search")
+            self._set_decision_value(decision, "route", "web_search")
+            self._set_decision_value(decision, "action", "web_search")
+            self._set_decision_value(decision, "requires_web", True)
+            self._set_decision_value(decision, "requires_tool", True)
+            self._set_decision_value(decision, "requires_tools", True)
+            self._set_decision_value(decision, "use_web", True)
+            self._set_decision_value(decision, "use_tools", True)
+
+            existing = list(
+                self._decision_value(decision, "required_tools", [])
+                or []
+            )
+            if not any(
+                str(tool).strip().lower()
+                in {"web", "web_search", "internet", "online_search", "search"}
+                for tool in existing
+            ):
+                existing.append("web")
+            self._set_decision_value(decision, "required_tools", existing)
+
+            logger.info(
+                "[DeterministicRouting] Current-information request forced to web search."
+            )
+
+        return decision
+
+    def _looks_like_web_search_request(
+        self,
+        query: str,
+    ) -> bool:
+        q = str(query or "").strip().lower()
+
+        explicit_search_phrases = (
+            "search the web",
+            "search web",
+            "search online",
+            "search the internet",
+            "browse the web",
+            "browse online",
+            "look up online",
+            "look it up online",
+            "find online",
+            "look up on the internet",
+        )
+
+        if any(
+            phrase in q
+            for phrase in explicit_search_phrases
+        ):
+            return True
+
+        freshness_terms = (
+            "latest",
+            "current",
+            "recent",
+            "today",
+            "today's",
+            "right now",
+            "newest",
+            "breaking",
+        )
+
+        information_terms = (
+            "news",
+            "update",
+            "updates",
+            "development",
+            "developments",
+            "information",
+            "announcement",
+            "announcements",
+            "happening",
+        )
+
+        has_freshness = any(
+            term in q
+            for term in freshness_terms
+        )
+
+        has_information = any(
+            term in q
+            for term in information_terms
+        )
+
+        return has_freshness and has_information
+
+    def _extract_entities(self, text: str):
+        COMMON_TOPICS = {
+            "python",
+            "java",
+            "javascript",
+            "c++",
+            "linux",
+            "docker",
+            "mongodb",
+            "postgres",
+            "redis",
+            "fastapi",
+            "django",
+            "flask",
+        }
+
+        entities = []
+
+        for word in text.lower().split():
+            cleaned = word.strip(".,?!")
+            if cleaned in COMMON_TOPICS:
+                entities.append(cleaned.title())
+
+        for match in re.findall(r"\b[A-Z][a-zA-Z0-9_]+\b", text):
+            if match not in entities:
+                entities.append(match)
+
+        return entities
+
+    def _build_confirmation_message(
+        self,
+        action_name: Optional[str] = None,
+    ) -> str:
+        if action_name:
+            return (
+                f"The action '{action_name}' requires your "
+                "confirmation. Shall I continue?"
+            )
+
+        return (
+            "This action requires your confirmation. "
+            "Shall I continue?"
+        )
+
+    # =========================================================
+    # WORKFLOW CONFIRMATION / RESUMPTION
+    # =========================================================
+
+    async def _handle_pending_workflow(
+        self,
+        *,
+        query: str,
+        session_id: str,
+        base_context: Optional[Dict[str, Any]],
+        state: Dict[str, Any],
+    ) -> Optional[SystemResponse]:
+        """
+        Handle confirmation for a suspended multi-step workflow.
+
+        Returns None when the current message is not resolving
+        the pending workflow confirmation.
+        """
+
+        if not self.state_manager:
+            return None
+
+        pending_plan = (
+            self.state_manager.get_pending_workflow(
+                session_id
+            )
+        )
+
+        # ---------------------------------------------------------
+        # PHASE 4 — DURABLE WORKFLOW RECOVERY
+        # ---------------------------------------------------------
+        # StateManager is runtime-only. If ARIA restarted, recover
+        # the original query from WorldModel and regenerate the plan.
+        if pending_plan is None and self.world_model:
+            try:
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    durable_active = bool(
+                        workflow_state.get("active")
+                    )
+                    durable_paused = bool(
+                        workflow_state.get("paused")
+                    )
+                    durable_confirmation = bool(
+                        workflow_state.get(
+                            "awaiting_confirmation"
+                        )
+                    )
+
+                    if (
+                        durable_active
+                        and durable_paused
+                        and durable_confirmation
+                    ):
+                        execution = workflow_state.get(
+                            "execution",
+                            {},
+                        )
+
+                        if not isinstance(execution, dict):
+                            execution = {}
+
+                        recovery_query = str(
+                            execution.get("query")
+                            or workflow_state.get("goal")
+                            or ""
+                        ).strip()
+
+                        durable_task_id = workflow_state.get(
+                            "pending_task_id"
+                        )
+
+                        if recovery_query:
+                            logger.info(
+                                "[CognitiveCore] Recovering durable "
+                                "workflow after restart: query=%r task=%s",
+                                recovery_query,
+                                durable_task_id,
+                            )
+
+                            recovery_context = dict(
+                                base_context or {}
+                            )
+
+                            recovery_context.update({
+                                "session_id": session_id,
+                                "user_id": recovery_context.get(
+                                    "user_id",
+                                    session_id,
+                                ),
+                                "state": state,
+                                "workflow_recovery": True,
+                                "durable_workflow": workflow_state,
+                            })
+
+                            if self.planner and hasattr(
+                                self.planner,
+                                "create_plan",
+                            ):
+                                regenerated_plan = (
+                                    await self.planner.create_plan(
+                                        recovery_query,
+                                        recovery_context,
+                                    )
+                                )
+
+                                if regenerated_plan:
+                                    pending_plan = regenerated_plan
+
+                                    # ---------------------------------------------------------
+                                    # PHASE 4 — RESOLVE PENDING TASK AFTER RESTART
+                                    # ---------------------------------------------------------
+                                    # Planner task IDs may change when a plan is regenerated.
+                                    # Prefer the durable task ID when it still exists; otherwise
+                                    # identify the equivalent confirmation task from the new plan.
+                                    resolved_task_id = durable_task_id
+
+                                    plan_tasks = list(
+                                        getattr(regenerated_plan, "tasks", [])
+                                        or []
+                                    )
+
+                                    plan_task_ids = {
+                                        str(getattr(task, "id", ""))
+                                        for task in plan_tasks
+                                        if getattr(task, "id", None)
+                                    }
+
+                                    if (
+                                        not resolved_task_id
+                                        or str(resolved_task_id) not in plan_task_ids
+                                    ):
+                                        resolved_task_id = None
+
+                                        for task in plan_tasks:
+                                            task_requires_confirmation = bool(
+                                                getattr(
+                                                    task,
+                                                    "requires_confirmation",
+                                                    False,
+                                                )
+                                            )
+
+                                            task_is_awaiting_confirmation = (
+                                                getattr(
+                                                    task,
+                                                    "status",
+                                                    None,
+                                                )
+                                                == "awaiting_confirmation"
+                                            )
+
+                                            if (
+                                                task_requires_confirmation
+                                                or task_is_awaiting_confirmation
+                                            ):
+                                                resolved_task_id = getattr(
+                                                    task,
+                                                    "id",
+                                                    None,
+                                                )
+                                                break
+
+                                    if not resolved_task_id:
+                                        logger.error(
+                                            "[CognitiveCore] Could not resolve the "
+                                            "pending confirmation task after restart."
+                                        )
+                                    else:
+                                        pending_task_id = resolved_task_id
+
+                                        self.state_manager.set_pending_workflow(
+                                            session_id=session_id,
+                                            plan=regenerated_plan,
+                                            task_id=resolved_task_id,
+                                            task_outputs=(
+                                                workflow_state.get(
+                                                    "task_outputs",
+                                                    {},
+                                                )
+                                                or {}
+                                            ),
+                                            completed_tasks=(
+                                                workflow_state.get(
+                                                    "completed_tasks",
+                                                    [],
+                                                )
+                                                or []
+                                            ),
+                                            failed_tasks=(
+                                                workflow_state.get(
+                                                    "failed_tasks",
+                                                    [],
+                                                )
+                                                or []
+                                            ),
+                                            skipped_tasks=(
+                                                workflow_state.get(
+                                                    "skipped_tasks",
+                                                    [],
+                                                )
+                                                or []
+                                            ),
+                                        )
+
+                                        logger.info(
+                                            "[CognitiveCore] Durable workflow confirmation "
+                                            "task resolved: %s",
+                                            resolved_task_id,
+                                        )
+
+                                    logger.info(
+                                        "[CognitiveCore] Durable workflow "
+                                        "plan regenerated successfully."
+                                    )
+
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] Durable workflow recovery failed."
+                )
+
+        has_pending_workflow = bool(pending_plan)
+        is_paused = bool(state.get("workflow_paused"))
+        awaiting_confirmation = bool(
+            state.get("pending_workflow_confirmation")
+        )
+
+        if not awaiting_confirmation:
+            if not (has_pending_workflow and is_paused):
+                return None
+            logger.warning(
+                "[CognitiveCore] Recovering pending workflow "
+                "confirmation from paused workflow state."
+            )
+
+        pending_task_id = (
+            self.state_manager.get_pending_workflow_task_id(
+                session_id
+            )
+        )
+
+        if pending_plan is None or not pending_task_id:
+            logger.warning(
+                "[CognitiveCore] Invalid pending workflow state."
+            )
+
+            self.state_manager.clear_workflow(
+                session_id
+            )
+
+            return SystemResponse(
+                success=False,
+                confidence=1.0,
+                source="workflow_confirmation",
+                error=(
+                    "The pending workflow is no longer available."
+                ),
+            )
+
+        if self._is_reject(query):
+
+            logger.info(
+                "[CognitiveCore] User cancelled workflow "
+                "at task %s.",
+                pending_task_id,
+            )
+
+            self.state_manager.cancel_workflow(
+                session_id
+            )
+
+            return SystemResponse(
+                success=True,
+                confidence=1.0,
+                source="workflow_confirmation",
+                data={
+                    "message": "Workflow cancelled."
+                },
+            )
+
+        if not self._is_confirm(query):
+
+            return SystemResponse(
+                success=True,
+                confidence=1.0,
+                source="workflow_confirmation",
+                data={
+                    "confirmation_required": True,
+                    "message": (
+                        "The current workflow is waiting for "
+                        "your confirmation. Shall I continue?"
+                    ),
+                },
+            )
+
+        logger.info(
+            "[CognitiveCore] Resuming workflow at task %s.",
+            pending_task_id,
+        )
+
+        resume_state = (
+            self.state_manager.get_workflow_progress(
+                session_id
+            )
+        )
+
+        self.state_manager.mark_workflow_resumed(
+            session_id
+        )
+
+        ctx = dict(
+            base_context or {}
+        )
+
+        ctx["state"] = (
+            self.state_manager.get_state(
+                session_id
+            )
+        )
+
+        try:
+
+            raw_exec_result = (
+                await self.executor.execute_plan(
+                    pending_plan,
+                    ctx,
+                    resume_state=resume_state,
+                    confirmed_task_id=pending_task_id,
+                )
+            )
+            exec_result = self._normalize_execution_result(raw_exec_result)
+
+        except Exception as exc:
+
+            logger.exception(
+                "[CognitiveCore] Workflow resume failed."
+            )
+
+            self.state_manager.mark_workflow_failed(
+                session_id,
+                error=str(exc),
+            )
+
+            return SystemResponse(
+                success=False,
+                confidence=1.0,
+                source="planner_executor",
+                error=str(exc),
+            )
+
+        return await self._process_workflow_result(
+            session_id=session_id,
+            plan=pending_plan,
+            exec_result=exec_result,
+        )
+
+    # =========================================================
+    # WORKFLOW RESULT PROCESSING
+    # =========================================================
+
+    async def _process_workflow_result(
+        self,
+        *,
+        session_id: str,
+        plan,
+        exec_result: Dict[str, Any],
+    ) -> SystemResponse:
+        """
+        Convert Executor workflow state into SystemResponse and
+        persist pause/resume information when necessary.
+        """
+
+        if not isinstance(
+            exec_result,
+            dict,
+        ):
+            if self.state_manager:
+                self.state_manager.mark_workflow_failed(
+                    session_id,
+                    error="Executor returned an invalid result.",
+                )
+
+            return SystemResponse(
+                success=False,
+                confidence=getattr(
+                    plan,
+                    "confidence",
+                    0.0,
+                ),
+                source="planner_executor",
+                error="Executor returned an invalid result.",
+            )
+
+        task_outputs = (
+            exec_result.get(
+                "task_outputs",
+                {},
+            )
+            or {}
+        )
+
+        workflow_results = (
+            exec_result.get(
+                "workflow_results",
+                {},
+            )
+            or {}
+        )
+
+        completed = (
+            exec_result.get(
+                "completed",
+                [],
+            )
+            or []
+        )
+
+        failed = (
+            exec_result.get(
+                "failed",
+                [],
+            )
+            or []
+        )
+
+        skipped = (
+            exec_result.get(
+                "skipped",
+                [],
+            )
+            or []
+        )
+
+        paused = bool(
+            exec_result.get(
+                "paused",
+                False,
+            )
+        )
+
+        requires_confirmation = bool(
+            exec_result.get(
+                "requires_confirmation",
+                False,
+            )
+        )
+
+        pending_task_id = (
+            exec_result.get("pending_task_id")
+        )
+        pending_action_name = (
+            exec_result.get("pending_action_name")
+        )
+        pending_action_params = (
+            exec_result.get(
+                "pending_action_params",
+                {},
+            )
+            or {}
+        )
+
+        logger.info(
+            "[CognitiveCore] Workflow result received: "
+            "paused=%s confirmation=%s "
+            "task_id=%s action=%s params=%s",
+            paused,
+            requires_confirmation,
+            pending_task_id,
+            pending_action_name,
+            pending_action_params,
+        )
+
+        if paused and requires_confirmation:
+
+            if not self.state_manager:
+
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="workflow_confirmation",
+                    error=(
+                        "State manager is unavailable; "
+                        "workflow cannot be suspended safely."
+                    ),
+                )
+
+            if not pending_task_id and hasattr(plan, "tasks"):
+
+                for task in plan.tasks:
+
+                    task_requires_confirmation = bool(
+                        getattr(
+                            task,
+                            "requires_confirmation",
+                            False,
+                        )
+                    )
+
+                    task_is_awaiting_confirmation = (
+                        getattr(
+                            task,
+                            "status",
+                            None,
+                        )
+                        == "awaiting_confirmation"
+                    )
+
+                    if (
+                        task_requires_confirmation
+                        or task_is_awaiting_confirmation
+                    ):
+
+                        pending_task_id = task.id
+
+                        pending_action_name = (
+                            pending_action_name
+                            or getattr(
+                                task,
+                                "action_name",
+                                None,
+                            )
+                        )
+
+                        if not pending_action_params:
+
+                            pending_action_params = dict(
+                                getattr(
+                                    task,
+                                    "params",
+                                    {},
+                                )
+                                or {}
+                            )
+
+                        logger.info(
+                            "[CognitiveCore] Identified "
+                            "confirmation task from plan: "
+                            "task_id=%s action=%s",
+                            pending_task_id,
+                            pending_action_name,
+                        )
+
+                        break
+
+            if not pending_task_id:
+
+                logger.error(
+                    "[CognitiveCore] Workflow requested confirmation "
+                    "but no pending task ID could be determined."
+                )
+
+                if self.state_manager:
+
+                    self.state_manager.mark_workflow_failed(
+                        session_id,
+                        error=(
+                            "Workflow confirmation state was created "
+                            "without a task ID."
+                        ),
+                    )
+
+                return SystemResponse(
+                    success=False,
+                    confidence=getattr(
+                        plan,
+                        "confidence",
+                        0.0,
+                    ),
+                    source="workflow_confirmation",
+                    error=(
+                        "Unable to determine which workflow task "
+                        "requires confirmation."
+                    ),
+                )
+
+            logger.info(
+                "[CognitiveCore] Persisting suspended workflow: "
+                "task_id=%s action=%s params=%s",
+                pending_task_id,
+                pending_action_name,
+                pending_action_params,
+            )
+
+            if hasattr(self.state_manager, "set_pending_workflow"):
+                try:
+
+                    self.state_manager.set_pending_workflow(
+                        session_id=session_id,
+                        plan=plan,
+                        task_id=pending_task_id,
+                        task_outputs=task_outputs,
+                        completed_tasks=completed,
+                        failed_tasks=failed,
+                        skipped_tasks=skipped,
+                    )
+
+                    logger.info(
+                        "[CognitiveCore] Pending workflow persisted: "
+                        "task_id=%s confirmation=%s paused=%s",
+                        pending_task_id,
+                        True,
+                        True,
+                    )
+
+                except TypeError:
+                    state = self.state_manager.get_state(
+                        session_id
+                    ) or {}
+
+                    state["workflow_active"] = True
+                    state["workflow_paused"] = True
+                    state["pending_workflow_confirmation"] = True
+                    state["pending_workflow"] = plan
+                    state["pending_workflow_task_id"] = pending_task_id
+                    state["workflow_task_outputs"] = (
+                        task_outputs or {}
+                    )
+                    state["workflow_completed_tasks"] = (
+                        completed or []
+                    )
+                    state["workflow_failed_tasks"] = (
+                        failed or []
+                    )
+                    state["workflow_skipped_tasks"] = (
+                        skipped or []
+                    )
+
+                    self.state_manager.update_state(
+                        session_id,
+                        **state,
+                    )
+
+                    logger.info(
+                        "[CognitiveCore] Pending workflow state "
+                        "persisted through fallback: "
+                        "task_id=%s",
+                        pending_task_id,
+                    )
+
+            # ---------------------------------------------------------
+            # PHASE 4 — DURABLE SUSPENDED WORKFLOW
+            # ---------------------------------------------------------
+            if self.world_model:
+                try:
+                    workflow_state = (
+                        self.world_model.get_workflow_state()
+                    )
+
+                    if not isinstance(workflow_state, dict):
+                        workflow_state = {}
+
+                    workflow_state.update({
+                        "active": True,
+                        "paused": True,
+                        "awaiting_confirmation": True,
+                        "pending_task_id": pending_task_id,
+                        "pending_action_name": pending_action_name,
+                        "pending_action_params": (
+                            pending_action_params or {}
+                        ),
+                        "task_outputs": task_outputs or {},
+                        "completed_tasks": completed or [],
+                        "failed_tasks": failed or [],
+                        "skipped_tasks": skipped or [],
+                        "goal": str(
+                            getattr(
+                                plan,
+                                "goal",
+                                "",
+                            )
+                            or getattr(
+                                plan,
+                                "objective",
+                                "",
+                            )
+                        ),
+                    })
+
+                    execution = workflow_state.get(
+                        "execution"
+                    )
+
+                    if not isinstance(execution, dict):
+                        execution = {}
+
+                    execution.update({
+                        "status": "awaiting_confirmation",
+                        "updated_at": time.time(),
+                    })
+
+                    workflow_state["execution"] = execution
+
+                    await self.world_model.save()
+
+                    logger.info(
+                        "[CognitiveCore] Durable suspended workflow "
+                        "saved: task_id=%s",
+                        pending_task_id,
+                    )
+
+                except Exception as exc:
+                    logger.warning(
+                        "[CognitiveCore] Durable suspended workflow "
+                        "persistence skipped: %s",
+                        exc,
+                    )
+
+            return SystemResponse(
+                success=True,
+                confidence=getattr(
+                    plan,
+                    "confidence",
+                    0.95,
+                ),
+                source="workflow_confirmation",
+                data={
+                    "confirmation_required": True,
+                    "workflow_paused": True,
+                    "task_id": pending_task_id,
+                    "action_name": pending_action_name,
+                    "message": (
+                        self._build_confirmation_message(
+                            pending_action_name
+                        )
+                    ),
+                },
+            )
+
+        success = bool(
+            exec_result.get(
+                "success",
+                False,
+            )
+        )
+
+        if not success:
+
+            error = (
+                "Orchestration tasks encountered failures."
+            )
+
+            if failed:
+                error = (
+                    "Workflow failed while executing task(s): "
+                    + ", ".join(
+                        str(item)
+                        for item in failed
+                    )
+                )
+
+            elif skipped:
+                error = (
+                    "Workflow could not complete because "
+                    "task(s) were skipped: "
+                    + ", ".join(
+                        str(item)
+                        for item in skipped
+                    )
+                )
+
+            if self.state_manager:
+
+                self.state_manager.mark_workflow_failed(
+                    session_id,
+                    error=error,
+                )
+
+            logger.warning(
+                "[CognitiveCore] Workflow failed. "
+                "failed=%s skipped=%s",
+                failed,
+                skipped,
+            )
+
+            return SystemResponse(
+                success=False,
+                confidence=getattr(
+                    plan,
+                    "confidence",
+                    0.5,
+                ),
+                source="planner_executor",
+                data={
+                    "task_outputs": task_outputs,
+                    "workflow_results": workflow_results,
+                },
+                error=error,
+            )
+
+        if self.state_manager:
+
+            self.state_manager.mark_workflow_completed(
+                session_id
+            )
+
+            self.state_manager.update_state(
+                session_id,
+                last_action="planner_executor",
+                last_success=True,
+            )
+
+        # ---------------------------------------------------------
+        # PHASE 4 — CLEAR DURABLE WORKFLOW
+        # ---------------------------------------------------------
+        if self.world_model:
+            try:
+                workflow_state = (
+                    self.world_model.get_workflow_state()
+                )
+
+                if isinstance(workflow_state, dict):
+                    workflow_state.update({
+                        "active": False,
+                        "paused": False,
+                        "awaiting_confirmation": False,
+                        "pending_task_id": None,
+                        "pending_action_name": None,
+                        "pending_action_params": {},
+                        "task_outputs": task_outputs,
+                        "completed_tasks": completed,
+                        "failed_tasks": failed,
+                        "skipped_tasks": skipped,
+                        "completed_at": time.time(),
+                    })
+
+                    await self.world_model.save()
+
+                    logger.info(
+                        "[CognitiveCore] Durable workflow marked "
+                        "completed."
+                    )
+
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Durable workflow completion "
+                    "persistence skipped: %s",
+                    exc,
+                )
+
+        # ---------------------------------------------------------
+        # PHASE 4 — ADVANCE ACTIVE AUTONOMOUS GOAL
+        # ---------------------------------------------------------
+        if self.goal_manager:
+            try:
+                active_goal = self.goal_manager.current_goal()
+
+                if active_goal:
+                    # Only advance the autonomous goal when this workflow
+                    # explicitly belongs to that goal.
+                    plan_goal = str(
+                        getattr(plan, "goal", "")
+                        or getattr(plan, "objective", "")
+                        or ""
+                    ).strip()
+
+                    goal_context = getattr(
+                        plan,
+                        "metadata",
+                        {},
+                    ) or {}
+
+                    autonomous_goal_id = str(
+                        goal_context.get(
+                            "autonomous_goal_id",
+                            ""
+                        )
+                        or ""
+                    )
+
+                    workflow_belongs_to_goal = (
+                        autonomous_goal_id == active_goal.id
+                        if autonomous_goal_id
+                        else (
+                            plan_goal.lower()
+                            == active_goal.title.lower()
+                        )
+                    )
+
+                    if workflow_belongs_to_goal:
+                        next_subgoal = self.goal_manager.next_subgoal(
+                            active_goal
+                        )
+
+                        if next_subgoal:
+                            completed_subgoal = (
+                                self.goal_manager.complete_subgoal(
+                                    active_goal,
+                                    next_subgoal.title,
+                                )
+                            )
+
+                            if completed_subgoal:
+                                logger.info(
+                                    "[CognitiveCore] Goal subgoal completed: "
+                                    "%s | goal=%s | progress=%.1f%%",
+                                    completed_subgoal.title,
+                                    active_goal.title,
+                                    active_goal.progress,
+                                )
+
+                        if active_goal.status == "completed":
+                            logger.info(
+                                "[CognitiveCore] Autonomous goal completed: %s",
+                                active_goal.title,
+                            )
+
+                    else:
+                        logger.debug(
+                            "[CognitiveCore] Workflow does not belong to "
+                            "active autonomous goal; goal not advanced."
+                        )
+
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] GoalManager workflow advancement failed."
+                )
+
+        logger.info(
+            "[CognitiveCore] Workflow completed successfully."
+        )
+
+        final_message = None
+
+        for task in reversed(plan.tasks):
+
+            output = task_outputs.get(task.id)
+
+            if not isinstance(output, dict):
+                continue
+
+            for field in (
+                "response",
+                "content",
+                "message",
+                "answer",
+                "summary",
+            ):
+
+                value = output.get(field)
+
+                if isinstance(value, str) and value.strip():
+                    final_message = value.strip()
+                    break
+
+            if final_message:
+                break
+
+        response_data = {
+            "task_outputs": task_outputs,
+            "workflow_results": workflow_results,
+        }
+
+        if final_message:
+            response_data["message"] = final_message
+            response_data["response"] = final_message
+
+        return SystemResponse(
+            success=True,
+            confidence=getattr(
+                plan,
+                "confidence",
+                0.95,
+            ),
+            source="planner_executor",
+            data=response_data,
+        )
+
+    # =========================================================
+    # MAIN PROCESS
+    # =========================================================
+
+    async def process(
+        self,
+        query: str,
+        session_id: str = "",
+        user_id: str = "",
+        base_context: Optional[Dict[str, Any]] = None,
+    ) -> SystemResponse:
+        """
+        Main cognitive orchestration pipeline guided by ReasoningEngine.
+        """
+
+        # Preserve the exact incoming user request before topic resolution
+        # mutates `query`; this is required for source-URL directives and logs.
+        incoming_user_query = str(query or "").strip()
+        context_for_followup = base_context if isinstance(base_context, dict) else {}
+        original_user_query = str(
+            context_for_followup.get("original_user_query") or incoming_user_query
+        ).strip()
+
+        # Runtime status is a request about this running process, not a factual
+        # knowledge query. Answer only from the live request context and clearly
+        # label what this process cannot verify.
+        status_query = original_user_query.casefold()
+        asks_runtime_status = (
+            ("runtime" in status_query or "system" in status_query or "aria" in status_query)
+            and any(term in status_query for term in (
+                "status", "health", "running", "started", "current state",
+                "what can you verify", "verify", "diagnostic",
+            ))
+        )
+        if asks_runtime_status:
+            app_state = context_for_followup.get("app_state")
+            registry = getattr(app_state, "registry", None)
+            services = getattr(registry, "_services", None)
+            if isinstance(services, dict):
+                service_names = sorted(str(name) for name in services.keys())
+                service_summary = ", ".join(service_names[:20]) or "none reported"
+                extra_count = max(0, len(service_names) - 20)
+                if extra_count:
+                    service_summary += f", and {extra_count} more"
+            else:
+                service_summary = "not exposed to the current request context"
+            answer = (
+                "Runtime status (verified from this request):\n"
+                "• The application is running enough to receive and process this Telegram request.\n"
+                f"• Registered services visible to this process: {service_summary}.\n"
+                "Not verified by this response: external database reachability, background-job success, "
+                "Render deployment health beyond this request, current resource usage, or whether every "
+                "integration is functioning. Those require dedicated health checks and logs."
+            )
+            return SystemResponse(
+                success=True,
+                confidence=1.0,
+                source="runtime_status",
+                data={"response": answer, "message": answer},
+                metadata={"verified_from_live_request": True},
+            )
+
+        # Handle a literal "Explain that/it/this" against the actual preceding
+        # calculation before routing can reinterpret words like "one sentence"
+        # as a new arithmetic expression. Prefer operands from the prior user
+        # turn and compute the answer ourselves instead of parsing assistant prose.
+        if re.match(r"^explain\s+(?:that|it|this)(?:\s+.*)?$", original_user_query, re.IGNORECASE):
+            history = context_for_followup.get("conversation_history", [])
+            previous = history[-1] if isinstance(history, list) and history else {}
+            if isinstance(previous, dict):
+                previous_user = str(previous.get("user", "")).strip()
+                calculation = re.search(
+                    r"(?:calculate|compute|solve|evaluate|work\s+out)?\s*(\d[\d,]*)\s*(?:×|\*|\bx\b)\s*(\d[\d,]*)",
+                    previous_user,
+                    re.IGNORECASE,
+                )
+                if calculation:
+                    left = int(calculation.group(1).replace(",", ""))
+                    right = int(calculation.group(2).replace(",", ""))
+                    product = left * right
+                    answer = (
+                        f"{left:,} × {right:,} means multiplying {left:,} by {right:,}; "
+                        f"the result is {product:,}."
+                    )
+                    return SystemResponse(
+                        success=True, confidence=1.0, source="deterministic_followup",
+                        data={"response": answer, "message": answer},
+                    )
+
+        # A request for an unspecified "obscure fact" is a prompt for a topic,
+        # not a factual query. Stop it before routing/retrieval can search for
+        # the instruction text itself or store it as knowledge.
+        try:
+            if (
+                self.knowledge_manager
+                and hasattr(self.knowledge_manager, "_is_unspecified_fact_request")
+                and self.knowledge_manager._is_unspecified_fact_request(incoming_user_query)
+            ):
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="clarification",
+                    data={
+                        "response": (
+                            "What topic would you like a verifiable fact about? For example, "
+                            "space, history, biology, technology, or an unusual animal. "
+                            "I'll look for relevant sources once you choose a subject."
+                        ),
+                        "message": (
+                            "What topic would you like a verifiable fact about? For example, "
+                            "space, history, biology, technology, or an unusual animal. "
+                            "I'll look for relevant sources once you choose a subject."
+                        ),
+                    },
+                )
+        except Exception:
+            logger.exception("[CognitiveCore] Unspecified-fact clarification guard failed.")
+
+        # Resolve calculation follow-ups deterministically. Reference resolution
+        # expands "Explain that" using the prior turn; don't send that expanded
+        # request back through tool routing, where it may be mistaken for a new
+        # operation and fail.
+        calculation_followup = re.match(
+            r"^Explain the result of the previous calculation \((.*?);\s*result:\s*(.*?)\)(?:\s+(.*))?\.?$",
+            incoming_user_query,
+            flags=re.IGNORECASE,
+        )
+        if calculation_followup:
+            prior_question = calculation_followup.group(1).strip()
+            prior_result_text = calculation_followup.group(2).strip().rstrip(".")
+            numeric_result = re.search(r"-?\d[\d,]*(?:\.\d+)?", prior_result_text)
+            prior_result = numeric_result.group(0) if numeric_result else prior_result_text
+            if numeric_result and "." not in prior_result:
+                try:
+                    prior_result = f"{int(prior_result.replace(',', '')):,}"
+                except ValueError:
+                    pass
+            expression = re.search(
+                r"(\d[\d,]*)\s*(?:×|\*|x|X)\s*(\d[\d,]*)",
+                prior_question,
+            )
+            if expression:
+                left = int(expression.group(1).replace(",", ""))
+                right = int(expression.group(2).replace(",", ""))
+                answer = (
+                    f"{left:,} × {right:,} means multiplying {left:,} by {right:,}; "
+                    f"the result is {prior_result}."
+                )
+                return SystemResponse(
+                    success=True, confidence=1.0, source="deterministic_followup",
+                    data={"response": answer, "message": answer},
+                )
+
+        execution_id = self._create_execution_id()
+
+        # Always initialize the unified decision before any early
+        # routing/exception path.  Some optional orchestration branches
+        # can reach the pipeline before controller/DecisionEngine merge;
+        # initializing here prevents an UnboundLocalError from masking
+        # the actual route handling.
+        decision = None
+
+        # Initialize the unified context before ANY early-routing branch.
+        # Memory recall/forget requests can return before the main context
+        # construction block below, so those branches must never reference
+        # an uninitialized local `context` variable.
+        context: Dict[str, Any] = dict(base_context or {})
+        context.update({
+            "query": query,
+            "session_id": session_id,
+            "user_id": user_id,
+            "execution_id": execution_id,
+            "memory_engine": self.memory_engine,
+            "memory_router": self.memory_router,
+            "memory_conversation_manager": self.memory_conversation_manager,
+            "conversation_manager": self.conversation_manager,
+            "state_manager": self.state_manager,
+            "tool_manager": self.tool_manager,
+            "planner": self.planner,
+            "executor": self.executor,
+            "reasoning": self.reasoning_engine,
+            "working_memory": self.working_memory,
+        })
+
+        # =============================================================
+        # HARD LOCAL-KNOWLEDGE GATE
+        # =============================================================
+        # Run ordinary educational/factual questions through the local
+        # KnowledgeManager before the controller, semantic-memory retrieval,
+        # tools, reasoning agents, or external LLM routing can override them.
+        # This also resolves short follow-ups such as "use local knowledge"
+        # to the active conversation topic.
+        try:
+            early_compound_memory_request = self._is_compound_memory_request(
+                query, context
+            )
+        except Exception:
+            early_compound_memory_request = False
+
+        explicit_local_knowledge_instruction = (
+            self._is_local_knowledge_instruction(incoming_user_query)
+        )
+        if (
+            (
+                explicit_local_knowledge_instruction
+                or self._looks_like_ordinary_knowledge_query(query)
+            )
+            and not early_compound_memory_request
+            and not self._looks_like_memory_recall_request(query)
+        ):
+            conversation_context = {}
+            if self.conversation_manager:
+                try:
+                    conversation_context = (
+                        self.conversation_manager.get_context(session_id) or {}
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[LocalKnowledge] Conversation topic lookup skipped: %s",
+                        exc,
+                    )
+
+            context["conversation"] = conversation_context
+            if self._is_local_knowledge_instruction(query):
+                resolved_local_query = (
+                    self._resolve_local_knowledge_topic(
+                        query, conversation_context, context
+                    )
+                    or ""
+                )
+                if not resolved_local_query:
+                    # Avoid searching for the instruction itself if no prior
+                    # topic is available.
+                    return SystemResponse(
+                        success=True,
+                        confidence=0.0,
+                        source="local_knowledge_miss",
+                        data={
+                            "response": (
+                                "I couldn't identify the topic of your follow-up. "
+                                "Please repeat the question you want answered from "
+                                "local knowledge."
+                            ),
+                            "message": (
+                                "I couldn't identify the topic of your follow-up. "
+                                "Please repeat the question you want answered from "
+                                "local knowledge."
+                            ),
+                        },
+                    )
+                query = resolved_local_query
+
+            context.update({
+                "query": query,
+                "original_query": incoming_user_query or str(query),
+                "resolved_query": query,
+                "references_resolved": True,
+                "local_knowledge_query": True,
+                "local_knowledge": True,
+                "require_source_url": (
+                    self._is_local_knowledge_instruction(incoming_user_query)
+                    or self._is_local_knowledge_instruction(query)
+                ),
+                "external_llm_synthesis": False,
+                "answer_owner": "knowledge_manager",
+            })
+            logger.info(
+                "[LocalKnowledge] Hard gate selected; bypassing controller, "
+                "memory-first, web tools, reasoning agents, and LLM routing. "
+                "Resolved query=%r",
+                query,
+            )
+            return await self.knowledge_first_pipeline(
+                session_id,
+                query,
+                context,
+                precomputed_reasoning=None,
+                completed_goal=None,
+            )
+
+        # =============================================================
+        # CANONICAL JARVIS REQUEST KERNEL + FINAL INTEGRATION GATE
+        # =============================================================
+        # This gate runs before memory-first, FastRouter, generic LLM,
+        # coding, planner, or agent fallbacks. It guarantees that delivery
+        # requests and explicit engineering requests cannot accidentally fall
+        # through to a conversational path.
+        try:
+            jarvis_request = self.jarvis_request_kernel.understand(
+                query,
+                request_id=execution_id,
+                metadata={
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "source": "cognitive_core",
+                },
+            )
+
+            context["jarvis_request"] = (
+                jarvis_request.to_dict()
+                if hasattr(jarvis_request, "to_dict")
+                else jarvis_request
+            )
+            context["jarvis_request_mode"] = getattr(
+                jarvis_request,
+                "mode",
+                None,
+            )
+            context["jarvis_request_requires_execution"] = bool(
+                getattr(
+                    jarvis_request,
+                    "requires_execution",
+                    False,
+                )
+            )
+            context["jarvis_request_read_only"] = bool(
+                getattr(
+                    jarvis_request,
+                    "read_only",
+                    False,
+                )
+            )
+
+            prepared = await self.jarvis_final_integration.prepare(
+                query,
+                execution_id=execution_id,
+                session_id=session_id,
+                user_id=user_id,
+                base_context=context,
+            )
+
+            if isinstance(prepared, dict):
+                context.update(prepared)
+                context["jarvis_final_preparation"] = {
+                    "success": True,
+                    "version": prepared.get("jarvis_final_integration"),
+                }
+
+            # Delivery and engineering routing happen BEFORE any generic
+            # memory/LLM path. This is the critical anti-fallback boundary.
+            engineering_route = await self.engineering_request_router.route(
+                query,
+                session_id=session_id,
+                user_id=user_id,
+                metadata={
+                    "execution_id": execution_id,
+                    "source": "cognitive_core_jarvis_kernel",
+                    "jarvis_request": context.get("jarvis_request"),
+                    "jarvis_context": context,
+                },
+            )
+
+            if engineering_route is not None:
+                context["canonical_engineering_route"] = engineering_route
+
+                if engineering_route.get("handled"):
+                    return self._engineering_route_response(
+                        engineering_route
+                    )
+
+                if engineering_route.get(
+                    "requires_readiness_gateway"
+                ):
+                    return self._engineering_route_response(
+                        engineering_route,
+                        default_message=(
+                            "This engineering request is read-only and was "
+                            "kept outside the implementation lifecycle."
+                        ),
+                    )
+
+        except Exception as exc:
+            # Fail closed ONLY for requests that the JARVIS kernel identified
+            # as engineering/delivery. Generic conversation remains available
+            # when the optional integration layer itself is unavailable.
+            logger.exception(
+                "[CognitiveCore] JARVIS final integration gate failed: %s",
+                exc,
+            )
+
+            request_mode = context.get(
+                "jarvis_request_mode"
+            )
+
+            if request_mode in {
+                "engineering",
+                "tool",
+                "automation",
+            }:
+                return SystemResponse(
+                    success=False,
+                    confidence=0.0,
+                    source="jarvis_final_integration",
+                    data={
+                        "response": (
+                            "The canonical JARVIS request gate failed before "
+                            "execution. No legacy engineering or delivery "
+                            "fallback was used."
+                        ),
+                        "message": (
+                            "The canonical JARVIS request gate failed before "
+                            "execution. No legacy engineering or delivery "
+                            "fallback was used."
+                        ),
+                    },
+                    error=str(exc),
+                )
+
+        try:
+            if self.state_manager:
+
+                try:
+
+                    state = self.state_manager.get_state(
+                        session_id
+                    )
+
+                    pending_response = (
+                        await self._handle_pending_workflow(
+                            query=query,
+                            session_id=session_id,
+                            base_context=base_context,
+                            state=state,
+                        )
+                    )
+
+                    if pending_response is not None:
+
+                        return pending_response
+
+                except Exception as exc:
+
+                    logger.exception(
+                        "[CognitiveCore] Pending workflow "
+                        "handling failed: %s",
+                        exc,
+                    )
+
+            # =========================================================
+            # EARLY DETERMINISTIC CAPABILITY GUARDRAIL
+            # =========================================================
+            # Capability questions are static ARIA metadata. Resolve them
+            # before FastRouter, MemoryFirst, episodic memory, knowledge
+            # search, reasoning, or any LLM provider call.
+            if self._looks_like_capability_request(query):
+                logger.info(
+                    "[Capability] Early deterministic capability response selected."
+                )
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="capability",
+                    data={
+                        "response": (
+                            "Certainly, Sir. I can help you with conversation and questions, "
+                            "remember and recall information you ask me to keep, search and "
+                            "reason over knowledge, work with documents and files, perform "
+                            "supported tools and workflows, help with coding and technical "
+                            "tasks, assist with planning and problem solving, and learn from "
+                            "our interactions when appropriate."
+                        ),
+                        "message": (
+                            "Certainly, Sir. I can help you with conversation and questions, "
+                            "remember and recall information you ask me to keep, search and "
+                            "reason over knowledge, work with documents and files, perform "
+                            "supported tools and workflows, help with coding and technical "
+                            "tasks, assist with planning and problem solving, and learn from "
+                            "our interactions when appropriate."
+                        ),
+                    },
+                )
+
+            if re.fullmatch(
+                r"\s*(?:what(?:'s| is)|whats)\s+my\s+name\s*\??\s*",
+                query,
+                re.IGNORECASE,
+            ):
+                if self.conversation_manager:
+                    try:
+                        conversation_context = (
+                            self.conversation_manager.get_context(session_id)
+                        )
+
+                        user_name = conversation_context.get("user_name")
+
+                        if user_name:
+                            logger.info(
+                                "[Conversation] Deterministic name recall: %s",
+                                user_name,
+                            )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=1.0,
+                                source="conversation_memory",
+                                data={
+                                    "response": f"Your name is {user_name}.",
+                                    "message": f"Your name is {user_name}.",
+                                },
+                            )
+
+                    except Exception as e:
+                        logger.warning(
+                            "[Conversation] Name recall failed: %s",
+                            e,
+                        )
+
+            fast_decision = None
+
+            try:
+                fast_decision = should_fast_route(query)
+
+                if fast_decision:
+                    logger.info(
+                        "[FastRouter] Classification=%s reason=%s",
+                        getattr(fast_decision, "fast", False),
+                        getattr(fast_decision, "reason", "unknown"),
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "[FastRouter] Classification skipped: %s",
+                    e,
+                )
+
+            compound_memory_request = self._is_compound_memory_request(
+                query,
+                {"fast_route": getattr(fast_decision, "reason", None) if fast_decision else None},
+            )
+
+            # Explicit memory commands must reach the deterministic memory
+            # admission/storage route. Never let semantic MemoryFirst
+            # retrieval answer a save/remember command using an unrelated
+            # existing memory.
+            explicit_memory_instruction = bool(
+                re.search(
+                    r"\b(?:remember|memorize|save|store|keep|don't forget|do not forget)\b",
+                    str(query or "").strip().lower(),
+                )
+            )
+
+            if explicit_memory_instruction:
+                logger.info(
+                    "[MemoryAdmission] Explicit memory instruction detected; bypassing MemoryFirst retrieval."
+                )
+
+            if compound_memory_request:
+                logger.info(
+                    "[CognitiveCore] Compound memory request detected; bypassing terminal memory route."
+                )
+
+            local_knowledge_query = (
+                self._looks_like_ordinary_knowledge_query(query)
+                and not compound_memory_request
+                and not explicit_memory_instruction
+            )
+            context["local_knowledge_query"] = local_knowledge_query
+
+            if local_knowledge_query:
+                logger.info(
+                    "[LocalKnowledge] Ordinary knowledge query detected; "
+                    "bypassing external intent/memory/reasoning prepasses."
+                )
+
+            # =========================================================
+            # DETERMINISTIC MEMORY RECALL / NON-DURABLE PREFERENCES
+            # =========================================================
+            # Recall is resolved before generic MemoryFirst retrieval. This
+            # prevents semantic matches from returning unrelated memories.
+            if not compound_memory_request and self._looks_like_memory_recall_request(query):
+                logger.info("[MemoryRecall] Deterministic recall path selected before MemoryFirst.")
+                try:
+                    if not self.memory_engine:
+                        raise RuntimeError("Memory engine is unavailable.")
+                    memories = await self.memory_engine.retrieve(
+                        query,
+                        bypass_knowledge_gate=True,
+                    ) or []
+                    safe_memories = self._safe_memory_items(memories)
+                    profile_answer = self._build_profile_memory_response(query, safe_memories)
+                    if profile_answer:
+                        return SystemResponse(
+                            success=True, confidence=1.0, source="memory_profile",
+                            data={"response": profile_answer, "message": profile_answer},
+                        )
+                    return SystemResponse(
+                        success=True, confidence=1.0, source="memory_profile",
+                        data={
+                            "response": "I don't have that information in memory yet, Sir.",
+                            "message": "I don't have that information in memory yet, Sir.",
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning("[MemoryRecall] Deterministic recall failed: %s", exc)
+                    return SystemResponse(
+                        success=False, confidence=0.0, source="memory",
+                        error="I couldn't retrieve your memories right now.",
+                    )
+
+            # Ordinary preference statements are now eligible for durable
+            # memory. A direct statement such as "I like pandas" is a stable
+            # user preference and should be available to later memory recall.
+            # The MemoryEngine applies the final admission policy.
+            if not compound_memory_request and self._looks_like_non_durable_preference_statement(query):
+                logger.info(
+                    "[MemoryAdmission] Preference statement detected; "
+                    "allowing MemoryEngine durable-memory admission."
+                )
+                try:
+                    if self.memory_engine and hasattr(self.memory_engine, "process_and_store"):
+                        observation = await self.memory_engine.process_and_store(query)
+                        context["memory_observation"] = observation or {}
+                        logger.info(
+                            "[MemoryAdmission] Preference stored deterministically: %s",
+                            observation.get("action", "none") if isinstance(observation, dict) else "stored",
+                        )
+                except Exception as exc:
+                    logger.warning("[MemoryAdmission] Preference storage failed: %s", exc)
+
+                # A preference statement is an instruction/fact to remember,
+                # not a request for semantic reasoning or LLM intent analysis.
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="conversation",
+                    data={
+                        "response": "Understood, Sir.",
+                        "message": "Understood, Sir.",
+                    },
+                )
+
+            # =========================================================
+            # MEMORY-FIRST ORCHESTRATION
+            # =========================================================
+            # Personal memory is checked before reasoning, tools, or any
+            # LLM response generation. A known fact should be answered from
+            # storage directly instead of spending an LLM call to rediscover it.
+            if (
+                not compound_memory_request
+                and not explicit_memory_instruction
+                and not local_knowledge_query
+                and self.memory_engine
+                and self._memory_first_candidate(query)
+            ):
+                try:
+                    # Sensitive retrieval is always deterministic. If the
+                    # protected value is absent, never ask an LLM to guess it.
+                    if self._looks_like_sensitive_memory_recall_request(query):
+                        protected = await self.memory_engine.retrieve(query) or []
+                        if protected:
+                            item = protected[0] if isinstance(protected[0], dict) else {}
+                            value = item.get("value")
+                            if value:
+                                logger.info("[MemoryFirst] Protected memory hit; bypassing LLM.")
+                                return SystemResponse(
+                                    success=True,
+                                    confidence=1.0,
+                                    source="protected_memory",
+                                    data={
+                                        "response": f"Your requested information is {value}, Sir.",
+                                        "message": f"Your requested information is {value}, Sir.",
+                                    },
+                                )
+                        logger.info("[MemoryFirst] Protected memory miss; refusing LLM fallback.")
+                        return SystemResponse(
+                            success=True,
+                            confidence=1.0,
+                            source="protected_memory",
+                            data={
+                                "response": "I don't have that protected information stored, Sir.",
+                                "message": "I don't have that protected information stored, Sir.",
+                            },
+                        )
+
+                    memories = await self.memory_engine.retrieve(query) or []
+                    if memories:
+                        memory_answer = self._build_memory_first_answer(query, memories)
+                        if memory_answer:
+                            logger.info(
+                                "[MemoryFirst] Memory hit; answering without LLM."
+                            )
+                            return SystemResponse(
+                                success=True,
+                                confidence=0.98,
+                                source="memory_first",
+                                data={
+                                    "response": memory_answer,
+                                    "message": memory_answer,
+                                },
+                            )
+                        logger.info(
+                            "[MemoryFirst] Retrieved memory but no deterministic answer; continuing pipeline."
+                        )
+                    else:
+                        logger.info("[MemoryFirst] No relevant memory; continuing to next knowledge source.")
+                except Exception as exc:
+                    logger.warning(
+                        "[MemoryFirst] Memory lookup skipped: %s",
+                        exc,
+                    )
+
+            if self._looks_like_memory_recall_request(query) and not compound_memory_request:
+                logger.info("[MemoryRecall] Retrieving existing durable profile memories.")
+
+                try:
+                    if not self.memory_engine:
+                        raise RuntimeError("Memory engine is unavailable.")
+
+                    memories = await self.memory_engine.retrieve(query) or []
+                    safe_memories = self._safe_memory_items(memories)
+
+                    profile_answer = self._build_profile_memory_response(
+                        query,
+                        safe_memories,
+                    )
+
+                    if profile_answer:
+                        return SystemResponse(
+                            success=True,
+                            confidence=0.98,
+                            source="memory_profile",
+                            data={
+                                "response": profile_answer,
+                                "message": profile_answer,
+                            },
+                        )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="memory_profile",
+                        data={
+                            "response": "I don't have that information in memory yet, Sir.",
+                            "message": "I don't have that information in memory yet, Sir.",
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[MemoryRecall] Memory retrieval failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="memory",
+                        error="I couldn't retrieve your memories right now.",
+                    )
+
+            # Explicit forget/delete requests must never fall through to
+            # deterministic memory extraction, which would try to STORE
+            # the user's deletion request as a new memory.
+            if (
+                self._looks_like_memory_forget_request(query)
+                and not compound_memory_request
+                and self.memory_conversation_manager
+            ):
+                logger.info("[MemoryForget] Routing explicit deletion request to memory manager.")
+
+                try:
+                    reply = await self.memory_conversation_manager.handle(
+                        query=query,
+                        context=context,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "[MemoryForget] Memory manager deletion failed: %s",
+                        exc,
+                    )
+                    reply = "I couldn't update my memory just now, Sir."
+
+                return SystemResponse(
+                    success=True,
+                    confidence=0.95,
+                    source="memory_conversation",
+                    data={
+                        "response": str(reply or "").strip(),
+                        "message": str(reply or "").strip(),
+                    },
+                )
+
+            # Automatically observe every normal user statement. The
+            # MemoryEngine decides whether it is durable, short-term, or
+            # ignorable; deterministic extraction runs before its optional
+            # secondary LLM extractor. This keeps memory learning active
+            # without making an LLM call for every turn.
+            if (
+                self.memory_engine
+                and not compound_memory_request
+                and not explicit_memory_instruction
+                and not local_knowledge_query
+                and not self._looks_like_memory_recall_request(query)
+                and not self._looks_like_sensitive_memory_recall_request(query)
+            ):
+                try:
+                    if hasattr(self.memory_engine, "process_and_store"):
+                        memory_observation = await self.memory_engine.process_and_store(query)
+                        if isinstance(memory_observation, dict):
+                            context["memory_observation"] = memory_observation
+                            logger.info(
+                                "[MemoryFirst] Observation result: %s",
+                                memory_observation.get("action", "none"),
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "[MemoryFirst] Automatic memory observation skipped: %s",
+                        exc,
+                    )
+
+            route = decide(query)
+
+            logger.info(
+                "[ExecutionRouter] Route=%s Confidence=%.2f",
+                route.route.value,
+                route.confidence,
+            )
+
+            if (
+                route.route == Route.MEMORY
+                and not compound_memory_request
+                and not self._looks_like_memory_forget_request(query)
+                and not self._looks_like_memory_recall_request(query)
+            ):
+                if not self.memory_engine:
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="memory",
+                        error="Memory engine is unavailable.",
+                    )
+
+                await self.memory_engine.deterministic_extract_and_store(query)
+
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="memory",
+                    data={
+                        "response": "Certainly. I'll remember that.",
+                        "message": "Certainly. I'll remember that.",
+                    },
+                )
+
+            if route.route == Route.GREETING:
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="execution_router",
+                    data={
+                        "response": "Hello. How can I help you today?",
+                        "message": "Hello. How can I help you today?",
+                    },
+                )
+
+            if route.route == Route.CALCULATOR:
+                try:
+                    if not self.skill_manager:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="calculator",
+                            error="Calculator skill manager is unavailable.",
+                        )
+
+                    calculator_query = await self._resolve_calculator_query(
+                        query=query,
+                        session_id=session_id,
+                    )
+
+                    result = await self.skill_manager.execute_skill(
+                        "calculator",
+                        calculator_query,
+                        {
+                            "session": session_id,
+                            "source": "execution_router",
+                            "cognitive_context": {
+                                "query": calculator_query,
+                                "original_query": query,
+                                "session_id": session_id,
+                                "user_id": user_id,
+                            },
+                        },
+                    )
+
+                    if not result or not result.success:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="calculator",
+                            error=(
+                                getattr(result, "error", None)
+                                or "Calculation failed."
+                            ),
+                        )
+
+                    data = result.data or {}
+
+                    calculation_result = data.get("result")
+
+                    if self.conversation_manager:
+                        try:
+                            self.conversation_manager.set_last_result(
+                                session_id=session_id,
+                                result=calculation_result,
+                                source="calculator",
+                                operation=calculator_query,
+                                metadata={
+                                    "expression": calculator_query,
+                                    "original_query": query,
+                                },
+                            )
+
+                            logger.info(
+                                "[Calculator] Stored calculation: %s = %s",
+                                calculator_query,
+                                calculation_result,
+                            )
+
+                        except Exception as e:
+                            logger.warning(
+                                "[Calculator] Could not store calculation context: %s",
+                                e,
+                            )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="calculator",
+                        data={
+                            "response": str(calculation_result),
+                            "message": str(calculation_result),
+                            "result": calculation_result,
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[Calculator] Execution failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="calculator",
+                        error=str(e),
+                    )
+
+            if route.route == Route.TIME:
+                try:
+                    timezone = self._extract_timezone(query)
+
+                    if not self.action_manager:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="time_action",
+                            error="Time action manager is not available.",
+                        )
+
+                    action_result = await self.action_manager.execute_action(
+                        action_name="time_action",
+                        params={
+                            "timezone": timezone,
+                        },
+                        confirmed=True,
+                    )
+
+                    if not action_result.success:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="time_action",
+                            error=action_result.error,
+                        )
+
+                    data = action_result.data or {}
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="time_action",
+                        data={
+                            "timezone": data.get("timezone"),
+                            "date": data.get("date"),
+                            "time": data.get("time"),
+                            "utc_offset": data.get("utc_offset"),
+                            "message": (
+                                f"The current time in {data.get('timezone')} "
+                                f"is {data.get('time')}."
+                            ),
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[TimeAction] Time retrieval failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="time_action",
+                        error=f"Unable to retrieve time: {e}",
+                    )
+
+            if route.route == Route.WEATHER:
+                try:
+
+                    if not self.action_manager:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="weather_action",
+                            error="Weather action manager is not available.",
+                        )
+
+                    weather_params = self._extract_weather_params(query)
+
+                    logger.info(
+                        "[WeatherRoute] location=%s | forecast_days=%s | target=%s",
+                        weather_params.get("location"),
+                        weather_params.get("forecast_days"),
+                        weather_params.get("forecast_target"),
+                    )
+
+                    action_result = await self.action_manager.execute_action(
+                        action_name="weather_action",
+                        params=weather_params,
+                        confirmed=True,
+                    )
+
+                    if not action_result.success:
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="weather_action",
+                            error=action_result.error,
+                        )
+
+                    data = action_result.data or {}
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="weather_action",
+                        data={
+                            "response": data.get("message"),
+                            "message": data.get("message"),
+                            "location": data.get("location"),
+                            "city": data.get("city"),
+                            "country": data.get("country"),
+                            "country_code": data.get("country_code"),
+                            "latitude": data.get("latitude"),
+                            "longitude": data.get("longitude"),
+                            "timezone": data.get("timezone"),
+                            "current": data.get("current"),
+                            "forecast": data.get("forecast"),
+                            "forecast_target": weather_params.get(
+                                "forecast_target"
+                            ),
+                        },
+                    )
+
+                except Exception as e:
+                    logger.exception(
+                        "[WeatherAction] Weather retrieval failed: %s",
+                        e,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="weather_action",
+                        error=f"Unable to retrieve weather: {e}",
+                    )
+
+            if route.route == Route.CODING and not self._looks_like_compound_request(query):
+                engine = self.engine_manager.get("coding")
+
+                reply = await engine.process(query)
+
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="coding_engine",
+                    data={
+                        "response": reply,
+                        "message": reply,
+                    },
+                )
+
+            # Compound requests must stay inside the unified cognitive
+            # pipeline even when the execution router classifies one
+            # subtask (for example, "learn Python") as coding.
+            if route.route == Route.CODING:
+                logger.info(
+                    "[CognitiveCore] Compound request detected; "
+                    "bypassing terminal coding route."
+                )
+
+            state: Dict[str, Any] = {}
+
+            if self.state_manager:
+                state = (
+                    self.state_manager.get_state(session_id)
+                    or {}
+                )
+
+            persisted_execution = self._validate_persisted_execution(
+                await self._get_persisted_execution_state(session_id)
+            )
+
+            if persisted_execution:
+                logger.info(
+                    "[CognitiveCore] Restored execution state: "
+                    "status=%s attempt=%s",
+                    persisted_execution.get("status"),
+                    persisted_execution.get("attempt", 0),
+                )
+
+            context = dict(base_context or {})
+            context["memory_compound_request"] = compound_memory_request
+            context["persisted_execution"] = (
+                persisted_execution
+            )
+            context["execution_id"] = execution_id
+            context.update({
+                "query": query,
+                "session_id": session_id,
+                "user_id": user_id,
+                "state": state,
+                "memory": [],
+                "memory_engine": self.memory_engine,
+                "planner": self.planner,
+                "executor": self.executor,
+                "reasoning": self.reasoning_engine,
+                "decision": self.decision_engine,
+                "agent_manager": getattr(self, "agent_manager", None),
+                "tool_manager": self.tool_manager,
+                "action_manager": self.action_manager,
+                "skill_manager": self.skill_manager,
+                "conversation_manager": self.conversation_manager,
+                "working_memory": self.working_memory,
+                "knowledge_manager": self.knowledge_manager,
+                "knowledge_graph": self.knowledge_graph,
+                "knowledge_database": self.knowledge_database,
+                "world_model": self.world_model,
+                "learning_engine": self.learning_engine,
+                "autonomous_learning": self.autonomous_learning,
+                "self_reflection": self.self_reflection,
+                "fast_route": (
+                    getattr(fast_decision, "reason", None)
+                    if fast_decision
+                    else None
+                ),
+            })
+
+            if self.reasoning_engine:
+                try:
+                    conversation_context = {}
+
+                    if self.conversation_manager:
+                        conversation_context = (
+                            self.conversation_manager.get_context(
+                                session_id
+                            )
+                            or {}
+                        )
+
+                    existing_conversation = context.get(
+                        "conversation",
+                        {},
+                    )
+
+                    if isinstance(existing_conversation, dict):
+                        merged_conversation = {
+                            **conversation_context,
+                            **existing_conversation,
+                        }
+                    else:
+                        merged_conversation = conversation_context
+
+                    context["conversation"] = merged_conversation
+
+                    resolved_query = await self.reasoning_engine.resolve_references(
+                        query,
+                        context,
+                    )
+
+                    if resolved_query and resolved_query != query:
+                        logger.info(
+                            "[CognitiveCore] Contextual query resolved: %r -> %r",
+                            query,
+                            resolved_query,
+                        )
+
+                        query = resolved_query
+
+                    context["query"] = query
+                    context["references_resolved"] = True
+
+                except Exception as e:
+                    logger.warning(
+                        "[CognitiveCore] Context resolution skipped: %s",
+                        e,
+                    )
+
+            context.update({
+                "session_id": session_id,
+                "user_id": user_id,
+                "state": state,
+                "base_context": base_context,
+                # Never store the context dictionary inside itself.
+                "cognitive_context_id": execution_id,
+            })
+            
+            controller_decision = self.cognitive_controller.analyze(
+                query=query,
+                context=context,
+            )
+
+            # The CognitiveController is the canonical decision source.
+            # Initialize the unified decision immediately so every later
+            # orchestration branch has a valid decision, even if optional
+            # intent/DecisionEngine processing fails or is skipped.
+            decision = controller_decision
+            context["decision"] = decision
+
+            # Deterministic capability guardrail:
+            # the LLM classifier is not authoritative for capabilities that
+            # can be recognized with high confidence from the user's wording.
+            controller_decision = self._apply_deterministic_capability_overrides(
+                query=query,
+                decision=controller_decision,
+            )
+
+            context["cognitive_decision"] = controller_decision
+
+            decision_contract = {
+                "intent": self._decision_value(
+                    controller_decision,
+                    "intent",
+                ),
+                "route": self._decision_value(
+                    controller_decision,
+                    "route",
+                ),
+                "action": self._decision_value(
+                    controller_decision,
+                    "action",
+                ),
+                "requires_reasoning": bool(
+                    self._decision_value(
+                        controller_decision,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
+                "requires_memory": bool(
+                    self._decision_value(
+                        controller_decision,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+                "requires_tool": bool(
+                    self._decision_value(
+                        controller_decision,
+                        "requires_tool",
+                        False,
+                    )
+                ),
+                "requires_planning": bool(
+                    self._decision_value(
+                        controller_decision,
+                        "requires_planning",
+                        False,
+                    )
+                ),
+                "confidence": self._decision_value(
+                    controller_decision,
+                    "confidence",
+                ),
+            }
+
+            context["decision_contract"] = decision_contract
+
+            logger.info(
+                "[CognitiveDecision] Normalized decision: %s",
+                decision_contract,
+            )
+
+            logger.info(
+                "[CognitiveController] %s",
+                controller_decision,
+            )
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["required_tools"] = (
+                        self._decision_value(
+                            controller_decision,
+                            "required_tools",
+                            [],
+                        )
+                        or []
+                    )
+                else:
+                    setattr(
+                        self.working_memory,
+                        "required_tools",
+                        self._decision_value(
+                            controller_decision,
+                            "required_tools",
+                            [],
+                        )
+                        or [],
+                    )
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["cognitive_decision"] = controller_decision
+                else:
+                    setattr(
+                        self.working_memory,
+                        "cognitive_decision",
+                        controller_decision,
+                    )
+
+            if (
+                self.state_manager
+                and state.get("pending_action_confirmation")
+            ):
+
+                normalized_query = (
+                    self._normalize_confirmation_text(query)
+                )
+
+                if self._is_confirm(normalized_query):
+
+                    action_name = state.get(
+                        "pending_action_name"
+                    )
+
+                    action_params = (
+                        state.get(
+                            "pending_action_params",
+                            {},
+                        )
+                        or {}
+                    )
+
+                    self.state_manager.clear_pending_action(
+                        session_id
+                    )
+
+                    if (
+                        not self.action_manager
+                        or not action_name
+                        or action_name
+                        not in self.action_manager.actions
+                    ):
+                        return SystemResponse(
+                            success=False,
+                            confidence=1.0,
+                            source="action_confirmation",
+                            error=(
+                                "The pending action is no "
+                                "longer available."
+                            ),
+                        )
+
+                    action_result = (
+                        await self.action_manager.execute_action(
+                            action_name=action_name,
+                            params=action_params,
+                            confirmed=True,
+                        )
+                    )
+
+                    response_data = {
+                        "action_name": action_name,
+                        "result": action_result.data,
+                    }
+
+                    if (
+                        action_result.success
+                        and action_name == "file_action"
+                        and action_params.get("mode") == "read"
+                    ):
+                        content = (
+                            action_result.data or {}
+                        ).get("content")
+
+                        if content:
+                            response_data["message"] = content
+
+                    return SystemResponse(
+                        success=action_result.success,
+                        confidence=1.0,
+                        source="action_manager",
+                        data=response_data,
+                        error=action_result.error,
+                    )
+
+                if self._is_reject(normalized_query):
+
+                    action_name = state.get(
+                        "pending_action_name"
+                    )
+
+                    self.state_manager.clear_pending_action(
+                        session_id
+                    )
+
+                    return SystemResponse(
+                        success=True,
+                        confidence=1.0,
+                        source="action_confirmation",
+                        data={
+                            "message": "Action cancelled."
+                        },
+                    )
+
+                return SystemResponse(
+                    success=True,
+                    confidence=1.0,
+                    source="action_confirmation",
+                    data={
+                        "confirmation_required": True,
+                        "message": (
+                            "The pending action is waiting for "
+                            "your confirmation. Shall I continue?"
+                        ),
+                    },
+                )
+
+            self._observe_tasks(query)
+            self._update_task_progress(query)
+
+            intent = None
+
+            if self.intent_analyzer and not local_knowledge_query:
+
+                try:
+                    intent = (
+                        await self.intent_analyzer.analyze(query)
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] Intent analysis failed."
+                    )
+            elif local_knowledge_query:
+                logger.info(
+                    "[LocalKnowledge] Intent analysis skipped; "
+                    "KnowledgeManager is the answer owner."
+                )
+
+            pre_ctx = dict(context)
+            pre_ctx["query"] = query
+            pre_ctx["session_id"] = session_id
+            pre_ctx["user_id"] = user_id
+            pre_ctx["state"] = state
+            if intent:
+                pre_ctx["intent"] = intent
+
+            decision = controller_decision
+            engine_decision = None
+
+            if (
+                self.decision_engine
+                and hasattr(self.decision_engine, "decide")
+                and not local_knowledge_query
+            ):
+                try:
+                    engine_decision = await self.decision_engine.decide(
+                        query=query,
+                        intent=intent,
+                        context=pre_ctx,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[CognitiveCore] DecisionEngine skipped: %s",
+                        exc,
+                    )
+
+            try:
+                decision = self._merge_decisions(
+                    controller_decision,
+                    engine_decision,
+                ) or controller_decision
+            except Exception as exc:
+                logger.warning(
+                    "[CognitiveCore] Decision merge failed; "
+                    "using controller decision: %s",
+                    exc,
+                )
+                decision = controller_decision
+
+            # Re-apply deterministic capability overrides after merging the
+            # controller and engine decisions so a weaker classifier cannot
+            # undo a clear arithmetic or explicit web-search request.
+            decision = self._apply_deterministic_capability_overrides(
+                query=query, decision=decision
+            )
+
+            context["decision_engine_result"] = engine_decision
+
+            logger.info(
+                "[CognitiveCore] Using unified decision: %s",
+                decision,
+            )
+
+            pre_ctx["decision"] = decision
+            context["decision"] = decision
+
+            # =========================================================
+            # CANONICAL PHASE 1 ENGINEERING GATEWAY
+            # =========================================================
+            # Engineering requests must enter the single authoritative
+            # Phase 1 runtime instead of falling through to the legacy
+            # coding/agent pipeline.
+            #
+            # Read-only engineering requests are intercepted safely and
+            # are intentionally NOT sent to develop(). Step 3 will add
+            # the dedicated read-only readiness gateway.
+            # =========================================================
+            if (
+                self.phase1_runtime is not None
+                and self.engineering_request_router is not None
+            ):
+                try:
+                    engineering_route = await self.engineering_request_router.route(
+                        query,
+                        session_id=session_id,
+                        user_id=user_id,
+                        metadata={
+                            "execution_id": execution_id,
+                            "source": "cognitive_core",
+                        },
+                        intent=intent,
+                        decision=decision,
+                    )
+
+                    if engineering_route is not None:
+                        context["canonical_engineering_route"] = engineering_route
+
+                        if engineering_route.get("handled"):
+                            engineering_result = engineering_route.get("result")
+
+                            if isinstance(engineering_result, SystemResponse):
+                                return engineering_result
+
+                            if isinstance(engineering_result, dict):
+                                response_message = (
+                                    engineering_result.get("message")
+                                    or engineering_result.get("response")
+                                    or engineering_result.get("summary")
+                                    or "The canonical Phase 1 engineering lifecycle completed."
+                                )
+                                engineering_success = bool(
+                                    engineering_result.get(
+                                        "success",
+                                        engineering_result.get(
+                                            "accepted",
+                                            engineering_result.get("ok", True),
+                                        ),
+                                    )
+                                )
+                            else:
+                                response_message = str(engineering_result)
+                                engineering_success = True
+
+                            logger.info(
+                                "[CognitiveCore] Canonical Phase 1 engineering route completed | success=%s",
+                                engineering_success,
+                            )
+
+                            return SystemResponse(
+                                success=engineering_success,
+                                confidence=1.0 if engineering_success else 0.0,
+                                source="phase1_authoritative_engineering",
+                                data={
+                                    "response": response_message,
+                                    "message": response_message,
+                                    "engineering_result": engineering_result,
+                                },
+                            )
+
+                        if engineering_route.get("requires_readiness_gateway"):
+                            message = engineering_route.get("message") or (
+                                "This engineering request is read-only. "
+                                "It was safely prevented from entering the "
+                                "implementation lifecycle. The dedicated "
+                                "readiness gateway will handle it in Step 3."
+                            )
+
+                            logger.info(
+                                "[CognitiveCore] Read-only engineering request intercepted before implementation."
+                            )
+
+                            return SystemResponse(
+                                success=True,
+                                confidence=1.0,
+                                source="phase1_read_only_guard",
+                                data={
+                                    "response": message,
+                                    "message": message,
+                                    "engineering_route": engineering_route,
+                                },
+                            )
+
+                except Exception as exc:
+                    # Fail closed. Never fall back to the legacy coding
+                    # pipeline after the canonical engineering gateway has
+                    # been selected.
+                    logger.exception(
+                        "[CognitiveCore] Canonical engineering routing failed: %s",
+                        exc,
+                    )
+
+                    return SystemResponse(
+                        success=False,
+                        confidence=0.0,
+                        source="phase1_authoritative_engineering",
+                        data={
+                            "response": (
+                                "The canonical Phase 1 engineering gateway "
+                                "failed before execution. No legacy engineering "
+                                "fallback was used."
+                            ),
+                            "message": (
+                                "The canonical Phase 1 engineering gateway "
+                                "failed before execution. No legacy engineering "
+                                "fallback was used."
+                            ),
+                            "error": str(exc),
+                        },
+                    )
+
+            context["phase1"] = {
+                "active": True,
+                "selected_skills": list(
+                    getattr(
+                        decision,
+                        "selected_skills",
+                        [],
+                    )
+                    or []
+                ),
+                "selected_tools": list(
+                    getattr(
+                        decision,
+                        "selected_tools",
+                        [],
+                    )
+                    or []
+                ),
+                "selected_agents": list(
+                    getattr(
+                        decision,
+                        "selected_agents",
+                        [],
+                    )
+                    or []
+                ),
+                "requires_reasoning": bool(
+                    getattr(
+                        decision,
+                        "requires_reasoning",
+                        False,
+                    )
+                ),
+                "requires_memory": bool(
+                    getattr(
+                        decision,
+                        "requires_memory",
+                        False,
+                    )
+                ),
+                "requires_documents": bool(
+                    getattr(
+                        decision,
+                        "requires_documents",
+                        False,
+                    )
+                ),
+                "requires_web": bool(
+                    getattr(
+                        decision,
+                        "requires_web",
+                        False,
+                    )
+                ),
+                "requires_planning": bool(
+                    self._decision_value(
+                        decision,
+                        "requires_planning",
+                        self._decision_value(
+                            decision,
+                            "use_planner",
+                            False,
+                        ),
+                    )
+                ),
+            }
+
+            evidence = await self._execute_required_tools(
+                decision,
+                query,
+                context,
+            )
+
+            # Preserve executed tool evidence in the cognitive context so
+            # the final answer layer can actually use it.
+            context["tool_results"] = evidence
+
+            if "web" in evidence:
+                context["web_results"] = evidence.get("web")
+
+            if self.working_memory:
+                if hasattr(self.working_memory, "metadata"):
+                    self.working_memory.metadata["tool_results"] = evidence
+                else:
+                    setattr(self.working_memory, "tool_results", evidence)
+
+            if "semantic_memory" in evidence:
+
+                self.working_memory.metadata[
+                    "semantic_context"
+                ] = evidence["semantic_memory"]
+
+            logger.info(
+                "[CognitiveController] Executed Tools: %s",
+                list(evidence.keys()),
+            )
+
+            reasoning = None
+            # Compound memory requests are answered by the final response
+            # layer after memory storage/retrieval. Do not send them through
+            # the full autonomous reasoning/agent pipeline; doing so can turn
+            # a conversational request into an executable planner/coding job.
+            if (
+                not context.get("memory_compound_request")
+                and not context.get("local_knowledge_query")
+                and self.reasoning_engine
+                and hasattr(self.reasoning_engine, "reason")
+            ):
+                try:
+                    reasoning = await self.reasoning_engine.reason(context)
+                except Exception:
+                    logger.exception("[CognitiveCore] Initial ReasoningEngine invocation failed.")
+
+            completed_goal = None
+            goal_context = None
+
+            if self.goal_manager:
+                try:
+                    active_before = self.goal_manager.current_goal()
+
+                    await self.goal_manager.observe(query, pre_ctx)
+
+                    active_after = self.goal_manager.current_goal()
+
+                    if active_before and active_after is None:
+                        completed_goal = active_before
+
+                    active_goal = self.goal_manager.current_goal()
+
+                    if active_goal:
+                        goal_context = self.goal_manager.get_goal_context(
+                            active_goal.id
+                        )
+
+                        context["goal"] = goal_context
+                        pre_ctx["goal"] = goal_context
+
+                        logger.info(
+                            "[CognitiveCore] Active goal: %s | progress=%.1f%% | next=%s",
+                            active_goal.title,
+                            active_goal.progress,
+                            goal_context.get("next_subgoal")
+                            if goal_context
+                            else None,
+                        )
+
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] GoalManager observation failed."
+                    )
+
+            if goal_context:
+                context["autonomous_goal"] = goal_context
+
+            if self.project_manager:
+                try:
+                    await self.project_manager.observe(query, pre_ctx)
+                except Exception:
+                    logger.exception("[CognitiveCore] ProjectManager observation failed.")
+
+            memories = evidence.get("memory", [])
+
+            if not memories:
+                if decision and getattr(decision, "use_memory", False):
+                    if self.memory_engine:
+                        try:
+                            memories = await self.memory_engine.retrieve(query) or []
+                        except Exception:
+                            logger.exception("[CognitiveCore] Memory engine retrieval failed.")
+                    elif self.memory_router:
+                        try:
+                            memories = (
+                                await self.memory_router.recall(query)
+                            ) or []
+                        except Exception:
+                            logger.exception(
+                                "[CognitiveCore] Memory retrieval failed."
+                            )
+                elif self.memory_engine and reasoning and getattr(reasoning, "requires_memory", False):
+                    try:
+                        memories = await self.memory_engine.retrieve(query) or []
+                    except Exception:
+                        logger.exception("[CognitiveCore] Memory engine retrieval failed.")
+                elif self.memory_router and reasoning and getattr(reasoning, "requires_memory", False):
+                    try:
+                        memories = (
+                            await self.memory_router.recall(query)
+                        ) or []
+
+                    except Exception:
+                        logger.exception(
+                            "[CognitiveCore] Memory retrieval failed."
+                        )
+
+            if self.context_builder:
+
+                ctx = await self.context_builder.build(
+                    query=query,
+                    session_id=session_id,
+                    user_id=user_id,
+                    base_context=base_context,
+                    memory=memories,
+                    state=state,
+                )
+                if isinstance(ctx, dict):
+                    context.update(ctx)
+                else:
+                    logger.warning(
+                        "[CognitiveCore] ContextBuilder returned non-dict context."
+                    )
+
+            else:
+                context["query"] = query
+                context["session_id"] = session_id
+                context["user_id"] = user_id
+                context["state"] = state
+                context["memory"] = memories
+
+            context.setdefault("query", query)
+            context.setdefault("session_id", session_id)
+            context.setdefault("user_id", user_id)
+            context.setdefault("state", state)
+            context["memory"] = self._safe_memory_items(
+                context.get("memory", memories)
+            )
+            context["local_knowledge_query"] = local_knowledge_query
+            context["_context_built"] = True
+
+            if intent:
+                context["intent"] = intent
+
+            if decision:
+                context["decision"] = decision
+
+            app_state = None
+
+            if base_context:
+                app_state = base_context.get("app_state")
+
+            document_ai = None
+            document_repository = None
+
+            if app_state:
+
+                try:
+                    if app_state.registry.has(
+                        "document_intelligence"
+                    ):
+                        document_ai = app_state.registry.get(
+                            "document_intelligence"
+                        )
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] Could not obtain "
+                        "document intelligence."
+                    )
+
+                try:
+                    if app_state.registry.has(
+                        "document_repository"
+                    ):
+                        document_repository = (
+                            app_state.registry.get(
+                                "document_repository"
+                            )
+                        )
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] Could not obtain "
+                        "document repository."
+                    )
+
+            context["document_intelligence"] = document_ai
+            context["document_repository"] = document_repository
+
+            context["capabilities"] = {
+                "memory": self.memory_router is not None
+                or self.memory_engine is not None,
+                "documents": document_ai is not None
+                or self.document_pipeline is not None,
+                "document_repository":
+                    document_repository is not None,
+                "skills": self.skill_manager is not None,
+                "actions": self.action_manager is not None,
+                "tools": self.tool_manager is not None,
+                "planner": self.planner is not None,
+                "executor": self.executor is not None,
+                "reasoning": self.reasoning_engine is not None,
+                "agents": self.agent_coordinator is not None,
+                "goals": self.goal_manager is not None,
+                "tasks": self.task_manager is not None,
+                "web": self.tool_manager is not None,
+                "learning": self.autonomous_learning is not None
+                or self.learning_engine is not None,
+                "reflection": self.self_reflection is not None,
+                "world_model": self.world_model is not None,
+            }
+
+            if self.state_manager:
+                try:
+                    self.state_manager.update_state(
+                        session_id,
+                        last_query=query,
+                    )
+                except Exception as e:
+                    logger.warning("State manager update skipped: %s", e)
+
+            if (
+                intent
+                and intent.name in (
+                    "memory_store",
+                    "memory_update",
+                    "memory_delete",
+                )
+                and self.memory_conversation_manager
+            ):
+
+                logger.info(
+                    "[CognitiveCore] Explicit memory operation: %s",
+                    intent.name,
+                )
+
+                reply = (
+                    await self.memory_conversation_manager.handle(
+                        query=query,
+                        context=context,
+                    )
+                )
+
+                if context.get("memory_compound_request"):
+                    context["memory_result"] = reply or context.get("memory_result")
+                    logger.info(
+                        "[CognitiveCore] Compound memory operation handled; continuing unified pipeline."
+                    )
+                else:
+                    return SystemResponse(
+                        success=True,
+                        confidence=getattr(
+                            intent,
+                            "confidence",
+                            1.0,
+                        ),
+                        source="memory_conversation",
+                        data={
+                            "message": reply,
+                        },
+                    )
+
+            if (
+                self.memory_router
+                and not self.memory_engine
+                and self._should_store_natural_memory(
+                    query=query,
+                    intent=intent,
+                    route=route,
+                )
+            ):
+
+                try:
+
+                    memory_result = (
+                        await self.memory_router
+                        .remember(query)
+                    )
+
+                    if (
+                        memory_result
+                        and memory_result.get("success")
+                    ):
+
+                        if self.event_bus:
+                            try:
+                                await self.event_bus.publish(
+                                    Event(
+                                        type=event_types.MEMORY_CREATED,
+                                        source="memory",
+                                        data={
+                                            "query": query,
+                                        }
+                                    )
+                                )
+                            except Exception as e:
+                                logger.warning("Event bus publish skipped: %s", e)
+
+                        try:
+
+                            refreshed = (
+                                await self.memory_router
+                                .recall(query)
+                            )
+
+                            if refreshed is not None:
+                                memories = self._safe_memory_items(
+                                    refreshed
+                                )
+                                context["memory"] = memories
+
+                        except Exception:
+                            logger.exception(
+                                "[CognitiveCore] Memory refresh "
+                                "failed."
+                            )
+
+                except Exception:
+                    logger.exception(
+                        "[CognitiveCore] Natural memory "
+                        "learning failed."
+                    )
+
+            phase1_selected_agents = list(
+                getattr(
+                    decision,
+                    "selected_agents",
+                    [],
+                )
+                or []
+            )
+
+            phase1_selected_skills = list(
+                getattr(
+                    decision,
+                    "selected_skills",
+                    [],
+                )
+                or []
+            )
+
+            should_run_agent_pipeline = bool(
+                not context.get("memory_compound_request")
+                and self.agent_coordinator
+                and (
+                    phase1_selected_agents
+                    or phase1_selected_skills
+                    or getattr(
+                        decision,
+                        "requires_planning",
+                        False,
+                    )
+                )
+            )
+
+            if should_run_agent_pipeline:
+
+                agent_result = (
+                    await self._run_phase1_agent_pipeline(
+                        query=query,
+                        context=context,
+                        decision=decision,
+                    )
+                )
+
+                if agent_result:
+
+                    context[
+                        "phase1_agent_result"
+                    ] = agent_result
+
+                    context[
+                        "agent_outputs"
+                    ] = agent_result.get(
+                        "outputs",
+                        [],
+                    )
+
+                    context[
+                        "agent_consensus"
+                    ] = agent_result.get(
+                        "consensus"
+                    )
+
+                    try:
+                        fused_agents = (
+                            self.response_fusion.fuse(
+                                agent_result.get(
+                                    "outputs",
+                                    [],
+                                )
+                            )
+                        )
+
+                        context[
+                            "agent_fusion"
+                        ] = fused_agents
+
+                    except Exception:
+                        logger.exception(
+                            "[CognitiveCore] Agent response fusion failed."
+                        )
+
+            self.brain_state["thinking"] = True
+            self.brain_state["reasoning"] = True
+            return await self.knowledge_first_pipeline(
+                session_id,
+                query,
+                context,
+                precomputed_reasoning=reasoning,
+                completed_goal=completed_goal,
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "[CognitiveCore ERROR] Processing failed: %s",
+                exc,
+            )
+
+            try:
+                await self._persist_execution_state(
+                    session_id,
+                    execution_id=locals().get(
+                        "execution_id",
+                        "",
+                    ),
+                    status="failed",
+                    query=query,
+                    error=str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "[CognitiveCore] Failed to persist "
+                    "fatal execution state."
+                )
+
+            if self.event_bus:
+                try:
+                    await self.event_bus.publish(
+                        Event(
+                            type=event_types.ERROR_OCCURRED,
+                            source="cognitive_core",
+                            data={
+                                "query": query,
+                                "error": str(exc),
+                            }
+                        )
+                    )
+                except Exception as e:
+                    logger.warning("Event bus error publish skipped: %s", e)
+
+            return SystemResponse(
+                success=False,
+                confidence=0.0,
+                source="cognitive_core",
+                data={},
+                error=(
+                    "I couldn't complete that operation safely."
+                ),
+            )

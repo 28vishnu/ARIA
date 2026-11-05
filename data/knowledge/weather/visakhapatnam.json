@@ -1,0 +1,11 @@
+{
+  "category": "weather",
+  "fetched_at": "2026-11-05T10:00:47.294561+00:00",
+  "data": {
+    "city": "Visakhapatnam",
+    "temperature_c": 28.4,
+    "wind_speed_kph": 13.0,
+    "weather_code": 0,
+    "time": "2026-11-05T10:00"
+  }
+}

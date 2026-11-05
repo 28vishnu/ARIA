@@ -1,0 +1,10 @@
+{
+  "category": "wikipedia",
+  "fetched_at": "2026-11-05T09:56:31.001268+00:00",
+  "data": {
+    "title": "Artificial intelligence",
+    "description": "Intelligence in machines",
+    "extract": "Artificial intelligence (AI) is the capability of computational systems to perform tasks typically associated with human intelligence, such as learning, reasoning, problem-solving, perception, and decision-making. It is also a field of research spanning computer science, engineering, and mathematics that develops and studies methods and software enabling machines to perceive their environment and use learning and intelligence to take actions that maximise their chances of achieving defined goals.",
+    "url": "https://en.wikipedia.org/wiki/Artificial_intelligence"
+  }
+}

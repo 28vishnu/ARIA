@@ -1,0 +1,10 @@
+{
+  "category": "encyclopedia",
+  "fetched_at": "2026-11-05T09:53:43.778800+00:00",
+  "data": {
+    "topic": "Quantum computing",
+    "description": "Computer hardware technology that uses quantum mechanics",
+    "extract": "A quantum computer is a computer that represents and processes information using quantum states. Quantum computations exploit phenomena such as superposition, interference, and entanglement. Quantum computers have the potential to complete some calculations exponentially faster than classical computers. For example, a large-scale quantum computer could break widely used encryption schemes and aid physicists in performing physical simulations. However, current hardware implementations of quantum computation are largely experimental and suitable for only certain specialized tasks.",
+    "wikipedia_url": "https://en.wikipedia.org/wiki/Quantum_computing"
+  }
+}

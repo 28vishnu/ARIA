@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>JARVIS — Personal Intelligence</title>
+    <!-- Configure first, then load optional presentation libraries asynchronously so offline/slow CDNs cannot block app startup. -->
+    <script>
+        window.__ariaTailwindLoaded = false;
+        window.lucide = window.lucide || { createIcons: function() {} };
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        obsidian: '#06070B',
+                        gold: '#D4AF37',
+                        'gold-light': '#F3E5AB',
+                        'glass-bg': 'rgba(18, 22, 34, 0.72)',
+                        'glass-card': 'rgba(255, 255, 255, 0.04)',
+                        'glass-input': 'rgba(255, 255, 255, 0.07)',
+                    },
+                    fontFamily: {
+                        ios: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+                    },
+                    boxShadow: {
+                        'glass-glow': '0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(212, 175, 55, 0.08)',
+                        'drawer-glow': '25px 0 60px rgba(0, 0, 0, 0.8), 10px 0 30px rgba(123, 44, 191, 0.15)',
+                        'gold-sm': '0 0 15px rgba(212, 175, 55, 0.25)',
+                        'cyan-sm': '0 0 15px rgba(0, 245, 212, 0.25)',
+                    }
+                }
+            }
+        }
+        window.setTimeout(function () {
+            if (!window.__ariaTailwindLoaded) document.documentElement.classList.add('tailwind-unavailable');
+        }, 4500);
+    </script>
+    <script async src="https://cdn.tailwindcss.com" onload="window.__ariaTailwindLoaded=true;document.documentElement.classList.remove('tailwind-unavailable')" onerror="document.documentElement.classList.add('tailwind-unavailable')"></script>
+    <script async src="https://unpkg.com/lucide@latest" onload="if(window.lucide&&window.lucide.createIcons)window.lucide.createIcons()" onerror="window.lucide={createIcons:function(){}}"></script>
+    <style>
+        /* Custom Native iOS Glassmorphism Styles */
+        body {
+            background-color: #06070B;
+            color: #F3F4F6;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+            overflow: hidden;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* High Intensity iOS Glassmorphism */
+        .ios-glass {
+            background: rgba(18, 22, 34, 0.72);
+            backdrop-filter: blur(30px) saturate(210%);
+            -webkit-backdrop-filter: blur(30px) saturate(210%);
+        }
+
+        .ios-glass-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .ios-glass-pill {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .ios-glass-menu {
+            background: rgba(22, 26, 40, 0.88);
+            backdrop-filter: blur(35px) saturate(220%);
+            -webkit-backdrop-filter: blur(35px) saturate(220%);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7), 0 0 40px rgba(212, 175, 55, 0.12);
+        }
+
+        /* Safe Notch Margins */
+        .safe-notch-top {
+            padding-top: max(20px, env(safe-area-inset-top));
+        }
+
+        .safe-notch-bottom {
+            padding-bottom: max(16px, env(safe-area-inset-bottom));
+        }
+
+        /* Ambient Glow Background Orbs */
+        .ambient-orb-1 {
+            position: absolute;
+            top: -10%;
+            left: -10%;
+            width: 50vw;
+            height: 50vw;
+            background: radial-gradient(circle, rgba(123, 44, 191, 0.25) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(60px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .ambient-orb-2 {
+            position: absolute;
+            bottom: -10%;
+            right: -10%;
+            width: 60vw;
+            height: 60vw;
+            background: radial-gradient(circle, rgba(212, 175, 55, 0.15) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(70px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .ambient-orb-3 {
+            position: absolute;
+            top: 40%;
+            right: -20%;
+            width: 45vw;
+            height: 45vw;
+            background: radial-gradient(circle, rgba(0, 245, 212, 0.12) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(212, 175, 55, 0.4);
+        }
+
+        /* Sidebar Transition Logic */
+        #sidebar-drawer {
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 25px 0 60px rgba(0, 0, 0, 0.85);
+            /* CRITICAL: NO BORDER HERE AS REQUESTED */
+            border: none !important;
+        }
+
+        .sidebar-closed {
+            transform: translateX(-100%);
+        }
+
+        .sidebar-open {
+            transform: translateX(0);
+        }
+
+        /* Pulse animation for voice mode */
+        @keyframes pulse-gold {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(212, 175, 55, 0.4); }
+            50% { transform: scale(1.08); box-shadow: 0 0 30px rgba(212, 175, 55, 0.8); }
+        }
+
+        .voice-active {
+            animation: pulse-gold 1.8s infinite ease-in-out;
+            background: linear-gradient(135deg, #D4AF37, #F3E5AB) !important;
+            color: #06070B !important;
+        }
+
+
+        /* Resilient fallback: retain a usable layout when a device cannot reach the CSS CDN. */
+        .hidden { display: none !important; }
+        .tailwind-unavailable body { background:#06070B; color:#F3F4F6; }
+        .tailwind-unavailable #app-root { position:relative; display:flex; flex-direction:column; width:100%; height:100%; overflow:hidden; }
+        .tailwind-unavailable #main-header { position:absolute; z-index:30; left:0; right:0; display:flex; align-items:center; justify-content:space-between; min-height:62px; }
+        .tailwind-unavailable #chat-scroll-area { position:absolute; top:68px; left:0; right:0; bottom:112px; overflow-y:auto; padding:16px; }
+        .tailwind-unavailable #welcome-container { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; min-height:100%; }
+        .tailwind-unavailable #messages-container { max-width:760px; margin:0 auto; }
+        .tailwind-unavailable #composer-root { position:absolute; z-index:20; left:0; right:0; bottom:0; padding:8px 10px max(8px, env(safe-area-inset-bottom)); }
+        .tailwind-unavailable #composer-capsule { display:flex; align-items:center; gap:8px; padding:8px; border-radius:24px; }
+        .tailwind-unavailable #user-input { flex:1; min-width:0; color:#fff; background:transparent; border:0; font-size:16px; }
+        .tailwind-unavailable button { color:#f3f4f6; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:8px; }
+        .tailwind-unavailable #sidebar-drawer { position:fixed; top:0; bottom:0; left:0; width:min(82vw,320px); z-index:50; display:flex; flex-direction:column; background:rgba(18,22,34,.96); }
+        .tailwind-unavailable .sidebar-closed { transform:translateX(-110%); }
+        .tailwind-unavailable .sidebar-open { transform:translateX(0); }
+        .tailwind-unavailable .ios-glass, .tailwind-unavailable .ios-glass-card, .tailwind-unavailable .ios-glass-pill, .tailwind-unavailable .ios-glass-menu { background:rgba(18,22,34,.92); border:1px solid rgba(255,255,255,.1); }
+        .tailwind-unavailable .message-content { overflow-wrap:anywhere; white-space:pre-wrap; line-height:1.6; }
+
+        /* Responsive viewport + keyboard-safe mobile layout */
+        :root { --app-vh: 100dvh; --composer-height: 100px; }
+        html, body { width:100%; height:100%; height:var(--app-vh); min-height:0; margin:0; overflow:hidden; }
+        body { position:fixed; inset:0; overscroll-behavior:none; }
+        #app-root { height:var(--app-vh) !important; min-height:0; }
+        #main-header { position:absolute; top:0; padding-top:max(8px, env(safe-area-inset-top)); padding-bottom:10px; min-height:64px; }
+        #chat-scroll-area { position:absolute; inset:64px 0 calc(var(--composer-height) + env(safe-area-inset-bottom)) 0; height:auto; min-height:0; padding-top:14px !important; padding-bottom:18px !important; overscroll-behavior:contain; scroll-padding-bottom:18px; }
+        #welcome-container { min-height:100%; height:auto !important; justify-content:center; padding-top:20px !important; padding-bottom:24px !important; }
+        #messages-container { width:100%; max-width:760px; margin-inline:auto; padding-bottom:12px; overflow-wrap:anywhere; word-break:break-word; }
+        #messages-container a { overflow-wrap:anywhere; word-break:break-word; }
+        #composer-root { position:absolute !important; left:0; right:0; bottom:0; padding:8px 12px max(8px, env(safe-area-inset-bottom)); background:linear-gradient(180deg, transparent, rgba(6,7,11,.92) 24%); }
+        #composer-capsule { width:100%; min-width:0; display:flex; align-items:center; gap:5px; padding:7px; border-radius:24px; }
+        #composer-capsule > button { flex:0 0 38px; width:38px; height:38px; min-width:38px; padding:8px; display:flex; align-items:center; justify-content:center; }
+        #user-input { flex:1 1 0%; min-width:0; width:0; font-size:16px !important; padding:8px 3px; }
+        #composer-root .composer-caption { margin-top:5px; }
+        .message-content { min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:break-word; white-space:pre-wrap; line-height:1.65; }
+        .source-list { display:flex; flex-wrap:wrap; gap:7px; min-width:0; }
+        .source-link { max-width:100%; min-width:0; overflow-wrap:anywhere; }
+        .typing-indicator { display:flex; align-items:center; gap:6px; color:rgba(255,255,255,.58); font-size:12px; }
+        .typing-dot { width:5px; height:5px; border-radius:50%; background:#D4AF37; animation:typingPulse 1.1s infinite ease-in-out; }
+        .typing-dot:nth-child(2) { animation-delay:.15s; } .typing-dot:nth-child(3) { animation-delay:.3s; }
+        @keyframes typingPulse { 0%,80%,100% {opacity:.25; transform:translateY(0)} 40% {opacity:1; transform:translateY(-3px)} }
+        @media (max-width:380px) {
+          #main-header { padding-left:12px; padding-right:12px; }
+          #btn-model-selector { max-width:190px; gap:6px; padding-inline:10px; }
+          #active-model-name { max-width:125px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          #composer-root { padding-left:8px; padding-right:8px; }
+          #composer-capsule > button { flex-basis:34px; width:34px; min-width:34px; height:36px; }
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col overflow-hidden select-none bg-obsidian">
+
+    <!-- Ambient Glow Background Canvas -->
+    <div class="ambient-orb-1"></div>
+    <div class="ambient-orb-2"></div>
+    <div class="ambient-orb-3"></div>
+
+    <!-- MAIN ROOT CONTAINER -->
+    <div id="app-root" class="relative w-full h-full flex flex-col z-10 overflow-hidden">
+
+        <section id="notification-panel" class="hidden fixed z-[90] top-20 right-3 left-3 sm:left-auto sm:w-[390px] max-h-[70vh] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 backdrop-blur-2xl shadow-2xl text-white" aria-label="JARVIS notifications">
+            <div class="flex items-center justify-between p-4 border-b border-white/10">
+                <div><div class="font-bold text-sm">JARVIS Notifications</div><div class="text-[11px] text-white/50">Alerts and newly acquired headlines</div></div>
+                <button onclick="closeNotifications()" class="p-2 rounded-lg hover:bg-white/10" aria-label="Close notifications"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+            <div id="notification-items" class="overflow-y-auto max-h-[55vh] p-3 space-y-2"><div class="text-xs text-white/50 p-3">Loading notifications…</div></div>
+        </section>
+
+        <!-- FIXED TOP HEADER (Non-Scrolling with Notch Inset) -->
+        <header id="main-header" class="safe-notch-top fixed top-0 left-0 right-0 z-30 ios-glass border-b border-white/5 px-4 pb-3 flex items-center justify-between">
+            
+            <!-- Left: 3-Line iOS Hamburger Button -->
+            <button id="btn-open-sidebar" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" aria-label="Open Sidebar">
+                <i data-lucide="menu" class="w-5 h-5"></i>
+            </button>
+
+            <!-- Center: Model Selector Pill -->
+            <div class="relative">
+                <button id="btn-model-selector" class="ios-glass-pill px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs font-semibold tracking-wide text-white/90 hover:border-gold/40 transition-all">
+                    <span id="active-model-icon" class="text-gold"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i></span>
+                    <span id="active-model-name" class="font-bold text-white">JARVIS Backend</span>
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-white/50"></i>
+                </button>
+
+                <!-- Model Picker Dropdown -->
+                <div id="model-dropdown" class="hidden absolute top-10 left-1/2 -translate-x-1/2 w-64 ios-glass-menu rounded-2xl p-2 z-50 border border-white/10 text-xs">
+                    <div class="text-[10px] uppercase font-bold text-white/40 px-3 py-1.5 tracking-wider">AI Engines</div>
+                    
+                    <button onclick="switchEngine('chatgpt-4o', 'ChatGPT-4o', 'sparkles', '#D4AF37')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-1.5 rounded-lg bg-amber-500/20 text-gold"><i data-lucide="sparkles" class="w-4 h-4"></i></div>
+                            <div>
+                                <div class="font-bold text-white">ChatGPT-4o</div>
+                                <div class="text-[10px] text-white/50">Omni multimodal reasoning</div>
+                            </div>
+                        </div>
+                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon" id="check-chatgpt-4o"></i>
+                    </button>
+
+                    <button onclick="switchEngine('gemini-1.5', 'Gemini 1.5 Pro', 'cpu', '#00F5D4')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400"><i data-lucide="cpu" class="w-4 h-4"></i></div>
+                            <div>
+                                <div class="font-bold text-white">Gemini 1.5 Pro</div>
+                                <div class="text-[10px] text-white/50">1M Token context & vision</div>
+                            </div>
+                        </div>
+                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon hidden" id="check-gemini-1.5"></i>
+                    </button>
+
+                    <button onclick="switchEngine('perplexity-pro', 'Perplexity Pro', 'globe', '#9D4EDD')" class="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-left transition-all">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><i data-lucide="globe" class="w-4 h-4"></i></div>
+                            <div>
+                                <div class="font-bold text-white">Perplexity Pro</div>
+                                <div class="text-[10px] text-white/50">Live web & citation research</div>
+                            </div>
+                        </div>
+                        <i data-lucide="check" class="w-4 h-4 text-gold check-icon hidden" id="check-perplexity-pro"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right: in-app notification inbox + new chat -->
+            <button id="btn-notifications" onclick="openNotifications()" class="relative p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" title="Notifications" aria-label="Notifications">
+                <i data-lucide="bell" class="w-5 h-5"></i>
+                <span id="notification-dot" class="hidden absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-400 ring-2 ring-slate-950"></span>
+            </button>
+            <button onclick="startNewChat()" class="p-2.5 rounded-full bg-white/5 active:scale-95 transition-all text-white/90 hover:text-gold hover:bg-white/10" title="New Chat">
+                <i data-lucide="square-pen" class="w-5 h-5"></i>
+            </button>
+        </header>
+
+        <!-- CHAT MESSAGES SCROLL AREA (Only middle container scrolls) -->
+        <main id="chat-scroll-area" class="flex-1 overflow-y-auto px-4 pt-24 pb-36 space-y-6">
+            
+            <!-- WELCOME SCREEN (Shown when activeChat is empty) -->
+            <div id="welcome-container" class="h-full flex flex-col items-center justify-center text-center px-4 max-w-lg mx-auto py-12">
+                <div class="w-16 h-16 rounded-3xl ios-glass-pill flex items-center justify-center text-gold shadow-gold-sm mb-6 border border-gold/30">
+                    <i data-lucide="bot" class="w-8 h-8"></i>
+                </div>
+                <h1 class="text-2xl font-black tracking-tight text-white mb-2">JARVIS Intelligence</h1>
+                <p class="text-xs text-white/60 mb-8 max-w-xs leading-relaxed">
+                    Your private assistant for knowledge, coding, planning, and daily updates.
+                </p>
+
+                <!-- Feature Quick Toggles Grid -->
+                <div class="grid grid-cols-2 gap-3 w-full mb-6">
+                    <button onclick="quickPrompt('Perform deep research on quantum computing advancements in 2026')" class="ios-glass-card p-3.5 rounded-2xl text-left hover:border-gold/40 transition-all group">
+                        <div class="flex items-center gap-2 text-purple-400 font-bold text-xs mb-1">
+                            <i data-lucide="search" class="w-3.5 h-3.5"></i> Deep Research
+                        </div>
+                        <div class="text-[11px] text-white/70 group-hover:text-white line-clamp-2">Quantum computing breakthroughs 2026</div>
+                    </button>
+
+                    <button onclick="quickPrompt('Analyze code for performance bottlenecks and suggest optimizations')" class="ios-glass-card p-3.5 rounded-2xl text-left hover:border-gold/40 transition-all group">
+                        <div class="flex items-center gap-2 text-cyan-400 font-bold text-xs mb-1">
+                            <i data-lucide="code-2" class="w-3.5 h-3.5"></i> Canvas & Code
+                        </div>
+                        <div class="text-[11px] text-white/70 group-hover:text-white line-clamp-2">Code optimizer & Canvas mode</div>
+                    </button>
+
+                    <button onclick="quickPrompt('Generate a high quality photorealistic image of a futuristic floating lotus city')" class="ios-glass-card p-3.5 rounded-2xl text-left hover:border-gold/40 transition-all group">
+                        <div class="flex items-center gap-2 text-gold font-bold text-xs mb-1">
+                            <i data-lucide="image" class="w-3.5 h-3.5"></i> Multimodal
+                        </div>
+                        <div class="text-[11px] text-white/70 group-hover:text-white line-clamp-2">Generate image or upload documents</div>
+                    </button>
+
+                    <button onclick="toggleVoiceMode()" class="ios-glass-card p-3.5 rounded-2xl text-left hover:border-gold/40 transition-all group">
+                        <div class="flex items-center gap-2 text-emerald-400 font-bold text-xs mb-1">
+                            <i data-lucide="mic" class="w-3.5 h-3.5"></i> Live Voice
+                        </div>
+                        <div class="text-[11px] text-white/70 group-hover:text-white line-clamp-2">Realtime voice conversation model</div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- DYNAMIC CHAT FEED CONTAINER -->
+            <div id="messages-container" class="hidden max-w-2xl mx-auto space-y-6">
+                <!-- Messages appended dynamically here -->
+            </div>
+        </main>
+
+        <!-- FLOATING BOTTOM GLASS INPUT BAR -->
+        <div id="composer-root" class="fixed bottom-0 left-0 right-0 z-20 px-3 safe-notch-bottom pointer-events-none">
+            <div class="max-w-2xl mx-auto pointer-events-auto">
+                
+                <!-- Perplexity Search Bar Mode Indicator (Hidden by default) -->
+                <div id="perplexity-badge" class="hidden mb-2 px-3 py-1 rounded-full ios-glass-pill w-max flex items-center gap-2 text-[11px] text-purple-300 font-bold border border-purple-500/30">
+                    <i data-lucide="globe" class="w-3.5 h-3.5 text-purple-400"></i>
+                    <span>Pro Search / Deep Web Grounding Active</span>
+                    <button onclick="toggleProSearch()" class="ml-1 text-white/40 hover:text-white"><i data-lucide="x" class="w-3 h-3"></i></button>
+                </div>
+
+                <!-- Main Glass Input Capsule -->
+                <div id="composer-capsule" class="ios-glass p-2 rounded-3xl border border-white/10 shadow-glass-glow flex items-center gap-2">
+                    
+                    <!-- File / Attachment Plus Button -->
+                    <button onclick="triggerFileUpload()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all active:scale-95" title="Attach file or image">
+                        <i data-lucide="plus" class="w-5 h-5"></i>
+                    </button>
+                    <input type="file" id="file-input" class="hidden" onchange="handleFileSelect(event)">
+
+                    <!-- Perplexity Deep Research Toggle Button -->
+                    <button id="btn-pro-search" onclick="toggleProSearch()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-purple-400 transition-all active:scale-95" title="Toggle Perplexity Deep Research">
+                        <i data-lucide="globe" class="w-5 h-5"></i>
+                    </button>
+
+                    <!-- Text Input -->
+                    <input type="text" id="user-input" placeholder="Ask JARVIS anything..." class="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/40 px-2 font-medium" onkeydown="handleKeyPress(event)">
+
+                    <!-- Voice Mode Button -->
+                    <button id="btn-voice-mode" onclick="toggleVoiceMode()" class="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-gold transition-all active:scale-95" title="Voice Conversation">
+                        <i data-lucide="mic" class="w-5 h-5"></i>
+                    </button>
+
+                    <!-- Send Button -->
+                    <button id="btn-send" onclick="sendMessage()" class="p-2.5 rounded-full bg-gold text-obsidian font-bold shadow-gold-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
+                        <i data-lucide="arrow-up" class="w-5 h-5 stroke-[2.5]"></i>
+                    </button>
+                </div>
+
+                <div class="composer-caption text-center text-[10px] text-white/30 mt-2 font-medium">
+                    JARVIS Backend • Real requests • Responses and sources from backend
+                </div>
+            </div>
+        </div>
+
+        <!-- SIDEBAR DRAWER OVERLAY BACKDROP -->
+        <div id="sidebar-overlay" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity opacity-0" onclick="closeSidebar()"></div>
+
+        <!-- SLIDING SIDEBAR DRAWER (No border, rich glass shadow) -->
+        <aside id="sidebar-drawer" class="sidebar-closed fixed top-0 bottom-0 left-0 w-[82vw] max-w-xs ios-glass z-50 flex flex-col justify-between safe-notch-top safe-notch-bottom">
+            
+            <!-- TOP SECTION (Fixed Search & New Chat) -->
+            <div class="p-4 space-y-3 flex-shrink-0">
+                
+                <!-- Sidebar Top Title & Close Button -->
+                <div class="flex items-center justify-between pb-2">
+                    <div class="flex items-center gap-2">
+                        <div class="w-7 h-7 rounded-xl bg-gold/20 flex items-center justify-center text-gold border border-gold/30">
+                            <i data-lucide="bot" class="w-4 h-4"></i>
+                        </div>
+                        <span class="font-black text-base tracking-tight text-white">AURA</span>
+                    </div>
+                    <button onclick="closeSidebar()" class="p-1.5 rounded-full bg-white/5 text-white/60 hover:text-white">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+
+                <!-- Search Input -->
+                <div class="relative">
+                    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/40"></i>
+                    <input type="text" id="search-chats-input" onkeyup="filterChats()" placeholder="Find a conversation..." class="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-white/40 outline-none focus:border-gold/50 transition-all">
+                </div>
+
+                <!-- New Chat Button -->
+                <button onclick="startNewChat(); closeSidebar();" class="w-full ios-glass-pill p-2.5 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-white hover:border-gold/40 active:scale-95 transition-all">
+                    <i data-lucide="plus" class="w-4 h-4 text-gold"></i>
+                    <span>New Conversation</span>
+                </button>
+            </div>
+
+            <!-- MIDDLE SECTION (INDEPENDENTLY SCROLLABLE CHATS) -->
+            <div id="sidebar-chats-scroll" class="flex-1 overflow-y-auto px-4 py-2 space-y-4">
+                
+                <!-- PINNED CHATS SECTION -->
+                <div id="pinned-chats-wrapper" class="space-y-1">
+                    <div class="text-[10px] uppercase font-bold text-white/40 tracking-wider px-2 py-1 flex items-center gap-1.5">
+                        <i data-lucide="pin" class="w-3 h-3 text-gold"></i> Pinned Chats
+                    </div>
+                    <div id="pinned-chats-list" class="space-y-1">
+                        <!-- Pinned chat items inserted here dynamically -->
+                    </div>
+                </div>
+
+                <!-- RECENT CHATS SECTION -->
+                <div class="space-y-1">
+                    <div class="text-[10px] uppercase font-bold text-white/40 tracking-wider px-2 py-1 flex items-center gap-1.5">
+                        <i data-lucide="clock" class="w-3 h-3 text-cyan-400"></i> Recents
+                    </div>
+                    <div id="recent-chats-list" class="space-y-1">
+                        <!-- Recent chat items inserted here dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- BOTTOM USER PROFILE CARD (STRICTLY PINNED AT BOTTOM) -->
+            <div class="p-4 border-t border-white/5 flex-shrink-0 bg-black/20">
+                <div class="ios-glass-card p-3 rounded-2xl flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-gold to-amber-200 text-obsidian font-extrabold flex items-center justify-center text-sm shadow-gold-sm">
+                            S
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-white">JARVIS Personal</div>
+                            <div class="text-[10px] text-white/50">Pro Subscriber • Unlimited</div>
+                        </div>
+                    </div>
+                    <button class="text-white/40 hover:text-white p-1.5 rounded-lg hover:bg-white/5">
+                        <i data-lucide="more-horizontal" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- CRITICAL Z-INDEX FIX: TOP-LEVEL CHAT CONTEXT MENU POPUP (Z-INDEX 9999) -->
+        <div id="chat-context-menu" class="hidden fixed w-52 ios-glass-menu rounded-2xl p-2 text-xs border border-white/15 z-[9999] shadow-glass-glow">
+            <div id="context-chat-title" class="px-3 py-1.5 font-bold text-white/90 border-b border-white/10 mb-1 truncate">Chat Options</div>
+            
+            <button onclick="contextAction('pin')" class="w-full flex items-center gap-2.5 p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 text-left transition-all">
+                <i data-lucide="pin" class="w-4 h-4 text-gold"></i>
+                <span id="context-pin-text">Pin chat</span>
+            </button>
+
+            <button onclick="contextAction('rename')" class="w-full flex items-center gap-2.5 p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 text-left transition-all">
+                <i data-lucide="edit-3" class="w-4 h-4 text-cyan-400"></i>
+                <span>Rename chat</span>
+            </button>
+
+            <button onclick="contextAction('archive')" class="w-full flex items-center gap-2.5 p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 text-left transition-all">
+                <i data-lucide="archive" class="w-4 h-4 text-amber-400"></i>
+                <span>Archive chat</span>
+            </button>
+
+            <div class="my-1 border-t border-white/10"></div>
+
+            <button onclick="contextAction('delete')" class="w-full flex items-center gap-2.5 p-2 rounded-xl text-red-400 hover:bg-red-500/20 text-left transition-all">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                <span>Delete chat</span>
+            </button>
+        </div>
+
+    </div>
+
+    <!-- JAVASCRIPT APP LOGIC & GESTURES -->
+    <script>
+        // APP STATE MANAGEMENT
+        let currentEngine = 'aria-backend'; // UI label only; backend chooses its configured model
+        let isProSearch = false;
+        let isVoiceActive = false;
+        let contextTargetChatId = null;
+
+        // Durable on-device chat history. WebView DOM storage is enabled by the native activity.
+        // Chats and pin state survive app restarts; clearing app data/uninstalling removes local data.
+        const CHAT_STORAGE_KEY = 'aria_glass_chats_v2';
+        const LEGACY_CHAT_STORAGE_KEY = 'aria_glass_chats';
+        const ACTIVE_CHAT_STORAGE_KEY = 'aria_glass_active_chat';
+        let chatsDatabase = loadSavedChats();
+        let pendingRequests = new Map();
+        let requestCounter = 0;
+        let activeChatId = localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) || null;
+        const sessionId = 'android-' + (localStorage.getItem('aria-session-id') || (() => { const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()); localStorage.setItem('aria-session-id', id); return id; })());
+
+        function loadSavedChats() {
+            try {
+                let raw = localStorage.getItem(CHAT_STORAGE_KEY);
+                if (!raw) raw = localStorage.getItem(LEGACY_CHAT_STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : [];
+                if (!Array.isArray(parsed)) return [];
+                return parsed.filter(c => c && typeof c.id === 'string' && Array.isArray(c.messages))
+                    .map(c => ({
+                        id: c.id,
+                        title: String(c.title || 'New conversation').slice(0, 160),
+                        pinned: Boolean(c.pinned),
+                        archived: Boolean(c.archived),
+                        engine: String(c.engine || 'aria-backend'),
+                        updated: String(c.updated || ''),
+                        messages: c.messages.filter(m => m && typeof m === 'object' && ['user','assistant'].includes(m.role))
+                            .map(m => ({ role: m.role, text: String(m.text ?? ''), sources: normalizeSources(m.sources || []) }))
+                    }));
+            } catch (error) {
+                console.error('Could not load saved JARVIS chats', error);
+                return [];
+            }
+        }
+
+        function saveChats() {
+            try {
+                localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatsDatabase));
+                localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId || '');
+                return true;
+            } catch (error) {
+                console.error('Could not persist JARVIS chats', error);
+                showStatus('Chat storage is full or unavailable. Export your important chats before clearing app data.');
+                return false;
+            }
+        }
+
+        function touchChat(chat) {
+            if (!chat) return;
+            chat.updated = new Date().toISOString();
+            saveChats();
+        }
+
+        function restoreLastChat() {
+            if (activeChatId && chatsDatabase.some(c => c.id === activeChatId && !c.archived)) {
+                loadChat(activeChatId, false);
+            } else {
+                activeChatId = null;
+                saveChats();
+                document.getElementById('messages-container').innerHTML = '';
+                document.getElementById('messages-container').classList.add('hidden');
+                document.getElementById('welcome-container').classList.remove('hidden');
+            }
+        }
+
+
+        // Flush the latest state when Android backgrounds the WebView.
+        window.addEventListener('pagehide', saveChats);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') saveChats();
+        });
+
+        // INITIALIZATION
+        window.addEventListener('DOMContentLoaded', () => {
+            if (!window.lucide) window.lucide = { createIcons: function() {} };
+            if (typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+            renderSidebarChats();
+            restoreLastChat();
+            initGestureListeners();
+            updateViewportLayout();
+            window.addEventListener('resize', updateViewportLayout);
+            window.addEventListener('orientationchange', () => setTimeout(updateViewportLayout, 250));
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', updateViewportLayout);
+                window.visualViewport.addEventListener('scroll', updateViewportLayout);
+            }
+
+            // Handle Model Dropdown Toggle
+            const modelBtn = document.getElementById('btn-model-selector');
+            const modelDropdown = document.getElementById('model-dropdown');
+            
+            modelBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                modelDropdown.classList.toggle('hidden');
+            });
+
+            document.addEventListener('click', () => {
+                modelDropdown.classList.add('hidden');
+                hideContextMenu();
+            });
+
+            // Prevent closing when clicking inside dropdown
+            modelDropdown.addEventListener('click', (e) => e.stopPropagation());
+        });
+
+        // RESTART / NEW CHAT STATE FIX
+        function startNewChat() {
+            activeChatId = null;
+            saveChats();
+            document.getElementById('messages-container').innerHTML = '';
+            document.getElementById('messages-container').classList.add('hidden');
+            document.getElementById('welcome-container').classList.remove('hidden');
+            document.getElementById('user-input').value = '';
+            renderSidebarChats();
+        }
+
+        // LOAD AN EXISTING CHAT
+        function loadChat(chatId, closeDrawer = true) {
+            const chat = chatsDatabase.find(c => c.id === chatId && !c.archived);
+            if (!chat) return;
+            activeChatId = chatId;
+            saveChats();
+
+            const container = document.getElementById('messages-container');
+            container.innerHTML = '';
+            
+            chat.messages.forEach(msg => {
+                appendMessageToUI(msg.role, msg.text, msg.sources);
+            });
+
+            document.getElementById('welcome-container').classList.add('hidden');
+            container.classList.remove('hidden');
+            scrollToBottom();
+            renderSidebarChats();
+            if (closeDrawer) closeSidebar();
+        }
+
+        // Real backend request path through the native Android bridge (no simulated replies).
+        function sendMessage() {
+            const input = document.getElementById('user-input');
+            const text = input.value.trim();
+            if (!text || !window.AriaNative) {
+                if (!window.AriaNative) showStatus('JARVIS native bridge is unavailable. Reopen the app.');
+                return;
+            }
+            if (!window.AriaNative.isSignedIn()) {
+                const secret = window.prompt('Sign in to your private JARVIS backend. Enter your JARVIS app password:');
+                if (!secret) { showStatus('Sign-in is required before sending messages.'); return; }
+                showStatus('Signing in to JARVIS…');
+                window.__pendingFirstMessage = text;
+                window.AriaNative.signIn(secret);
+                input.value = '';
+                return;
+            }
+            if (!activeChatId) {
+                activeChatId = 'c_' + Date.now();
+                chatsDatabase.unshift({ id:activeChatId, title:text.length > 36 ? text.slice(0,36)+'…' : text, pinned:false, archived:false, engine:currentEngine, updated:new Date().toISOString(), messages:[] });
+            }
+            const currentChat = chatsDatabase.find(c => c.id === activeChatId);
+            document.getElementById('welcome-container').classList.add('hidden');
+            document.getElementById('messages-container').classList.remove('hidden');
+            appendMessageToUI('user', text);
+            currentChat.messages.push({role:'user', text, sources:[]});
+            touchChat(currentChat);
+            input.value = '';
+            input.style.height = '';
+            const requestId = 'req_' + (++requestCounter) + '_' + Date.now();
+            const typing = appendTypingIndicator();
+            pendingRequests.set(requestId, { chatId:activeChatId, typing });
+            setComposerBusy(true);
+            window.AriaNative.chat(requestId, text, sessionId);
+            renderSidebarChats();
+            setTimeout(scrollToBottom, 60);
+        }
+
+        window.onAriaLoginResult = function(result) {
+            if (!result || !result.success) { showStatus((result && result.message) || 'JARVIS sign-in failed.'); return; }
+            showStatus('Connected to JARVIS.');
+            const queued = window.__pendingFirstMessage;
+            window.__pendingFirstMessage = null;
+            if (queued) { document.getElementById('user-input').value = queued; sendMessage(); }
+        };
+
+        window.onAriaChatResult = function(result) {
+            if (!result) return;
+            const pending = pendingRequests.get(String(result.requestId || ''));
+            if (pending) {
+                if (pending.typing && pending.typing.parentNode) pending.typing.remove();
+                pendingRequests.delete(String(result.requestId || ''));
+            }
+            setComposerBusy(pendingRequests.size > 0);
+            if (result.authRequired) { showStatus(result.message || 'Please sign in again.'); return; }
+            const chat = chatsDatabase.find(c => c.id === (pending && pending.chatId));
+            if (!chat) { showStatus('The reply arrived, but its conversation no longer exists.'); return; }
+            let reply = result.reply || result.answer || result.message || 'JARVIS returned an empty response.';
+            let sources = [];
+            if (result.success) {
+                const extracted = extractSourcesFromReply(reply);
+                reply = extracted.reply;
+                sources = normalizeSources([...(Array.isArray(result.sources) ? result.sources : []), ...(Array.isArray(result.citations) ? result.citations : []), ...(Array.isArray(result.references) ? result.references : []), ...extracted.sources]);
+                sources = [...new Map(sources.map(source => [source.url, source])).values()];
+            } else {
+                reply = String(result.reply || result.message || 'The JARVIS request failed.');
+            }
+            chat.messages.push({role:'assistant', text:String(reply), sources});
+            if (isVoiceActive && window.AriaNative && typeof window.AriaNative.speak === 'function') {
+                window.AriaNative.speak(String(reply));
+            }
+            touchChat(chat);
+            // Only render into the visible pane if the user is still viewing this conversation.
+            if (activeChatId === chat.id) appendMessageToUI('assistant', reply, sources);
+            renderSidebarChats();
+            if (!result.success) showStatus(result.message || 'JARVIS request failed.');
+        };
+
+        function extractSourcesFromReply(text) {
+            const raw = String(text || '');
+            const marker = /\n\s*(?:sources|references|citations)\s*:\s*\n/i;
+            const match = marker.exec(raw);
+            if (!match) return { reply:raw, sources:[] };
+            const sectionStart = match.index + match[0].length;
+            const section = raw.slice(sectionStart);
+            const sources = [];
+            const urlPattern = /https?:\/\/[^\s)<>]+/gi;
+            for (const line of section.split(/\r?\n/)) {
+                const urls = line.match(urlPattern) || [];
+                for (const url of urls) {
+                    const clean = url.replace(/[.,;]+$/, '');
+                    const before = line.slice(0, line.indexOf(url)).replace(/^\s*[•*\-]\s*/, '').replace(/\s*[—–-]\s*$/, '').trim();
+                    try { sources.push({title:before || new URL(clean).hostname, url:clean}); } catch (_) {}
+                }
+            }
+            return { reply:raw.slice(0, match.index).trim(), sources };
+        }
+
+        function normalizeSources(items) {
+            if (!Array.isArray(items)) return [];
+            return items.map(item => {
+                if (typeof item === 'string') return {title:item, url:item};
+                if (!item || typeof item !== 'object') return null;
+                const url = item.url || item.link || item.href || item.source_url || '';
+                const title = item.title || item.name || item.domain || item.source || url;
+                return {title:String(title || 'Source'), url:String(url || '')};
+            }).filter(s => /^https?:\/\//i.test(s.url));
+        }
+
+        function appendTypingIndicator() {
+            const container = document.getElementById('messages-container');
+            const row = document.createElement('div'); row.className = 'flex justify-start';
+            row.innerHTML = '<div class="ios-glass-card rounded-2xl px-4 py-3"><div class="typing-indicator"><span>JARVIS is thinking</span><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div></div>';
+            container.appendChild(row); scrollToBottom(); return row;
+        }
+        function setComposerBusy(busy) {
+            const btn = document.getElementById('btn-send');
+            if (!btn) return;
+            btn.disabled = !!busy; btn.style.opacity = busy ? '.65' : '1';
+            btn.innerHTML = busy ? '<i data-lucide="loader-circle" class="w-5 h-5"></i>' : '<i data-lucide="arrow-up" class="w-5 h-5"></i>';
+            if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+        }
+        function showStatus(message) {
+            let el = document.getElementById('aria-status');
+            if (!el) { el=document.createElement('div'); el.id='aria-status'; el.className='fixed left-4 right-4 z-[80] mx-auto max-w-md rounded-xl border border-white/10 bg-slate-900/95 px-4 py-3 text-sm text-white shadow-2xl'; el.style.bottom='calc(var(--composer-height) + env(safe-area-inset-bottom) + 10px)'; document.body.appendChild(el); }
+            el.textContent=message; el.classList.remove('hidden'); clearTimeout(window.__ariaStatusTimer); window.__ariaStatusTimer=setTimeout(()=>el.classList.add('hidden'),4200);
+        }
+
+        function quickPrompt(promptText) {
+            document.getElementById('user-input').value = promptText;
+            sendMessage();
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+        }
+
+        // Render text as textContent (never inject backend text as HTML).
+        function appendMessageToUI(role, text, sources = []) {
+            const container = document.getElementById('messages-container');
+            const isUser = role === 'user';
+            const wrapper = document.createElement('div');
+            wrapper.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-[92%] sm:max-w-[82%] min-w-0 p-4 rounded-3xl ${isUser ? 'bg-gradient-to-r from-gold to-amber-300 text-obsidian font-semibold rounded-br-md shadow-gold-sm' : 'ios-glass-card text-white rounded-bl-md border border-white/10'}`;
+            if (!isUser) {
+                const heading=document.createElement('div'); heading.className='flex items-center gap-2 mb-2 text-gold font-bold text-xs';
+                heading.innerHTML='<i data-lucide="bot" class="w-4 h-4"></i><span>JARVIS</span>'; bubble.appendChild(heading);
+            }
+            const body=document.createElement('div'); body.className='message-content text-sm'; body.textContent=String(text ?? ''); bubble.appendChild(body);
+            const safeSources=normalizeSources(sources);
+            if (!isUser && safeSources.length) {
+                const section=document.createElement('div'); section.className='mt-4 pt-3 border-t border-white/10';
+                const title=document.createElement('div'); title.className='text-[11px] font-bold text-purple-300 uppercase tracking-wider mb-2 flex items-center gap-2'; title.innerHTML='<i data-lucide="globe" class="w-3.5 h-3.5"></i><span>Sources</span>'; section.appendChild(title);
+                const list=document.createElement('div'); list.className='source-list';
+                safeSources.forEach(source=>{ const a=document.createElement('a'); a.className='source-link ios-glass-pill px-3 py-2 rounded-xl text-xs text-white/85 hover:text-gold inline-flex items-center gap-2'; a.href=source.url; a.target='_blank'; a.rel='noopener noreferrer'; a.innerHTML='<i data-lucide="external-link" class="w-3 h-3 flex-shrink-0"></i>'; const label=document.createElement('span'); label.textContent=source.title || new URL(source.url).hostname; a.appendChild(label); list.appendChild(a); });
+                section.appendChild(list); bubble.appendChild(section);
+            }
+            wrapper.appendChild(bubble); container.appendChild(wrapper); if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons(); scrollToBottom(); return wrapper;
+        }
+
+        function scrollToBottom() {
+            const scrollArea = document.getElementById('chat-scroll-area');
+            scrollArea.scrollTop = scrollArea.scrollHeight;
+        }
+
+        // SIDEBAR CHATS RENDERING
+        function renderSidebarChats() {
+            const pinnedList = document.getElementById('pinned-chats-list');
+            const recentList = document.getElementById('recent-chats-list');
+
+            pinnedList.innerHTML = '';
+            recentList.innerHTML = '';
+
+            const visibleChats = chatsDatabase.filter(c => !c.archived);
+            const pinned = visibleChats.filter(c => c.pinned);
+            const recents = visibleChats.filter(c => !c.pinned);
+
+            if (pinned.length === 0) {
+                pinnedList.innerHTML = `<div class="text-[11px] text-white/30 italic px-2 py-1">No pinned chats</div>`;
+            } else {
+                pinned.forEach(c => pinnedList.appendChild(createChatItemElement(c)));
+            }
+
+            if (recents.length === 0) {
+                recentList.innerHTML = `<div class="text-[11px] text-white/30 italic px-2 py-1">No recent chats</div>`;
+            } else {
+                recents.forEach(c => recentList.appendChild(createChatItemElement(c)));
+            }
+
+            if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+        }
+
+        function createChatItemElement(chat) {
+            const div = document.createElement('div');
+            const isActive = chat.id === activeChatId;
+            div.className = `group relative flex items-center justify-between p-2.5 rounded-xl transition-all ${isActive ? 'bg-white/15 text-white font-bold' : 'text-white/70 hover:bg-white/5 hover:text-white'}`;
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'flex items-center gap-2.5 truncate cursor-pointer flex-1 text-left min-w-0';
+            open.addEventListener('click', () => loadChat(chat.id));
+            const icon = document.createElement('i');
+            icon.setAttribute('data-lucide', chat.pinned ? 'pin' : 'message-square');
+            icon.className = `w-3.5 h-3.5 ${chat.pinned ? 'text-gold' : 'text-white/40'} flex-shrink-0`;
+            const title = document.createElement('span');
+            title.className = 'text-xs truncate';
+            title.textContent = chat.title;
+            open.append(icon, title);
+            const options = document.createElement('button');
+            options.type = 'button';
+            options.className = 'p-1 rounded-lg hover:bg-white/15 text-white/40 hover:text-white transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100';
+            options.title = 'Options';
+            options.setAttribute('aria-label', 'Chat options');
+            options.innerHTML = '<i data-lucide="more-horizontal" class="w-3.5 h-3.5"></i>';
+            options.addEventListener('click', e => openContextMenu(e, chat.id));
+            div.append(open, options);
+            return div;
+        }
+
+        // CRITICAL Z-INDEX & CONTEXT MENU FIX
+        function openContextMenu(e, chatId) {
+            e.stopPropagation();
+            e.preventDefault();
+            
+            contextTargetChatId = chatId;
+            const chat = chatsDatabase.find(c => c.id === chatId);
+            
+            const menu = document.getElementById('chat-context-menu');
+            document.getElementById('context-chat-title').innerText = chat ? chat.title : 'Chat Options';
+            document.getElementById('context-pin-text').innerText = chat && chat.pinned ? 'Unpin chat' : 'Pin chat';
+
+            // Calculate Optimal Screen Positioning
+            const clickX = e.clientX;
+            const clickY = e.clientY;
+            
+            const menuWidth = 208; // w-52 = 13rem = 208px
+            const menuHeight = 180;
+
+            let posX = clickX;
+            let posY = clickY;
+
+            if (posX + menuWidth > window.innerWidth) posX = window.innerWidth - menuWidth - 10;
+            if (posY + menuHeight > window.innerHeight) posY = window.innerHeight - menuHeight - 10;
+
+            menu.style.left = `${posX}px`;
+            menu.style.top = `${posY}px`;
+            
+            // Unhide context menu (z-index 9999 ensures it's above everything)
+            menu.classList.remove('hidden');
+        }
+
+        function hideContextMenu() {
+            document.getElementById('chat-context-menu').classList.add('hidden');
+        }
+
+        function contextAction(action) {
+            if (!contextTargetChatId) return;
+            const chat = chatsDatabase.find(c => c.id === contextTargetChatId);
+            if (!chat) return;
+
+            if (action === 'pin') {
+                chat.pinned = !chat.pinned;
+            } else if (action === 'rename') {
+                const newTitle = prompt('Enter new chat title:', chat.title);
+                if (newTitle) chat.title = newTitle.trim();
+            } else if (action === 'delete') {
+                chatsDatabase = chatsDatabase.filter(c => c.id !== contextTargetChatId);
+                if (activeChatId === contextTargetChatId) startNewChat();
+            } else if (action === 'archive') {
+                chat.archived = true;
+                if (activeChatId === contextTargetChatId) startNewChat();
+            }
+
+            touchChat(chat);
+            saveChats();
+            hideContextMenu();
+            renderSidebarChats();
+        }
+
+        function filterChats() {
+            const query = document.getElementById('search-chats-input').value.toLowerCase();
+            const items = document.querySelectorAll('#sidebar-chats-scroll .group');
+            items.forEach(item => {
+                const text = item.innerText.toLowerCase();
+                item.style.display = text.includes(query) ? 'flex' : 'none';
+            });
+        }
+
+        // SIDEBAR TOGGLE & SWIPE GESTURE PHYSICS
+        const sidebar = document.getElementById('sidebar-drawer');
+        const overlay = document.getElementById('sidebar-overlay');
+
+        function openSidebar() {
+            sidebar.classList.remove('sidebar-closed');
+            sidebar.classList.add('sidebar-open');
+            overlay.classList.remove('hidden');
+            setTimeout(() => overlay.classList.add('opacity-100'), 10);
+        }
+
+        function closeSidebar() {
+            sidebar.classList.remove('sidebar-open');
+            sidebar.classList.add('sidebar-closed');
+            overlay.classList.remove('opacity-100');
+            setTimeout(() => overlay.classList.add('hidden'), 300);
+        }
+
+        document.getElementById('btn-open-sidebar').addEventListener('click', openSidebar);
+
+        // EDGE SWIPE GESTURE LISTENERS
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        function initGestureListeners() {
+            document.addEventListener('touchstart', (e) => {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            }, { passive: true });
+
+            document.addEventListener('touchend', (e) => {
+                const touchEndX = e.changedTouches[0].clientX;
+                const touchEndY = e.changedTouches[0].clientY;
+
+                const deltaX = touchEndX - touchStartX;
+                const deltaY = touchEndY - touchStartY;
+
+                // Ensure horizontal swipe dominant over vertical scroll
+                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+                    // Edge Swipe Right to Open (Touch started near left edge < 35px)
+                    if (deltaX > 0 && touchStartX < 35) {
+                        openSidebar();
+                    }
+                    // Swipe Left to Close Sidebar
+                    else if (deltaX < 0 && sidebar.classList.contains('sidebar-open')) {
+                        closeSidebar();
+                    }
+                }
+            }, { passive: true });
+        }
+
+        // Authenticated in-app inbox. This polls the same persistent alert queue
+        // used by Telegram; it does not pretend to be Android push notifications.
+        let notificationRequestCounter = 0;
+        let notificationPollHandle = null;
+        let lastSeenNotificationId = Number(localStorage.getItem('aria_last_seen_notification_id') || 0);
+
+        function refreshNotifications() {
+            if (!window.AriaNative || typeof window.AriaNative.notifications !== 'function' || !window.AriaNative.isSignedIn()) return;
+            window.AriaNative.notifications('notifications_' + (++notificationRequestCounter));
+        }
+
+        function openNotifications() {
+            document.getElementById('notification-panel').classList.remove('hidden');
+            refreshNotifications();
+        }
+
+        function closeNotifications() {
+            document.getElementById('notification-panel').classList.add('hidden');
+        }
+
+        window.onAriaNotificationsResult = function(result) {
+            if (!result || result.authRequired) return;
+            const container = document.getElementById('notification-items');
+            const items = result.success && Array.isArray(result.items) ? result.items : [];
+            if (!items.length) {
+                container.innerHTML = '<div class="text-xs text-white/50 p-3">No notifications yet. New alerts will appear here.</div>';
+                document.getElementById('notification-dot').classList.add('hidden');
+                return;
+            }
+            const newest = Math.max(...items.map(item => Number(item.id || 0)));
+            const panelOpen = !document.getElementById('notification-panel').classList.contains('hidden');
+            document.getElementById('notification-dot').classList.toggle('hidden', panelOpen || newest <= lastSeenNotificationId);
+            container.replaceChildren();
+            items.forEach(item => {
+                const card = document.createElement('article');
+                card.className = 'rounded-xl border border-white/10 bg-white/5 p-3';
+                const heading = document.createElement('div');
+                heading.className = 'text-xs font-bold';
+                heading.textContent = String(item.title || 'JARVIS update');
+                const meta = document.createElement('div');
+                meta.className = 'mt-1 text-[10px] uppercase tracking-wide text-cyan-300';
+                meta.textContent = String(item.severity || 'info') + ' · ' + String(item.source || 'JARVIS');
+                const body = document.createElement('div');
+                body.className = 'mt-2 text-xs text-white/70 whitespace-pre-wrap break-words';
+                body.textContent = String(item.body || '');
+                card.append(heading, meta, body);
+                container.appendChild(card);
+            });
+            if (panelOpen) {
+                lastSeenNotificationId = Math.max(lastSeenNotificationId, newest);
+                localStorage.setItem('aria_last_seen_notification_id', String(lastSeenNotificationId));
+                document.getElementById('notification-dot').classList.add('hidden');
+            }
+        };
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) refreshNotifications();
+        });
+        if (notificationPollHandle === null) notificationPollHandle = window.setInterval(refreshNotifications, 60000);
+
+        // ENGINE & TOGGLE FEATURES
+        function switchEngine(id, name, icon, colorHex) {
+            showStatus('Model selection is visual only until the JARVIS backend exposes provider routing. Requests still go to your configured JARVIS backend.');
+            currentEngine = id;
+            document.getElementById('active-model-name').innerText = name;
+            
+            const iconContainer = document.getElementById('active-model-icon');
+            iconContainer.style.color = colorHex;
+            iconContainer.innerHTML = `<i data-lucide="${icon}" class="w-3.5 h-3.5"></i>`;
+
+            document.querySelectorAll('.check-icon').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`check-${id}`).classList.remove('hidden');
+
+            document.getElementById('model-dropdown').classList.add('hidden');
+            if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+        }
+
+        function toggleProSearch() {
+            isProSearch = !isProSearch;
+            const badge = document.getElementById('perplexity-badge');
+            const btn = document.getElementById('btn-pro-search');
+
+            if (isProSearch) {
+                badge.classList.remove('hidden');
+                btn.classList.add('text-purple-400');
+            } else {
+                badge.classList.add('hidden');
+                btn.classList.remove('text-purple-400');
+            }
+        }
+
+        function toggleVoiceMode() {
+            const btn = document.getElementById('btn-voice-mode');
+            if (!window.AriaNative || typeof window.AriaNative.startVoice !== 'function') {
+                showStatus('Native voice support is unavailable. Update the JARVIS Android app.');
+                return;
+            }
+            isVoiceActive = !isVoiceActive;
+            if (isVoiceActive) {
+                btn.classList.add('voice-active');
+                showStatus('Voice mode enabled. Tap the microphone and speak; JARVIS will read its reply aloud.');
+                window.AriaNative.startVoice();
+            } else {
+                btn.classList.remove('voice-active');
+                if (typeof window.AriaNative.stopVoice === 'function') window.AriaNative.stopVoice();
+                if (typeof window.AriaNative.stopSpeaking === 'function') window.AriaNative.stopSpeaking();
+                showStatus('Voice mode disabled.');
+            }
+        }
+
+        window.onAriaVoiceStatus = function(result) {
+            if (result && result.status) showStatus(result.status);
+        };
+
+        window.onAriaVoiceResult = function(result) {
+            if (!result || !result.success) {
+                showStatus((result && result.message) || 'Voice input failed. Please try again.');
+                // Keep hands-free mode usable after silence/no-match/network errors,
+                // without retrying when the user explicitly switched voice mode off.
+                if (isVoiceActive && window.AriaNative && typeof window.AriaNative.startVoice === 'function') {
+                    window.setTimeout(() => { if (isVoiceActive) window.AriaNative.startVoice(); }, 1600);
+                }
+                return;
+            }
+            const transcript = String(result.text || '').trim();
+            if (!transcript) return;
+            const input = document.getElementById('user-input');
+            input.value = transcript;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            sendMessage();
+        };
+
+        window.onAriaSpeechFinished = function() {
+            if (!isVoiceActive || !window.AriaNative || typeof window.AriaNative.startVoice !== 'function') return;
+            // Continue the hands-free turn only while the user has left voice mode on.
+            window.setTimeout(() => {
+                if (isVoiceActive) window.AriaNative.startVoice();
+            }, 350);
+        };
+
+        function triggerFileUpload() {
+            document.getElementById('file-input').click();
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const input = document.getElementById('user-input');
+                input.value = `[Attached File: ${file.name}] ` + input.value;
+            }
+        }
+
+        function updateViewportLayout() {
+            const vv = window.visualViewport;
+            const height = vv ? vv.height : window.innerHeight;
+            document.documentElement.style.setProperty('--app-vh', Math.max(260, height) + 'px');
+            const composer = document.getElementById('composer-root');
+            if (composer) {
+                const h = composer.getBoundingClientRect().height;
+                document.documentElement.style.setProperty('--composer-height', Math.ceil(h + 8) + 'px');
+            }
+            const header = document.getElementById('main-header');
+            const scroll = document.getElementById('chat-scroll-area');
+            if (header && scroll) scroll.style.top = Math.ceil(header.getBoundingClientRect().height) + 'px';
+        }
+    </script>
+</body>
+</html>

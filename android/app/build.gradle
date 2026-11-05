@@ -1,0 +1,58 @@
+
+plugins {
+    id 'com.android.application'
+}
+
+def buildVersionCode = (System.getenv('VERSION_CODE') ?: '1').toInteger()
+def buildVersionName = System.getenv('VERSION_NAME') ?: '1.0.0'
+
+def storePath = System.getenv('ARIA_KEYSTORE_PATH')
+def storePass = System.getenv('ARIA_KEYSTORE_PASSWORD')
+def aliasValue = System.getenv('ARIA_KEY_ALIAS')
+def keyPass = System.getenv('ARIA_KEY_PASSWORD')
+
+android {
+    namespace = 'com.aria.assistant'
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = 'com.aria.assistant'
+        minSdk = 23
+        targetSdk = 35
+        versionCode = buildVersionCode
+        versionName = buildVersionName
+    }
+
+    signingConfigs {
+        release {
+            if (!storePath || !storePass || !aliasValue || !keyPass) {
+                throw new GradleException(
+                    'Missing release signing environment variables.'
+                )
+            }
+
+            def signingFile = file(storePath)
+
+            if (!signingFile.exists() || !signingFile.isFile()) {
+                throw new GradleException(
+                    'Release keystore file does not exist.'
+                )
+            }
+
+            storeFile = signingFile
+            storePassword = storePass
+            keyAlias = aliasValue
+            keyPassword = keyPass
+        }
+    }
+
+    buildTypes {
+        debug {
+        }
+
+        release {
+            minifyEnabled = false
+            signingConfig = signingConfigs.release
+        }
+    }
+}
